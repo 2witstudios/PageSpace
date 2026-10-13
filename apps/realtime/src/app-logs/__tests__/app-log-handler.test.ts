@@ -43,11 +43,12 @@ import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { isAppLogsNatsConfigured } from '@pagespace/lib/services/app-hosting/app-logs-env';
 import { buildAppLogHandlers, IDLE_UNSUBSCRIBE_MS } from '../app-log-handler';
 import { createAppLogSessionMap } from '../app-log-session-map';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 function makeSocket(userId: string | undefined, id = 'socket-1') {
   return {
     id,
-    data: { user: userId ? { id: userId } : undefined },
+    data: { user: userId ? { id: userId } : undefined, actor: userId ? credentialActor(userId, null) : undefined },
     emit: vi.fn(),
   };
 }

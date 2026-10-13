@@ -20,7 +20,7 @@ vi.mock('@/lib/orgs/org-route-auth', () => ({
       ? mockGate(...args)
       : { ok: false, response: new Response(JSON.stringify({ error: 'Organization billing is not available on this deployment', code: 'billing_unavailable' }), { status: 404 }) },
   ORG_READ_AUTH: {},
-  ORG_WRITE_AUTH: {},
+  ORG_MONEY_WRITE_AUTH: {},
 }));
 vi.mock('@pagespace/lib/organizations/seat-service', () => ({ getSeatSummary: mockSummary, setSeatAutoAdd: mockSet }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mockAudit }));

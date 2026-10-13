@@ -10,12 +10,14 @@
 import type { ScopeSet, GrantAuthority } from '@pagespace/lib/auth/oauth/scopes';
 import { getDriveAccess, getExplicitScopeAuthority } from '@pagespace/lib/services/drive-service';
 import { customRoleBelongsToDrive, getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
-export async function resolveGrantAuthority(scopes: ScopeSet, userId: string): Promise<GrantAuthority> {
+export async function resolveGrantAuthority(scopes: ScopeSet, actor: AccessActor): Promise<GrantAuthority> {
+  const userId = actor.userId;
   const entries = await Promise.all(
     Array.from(scopes.drives, async ([driveId, scope]) => {
       const [access, ownCustomRoleId, customRoleOk] = await Promise.all([
-        getDriveAccess(driveId, userId),
+        getDriveAccess(driveId, actor),
         getMemberCustomRoleId(driveId, userId),
         scope.role.kind === 'custom' ? customRoleBelongsToDrive(scope.role.customRoleId, driveId) : Promise.resolve(true),
       ]);

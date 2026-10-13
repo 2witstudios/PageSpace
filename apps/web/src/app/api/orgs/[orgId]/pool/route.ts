@@ -7,7 +7,8 @@ import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
 /**
  * GET /api/orgs/[orgId]/pool — the org pool and where it goes: available, unallocated, seats and every
  * drive wallet (read model, D-OW-38 "pool split"; SPEND-10; UI-7). Owner and Admins only:
- * SPEND-9 keeps the pool from every consumer.
+ * SPEND-9 keeps the pool from every consumer. Session only ([D-OW-26]: a key reads wallet views through
+ * the consumer allowlist, and the pool is an admin money view; X-1 exclusion table).
  */
 export async function GET(request: Request, context: { params: Promise<{ orgId: string }> }) {
   const { orgId } = await context.params;

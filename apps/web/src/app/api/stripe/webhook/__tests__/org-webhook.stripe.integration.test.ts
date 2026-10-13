@@ -42,6 +42,7 @@ import type { OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-
 import { stripeConfig, stripeMode } from '@/lib/stripe-config';
 import { provisionOrgSubscription, stripeOrgBilling } from '@/lib/org-billing/org-subscription';
 import { POST } from '../route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY;
 const RUN = `ow-d3 test ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -258,7 +259,7 @@ describe.skipIf(!TEST_KEY)('Stripe webhook org branch with real Stripe TEST even
     expect(await admitDriveComputeCreator({ driveId: product.id, userId: owner.id })).toEqual({ allowed: false, code: 'org_lapsed', message: ORG_LAPSED_MESSAGE });
     expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, owner.id))).toHaveLength(0);
     expect((await poolOf(orgId))?.monthlyRemainingCents).toBe(poolAfterFirst?.monthlyRemainingCents);
-    expect(await canUserViewPage(owner.id, roadmap.id)).toBe(true);
+    expect(await canUserViewPage(credentialActor(owner.id, null), roadmap.id)).toBe(true);
     await expectWalletLegInvariant(await childWalletIds());
 
     // Step 11: re-subscribe. The route's answer carries the new subscription's client secret; the card is

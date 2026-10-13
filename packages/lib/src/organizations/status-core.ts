@@ -4,6 +4,7 @@
  * Lapse is a read: member data and credit remain intact, and security tightening
  * remains available. Billing-disabled deployments derive capability separately.
  */
+import { holdsOrgRole } from './authorize-core';
 
 export const ORG_STATUSES = ['active', 'lapsed'] as const;
 export type OrgStatus = (typeof ORG_STATUSES)[number];
@@ -16,6 +17,7 @@ export type OrgLapseReason =
   | 'unpaid'
   | 'canceled'
   | 'incomplete'
+  | 'manual_collection'
   | 'unknown_status';
 
 export type OrgStatusResult =
@@ -26,12 +28,10 @@ export type OrgStatusResult =
 export interface OrgSubscriptionState {
   /** Stripe status, or unverified_price when the mirror cannot verify the plan items. */
   status: string;
-  /** Verified invoice evidence for this exact org and subscription. */
+  /** Stripe collection_method as mirrored: only charge_automatically can grant capability ([D-OW-44]). */
+  collectionMethod: string;
+  /** Verified invoice evidence for this exact org and subscription (org_subscription_funding). */
   hasVerifiedFunding: boolean;
-  trialEnd: Date | null;
-  currentPeriodStart: Date | null;
-  currentPeriodEnd: Date | null;
-  cancelAtPeriodEnd: boolean;
 }
 
 /** The SEAT-9 refusal, shown wherever an org-only capability is refused; restricting stays allowed (D-OW-33). No credit or price figure. */
@@ -45,12 +45,14 @@ export const ORG_LAPSED_CODE = 'org_lapsed' as const;
 export function deriveOrgStatus(input: {
   billingEnabled: boolean;
   subscription: OrgSubscriptionState | null;
-  now: Date;
 }): OrgStatusResult {
   if (!input.billingEnabled) return { status: 'active', reason: null };
   const sub = input.subscription;
   // [D-OW-30]: no creation trial — an org nobody has paid for spends nothing.
   if (!sub) return { status: 'lapsed', reason: 'no_subscription' };
+  // [D-OW-44]: an invoice-billed subscription reads `active` before anything is paid, so only
+  // automatic collection can grant capability; anything else is lapsed whatever its status.
+  if (sub.collectionMethod !== 'charge_automatically') return { status: 'lapsed', reason: 'manual_collection' };
 
   switch (sub.status) {
     case 'active':
@@ -126,7 +128,7 @@ export function orgBillingNotice(input: {
   result: OrgStatusResult;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
 }): OrgBillingNotice | null {
-  const manages = input.role === 'OWNER' || input.role === 'ADMIN';
+  const manages = holdsOrgRole(input.role, 'ADMIN');
   const { result } = input;
   if (result.status === 'lapsed') {
     return manages ? { kind: 'reactivate', reason: result.reason, canManageBilling: true } : { kind: 'read_only', canManageBilling: false };

@@ -6,6 +6,15 @@
  * encode internal query order (pages lookup, then existing permissions).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -89,6 +98,7 @@ import {
 } from '../drive-member-service';
 import { encryptField } from '../../encryption/field-crypto';
 import * as fieldCrypto from '../../encryption/field-crypto';
+import { credentialActor } from '../../permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -120,7 +130,7 @@ describe('drive-member-service', () => {
     it('should return all false when drive not found', async () => {
       mockDb.query.drives.findFirst.mockResolvedValueOnce(null);
 
-      const result = await checkDriveAccess('drive-1', 'user-1');
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
       expect(result.drive).toBeNull();
       expect(result.isOwner).toBe(false);
     });
@@ -128,7 +138,7 @@ describe('drive-member-service', () => {
     it('should return owner access when user is owner', async () => {
       mockDb.query.drives.findFirst.mockResolvedValueOnce({ id: 'drive-1', ownerId: 'user-1' });
 
-      const result = await checkDriveAccess('drive-1', 'user-1');
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
       expect(result.isOwner).toBe(true);
       expect(result.isAdmin).toBe(true);
       expect(result.isMember).toBe(true);
@@ -144,7 +154,7 @@ describe('drive-member-service', () => {
         }),
       });
 
-      const result = await checkDriveAccess('drive-1', 'user-1');
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(true);
       expect(result.isMember).toBe(true);
       expect(result.isOwner).toBe(false);
@@ -160,7 +170,7 @@ describe('drive-member-service', () => {
         }),
       });
 
-      const result = await checkDriveAccess('drive-1', 'user-1');
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(false);
       expect(result.isMember).toBe(true);
     });
@@ -175,7 +185,7 @@ describe('drive-member-service', () => {
         }),
       });
 
-      const result = await checkDriveAccess('drive-1', 'user-1');
+      const result = await checkDriveAccess('drive-1', credentialActor('user-1', null));
       expect(result.isMember).toBe(false);
       expect(result.drive).not.toBeNull();
     });

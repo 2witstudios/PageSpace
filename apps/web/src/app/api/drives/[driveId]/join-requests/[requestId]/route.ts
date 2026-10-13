@@ -4,7 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { answerDriveJoinRequest, withdrawDriveJoinRequest } from '@pagespace/lib/services/drive-join-request-service';
 import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
-import { authenticateOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authenticateOrgRequest, refuseDriveCredential, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
@@ -15,7 +15,9 @@ import { safeParseBody } from '@/lib/validation/parse-body';
  *        Approval is the only path from a request to membership.
  * DELETE withdraw: the requester only.
  *
- * Session only: CLI and MCP parity is Wave G (X-1). Dark while ORGS_ENABLED is false.
+ * A session or an unscoped MCP key (X-1: `drives.answerJoinRequest`, `drives.withdrawJoinRequest`); the
+ * drive's org sign-in policy applies to the credential. Authority is the service's, through
+ * requireOrgRole (ORG-5). Dark while ORGS_ENABLED is false.
  */
 
 const answerSchema = z.object({
@@ -26,8 +28,10 @@ type RouteContext = { params: Promise<{ driveId: string; requestId: string }> };
 
 export async function PATCH(request: Request, context: RouteContext) {
   const { driveId, requestId } = await context.params;
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
+  const refused = await refuseDriveCredential(request, gate, driveId);
+  if (refused) return refused;
 
   const parsed = await safeParseBody(request, answerSchema);
   if (!parsed.success) return parsed.response;
@@ -50,7 +54,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       },
     });
     // ORG-4: answering through org Owner/Admin power rather than as the lead is audited too.
-    await recordOrgPowerDriveAction(gate.userId, result.drive, 'answer_join_request');
+    await recordOrgPowerDriveAction(gate.actor, result.drive, 'answer_join_request');
 
     return NextResponse.json({ request: result.request, admitted: result.admitted });
   } catch (error) {
@@ -61,8 +65,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
 export async function DELETE(request: Request, context: RouteContext) {
   const { driveId, requestId } = await context.params;
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
+  const refused = await refuseDriveCredential(request, gate, driveId);
+  if (refused) return refused;
 
   try {
     const result = await withdrawDriveJoinRequest(gate.userId, driveId, requestId);

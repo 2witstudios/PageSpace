@@ -25,8 +25,10 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { RevokePorts } from '@pagespace/lib/services/invites';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
-export const buildRevokePorts = (request: Request): RevokePorts => ({
+/** `actor`: the revoking request's credential; the actor's drive role is read through it (SEC-2/3). */
+export const buildRevokePorts = (request: Request, actor: AccessActor): RevokePorts => ({
   loadPendingInviteForDrive: async ({ inviteId, driveId }) =>
     driveInviteRepository.findUnconsumedInviteForDrive({ inviteId, driveId }),
 
@@ -35,8 +37,8 @@ export const buildRevokePorts = (request: Request): RevokePorts => ({
       where: eq(drives.id, driveId),
       columns: { id: true, ownerId: true, orgId: true, orgVisibility: true },
     });
-    if (!drive) return null;
-    return driveRoleOf(await loadDriveRelationship(actorId, drive));
+    if (!drive || actorId !== actor.userId) return null;
+    return driveRoleOf(await loadDriveRelationship(actor, drive));
   },
 
   deletePendingInviteForDrive: async ({ inviteId, driveId }) =>

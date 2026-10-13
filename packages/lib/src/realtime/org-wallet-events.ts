@@ -6,7 +6,8 @@
  *   wallet:changed  on `drive:<driveId>:wallet` (joined only by people with a wallet view)
  *                   payload { driveId, walletId, change: 'balance' | 'allocation' | 'status' | 'caps' | 'rules' }
  *   org:changed     on `notifications:<userId>` for every accepted member of the org
- *                   payload { orgId, change: 'policy' | 'seats' | 'status' | 'membership' | 'seat_caps' | 'wallet' }
+ *                   payload { orgId, change: 'policy' | 'seats' | 'status' | 'membership' | 'seat_caps' | 'wallet'
+ *                                        | 'profile' | 'invitations' | 'deleted' }
  *
  * Payloads carry ids and the kind of change only — never an amount — so a viewer learns nothing
  * their own projection would not show; the client refetches the view it is allowed (SPEND-9).
@@ -21,7 +22,11 @@ export const WALLET_CHANGED_EVENT = 'wallet:changed' as const;
 export const ORG_CHANGED_EVENT = 'org:changed' as const;
 
 export type WalletChange = 'balance' | 'allocation' | 'status' | 'caps' | 'rules';
-export type OrgChange = 'policy' | 'seats' | 'status' | 'membership' | 'seat_caps' | 'wallet';
+/**
+ * `profile`: the name, URL or avatar changed. `invitations`: an invitation was sent or revoked.
+ * `deleted`: the org is gone (sent to the people who were its members a moment before).
+ */
+export type OrgChange = 'policy' | 'seats' | 'status' | 'membership' | 'seat_caps' | 'wallet' | 'profile' | 'invitations' | 'deleted';
 
 export interface RealtimeMessage<P> {
   channelId: string;
@@ -34,6 +39,18 @@ export interface OrgChangedPayload { orgId: string; change: OrgChange }
 
 export function walletChangedMessage(input: WalletChangedPayload): RealtimeMessage<WalletChangedPayload> {
   return { channelId: driveWalletRoom(input.driveId), event: WALLET_CHANGED_EVENT, payload: { driveId: input.driveId, walletId: input.walletId, change: input.change } };
+}
+
+/** Changes only the org's Owner and Admins can see: GET invitations is ADMIN-gated, so only they are told. */
+const ADMIN_ONLY_CHANGES: ReadonlySet<OrgChange> = new Set(['invitations']);
+
+/**
+ * Who an org change is sent to, from the org's member rows: every accepted member, except for a change
+ * only managers can see (invitations), which reaches the Owner and Admins alone.
+ */
+export function orgChangeRecipients(members: readonly { userId: string; role: 'OWNER' | 'ADMIN' | 'MEMBER' }[], change: OrgChange): string[] {
+  const managersOnly = ADMIN_ONLY_CHANGES.has(change);
+  return members.filter((m) => !managersOnly || m.role === 'OWNER' || m.role === 'ADMIN').map((m) => m.userId);
 }
 
 /** One message per recipient, deduplicated and in a stable order. */

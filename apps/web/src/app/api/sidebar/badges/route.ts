@@ -10,6 +10,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -68,8 +70,9 @@ const PERMISSION_BATCH_SIZE = 200;
  * A `mute` filter, when one exists, belongs as another predicate on
  * `user_channels` — nothing else here needs to change for it.
  */
-async function countChannelUnread(userId: string): Promise<number> {
-  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+async function countChannelUnread(actor: AccessActor): Promise<number> {
+  const userId = actor.userId;
+  const memberDriveIds = await getMemberDriveIds(actor, { includeTrashed: true });
   const result = await db.execute<ChannelUnreadRow>(sql`
     WITH user_channels AS (
       SELECT p.id
@@ -119,7 +122,7 @@ async function countChannelUnread(userId: string): Promise<number> {
   for (let i = 0; i < rows.length; i += PERMISSION_BATCH_SIZE) {
     const chunk = rows.slice(i, i + PERMISSION_BATCH_SIZE);
     const permissions = await getBatchPagePermissions(
-      userId,
+      actor,
       chunk.map((row) => row.id)
     );
     for (const row of chunk) {
@@ -169,7 +172,7 @@ export async function GET(req: Request) {
         // the query fails loses less than blanking the other four, and matches
         // getBatchPagePermissions, which already swallows its own failures into
         // an all-deny map (i.e. zero) rather than throwing.
-        countChannelUnread(userId).catch((error) => {
+        countChannelUnread(actorFromAuth(auth)).catch((error) => {
           loggers.api.error('Failed to count unread channel messages:', error as Error);
           return 0;
         }),

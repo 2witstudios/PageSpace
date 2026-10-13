@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { orgChangedMessages, walletChangedMessage, ORG_CHANGED_EVENT, WALLET_CHANGED_EVENT } from '../org-wallet-events';
+import { orgChangeRecipients, orgChangedMessages, walletChangedMessage, ORG_CHANGED_EVENT, WALLET_CHANGED_EVENT } from '../org-wallet-events';
 
 describe('org and wallet realtime events: the contract the UI listens on', () => {
   it('X-4 (partial) a drive wallet change is one wallet:changed on the drive wallet room, naming what changed and carrying no amount', () => {
@@ -16,5 +16,17 @@ describe('org and wallet realtime events: the contract the UI listens on', () =>
       { channelId: 'notifications:u-b', event: ORG_CHANGED_EVENT, payload: { orgId: 'org-1', change: 'status' } },
     ]);
     expect(ORG_CHANGED_EVENT).toBe('org:changed');
+  });
+
+  it('X-4 (partial) an invitations change reaches only the Owner and Admins, the people who can see invitations; every other change reaches every member', () => {
+    const members = [
+      { userId: 'u-owner', role: 'OWNER' as const },
+      { userId: 'u-admin', role: 'ADMIN' as const },
+      { userId: 'u-member', role: 'MEMBER' as const },
+    ];
+    expect(orgChangeRecipients(members, 'invitations')).toEqual(['u-owner', 'u-admin']);
+    for (const change of ['membership', 'profile', 'status', 'policy', 'deleted'] as const) {
+      expect(orgChangeRecipients(members, change)).toEqual(['u-owner', 'u-admin', 'u-member']);
+    }
   });
 });

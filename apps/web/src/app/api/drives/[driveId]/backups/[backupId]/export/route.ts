@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { streamBackupExport } from '@/services/api/backup-export-service';
 import { getExportContentDisposition } from './utils';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -18,7 +19,7 @@ export async function GET(
 
   let stream: AsyncGenerator<Buffer>;
   try {
-    stream = await streamBackupExport(backupId, driveId, auth.userId);
+    stream = await streamBackupExport(backupId, driveId, actorFromAuth(auth));
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status !== undefined && status >= 400 && status < 500) {

@@ -19,6 +19,7 @@ export {
   isValidationError,
   NetworkError,
   NotFoundError,
+  orgSignInRequirementOf,
   PageSpaceError,
   PermissionDeniedError,
   RateLimitError,
@@ -32,6 +33,7 @@ export type {
   HttpErrorHeaders,
   IncompatibilityReason,
   NetworkErrorOptions,
+  OrgSignInRequirement,
   PageSpaceErrorCode,
   TimeoutErrorOptions,
   ValidationIssue,
@@ -139,6 +141,19 @@ export {
   trashDrive,
   updateDriveContext,
 } from './operations/drives.js';
+// Org ownership of a drive and join requests (X-1; DRV-1..DRV-4, DRV-6).
+export {
+  answerDriveJoinRequest,
+  IMPLICIT_MEMBERS_CHOICES,
+  JOIN_REQUEST_DECISIONS,
+  listDriveJoinRequests,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  requestToJoinDrive,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  withdrawDriveJoinRequest,
+} from './operations/drives.js';
 export type { ConfirmMismatch, Result } from './operations/drives.js';
 
 // Members (Phase 3 task 1).
@@ -205,17 +220,55 @@ export type { TaskCompletionGatedError } from './operations/tasks.js';
 export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 export { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
 
-// Organization reads (X-1: reads only — every org write needs a signed-in session).
+// Organizations (X-1, ORG-5): every org read and write the web exposes to a key. Card-checkout
+// create, org delete, ownership transfer, seat caps and admin money views stay session-only ([D-OW-26]).
 export {
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getOrgAuditLog,
+  getOrgDriveUsage,
   getOrgPolicies,
   getOrganization,
+  GUEST_APPROVAL_DECISIONS,
+  inviteToOrganization,
+  leaveOrganization,
   listMyOrganizations,
+  listOrgAutomations,
+  listOrgDomains,
   listOrgDriveDirectory,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
   listOrgMembers,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  ORG_POLICY_KEYS,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  updateOrgPolicies,
+  updateOrganization,
+  verifyOrgDomain,
 } from './operations/organizations.js';
 
 // Wallet reads (X-1, [D-OW-26]: reads only — a key never moves money or changes a spend source).
-export { CONSUMER_WALLET_VIEW_KEYS, getConversationSpendSource, getDriveWallet, listMyWallets } from './operations/wallets.js';
+export {
+  CONSUMER_WALLET_VIEW_KEYS,
+  getAlwaysOwnCredits,
+  getConversationSpendSource,
+  getDriveWallet,
+  listMyWallets,
+} from './operations/wallets.js';
 export type { CallSpendDecision, ConsumerWalletView, MyWallets } from './operations/wallets.js';
 
 // Uploads — the two API legs of a direct-to-storage upload, plus the slot release.

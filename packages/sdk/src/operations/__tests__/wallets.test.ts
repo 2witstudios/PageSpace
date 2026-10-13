@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildRequest } from '../../transport/build-request.js';
 import { parseResponse } from '../../transport/parse-response.js';
 import { ResponseValidationError } from '../../errors.js';
-import { CONSUMER_WALLET_VIEW_KEYS, getConversationSpendSource, getDriveWallet, listMyWallets } from '../wallets.js';
+import { CONSUMER_WALLET_VIEW_KEYS, getAlwaysOwnCredits, getConversationSpendSource, getDriveWallet, listMyWallets } from '../wallets.js';
 import { loadAllOperations } from '../../__tests__/support/load-operations.js';
 
 const config = { baseUrl: 'https://pagespace.ai' };
@@ -165,7 +165,12 @@ describe('wallets.getConversationSource', () => {
 describe('wallet operations — [D-OW-26] read-only surface', () => {
   it('X-1 (partial) every wallets.* operation in the registry is a GET (a token never moves money or changes a source)', () => {
     const walletOps = loadAllOperations().filter((op) => op.name.startsWith('wallets.'));
-    expect(walletOps.map((op) => op.name).sort()).toEqual(['wallets.getConversationSource', 'wallets.getDriveWallet', 'wallets.list']);
+    expect(walletOps.map((op) => op.name).sort()).toEqual([
+      'wallets.getAlwaysOwnCredits',
+      'wallets.getConversationSource',
+      'wallets.getDriveWallet',
+      'wallets.list',
+    ]);
     expect(walletOps.every((op) => op.method === 'GET')).toBe(true);
   });
 
@@ -173,5 +178,19 @@ describe('wallet operations — [D-OW-26] read-only surface', () => {
     expect(getDriveWallet.requiredScope).toBe('drive');
     expect(listMyWallets.requiredScope).toBe('account');
     expect(getConversationSpendSource.requiredScope).toBe('account');
+  });
+
+  it('X-1 (partial) wallets.getAlwaysOwnCredits reads the switches (global, and a drive\'s via query) and never sets them', () => {
+    expect(getAlwaysOwnCredits.method).toBe('GET');
+    expect(getAlwaysOwnCredits.requiredScope).toBe('account');
+    expect(buildRequest(getAlwaysOwnCredits, {}, { baseUrl: 'https://pagespace.ai' }).url).toBe('https://pagespace.ai/api/wallets/always-own-credits');
+    expect(buildRequest(getAlwaysOwnCredits, { driveId: 'd1' }, { baseUrl: 'https://pagespace.ai' }).url).toBe(
+      'https://pagespace.ai/api/wallets/always-own-credits?driveId=d1',
+    );
+    expect(getAlwaysOwnCredits.outputSchema.parse({ alwaysOwnCredits: true, alwaysOwnCreditsInDrive: false })).toEqual({
+      alwaysOwnCredits: true,
+      alwaysOwnCreditsInDrive: false,
+    });
+    expect(getAlwaysOwnCredits.inputSchema.safeParse({ enabled: true }).success).toBe(false);
   });
 });

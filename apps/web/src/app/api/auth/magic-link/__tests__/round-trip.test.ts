@@ -133,7 +133,7 @@ vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 vi.mock('@/lib/auth/invite-resolver', () => ({
@@ -325,7 +325,7 @@ describe('magic-link round-trip — inviteToken metadata binding end-to-end', ()
       data: { userId: 'user_test', isNewUser: false, metadata: persistedMetadata },
     });
     vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-      kind: 'drive', invitedDriveId: 'drive_invited_abc', invitedPageId: null, connectionId: null,
+      kind: 'drive', invitedDriveId: 'drive_invited_abc', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
 
     const verifyResp = await verifyGet(new Request(url, { method: 'GET' }));

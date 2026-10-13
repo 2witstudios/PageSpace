@@ -24,6 +24,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionAccess, reopenConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -36,14 +37,14 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId, conversationId } = await context.params;
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
 
   let outcome: Awaited<ReturnType<typeof reopenConversationInSession>>;
   try {
-    outcome = await reopenConversationInSession({ conversationId, userId: auth.userId, workspaceId });
+    outcome = await reopenConversationInSession({ conversationId, actor: actorFromAuth(auth), workspaceId });
   } catch (error) {
     loggers.api.error(
       'Session conversation reopen failed',

@@ -24,6 +24,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkSessionEndAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { killShellById, resolveShellById } from '@/lib/agent-workspaces/workspace-shells-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -47,14 +48,14 @@ export async function DELETE(request: Request, context: RouteContext) {
   // Not found and denied answer THE SAME 404 (family policy, review #2261/5)
   // — "Shell not found" for both, so a caller cannot distinguish "no such
   // shell" from "not yours".
-  const access = await checkSessionEndAccess(auth.userId, resolved.shell.workspaceId);
+  const access = await checkSessionEndAccess(actorFromAuth(auth), resolved.shell.workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE, 'Shell not found');
   }
 
   // The acting human, carried into the membership write the kill now performs:
   // the pane bound to this shell goes with the process, in the same transaction.
-  const killed = await killShellById({ shellId, actingUserId: auth.userId });
+  const killed = await killShellById({ shellId, actor: actorFromAuth(auth) });
   if (!killed.ok) {
     // `unsupported` is a PERMANENT property of the machine's substrate — it has
     // no interactive-stream surface on this seam at all (a local environment;

@@ -42,6 +42,7 @@ import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 import { errorLogFields } from '@pagespace/lib/logging/error-cause';
+import { automationActor } from '@pagespace/lib/permissions/access-actor';
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -212,6 +213,8 @@ async function buildAndPersistPulse(
 ): Promise<void> {
   const { holdId, walletId } = reservation;
   const userId = user.id;
+  // The scheduled pulse runs for the user with no one signing in (D-OW-34): org sign-in policy does not apply.
+  const actor = automationActor(userId, 'pulse-cron');
   // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
   const userNamePlain = await decryptField(user.name);
   const userEmailPlain = await decryptField(user.email);
@@ -235,8 +238,8 @@ async function buildAndPersistPulse(
   // membership at all, and excludes trashed pages and pages in trashed drives.
   const [userDrives, accessiblePagesList] = await Promise.all([
     // Owned or joined (org-aware; page-level access does not count)
-    getMemberDriveIds(userId, { includeTrashed: true }),
-    accessiblePageIds(userId),
+    getMemberDriveIds(actor, { includeTrashed: true }),
+    accessiblePageIds(actor),
   ]);
   const driveIds = userDrives;
   const accessiblePages = new Set(accessiblePagesList);

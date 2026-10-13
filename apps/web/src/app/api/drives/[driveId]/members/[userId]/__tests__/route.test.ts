@@ -358,7 +358,7 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`);
       await GET(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockCurrentUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockCurrentUserId }));
     });
 
     it('should call getDriveMemberDetails with driveId and targetUserId', async () => {
@@ -712,7 +712,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       });
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockCurrentUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockCurrentUserId }));
     });
 
     it('should call getDriveMemberDetails to verify member exists', async () => {

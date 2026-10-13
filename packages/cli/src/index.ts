@@ -81,6 +81,7 @@ export {
   drivesSetHomePageHandler,
   drivesTrashHandler,
   drivesUpdateContextHandler,
+  extractDriveCreateArgs,
   renderDrive,
   renderDrivesList,
 } from './commands/drives.js';
@@ -491,6 +492,71 @@ export {
 } from './commands/orgs.js';
 export type { ExtractOrgArgsResult } from './commands/orgs.js';
 
+// Organization WRITES and admin reads (Spec X-1, ORG-5) — one verb per organizations.* SDK operation.
+export {
+  buildAuditFilter,
+  buildVerifyDomain,
+  parsePolicyAssignments,
+  renderAuditLog,
+  renderAutomations,
+  renderDomains,
+  renderDriveUsage,
+  renderGuestApprovals,
+  renderGuests,
+  renderInvitations,
+  renderMemberActivity,
+  renderPolicyChange,
+  renderSuspended,
+  renderTrashedDrives,
+  orgsAcceptInviteHandler,
+  orgsActivityHandler,
+  orgsAddDomainHandler,
+  orgsAnswerGuestHandler,
+  orgsAuditExportHandler,
+  orgsAuditHandler,
+  orgsAutomationsHandler,
+  orgsClearSuppressionHandler,
+  orgsConfirmDomainHandler,
+  orgsDeleteAutomationHandler,
+  orgsDomainsHandler,
+  orgsDriveUsageHandler,
+  orgsGuestApprovalsHandler,
+  orgsGuestsHandler,
+  orgsInvitationsHandler,
+  orgsInviteHandler,
+  orgsLeaveHandler,
+  orgsReassignAutomationHandler,
+  orgsRemoveDomainHandler,
+  orgsRemoveMemberHandler,
+  orgsResendInviteHandler,
+  orgsRevokeInviteHandler,
+  orgsSetPoliciesHandler,
+  orgsSetRoleHandler,
+  orgsSignInPreviewHandler,
+  orgsSuspendedHandler,
+  orgsTrashedDrivesHandler,
+  orgsUpdateHandler,
+  orgsVerifyDomainHandler,
+  policyChangeMayRestrict,
+} from './commands/org-writes.js';
+
+// Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6).
+export {
+  drivesAnswerJoinHandler,
+  drivesJoinRequestsHandler,
+  drivesMoveOutOfOrgHandler,
+  drivesMoveToOrgHandler,
+  drivesRequestJoinHandler,
+  drivesSetLeadHandler,
+  drivesSetVisibilityHandler,
+  drivesWithdrawJoinHandler,
+  renderJoinRequests,
+} from './commands/drive-org.js';
+
+// The shared verb shape (pure argv parsing, one SDK call per verb).
+export { oneOf, parseVerbArgs, verbHandler } from './commands/verb.js';
+export type { ParsedVerbArgs, VerbArgsResult, VerbSpec } from './commands/verb.js';
+
 // Wallet READ verbs (X-1, [D-OW-26]) — thin projections over the wallets.* SDK reads.
 export {
   extractConversationSourceArgs,
@@ -501,6 +567,8 @@ export {
   renderMyWallets,
   renderResolvedSpend,
   sourceLabel,
+  renderAlwaysOwnCredits,
+  walletsAlwaysOwnCreditsHandler,
   walletsDriveHandler,
   walletsListHandler,
   walletsSourceHandler,

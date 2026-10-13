@@ -92,7 +92,14 @@ async function loadLiveSubscription(tx: Tx, orgId: string) {
 export type SeatAdmission =
   /** `quantity` is the extra-seat quantity Stripe now bills, set when this admission raised it. */
   | { ok: true; raised: boolean; quantity?: number }
-  | { ok: false; status: 402; reason: typeof SEAT_REFUSED_CODE; message: string; purchased: number; held: number };
+  | { ok: false; status: 402; reason: typeof SEAT_REFUSED_CODE; message: string; purchased: number; held: number }
+  /** [D-OW-26] A delegated key would need a seat raise (a money move): nothing is taken or bought. */
+  | { ok: false; status: 403; reason: typeof SEAT_RAISE_BY_KEY_CODE; message: string; purchased: number; held: number };
+
+/** The refusal code of a seat raise a delegated key asked for ([D-OW-26]). */
+export const SEAT_RAISE_BY_KEY_CODE = 'mcp_token_cannot_move_money' as const;
+export const SEAT_RAISE_BY_KEY_MESSAGE =
+  'An access token cannot buy another seat: every purchased seat is taken. Sign in to invite, or free a seat first';
 
 /**
  * May ONE more seat be taken for this org, inside the caller's transaction? Takes the billing
@@ -104,7 +111,8 @@ export type SeatAdmission =
  */
 export async function admitSeat(
   tx: Tx,
-  input: { orgId: string; actorRole: OrgRole },
+  /** `credential`: a delegated key ('mcp') is never admitted a seat raise ([D-OW-26], decideSeatAdmission). */
+  input: { orgId: string; actorRole: OrgRole; credential: 'session' | 'mcp' },
   port?: SeatBillingPort,
 ): Promise<SeatAdmission> {
   await lockOrgBilling(tx, input.orgId);
@@ -122,8 +130,12 @@ export async function admitSeat(
     period: sub ? { end: sub.currentPeriodEnd, reconciledThrough: sub.seatsReconciledThrough } : null,
     now: new Date(),
     giftedExtraSeats: sub?.giftedExtraSeats ?? null,
+    credential: input.credential,
   });
   if (decision.action === 'admit') return { ok: true, raised: false };
+  if (decision.action === 'refuse' && decision.reason === 'delegated_raise') {
+    return { ok: false, status: 403, reason: SEAT_RAISE_BY_KEY_CODE, message: SEAT_RAISE_BY_KEY_MESSAGE, purchased: decision.purchased, held: decision.held };
+  }
   if (decision.action === 'refuse') {
     return {
       ok: false,

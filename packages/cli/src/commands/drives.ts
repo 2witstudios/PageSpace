@@ -1,5 +1,7 @@
 /**
- * `pagespace drives list|create|rename|update-context|trash|restore` (Phase 5 task 1).
+ * `pagespace drives list|create|rename|update-context|trash|restore` (Phase 5 task 1). `create`
+ * takes `--org <orgId>` to create the drive in an organization (DRV-3, X-1); the org-ownership
+ * verbs (move, visibility, lead, join requests) live in `drive-org.ts`.
  * Thin projections over the `drives.*` SDK operations — argv parsing and
  * result rendering are pure; `ctx.sdk` is the only I/O edge each handler
  * touches directly (destructive `trash` also reads `ctx.isTTY`/`ctx.prompt`
@@ -18,6 +20,7 @@ import { confirmationFailureMessage, confirmDestructive } from '../confirm.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { callSdk } from './sdk-error.js';
+import { oneOf, parseVerbArgs, type VerbArgsResult } from './verb.js';
 
 type DriveSummary = Awaited<ReturnType<PageSpaceClient['drives']['list']>>[number];
 /** `create` and `rename`/`trash` return different (but overlapping) drive shapes — only id/name are rendered. */
@@ -31,7 +34,9 @@ export function renderDrivesList(drives: readonly DriveSummary[]): string {
   if (drives.length === 0) {
     return 'No drives.\n';
   }
-  return drives.map((drive) => `${drive.id}  ${drive.name}  [${drive.kind}] (${drive.role})\n`).join('');
+  return drives
+    .map((drive) => `${drive.id}  ${drive.name}  [${drive.kind}] (${drive.role})${drive.orgId ? `  org ${drive.orgId} · ${drive.orgVisibility ?? 'OPEN'}` : ''}\n`)
+    .join('');
 }
 
 /** Pure: no I/O. */
@@ -51,14 +56,35 @@ export const drivesListHandler: CommandHandler = async (ctx, intent) => {
   return EXIT_SUCCESS;
 };
 
+const CREATE_USAGE = 'Usage: pagespace drives create <name> [--org <orgId> [--visibility OPEN|RESTRICTED|PRIVATE]]';
+const ORG_VISIBILITIES = ['OPEN', 'RESTRICTED', 'PRIVATE'] as const;
+
+/** Pure: `<name>` and, to create it in an organization (DRV-3), `--org` with an optional `--visibility`. */
+export function extractDriveCreateArgs(args: readonly string[]): VerbArgsResult<Parameters<PageSpaceClient['drives']['create']>[0]> {
+  const parsed = parseVerbArgs(args, { usage: CREATE_USAGE, positionals: 1, variadic: true, flags: ['org', 'visibility'] });
+  if (!parsed.ok) return parsed;
+  const { positionals, options } = parsed.value;
+  if (options.visibility !== undefined && options.org === undefined) return { ok: false, message: `--visibility needs --org.\n${CREATE_USAGE}` };
+  const visibility = options.visibility === undefined ? undefined : oneOf(options.visibility, ORG_VISIBILITIES, 'Visibility', CREATE_USAGE);
+  if (visibility && !visibility.ok) return visibility;
+  return {
+    ok: true,
+    value: {
+      name: positionals[0],
+      ...(options.org !== undefined ? { orgId: options.org } : {}),
+      ...(visibility ? { orgVisibility: visibility.value } : {}),
+    },
+  };
+}
+
 export const drivesCreateHandler: CommandHandler = async (ctx, intent) => {
-  const [name] = intent.args;
-  if (!name) {
-    ctx.stderr.write('Usage: pagespace drives create <name>\n');
+  const input = extractDriveCreateArgs(intent.args);
+  if (!input.ok) {
+    ctx.stderr.write(`${input.message}\n`);
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.create({ name }));
+  const result = await callSdk(ctx.stderr, () => ctx.sdk.drives.create(input.value));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

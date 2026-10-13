@@ -57,7 +57,6 @@ export interface OrgWebhookDeps {
   seatPriceId: () => string;
   /** The configured Business base price id (stripe-config orgPriceIds.businessBase): finds the base item the mirror refreshes. */
   basePriceId: () => string;
-  now?: () => Date;
 }
 
 type MetadataBag = Record<string, string> | null | undefined;
@@ -138,7 +137,6 @@ export async function mirrorOrgSubscription(
     if (plan !== 'apply' || !stored) return { kind: 'ignored', orgId, reason: plan === 'apply' ? 'no_row' : plan };
 
     const fetched = await deps.stripe.retrieveSubscription(subscriptionId);
-    const now = deps.now?.() ?? new Date();
     // Review 3+4 P2-8: the seat item and its quantity as Stripe has them NOW (a change made
     // outside the app is mirrored, never left stale), alongside the status.
     const mirrorPatch = planOrgSubscriptionPriceMirror({
@@ -160,15 +158,17 @@ export async function mirrorOrgSubscription(
     const next = {
       gifted: gift.typed && gift.giftedExtraSeats !== null,
       giftedExtraSeats: gift.typed ? gift.giftedExtraSeats : null,
-      trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
+      // [D-OW-44] mirrored with the status: an invoice-billed subscription never grants capability.
+      collectionMethod: fetched.collectionMethod,
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       ...mirrorPatch,
     };
-    const before = (await getOrgStatus(orgId, { executor: tx, now })).status;
+    // The status reads the mirrored row AND its funding proof (D-OW-30), so it is read, not derived from the row alone.
+    const before = (await getOrgStatus(orgId, { executor: tx })).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
-    const after = (await getOrgStatus(orgId, { executor: tx, now })).status;
+    const after = (await getOrgStatus(orgId, { executor: tx })).status;
     return {
       kind: 'applied',
       orgId,
@@ -290,7 +290,7 @@ export async function handleOrgInvoicePaid(
   return { refill, mirror };
 }
 
-/** invoice.payment_failed for an org-routed event: mirror the subscription (it goes past_due). */
+/** invoice.payment_failed for an org-routed event: mirror the subscription (past_due lapses the org, SEAT-9). */
 export async function handleOrgInvoicePaymentFailed(
   route: Exclude<BillingOwnerRoute, { kind: 'person' }>,
   invoice: Stripe.Invoice,

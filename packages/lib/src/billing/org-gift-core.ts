@@ -45,9 +45,8 @@
  */
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { isLiveOrgSubscriptionStatus, orgStripeIdempotencyKey } from './org-subscription-core';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from './wallet-funding';
 
-/** The subscription metadata `type` the funding path recognises as an admin gift. */
-export const ORG_GIFT_METADATA_TYPE = 'gift_subscription';
 
 /**
  * The most extra seats an admin gift may pin (D-OW-54). One bound for both doors: the admin
@@ -71,7 +70,7 @@ export interface OrgGiftMetadataState {
  * until it is revoked.
  */
 export function parseOrgGiftMetadata(metadata: Record<string, string> | null | undefined): OrgGiftMetadataState {
-  if (metadata?.type !== ORG_GIFT_METADATA_TYPE) return { typed: false, giftedExtraSeats: null };
+  if (metadata?.type !== GIFT_SUBSCRIPTION_METADATA_TYPE) return { typed: false, giftedExtraSeats: null };
   const raw = metadata.giftedExtraSeats;
   const seats = typeof raw === 'string' && /^\d{1,9}$/.test(raw) ? Number(raw) : null;
   return { typed: true, giftedExtraSeats: seats !== null && seats <= MAX_GIFTED_EXTRA_SEATS ? seats : null };
@@ -129,7 +128,7 @@ export interface OrgGiftCouponParams {
 export interface OrgGiftSubscriptionUpdate {
   discounts: [{ coupon: string }];
   /** No admin or reason here: those live in the audit trails, so a retried gift is the same request. */
-  metadata: { type: typeof ORG_GIFT_METADATA_TYPE; giftedExtraSeats: string };
+  metadata: { type: typeof GIFT_SUBSCRIPTION_METADATA_TYPE; giftedExtraSeats: string };
   /** The seat item, held at the gifted quantity. */
   items: [{ id: string; quantity: number }];
   proration_behavior: 'none';
@@ -226,7 +225,7 @@ export function planOrgGift(facts: OrgGiftFacts): OrgGiftPlan {
   };
   const update: OrgGiftSubscriptionUpdate = {
     discounts: [{ coupon: coupon.id }],
-    metadata: { type: ORG_GIFT_METADATA_TYPE, giftedExtraSeats: String(facts.extraSeats) },
+    metadata: { type: GIFT_SUBSCRIPTION_METADATA_TYPE, giftedExtraSeats: String(facts.extraSeats) },
     items: [{ id: stored.stripeSeatItemId, quantity: facts.extraSeats }],
     proration_behavior: 'none',
     ...(restoresNow ? { billing_cycle_anchor: 'now' as const } : {}),

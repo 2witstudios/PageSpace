@@ -109,7 +109,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
@@ -739,7 +739,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
   describe('inviteToken handling (web JSON response)', () => {
     it('given an inviteToken consumed successfully, returns redirectUrl pointing to the invited drive with invited=1', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
-      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({ kind: 'drive', invitedDriveId: 'drive_xyz', invitedPageId: null, connectionId: null });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({ kind: 'drive', invitedDriveId: 'drive_xyz', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
       const body = await response.json();
@@ -752,7 +752,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('given an inviteToken whose consumption failed (e.g. TOKEN_CONSUMED race), returns redirectUrl carrying ?inviteError=<code> so the UI can surface the failure', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'TOKEN_CONSUMED',
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'TOKEN_CONSUMED',
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
@@ -766,7 +766,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('given EMAIL_MISMATCH on invite consumption, surfaces ?inviteError=EMAIL_MISMATCH on the redirect', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'EMAIL_MISMATCH',
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'EMAIL_MISMATCH',
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));

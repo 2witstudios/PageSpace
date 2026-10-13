@@ -9,6 +9,7 @@ import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { unifiedPageScope, derivedPageId } from '@/lib/repositories/unified-message-scope';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only operation
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -92,10 +93,10 @@ export async function GET(
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_message', resourceId: conversationId, details: { reason: 'no_view_permission', agentId, method: 'GET' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to view this agent\'s conversations' },
         { status: 403 }
-      );
+      ));
     }
 
     // Conversation access gate: private conversations are only visible to their owner.

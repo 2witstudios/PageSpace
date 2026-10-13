@@ -8,6 +8,7 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 interface DriveAgentSummary {
   id: string;
@@ -53,10 +54,10 @@ export async function GET(
     // Verify drive access
     const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'You don\'t have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get drive information
@@ -195,12 +196,12 @@ export async function POST(
 
     const { driveId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can add agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can add agent members' }, { status: 403 }));
     }
 
     const rawBody = await request.json();
@@ -215,7 +216,7 @@ export async function POST(
     // the caller against the agent + drive and caps the granted role at the
     // caller's own access.
     const result = await addAgentToDrive({
-      actingUserId: userId,
+      actor: actorFromAuth(auth),
       agentPageId,
       driveId,
       requestedRole: role,

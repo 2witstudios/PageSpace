@@ -419,7 +419,7 @@ describe('sendOrgInvitationEmail', () => {
       orgName: 'Northwind Labs',
       role: 'MEMBER',
       expiresInDays: 7,
-      inviteUrl: 'https://app.example.com/orgs/invite?token=ps_orginv_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_orginv_xyz',
     });
 
     const call = vi.mocked(sendEmail).mock.calls[0][0];
@@ -434,7 +434,7 @@ describe('sendOrgInvitationEmail', () => {
       orgName: 'Org\nX-Header: pwn',
       role: 'ADMIN',
       expiresInDays: 7,
-      inviteUrl: 'https://app.example.com/orgs/invite?token=ps_orginv_xyz',
+      inviteUrl: 'https://app.example.com/invite/ps_orginv_xyz',
     });
 
     const call = vi.mocked(sendEmail).mock.calls[0][0];

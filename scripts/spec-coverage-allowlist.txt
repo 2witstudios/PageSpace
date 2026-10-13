@@ -28,45 +28,13 @@
 # seat quantity changed on Stripe's side writes no event, and org events are appended after commit and a failed
 # append is logged, not retried (org-audit.ts).
 AUD-1
-DRV-3
-# DRV-5 (Open: every org member resolves as an implicit member with the drive's default role; sidebar,
-# picker and accessible-drives include it): B4's org-membership-sync tests prove the materialized rows
-# (default role, accepted, drive lead excluded, idempotent), titled "DRV-5 (partial)"; resolution through
-# the permission resolver and inclusion in sidebar, picker and accessible-drives are unproven until B7/Wave F.
-# ow-pol6-resolver: implicit Open membership now resolves the same in every TS resolver AND the SQL twin
-# accessible_page_ids_for_user (0334, pulse/activity/page payloads), in one real-PG matrix; the sidebar and picker
-# surfaces are not re-verified there, so it stays.
-DRV-5
-DRV-7
-# DRV-8 (a guest is a drive member not in the org; guests hold no seat, see only the drives they were
-# invited to, and are labeled as guests) re-added per reviews 5230157358 and 5230240628 on #2659:
-# the B1 tests prove only that drive_members.source distinguishes invited rows from org-materialized
-# rows, so they are titled "DRV-8 (partial)"; seat exclusion, visibility and labeling are unproven
-# until B4/B7, Wave C and Wave F.
-DRV-8
-DRV-9
-# ORG-1 (name, slug, avatar, one human Owner; ownership is transferable), ORG-2 (Owner/Admin/Member;
-# many orgs per user; a user in no org sees no org UI) and ORG-3 (email invites with expiry, resend,
-# revoke, acceptance for new and existing accounts; a pending invite counts as a seat) re-added per
-# reviews 5230157358 and 5230240628 on #2659: the B1 schema tests prove only the storage shape
-# (fields, the one-OWNER-row cap, unique membership, one open case-insensitive invite), so they are
-# titled "(partial)". B3 (org services and routes) then proved Owner membership matching ownerId
-# through creation and transfer, roles and membership across many orgs, and the invite lifecycle
-# (expiry, rotation after expiry, resend, revoke, acceptance by a new or an existing account, live-
-# invite seat counting), still titled "(partial)" because each test proves one clause. Still
-# unproven: ORG-1 "human" Owner (agent accounts), ORG-2 the no-org-UI rule (Wave F), ORG-3 invite
-# acceptance wired into every sign-up flow (Wave F accept page) and a pending invite counting in
-# the Stripe seat quantity (Wave C, SEAT-3).
-ORG-1
+# ORG-2 (Owner/Admin/Member; many orgs per user; a user in no org sees no org UI) re-added per the lane-B review
+# of #2869 (comment 6126276565): no single test proves all three clauses. Proven in parts, each titled
+# "ORG-2 (partial)": the roles and many-orgs clauses and a no-org person's empty org list and 404s on real Postgres
+# (packages/lib org-roles-many-orgs.integration), and the no-org UI on the real web components with an empty org
+# list (apps/web components/orgs/__tests__/no-org-ui.test.tsx; ruling: the Create organization entry is the one
+# affordance a no-org user sees). A test crossing both packages is not possible in one run, so it stays here.
 ORG-2
-ORG-3
-# ORG-4: ow-pol6-resolver made the SQL twin (0334) give org Owner/Admin power the same full access as the TS
-# resolvers, and audit it on a PRIVATE drive through the same deduped event (accessiblePageIds, loadPagePayload;
-# "ORG-4 (partial)" in org-admin-access-audit.integration). Other ORG-4 clauses were not re-verified there.
-ORG-4
-# ORG-5 (one shared org permission function used by web routes, CLI, and MCP): B3 routes all go
-# through requireOrgRole, titled "ORG-5 (partial)"; CLI and MCP use it in Wave G (X-1).
-ORG-5
 # POL-1 (policies stored once per org and read through one function, no route reads the org row directly; a
 # change applies immediately; anything newly forbidden is suspended, not deleted, and listed in the audit log)
 # re-added per Review 3+4 (page v3pbwr7hy45eu1t2w6qbxm3e, P2-7 "removed but not proven"). ow-policy-integrity:
@@ -96,15 +64,15 @@ POL-2
 # list offered to the pickers is the public catalog and is not org-filtered (UI lane), and the hidden agent-model
 # writes (page-agents config) are not checked at save time, only at run time.
 POL-8
-# SEAT-9 (partial, ow-lapse-automation): [D-OW-33] amends the policies clause — a lapsed org may make
-# RESTRICTING changes only (lapsed-restrict.integration, policy-restricts, wallet-restricts). Stays listed: the
-# Spec text still says "policies changes" are blocked (amendment proposed in the PR body), and the banner/notice
-# and "nothing is deleted" clauses are proven elsewhere only in part.
+# SEAT-9 (partial): seat-9-matrix.integration (real PG) proves the whole capability list in one test — unpaid,
+# past_due, canceled and never-paid all lapse; reads kept; invite, create/take in an org drive, pool and
+# allocations, loosening policy and caps, approving guests, the publish guard, sandbox and env creation all
+# refused 402 org_lapsed; storage charged nothing (D-OW-32); nothing deleted; restricting allowed (D-OW-33);
+# paid again, all back — and the per-role banner data. The banner RENDERING on every org surface is proven by
+# OrgSurfaceBanner.test in apps/web. Stays listed because the two cannot share one describe (lib vs web), and
+# the publish route itself (apps/web publish-page.ts, server-only) is asserted only through its checkOrgActive guard.
 SEAT-9
 SEC-1
-SEC-2
-SEC-3
-SEC-4
 # SPEND-1 (partial, ow-c2, C3, ow-fix-ungated-ai): every chat turn, /btw, consult, v1, image, pulse,
 # workflow, trigger and mention call gates first; context compaction and the memory cron now reserve
 # before their model call; a realtime voice call resolves its drive before connecting (a page
@@ -143,23 +111,12 @@ SPEND-9
 # SPEND-10 (partial, ow-c6): the lead's view carries spend by member, the org admin's the pool and the
 # unallocated balance; automation spend is labeled per person until C4 names the drive consumer.
 SPEND-10
-UI-1
-# UI-3 (partial, phase5-fixes): the drive chip (org mark, org in the tooltip) and the org chip on /orgs/* pages
-# (Main.dc.html:146) are tested in DashboardCrumb.org.test; back on the list until a reviewer agrees every clause is proven.
-UI-3
-UI-4
-UI-5
 UI-7
+# UI-8 (partial): the chip, popover and composer strip (spend-surfaces*), the refusal card in the chat error
+# banner, the automation spend line / skipped badge / owner-left state, and the /btw fallback notice are
+# tested, each titled "UI-8 (partial)". Unproven: v1/chat/completions, consult and mentions still drop the
+# gate's fallback (SPEND-4, the spend-gate lane), and canvas page 2 fidelity needs a reviewer with the canvas.
 UI-8
-# UI-9 (partial, ow-c6 + ui-wallet-surfaces): the routes (ow-c6) and the Drive Settings › Wallet page
-# (per-viewer panels from the real projection, pause, caps, top-up, donate, rules) are tested; the
-# canvas's per-member "today" spend and "via automations" split have no read model yet.
-UI-9
-# UI-10 (partial, ow-c6 + ui-wallet-surfaces): GET /api/wallets (with seat allowance, spent and left),
-# PUT /api/wallets/default and the Settings › Usage › Wallets page are tested; the canvas's per-drive
-# "you spent N" on a drive wallet you spend from has no read model yet.
-UI-10
-UI-11
 # WAL-1 (partial, ow-c1): the wallets table carries every WAL-1 field, the migration proves each
 # former credit_balances row became its user's personal root wallet to the cent, and the constraint
 # suite proves owner/subject/parent/status shapes; top-up "never expires" on child wallets is unproven
@@ -202,25 +159,9 @@ WAL-8
 # pool cannot stand in); cron storage accrual settles on the pool with no hold or gate, so it can put a
 # paused or empty pool into debt; the personal usage breakdown still lists org compute under the recorded person.
 WAL-9
-# X-1 (partial, ow-c6 + ow-p6-x1): wallet READS and the five org READS (orgs list/get, members,
-# drive directory, policies) are mirrored for CLI/MCP, gated by the same requireOrgRole the web
-# routes run; per [D-OW-26] a token may not move money or change a spend source, and every org
-# WRITE is session-only on the server today, so no write is mirrored. Whether X-1's "where the web
-# does" also demands write parity is a reviewer call; until then the bare ID stays here.
-X-1
-# X-2: B3's "X-2 (partial)" test blocks ORGS_ENABLED while org tables are excluded from the GDPR
-# export; the export and account-deletion handling itself is the Phase 6 leaf yfmlkdchehmberwthwu6g7vt.
-X-2
-X-3
-# X-4 (realtime events for membership, visibility and wallet state): B4 proves one drive-member event
-# per affected user from the org membership sync, titled "X-4 (partial)"; wallet-state events and the
-# client updating without refresh are unproven until Wave C/F.
+# X-4 (partial): one drive-member event per affected user from the org membership sync (B4); wallet:changed
+# and org:changed contracts; org rename/avatar, delete (audience read before), invitation create/revoke and
+# accept announce org:changed; the app shell's listener refetches GET /api/orgs so the picker regroups and
+# renames without reload (useMyOrgs.shared-cache). Unproven in one test: a two-context run where a visibility
+# change updates another member's sidebar live (an e2e in E2E_SPECS once ORGS_ENABLED flips).
 X-4
-# X-6 (Negative tests: non-member sees no other org's Open drive; a guest sees exactly one
-# drive; a disabled policy refuses; an empty chosen wallet charges nothing; an automation never
-# charges a person) needs org/wallet resolution logic that does not exist until Wave B/C lands.
-# The seam guards and the Northwind fixture shape check in this lane are real tests but they
-# check code STRUCTURE, not these five authorization/spend behaviors — they do not prove X-6 and
-# their names no longer claim it (PR #2642 review thread PRRT_kwDOPhnPxc6ioz-F). Only remove this
-# line once a test exercises one of the five behaviors above against real resolution logic.
-X-6

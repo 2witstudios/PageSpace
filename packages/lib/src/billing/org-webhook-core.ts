@@ -48,7 +48,7 @@ export type OrgSubscriptionMirrorPlan = 'apply' | 'ignore_other_subscription' | 
  * latest state and an out-of-order or late event cannot roll the row back. What it
  * must still refuse is a different subscription: a late event about an ended one the
  * org has since replaced. An org with no row yet is the provisioning path's
- * (ensureOrgBusinessSubscription writes the row under the same lock).
+ * (provisionOrgSubscription writes the row under the same lock).
  */
 export function planOrgSubscriptionMirror(input: {
   storedSubscriptionId: string | null;
@@ -84,15 +84,13 @@ export function planOrgSeatItemMirror(input: {
   itemsHasMore?: boolean;
 }): OrgSeatItemMirrorPatch | null {
   const linkage = orgSubscriptionItems({ items: input.items, itemsHasMore: input.itemsHasMore }, input.prices);
-  if (!linkage?.seatItem) return null;
+  if (!linkage) return null;
   const patch: OrgSeatItemMirrorPatch = {};
   if (linkage.baseItemId !== input.stored.stripeBaseItemId) patch.stripeBaseItemId = linkage.baseItemId;
-  if (linkage.seatItem) {
-    if (linkage.seatItem.id !== input.stored.stripeSeatItemId) patch.stripeSeatItemId = linkage.seatItem.id;
-    if (linkage.seatItem.quantity !== input.stored.extraSeatQuantity) {
-      patch.extraSeatQuantity = linkage.seatItem.quantity;
-      patch.seatRevision = input.stored.seatRevision + 1;
-    }
+  if (linkage.seatItem.id !== input.stored.stripeSeatItemId) patch.stripeSeatItemId = linkage.seatItem.id;
+  if (linkage.seatItem.quantity !== input.stored.extraSeatQuantity) {
+    patch.extraSeatQuantity = linkage.seatItem.quantity;
+    patch.seatRevision = input.stored.seatRevision + 1;
   }
   return patch;
 }

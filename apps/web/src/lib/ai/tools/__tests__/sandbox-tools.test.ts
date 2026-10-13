@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest';
 // schema + context resolution + gate + delegation and nothing else.
 import { createSandboxTools, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const ctx: SandboxActorContext = {
   userId: 'u1',
@@ -42,14 +43,17 @@ function fakeRunDeps(): SandboxRunDeps {
   };
 }
 
-function exec(tool: { execute?: unknown }, args: unknown, context: unknown) {
+/** The tool context every call carries: its user and that user's actor (D-OW-45). */
+const ACTOR = credentialActor('u1', null);
+
+function exec(tool: { execute?: unknown }, args: unknown, context: Record<string, unknown>) {
   const fn = tool.execute as (a: unknown, o: unknown) => Promise<unknown>;
-  return fn(args, { experimental_context: context });
+  return fn(args, { experimental_context: { userId: 'u1', accessActor: ACTOR, ...context } });
 }
 
 describe('createSandboxTools', () => {
   it('bash: given a resolvable context, should delegate to the runner and return its result', async () => {
-    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { command: 'echo hi' }, {});
     expect(result).toMatchObject({ success: true, stdout: 'hi', exitCode: 0 });
   });
@@ -68,7 +72,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { command: 'echo hi', cwd: '/workspace/repo', timeoutMs: 5000 }, {});
     expect(result).toMatchObject({ success: true });
     expect(seenRuns).toEqual([
@@ -95,7 +99,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.bash, { command: 'echo hi' }, { userId: 'u1' });
     expect(result).toMatchObject({ success: true });
     expect(seenCwds).toEqual(['/workspace']);
@@ -109,7 +113,7 @@ describe('createSandboxTools', () => {
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
     const tools = createSandboxTools({
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: async () => ({ error: 'no drive' }),
       gate: okGate,
     });
@@ -126,7 +130,7 @@ describe('createSandboxTools', () => {
       return { ok: true, sandboxId: 'sbx', resumed: false, workspaceId: 'ws-1' };
     };
     const tools = createSandboxTools({
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'concurrency_limit', error: 'too many runs', retryAfter: 30 }),
     });
@@ -137,7 +141,7 @@ describe('createSandboxTools', () => {
 
   it('bash: given the gate denies without a retry hint, should not fabricate a retryAfter field', async () => {
     const tools = createSandboxTools({
-      runDeps: fakeRunDeps(),
+      runDeps: () => fakeRunDeps(),
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -159,7 +163,7 @@ describe('createSandboxTools', () => {
       createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -181,7 +185,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.writeFile, { path: 'a.txt', content: 'hello' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', bytesWritten: 5 });
     // The runner anchors the relative path at the sandbox root — no node/binding cwd.
@@ -202,7 +206,7 @@ describe('createSandboxTools', () => {
       },
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.readFile, { path: 'a.txt' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', content: 'data' });
     expect(seenReads).toEqual([{ path: '/workspace/a.txt' }]);
@@ -223,7 +227,7 @@ describe('createSandboxTools', () => {
       createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -245,7 +249,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(tools.editFile, { path: 'a.txt', oldString: 'data', newString: 'X' }, {});
     expect(result).toMatchObject({ success: true, path: 'a.txt', replacements: 1 });
     expect(seenWrites).toEqual([[{ path: '/workspace/a.txt', content: 'X' }]]);
@@ -264,7 +268,7 @@ describe('createSandboxTools', () => {
       readFileToBuffer: async () => Buffer.from('data data'),
       createCheckpoint: async () => {},
     });
-    const tools = createSandboxTools({ runDeps, resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => runDeps, resolveContext: okResolve, gate: okGate });
     const result = await exec(
       tools.editFile,
       { path: 'a.txt', oldString: 'data', newString: 'X', replaceAll: true },
@@ -288,7 +292,7 @@ describe('createSandboxTools', () => {
       createCheckpoint: async () => {},
     });
     const tools = createSandboxTools({
-      runDeps,
+      runDeps: () => runDeps,
       resolveContext: okResolve,
       gate: async () => ({ ok: false, reason: 'kill_switch_off', error: 'disabled' }),
     });
@@ -298,14 +302,14 @@ describe('createSandboxTools', () => {
   });
 
   it('bash inputSchema: should reject an empty command', () => {
-    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.bash.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ command: '' }).success).toBe(false);
     expect(schema.safeParse({ command: 'ls' }).success).toBe(true);
   });
 
   it('bash inputSchema: should accept cwd and a positive integer timeoutMs, rejecting invalid ones', () => {
-    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.bash.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ command: 'ls', cwd: '/workspace/repo' }).success).toBe(true);
     expect(schema.safeParse({ command: 'ls', timeoutMs: 5000 }).success).toBe(true);
@@ -319,14 +323,14 @@ describe('createSandboxTools', () => {
     }
 
     it('writeFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'writeFile');
       expect(schema.safeParse({ path: 'a.txt', content: 'x', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ path: 'a.txt', content: 'x' }).success).toBe(true);
     });
 
     it('readFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'readFile');
       expect(schema.safeParse({ path: 'a.txt', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ path: 'a.txt' }).success).toBe(true);
@@ -336,7 +340,7 @@ describe('createSandboxTools', () => {
       // The runner clamps a 0-or-negative offset to line 1 (selectLineWindow),
       // so a schema that refuses those values gives a model a zod error instead
       // of the documented clamp behaviour.
-      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'readFile');
       expect(schema.safeParse({ path: 'a.txt', offset: 0 }).success).toBe(true);
       expect(schema.safeParse({ path: 'a.txt', offset: -5 }).success).toBe(true);
@@ -345,14 +349,14 @@ describe('createSandboxTools', () => {
     });
 
     it('editFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
-      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'editFile');
       expect(schema.safeParse({ path: 'a.txt', oldString: 'x', newString: 'y', cwd: 'PageSpace' }).success).toBe(false);
       expect(schema.safeParse({ path: 'a.txt', oldString: 'x', newString: 'y' }).success).toBe(true);
     });
 
     it('bash inputSchema: given a legitimate extra-looking but unknown field, should reject it', () => {
-      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'bash');
       expect(schema.safeParse({ command: 'ls', bogus: true }).success).toBe(false);
       expect(schema.safeParse({ command: 'ls', cwd: 'PageSpace' }).success).toBe(true);
@@ -360,7 +364,7 @@ describe('createSandboxTools', () => {
   });
 
   it('editFile inputSchema: should require path/oldString/newString and accept replaceAll', () => {
-    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     const schema = tools.editFile.inputSchema as { safeParse: (v: unknown) => { success: boolean } };
     expect(schema.safeParse({ path: 'a', oldString: 'x', newString: 'y' }).success).toBe(true);
     expect(schema.safeParse({ path: 'a', oldString: 'x', newString: 'y', replaceAll: true }).success).toBe(true);
@@ -368,7 +372,7 @@ describe('createSandboxTools', () => {
   });
 
   it('should expose exactly the four session tools — no machine directory tools remain', () => {
-    const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+    const tools = createSandboxTools({ runDeps: () => fakeRunDeps(), resolveContext: okResolve, gate: okGate });
     expect(Object.keys(tools).sort()).toEqual(['bash', 'editFile', 'readFile', 'writeFile']);
   });
 });

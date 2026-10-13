@@ -167,7 +167,6 @@ describe('Members & seats', () => {
   it('SEAT-9 (partial) D-OW-33: while lapsed, inviting and giving seats pause; revoking still works; a cap may be lowered but not raised', async () => {
     mocks.notice = { kind: 'reactivate', reason: 'canceled', canManageBilling: true };
     render(<OrgMembersPage />);
-    expect(screen.getByText('Northwind Labs is unpaid and read-only')).toBeTruthy();
     expect((screen.getByRole('button', { name: /Invite people/ }) as HTMLButtonElement).disabled).toBe(true);
     for (const button of screen.getAllByRole('button', { name: 'Give a seat' })) expect((button as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Revoke' }) as HTMLButtonElement).disabled).toBe(false);

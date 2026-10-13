@@ -75,6 +75,7 @@ import {
   ensureGlobalSandboxSession,
   spawnSession,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** One captured `POST /api/broadcast` body. */
 interface CapturedBroadcast {
@@ -351,7 +352,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const owner = await factories.createUser();
     const callerConversationId = createId();
     await resolveOrCreateConversation(owner.id, callerConversationId);
-    const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
+    const ensured = await ensureGlobalSandboxSession(callerConversationId, credentialActor(owner.id, null));
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
 
     broadcasts.length = 0;
@@ -359,7 +360,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const spawned = await buildSessionToolsDeps().createWorkerSession({
       conversationId: workerConversationId,
       callerConversationId,
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       name: 'spawned worker',
       // undefined = the caller's own workspace (the epic-central spawn shape).
@@ -431,7 +432,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
     const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Drive agent' });
-    const session = await spawnSession({ userId: owner.id, driveId: drive.id });
+    const session = await spawnSession({ actor: credentialActor(owner.id, null), driveId: drive.id });
     if (!session.ok) throw new Error(`spawnSession failed: ${session.reason}`);
 
     broadcasts.length = 0;
@@ -439,7 +440,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const spawned = await buildSessionToolsDeps().createWorkerSession({
       conversationId: workerConversationId,
       callerConversationId: createId(),
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       name: 'page worker',
       workspace: session.session.id,

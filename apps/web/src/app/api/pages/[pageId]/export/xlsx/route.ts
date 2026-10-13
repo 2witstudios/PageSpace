@@ -15,6 +15,7 @@ import {
   numberFormatToExcelCode,
 } from '@pagespace/lib/sheets/sheet';
 import { readSheetData } from '@pagespace/lib/sheets/store';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -40,7 +41,7 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
     // Check user permissions
     const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return new NextResponse("Forbidden", { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
     }
 
     // Fetch the page

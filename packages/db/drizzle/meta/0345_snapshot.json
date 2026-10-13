@@ -1,6 +1,6 @@
 {
-  "id": "63dc9781-28da-47e1-9be9-8cb7c8f90b54",
-  "prevId": "27087fd9-30b4-4a7e-928d-37cc55958270",
+  "id": "26dea859-358c-4efb-bf18-2f0dfbfb5cd2",
+  "prevId": "a7709f6c-9d6b-417f-89b4-dc7d7db40686",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -26190,24 +26190,12 @@
           "primaryKey": false,
           "notNull": false
         },
-        "giftedExtraSeats": {
-          "name": "giftedExtraSeats",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "giftRevision": {
-          "name": "giftRevision",
-          "type": "integer",
+        "collectionMethod": {
+          "name": "collectionMethod",
+          "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": 0
-        },
-        "trialEnd": {
-          "name": "trialEnd",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
+          "default": "'charge_automatically'"
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",
@@ -26411,7 +26399,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "organizations_avatar_url_chk": {
+          "name": "organizations_avatar_url_chk",
+          "value": "\"organizations\".\"avatarUrl\" IS NULL OR \"organizations\".\"avatarUrl\" ~ ('^/api/orgs/' || \"organizations\".\"id\" || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.org_guest_holds": {

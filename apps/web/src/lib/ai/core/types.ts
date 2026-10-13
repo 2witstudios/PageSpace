@@ -6,9 +6,16 @@
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
 import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface ToolExecutionContext {
   userId: string;
+  /**
+   * Who drives this turn, as the permission layer's actor (D-OW-45): the chat request's credential (with its
+   * ceremony evidence) or, for a workflow/trigger run, the automation running as its creator. Every tool access
+   * check asks the org sign-in policy (SEC-2/3) of it. Its userId is `userId`.
+   */
+  accessActor: AccessActor;
   conversationId?: string;
   // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
   timezone?: string;

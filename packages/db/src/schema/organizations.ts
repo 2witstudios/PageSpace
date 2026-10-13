@@ -41,6 +41,8 @@ export const organizations = pgTable('organizations', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').unique().notNull(),
+  // ORG-1: an image PageSpace stores and serves, never an outside URL (organizations_avatar_url_chk
+  // below; the pure rule is lib organizations/org-avatar-core.ts).
   avatarUrl: text('avatarUrl'),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'restrict' }),
   // Org-wide policies (Spec POL). Shape is owned by the policy reader in lib;
@@ -56,6 +58,11 @@ export const organizations = pgTable('organizations', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   ownerIdx: index('organizations_owner_id_idx').on(table.ownerId),
+  // Only this org's own avatar route, exactly as orgAvatarPath builds it: no other host, no other org.
+  avatarUrlCheck: check(
+    'organizations_avatar_url_chk',
+    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
+  ),
 }));
 
 export const orgMembers = pgTable('org_members', {
@@ -133,7 +140,10 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   // each one's Stripe idempotency key: one key per gift state transition, so a later gift or
   // revoke is never answered with an earlier one's cached response.
   giftRevision: integer('giftRevision').default(0).notNull(),
-  trialEnd: timestamp('trialEnd', { mode: 'date' }),
+  // [D-OW-44] Stripe collection_method, mirrored with the status: only charge_automatically can
+  // grant capability (status-core). Every writer sets it from Stripe; the default only backfills
+  // rows that existed before the column, all of which PageSpace created automatically collected.
+  collectionMethod: text('collectionMethod').default('charge_automatically').notNull(),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),

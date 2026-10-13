@@ -88,7 +88,6 @@ const CAPABILITY_SCOPES = notAccess("a session token's CAPABILITY scopes (e.g. m
 const KEY_SETTINGS = notAccess("the owner's own key settings: shows the key's configured scope");
 const LEGACY_SCOPE_CHECKS = ceiling('the scope check helpers: refuse or narrow a drive/page/list the owner already reaches');
 const ORG_GATE = ceiling("copies the credential's drive ceiling onto the org gate (empty = unrestricted); every consumer refuses or narrows by it");
-const ORG_REFUSAL = ceiling('refuses an org-wide org read to a drive-scoped token (the wallets.list rule); grants nothing');
 
 /** Every function in the tree that reads a key's drive scope. Keyed `file#function`. */
 const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
@@ -155,8 +154,6 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/lib/wallets/wallet-route.ts#refuseScopedTokenForAccountRead': SCOPE_REFUSAL,
   // ── org reads (X-1): the scope rides the org gate; consumers only refuse or narrow ──────────────────────
   'apps/web/src/lib/orgs/org-route-auth.ts#tokenAllowedDriveIds': ORG_GATE,
-  'apps/web/src/lib/orgs/org-route-auth.ts#refuseDriveScopedToken': ORG_REFUSAL,
-  'apps/web/src/lib/orgs/org-route-auth.ts#authorizeAuthenticated': ORG_GATE,
   'apps/web/src/app/api/orgs/[orgId]/drives/route.ts#GET': ceiling(
     "filters the OWNER's org drive directory (listOrgDriveDirectory) to the token's scope; nothing outside the scope is added",
   ),

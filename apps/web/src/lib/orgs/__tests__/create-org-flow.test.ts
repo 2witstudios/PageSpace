@@ -41,7 +41,7 @@ describe('createOrgSeatCount', () => {
 });
 
 describe('nextStepAfterCreate', () => {
-  const sub = { status: 'incomplete', trialEnd: null, currentPeriodEnd: null, extraSeatQuantity: 0 };
+  const sub = { status: 'incomplete', currentPeriodEnd: null, extraSeatQuantity: 0 };
 
   it('UI-6 (partial): payment_required goes to the Payment Element with the client secret (no trial, D-OW-30)', () => {
     expect(nextStepAfterCreate({ state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' } }))

@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { listDriveWalletCaps } from '@pagespace/lib/services/drive-wallet-service';
 import { authenticateRequestWithOptions, checkMCPDriveScope, isAuthError } from '@/lib/auth';
 import { WALLET_READ_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 type RouteContext = { params: Promise<{ driveId: string }> };
 
@@ -20,7 +21,7 @@ export async function GET(request: Request, context: RouteContext) {
   const scopeError = checkMCPDriveScope(auth, driveId);
   if (scopeError) return scopeError;
   try {
-    const result = await listDriveWalletCaps(auth.userId, driveId, walletCredentialOf(auth));
+    const result = await listDriveWalletCaps(actorFromAuth(auth), driveId, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'drive_wallet', resourceId: driveId, details: { operation: 'list_consumer_caps' } });
     return NextResponse.json({ walletId: result.walletId, caps: result.caps });

@@ -46,12 +46,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -88,6 +89,7 @@ import {
   expelConversationFromSession,
   findWorkspaceOfConversation,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -491,7 +493,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
 
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -514,7 +516,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(expelConversationFromSession).not.toHaveBeenCalled();
       expect(expelAfterDelete).toHaveBeenCalledWith({
         conversationId: mockConversationId,
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(vi.mocked(expelAfterDelete).mock.invocationCallOrder[0]).toBeGreaterThan(
         vi.mocked(conversationRepository.softDeleteConversation).mock.invocationCallOrder[0],
@@ -554,7 +556,7 @@ describe('DELETE /api/ai/page-agents/[agentId]/conversations/[conversationId]', 
       expect(expelConversationFromSession).toHaveBeenCalledWith({
         conversationId: mockConversationId,
         workspaceId: 'ses_1',
-        actingUserId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
       expect(conversationRepository.softDeleteConversation).toHaveBeenCalledWith(mockAgentId, mockConversationId);
     });

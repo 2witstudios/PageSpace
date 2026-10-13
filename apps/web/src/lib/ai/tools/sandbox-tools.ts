@@ -37,6 +37,8 @@ import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-polic
 import { DEFAULT_READ_LINES } from '@pagespace/lib/services/sandbox/execution-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { toolActor } from './actor-permissions';
 
 export const MAX_PATH_LENGTH = 1024;
 
@@ -99,10 +101,12 @@ export type ResolveSandboxContext = (
  * on the kill-switch, `canRunCode` (app admin + CODE_EXECUTION), and the
  * concurrency preflight — the derived sandbox capability, no stored toggle.
  */
-export type SandboxGate = (ctx: SandboxActorContext) => Promise<SandboxToolGateResult>;
+/** `actor`: who drives the call (the tool context's actor) — code execution in a drive is asked of their credential. */
+export type SandboxGate = (ctx: SandboxActorContext, actor: AccessActor) => Promise<SandboxToolGateResult>;
 
 export interface SandboxToolsDeps {
-  runDeps: SandboxRunDeps;
+  /** The run deps, bound to the actor the gate authorized (provisioning re-checks code execution as them). */
+  runDeps: (actor: AccessActor) => SandboxRunDeps;
   resolveContext: ResolveSandboxContext;
   gate: SandboxGate;
 }
@@ -145,15 +149,17 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
   const open = async (
     options: unknown,
   ): Promise<
-    | { ok: true; ctx: SandboxActorContext }
+    | { ok: true; ctx: SandboxActorContext; actor: AccessActor }
     | { ok: false; error: { success: false; error: string; retryAfter?: number } }
   > => {
     const rawContext = readContext(options);
     const ctx = await resolveContext(rawContext);
     if ('error' in ctx) return { ok: false, error: { success: false, error: ctx.error } };
-    const decision = await gate(ctx);
+    if (!rawContext) return { ok: false, error: { success: false, error: 'User authentication required' } };
+    const actor = toolActor(rawContext);
+    const decision = await gate(ctx, actor);
     if (!decision.ok) return { ok: false, error: gateDenial(decision) };
-    return { ok: true, ctx };
+    return { ok: true, ctx, actor };
   };
 
   return {
@@ -164,7 +170,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       execute: async ({ command, cwd, timeoutMs }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps });
+        return runBashInSandbox({ command, cwd, timeoutMs, ctx: opened.ctx, deps: runDeps(opened.actor) });
       },
     }),
 
@@ -175,7 +181,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       execute: async ({ path, content }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps });
+        return writeSandboxFile({ path, content, ctx: opened.ctx, deps: runDeps(opened.actor) });
       },
     }),
 
@@ -189,7 +195,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       execute: async ({ path, offset, limit }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps });
+        return readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps(opened.actor) });
       },
     }),
 
@@ -200,7 +206,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       execute: async ({ path, oldString, newString, replaceAll }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps });
+        return editSandboxFile({ path, oldString, newString, replaceAll, ctx: opened.ctx, deps: runDeps(opened.actor) });
       },
     }),
   };

@@ -39,6 +39,7 @@ import { createDriveWallet } from '../../services/drive-wallet-service';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -1236,7 +1237,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
     }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
     expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
     expect((await walletRow(w.poolId)).monthlyPeriodStart?.getTime()).toBe(startS * 1000);
@@ -1681,7 +1682,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect(await applyOrgPoolRefill({
         id: `in_${createId()}`, customer: acme.stripeCustomerId, billing_reason: 'subscription_cycle', amount_paid: 5000, subtotal: 5000,
         parent: { subscription_details: { subscription: `sub_${createId()}` } },
-        lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+        lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
       }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
       // The org pool: owned by the org, no subject, no parent — one row.
@@ -1694,14 +1695,14 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       drivesMade.push(orgDrive.id);
       await factories.createDriveMember(orgDrive.id, w.marcusId, { source: 'org' });
       await factories.createDriveMember(orgDrive.id, w.chrisId, { source: 'org' });
-      expect(await createDriveWallet(w.jonoId, orgDrive.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      expect(await createDriveWallet(credentialActor(w.jonoId, null), orgDrive.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
       const [orgDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, orgDrive.id)));
       expect(orgDriveWallet).toMatchObject({ ownerType: 'org', orgId: acme.id, parentWalletId: pool.id });
 
       // A drive wallet on a personal drive: its drive as subject, the owner's personal wallet as parent.
       const personal = await factories.createDrive(w.jonoId, { name: 'Jono Notes', slug: `jono-notes-${createId()}` });
       drivesMade.push(personal.id);
-      expect(await createDriveWallet(w.jonoId, personal.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      expect(await createDriveWallet(credentialActor(w.jonoId, null), personal.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
       const [personalDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, personal.id)));
       const [jonoRoot] = await db.select().from(wallets).where(personalRootWalletOf(w.jonoId));
       expect(personalDriveWallet).toMatchObject({ ownerType: 'user', userId: w.jonoId, parentWalletId: jonoRoot.id });

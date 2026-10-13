@@ -79,6 +79,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
 }));
 vi.mock('@pagespace/lib/services/page-version-service', () => ({
@@ -108,6 +109,7 @@ vi.mock('marked', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../convert-content-mode/route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -420,6 +422,6 @@ vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
   const permissions = await import('@pagespace/lib/permissions/permissions');
   return { ...actual,
-    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(auth.userId, resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
   };
 });

@@ -42,11 +42,16 @@ describe('org_subscriptions', () => {
     expect(columns.seatRevision.default).toBe(0);
   });
 
-  it('the trial end and the current period columns are nullable until Stripe reports them', () => {
-    for (const c of ['trialEnd', 'currentPeriodStart', 'currentPeriodEnd'] as const) {
+  it('records the current period, nullable until Stripe reports it; there is no org trial, so no trial end ([D-OW-30])', () => {
+    for (const c of ['currentPeriodStart', 'currentPeriodEnd'] as const) {
       expect(columns[c].notNull, c).toBe(false);
     }
     expect(columns.cancelAtPeriodEnd.notNull).toBe(true);
+    expect(columns).not.toHaveProperty('trialEnd');
+  });
+
+  it('D-OW-44 mirrors the Stripe collection method, never null, so status can refuse invoice-billed subscriptions', () => {
+    expect(columns.collectionMethod.notNull).toBe(true);
   });
 
   it('SEAT-1 (partial) the org customer stays on organizations.stripeCustomerId, unique across orgs', () => {

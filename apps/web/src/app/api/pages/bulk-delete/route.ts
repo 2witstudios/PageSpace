@@ -14,6 +14,7 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPA
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -70,10 +71,10 @@ export async function DELETE(request: Request) {
     for (const page of sourcePages) {
       const canDelete = await canPrincipalDeletePage(auth, page.id);
       if (!canDelete) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), page.id, NextResponse.json(
           { error: `You do not have permission to delete page: ${page.title}` },
           { status: 403 }
-        );
+        ));
       }
     }
 

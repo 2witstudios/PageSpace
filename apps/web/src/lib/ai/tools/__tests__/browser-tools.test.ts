@@ -4,6 +4,12 @@ import { createBrowserTools, toModelOutputForBrowserScreenshot, type OperateBrow
 import type { BrowserControlResponse, BrowserOperation } from '@pagespace/browser-worker/browser-operation';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+/** A tool context always carries its user's actor (D-OW-45); tests name the user, the actor follows. */
+const withActor = (context: Partial<ToolExecutionContext>) =>
+  context.userId ? { accessActor: credentialActor(context.userId, null), ...context } : context;
+
 
 const ACTOR: SandboxActorContext = {
   userId: 'user-1',
@@ -41,7 +47,7 @@ const setup = (
 };
 
 const call = (tools: ReturnType<typeof createBrowserTools>, name: keyof ReturnType<typeof createBrowserTools>, input: unknown, context: Partial<ToolExecutionContext> = { userId: 'user-1' }) =>
-  tools[name].execute!(input as never, { toolCallId: '1', messages: [], experimental_context: context } as never);
+  tools[name].execute!(input as never, { toolCallId: '1', messages: [], experimental_context: withActor(context) } as never);
 
 describe('browser tools', () => {
   it('turns browser_navigate into one typed navigate and returns the page', async () => {

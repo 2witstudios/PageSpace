@@ -40,6 +40,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
+  ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
+  ['orgs/invitations/accept', 'ORG-3: audited in acceptOrgInviteForUser (lib/orgs/accept-org-invite.ts), the one shell this route and the sign-in/sign-up invite door share, so both write the same authz.role.assigned / authz.access.denied rows'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
   ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],
 

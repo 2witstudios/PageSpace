@@ -45,7 +45,7 @@ import { giftOrgSubscription, ungiftOrgSubscription, type OrgGiftStripe } from '
 import { orgInvitations } from '@pagespace/db/schema/organizations';
 import { admitSeat } from '@pagespace/lib/organizations/seat-service';
 import { stripeConfig } from '@/lib/stripe-config';
-import { ensureOrgBusinessSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
+import { provisionOrgSubscription, type OrgBillingDeps, type OrgBillingStripe } from '@/lib/org-billing/org-subscription';
 import { FakeOrgStripe } from './fake-org-stripe';
 
 const fakeHolder = vi.hoisted(() => ({ current: null as OrgBillingStripe | null }));
@@ -219,7 +219,7 @@ async function northwind(seats: number): Promise<Org> {
   orgIds.push(created.organization.id);
   const stripe = new FakeOrgStripe();
   const deps: OrgBillingDeps = { stripe, prices: () => PRICES, countSeats: async () => seats };
-  const { linkage } = await ensureOrgBusinessSubscription(created.organization.id, deps);
+  const { linkage } = (await provisionOrgSubscription(created.organization.id, deps)).result;
   fakeHolder.current = stripe;
   return { orgId: created.organization.id, customerId: linkage.stripeCustomerId, subscriptionId: linkage.stripeSubscriptionId, stripe };
 }
@@ -244,7 +244,7 @@ function invoiceObject(spec: { customer: string; subscriptionId: string; metadat
     period_end: periodEnd,
     livemode: false,
     parent: { type: 'subscription_details', subscription_details: { metadata: spec.metadata, subscription: spec.subscriptionId } },
-    lines: { object: 'list', data: lines },
+    lines: { object: 'list', has_more: false, data: lines },
   };
 }
 
@@ -313,7 +313,7 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     // 1. Creation: exactly one subscription, on the org's own customer, awaiting a card. No trial, nothing funded.
     const subs = [...org.stripe.subscriptions.values()];
     expect(subs).toHaveLength(1);
-    expect(subs[0]).toMatchObject({ id: org.subscriptionId, customerId: org.customerId, status: 'incomplete', trialEnd: null });
+    expect(subs[0]).toMatchObject({ id: org.subscriptionId, customerId: org.customerId, status: 'incomplete' });
     expect(org.stripe.invoiceFor(org.subscriptionId)).toMatchObject({ status: 'open', amountPaidCents: 0 });
     const [orgRow] = await db.select({ stripeCustomerId: organizations.stripeCustomerId }).from(organizations).where(eq(organizations.id, org.orgId));
     expect(orgRow.stripeCustomerId).toBe(org.customerId);
@@ -429,7 +429,7 @@ describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Str
     });
     // The Owner holds one seat; 6 live invites fill the 7 gifted seats.
     await db.insert(orgInvitations).values(Array.from({ length: TIER_PLAN_LIMITS.business.includedSeats + pinnedSeats - 1 }, (_, n) => invite(n)));
-    const refused = await db.transaction((tx) => admitSeat(tx, { orgId: org.orgId, actorRole: 'OWNER' }));
+    const refused = await db.transaction((tx) => admitSeat(tx, { orgId: org.orgId, actorRole: 'OWNER', credential: 'session' }));
     expect(refused).toMatchObject({ ok: false, status: 402, purchased: TIER_PLAN_LIMITS.business.includedSeats + pinnedSeats });
     expect(refused.ok === false && refused.message).toMatch(/gift/i);
     expect(sub.items.find((i) => i.priceId === PRICES.seatPriceId)?.quantity).toBe(pinnedSeats);

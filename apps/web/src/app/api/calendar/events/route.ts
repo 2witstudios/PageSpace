@@ -19,6 +19,7 @@ import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { absoluteInstant } from '@/lib/validation/date-params';
 import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -263,10 +264,10 @@ export async function GET(request: Request) {
 
       const canView = await isPrincipalDriveMember(auth, params.driveId);
       if (!canView) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
 
       // Fetch events shared into this drive via the junction table
@@ -564,10 +565,10 @@ export async function POST(request: Request) {
       // included — a member user could do this, so a member key can too).
       const canAccess = await isPrincipalDriveMember(auth, data.driveId);
       if (!canAccess) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), data.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
     }
 

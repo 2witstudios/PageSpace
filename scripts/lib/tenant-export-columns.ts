@@ -120,14 +120,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
 
   drives: {
     columns: [
-      'id', 'name', 'slug', 'ownerId', 'kind', 'orgVisibility', 'isTrashed', 'trashedAt',
+      'id', 'name', 'slug', 'ownerId', 'kind', 'orgId', 'orgVisibility', 'isTrashed', 'trashedAt',
       'createdAt', 'updatedAt', 'drivePrompt', 'publishSubdomain',
       'publish_default_og_image_url', 'publish_favicon_url',
     ],
-    excluded: {
-      orgId:
-        'References `organizations`, which the bundle does not carry, so a carried value would violate the FK on import. Temporary under Spec X-3: removed by the Phase 6 GDPR/backups leaf yfmlkdchehmberwthwu6g7vt before Wave F, which carries organizations and orgId so a migrated org drive does not arrive as a personal drive; the lane that introduces the ORGS_ENABLED code constant adds a test that fails while this exclusion exists.',
-    },
+    // `orgId` travels (Spec X-3): `organizations` is inserted before `drives`,
+    // so an org drive arrives as an org drive rather than a personal one.
     /**
      * Both point at `pages`, which is inserted AFTER `drives` (pages.driveId
      * points back the other way, so the two tables are mutually referential
@@ -283,11 +281,11 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'userId', 'title', 'type', 'contextId', 'agentPageId',
       'rev', 'planPageId', 'lastMessageAt',
       'createdAt', 'updatedAt', 'isActive', 'isShared',
+      // The wallet chosen for this thread (SPEND-3). No FK, so the exporter
+      // nulls it when the wallet stays behind: NULL is "nothing chosen" and
+      // preselects from the defaults, where a stale id would fail every call.
+      'chosenWalletId',
     ],
-    excluded: {
-      chosenWalletId:
-        'The wallet chosen for this conversation (SPEND-3) is an id in the SOURCE instance\'s `wallets` table, which the bundle does not carry. Carried, it would name no wallet in the tenant and the credit gate would refuse every call in the conversation (a stale choice fails closed); left out, it lands as NULL, which means "nothing chosen" and preselects from the defaults exactly as a new conversation does.',
-    },
     // `planPageId` travels, but like `agentPageId` it is nulled by the exporter
     // when the plan page is outside the bundle (tenant-export.ts) — a binding
     // may point into a drive the migration does not carry.
@@ -342,11 +340,119 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   favorites: {
     columns: ['id', 'userId', 'itemType', 'pageId', 'driveId', 'position', 'createdAt'],
   },
+
+  // ── Organizations & Wallets (Spec X-3) ───────────────────────────────────
+  // Which ROWS travel is scripts/lib/org-wallet-selection.ts (a migrating org
+  // moves whole; a referenced one moves without its money). Every column of a
+  // carried row travels: the Stripe ids are references, not credentials, the
+  // same as `users.stripeCustomerId` above; token and email columns hold only
+  // hashes (`tokenHash`, `emailTokenHash`, the keyed `emailHash`), and
+  // `dnsToken` is the public value published in the org's own DNS.
+  organizations: {
+    columns: [
+      'id', 'name', 'slug', 'avatarUrl', 'ownerId', 'policies',
+      'stripeCustomerId', 'stripeSubscriptionId', 'seatAutoAdd', 'createdAt', 'updatedAt',
+    ],
+  },
+
+  org_members: {
+    columns: ['id', 'orgId', 'userId', 'role', 'invitedBy', 'joinedAt'],
+  },
+
+  org_invitations: {
+    columns: [
+      'id', 'orgId', 'email', 'role', 'tokenHash', 'invitedBy', 'expiresAt',
+      'acceptedAt', 'createdAt',
+    ],
+  },
+
+  org_subscriptions: {
+    columns: [
+      'id', 'orgId', 'stripeSubscriptionId', 'stripeBasePriceId', 'stripeBaseItemId',
+      'stripeSeatPriceId', 'stripeSeatItemId', 'extraSeatQuantity', 'seatRevision',
+      'status', 'gifted', 'giftedExtraSeats', 'giftRevision', 'collectionMethod', 'currentPeriodStart', 'currentPeriodEnd',
+      'cancelAtPeriodEnd', 'seatsReconciledThrough', 'createdAt', 'updatedAt',
+    ],
+  },
+
+  org_subscription_funding: {
+    columns: [
+      'id', 'orgId', 'stripeSubscriptionId', 'stripeInvoiceId', 'basis', 'paidCents', 'verifiedAt',
+    ],
+  },
+
+  org_domains: {
+    columns: [
+      'id', 'orgId', 'domain', 'dnsToken', 'emailTokenHash', 'emailTokenExpiresAt',
+      'emailSentTo', 'verifiedAt', 'verifiedMethod', 'createdBy', 'createdAt',
+    ],
+  },
+
+  org_member_departures: {
+    columns: ['id', 'orgId', 'userId', 'reason', 'departedAt'],
+  },
+
+  // Keyed under the deployment's blind-index key, the same key `users.emailBidx`
+  // (carried above) needs the tenant to share, so a suppression keeps matching.
+  org_departure_suppressions: {
+    columns: ['id', 'orgId', 'emailHash', 'createdAt'],
+  },
+
+  org_guest_holds: {
+    columns: [
+      'id', 'orgId', 'driveId', 'userId', 'email', 'state', 'origin', 'request',
+      'parked', 'requestedBy', 'createdAt',
+    ],
+  },
+
+  drive_join_requests: {
+    columns: ['id', 'driveId', 'userId', 'status', 'message', 'requestedAt', 'decidedAt', 'decidedBy'],
+  },
+
+  wallets: {
+    columns: [
+      'id', 'ownerType', 'userId', 'orgId', 'subjectType', 'subjectId', 'parentWalletId',
+      'monthlyRemainingCents', 'monthlyAllowanceCents', 'spentCents', 'topupRemainingCents',
+      'debtCents', 'pendingMillicents', 'monthlyPeriodStart', 'monthlyPeriodEnd', 'status',
+      'donationsEnabled', 'fallbackRule', 'defaultSpendSource', 'alwaysOwnCredits',
+      'overshootChoice', 'createdAt', 'updatedAt',
+    ],
+  },
+
+  wallet_funding_legs: {
+    columns: [
+      'id', 'walletId', 'funderKind', 'funderUserId', 'funderOrgId', 'originalCents',
+      'remainingCents', 'nonRefundable', 'sourceRef', 'createdAt',
+    ],
+  },
+
+  wallet_consumer_caps: {
+    columns: ['walletId', 'consumerKey', 'dailyCapCents', 'monthlyCapCents', 'createdAt', 'updatedAt'],
+  },
+
+  // The two notice tables are once-per-period throttles. They travel so a
+  // migrated wallet's funder is not told about the same debt or cap twice.
+  wallet_debt_notices: {
+    columns: ['walletId', 'lastNotifiedAt'],
+  },
+
+  wallet_cap_alerts: {
+    columns: ['walletId', 'consumerKey', 'capWindow', 'periodStart', 'threshold', 'sentAt'],
+  },
+
+  drive_spend_overrides: {
+    columns: ['userId', 'driveId', 'createdAt'],
+  },
+
+  automation_skip_notices: {
+    columns: ['driveId', 'lastNotifiedAt'],
+  },
 };
 
 /**
- * TABLES in the agent-session FK closure that the bundle deliberately does NOT
- * carry — the table-level twin of a column `excluded` entry.
+ * TABLES in the agent-session FK closure, or hanging directly off an org or a
+ * wallet, that the bundle deliberately does NOT carry — the table-level twin of
+ * a column `excluded` entry.
  *
  * The paired guard (`scripts/__tests__/tenant-export-columns.test.ts`) derives
  * the closure from the Drizzle schema at runtime: every table reachable by
@@ -461,6 +567,17 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
 
   app_hosting_reclaims:
     'The FK-FREE teardown OUTBOX: each row is an instruction to DESTROY a Fly app in the SOURCE deployment\'s organization, held until the kill is confirmed. It is the one table in the schema where carrying a row is actively dangerous rather than merely useless — an imported reclaim would have the tenant\'s drain cron repeatedly attempt to destroy an app belonging to another organization, and a row that can never be confirmed dead is never removed, so the outbox would accumulate permanently stuck entries that look exactly like the billing anomaly it exists to alert on.',
+
+  /**
+   * The wallet tables' two FK children that stay behind (Spec X-3). The wallet
+   * ROW travels with its balance, allocation, spent and debt, which is what the
+   * tenant spends from; these two are the SOURCE instance's books about it.
+   */
+  credit_ledger:
+    'The SOURCE instance\'s money journal: every grant, purchase, usage charge and correction, keyed to Stripe invoices (`stripeRef`, UNIQUE) and to `ai_usage_logs` rows the bundle does not carry. The balance it produced travels on the `wallets` row itself (monthly, top-up, spent, debt), so nothing the tenant spends from is lost. A `pending` row is a charge the source\'s settle cron has not yet applied to that balance; carried, the tenant\'s cron would apply it too and the user would pay for one call in two deployments. Its rows also name every consumer of an org pool, most of whom are not migrating (`userId` is NOT NULL), so it could only travel partially, and a partial ledger reads as wrong totals. Tenant billing runs through the control plane, not this journal.',
+
+  credit_holds:
+    'IN-FLIGHT reservations against a wallet (minutes long, swept on `expiresAt`), each for an AI call a SOURCE-instance worker is midway through. Same class as `ai_stream_sessions`: carried, a hold would block the tenant\'s gate on spend that no tenant worker will ever settle or release.',
 
   dev_preview_services:
     'The dev-preview RELAY state of a Sprite INSTANCE in the SOURCE fleet: `spriteInstanceId` (NOT NULL, UNIQUE) and `sandboxId` name a VM the tenant does not own, `targetPort` and `relayServiceName` describe a process inside it, and the row is keyed to that instance BY DESIGN so that a re-provisioned VM inherits nothing from it. The tenant\'s migrated session arrives with `sandboxId` NULL (never provisioned — see `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`), so a carried row would be stale on arrival by the table\'s own fail-closed rule (its instance can never match a sprite the tenant provisions) and could only ever read as "this preview needs re-creating". Nothing in it is authored by the user: the dev server they ran is in their session and env, which travel; the relay is our plumbing. Left behind, exactly like the Sprite pointers it hangs off.',

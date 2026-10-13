@@ -1,6 +1,7 @@
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import type { DriveMemberSource } from '@pagespace/db/schema/members';
+import { holdsOrgRole } from '../organizations/authorize-core';
 
 /**
  * `resolveOrgDriveAccess` — the org branch of drive access (Spec ORG-4, DRV-5..7, POL-6),
@@ -69,7 +70,7 @@ export function resolveOrgDriveAccess({
   // stale (the visibility changed before the membership sync ran) and grants nothing.
   const row = driveMembership?.source === 'org' && driveVisibility !== 'OPEN' ? null : driveMembership;
 
-  if (orgRole === 'OWNER' || orgRole === 'ADMIN') {
+  if (holdsOrgRole(orgRole, 'ADMIN')) {
     // A row that already grants ADMIN or OWNER is used as-is: org power is not what opened the
     // drive, so no org-admin audit is owed, and the drive lead's OWNER row is never downgraded.
     if (row?.role === 'OWNER' || row?.role === 'ADMIN') return fromMembership(row);

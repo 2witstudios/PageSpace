@@ -17,6 +17,8 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
+import { toolActor } from '@/lib/ai/tools/actor-permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 async function broadcastCommandChange(driveId: string): Promise<void> {
   try {
@@ -29,7 +31,8 @@ async function broadcastCommandChange(driveId: string): Promise<void> {
 
 const commandLogger = loggers.ai.child({ module: 'command-tools' });
 
-async function loadCommandForManage(userId: string, commandId: string): Promise<SelectCommand> {
+async function loadCommandForManage(actor: AccessActor, commandId: string): Promise<SelectCommand> {
+  const { userId } = actor;
   const command = await db.query.commands.findFirst({
     where: eq(commands.id, commandId),
   });
@@ -38,13 +41,13 @@ async function loadCommandForManage(userId: string, commandId: string): Promise<
     if (command.userId !== userId) throw new Error('Command not found');
     return command;
   }
-  const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
+  const allowed = await isDriveOwnerOrAdmin(actor, command.driveId as string);
   if (!allowed) throw new Error('Only the drive owner or admins can manage drive commands');
   return command;
 }
 
 async function validateEntryPageForTool(
-  userId: string,
+  actor: AccessActor,
   entryPageId: string,
   commandDriveId: string | null
 ): Promise<void> {
@@ -54,7 +57,7 @@ async function validateEntryPageForTool(
   });
   if (!page) throw new Error('Entry page not found');
   if (page.isTrashed) throw new Error('Entry page is in the trash');
-  const canView = await canUserViewPage(userId, entryPageId);
+  const canView = await canUserViewPage(actor, entryPageId);
   if (!canView) throw new Error('You do not have access to the entry page');
   if (commandDriveId !== null && page.driveId !== commandDriveId) {
     throw new Error("A drive command's entry page must be in the same drive");
@@ -106,11 +109,11 @@ export const commandTools = {
 
       try {
         if (commandDriveId !== null) {
-          const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
+          const allowed = await isDriveOwnerOrAdmin(toolActor(context as ToolExecutionContext), commandDriveId);
           if (!allowed) throw new Error('Only the drive owner or admins can create drive commands');
         }
 
-        await validateEntryPageForTool(userId, entryPageId, commandDriveId);
+        await validateEntryPageForTool(toolActor(context as ToolExecutionContext), entryPageId, commandDriveId);
 
         const duplicate = await db.query.commands.findFirst({
           where: and(
@@ -203,7 +206,7 @@ export const commandTools = {
       }
 
       try {
-        const command = await loadCommandForManage(userId, commandId);
+        const command = await loadCommandForManage(toolActor(context as ToolExecutionContext), commandId);
 
         if (typeof trigger === 'string' && trigger !== command.trigger) {
           const duplicate = await db.query.commands.findFirst({
@@ -222,7 +225,7 @@ export const commandTools = {
         }
 
         if (typeof entryPageId === 'string') {
-          await validateEntryPageForTool(userId, entryPageId, command.driveId);
+          await validateEntryPageForTool(toolActor(context as ToolExecutionContext), entryPageId, command.driveId);
         }
 
         const updateData: Partial<{
@@ -277,7 +280,7 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        const command = await loadCommandForManage(userId, commandId);
+        const command = await loadCommandForManage(toolActor(context as ToolExecutionContext), commandId);
         await db.delete(commands).where(eq(commands.id, command.id));
         if (command.driveId !== null) void broadcastCommandChange(command.driveId);
 
@@ -315,7 +318,7 @@ export const commandTools = {
 
       try {
         // Drives the caller is a member of (org-aware; page-level access does not count).
-        const allMemberDriveIds = await getMemberDriveIds(userId, { includeTrashed: false });
+        const allMemberDriveIds = await getMemberDriveIds(toolActor(context as ToolExecutionContext), { includeTrashed: false });
 
         if (driveId && !allMemberDriveIds.includes(driveId)) {
           throw new Error('Drive not found or you are not a member of that drive');

@@ -32,6 +32,7 @@
  */
 
 import type { OrgRole } from '@pagespace/db/schema/organizations';
+import { holdsOrgRole } from './authorize-core';
 
 /**
  * How long before the billing period's end a freed seat is handed back. The renewal invoice
@@ -63,10 +64,11 @@ export type SeatAdmissionDecision =
   | { action: 'refuse'; reason: SeatRefusalReason; purchased: number; held: number };
 
 /**
- * Why no seat could be granted: auto-add is off, or the org is on an admin gift whose seat
- * count is pinned (D-OW-54) — a gift is never raised, whatever auto-add says.
+ * Why no seat could be granted: auto-add is off, the org is on an admin gift whose seat
+ * count is pinned (D-OW-54) — a gift is never raised, whatever auto-add says — or the raise
+ * was asked for by a delegated credential ([D-OW-26]: a key never buys a seat).
  */
-export type SeatRefusalReason = 'auto_add_off' | 'gifted_seats_full';
+export type SeatRefusalReason = 'auto_add_off' | 'gifted_seats_full' | 'delegated_raise';
 
 /** The live subscription's period as the release sweep left it; null with no live subscription. */
 export interface SeatPeriod {
@@ -97,6 +99,10 @@ function releasedBeforeBoundary(period: SeatPeriod | null, now: Date): boolean {
  * so raising back is free now and Stripe bills the count from the renewal (SEAT-5). Such a
  * raise can exceed what was released only by seats bought inside that same last hour, whose
  * pro-rata is not charged either (in the customer's favour, never against them).
+ *
+ * [D-OW-26] A raise is a money move (a prorated Stripe charge), so a delegated credential (an MCP/CLI
+ * key) is never admitted one: past the purchased seats it is refused as `delegated_raise`; within
+ * them it is admitted like a session.
  */
 export function decideSeatAdmission(input: {
   held: number;
@@ -108,6 +114,7 @@ export function decideSeatAdmission(input: {
   now: Date;
   /** The extra seats an admin gift pins (org_subscriptions.giftedExtraSeats); null when not gifted. */
   giftedExtraSeats: number | null;
+  credential: 'session' | 'mcp';
 }): SeatAdmissionDecision {
   if (!input.billingEnabled) return { action: 'admit' };
   assertCount('held', input.held);
@@ -123,6 +130,7 @@ export function decideSeatAdmission(input: {
   const purchased = input.included + input.purchasedExtra;
   if (after <= purchased) return { action: 'admit' };
   if (!input.autoAdd) return { action: 'refuse', reason: 'auto_add_off', purchased, held: input.held };
+  if (input.credential !== 'session') return { action: 'refuse', reason: 'delegated_raise', purchased, held: input.held };
   const proration: SeatReleaseProration = releasedBeforeBoundary(input.period, input.now) ? 'none' : 'create_prorations';
   return { action: 'raise', toExtra: Math.max(0, after - input.included), proration };
 }
@@ -212,14 +220,14 @@ export function seatRefusalMessage(input: { purchased: number; held: number; act
   if (input.reason === 'gifted_seats_full') {
     if (input.actorRole === 'MEMBER') return 'Every seat in this organization is taken (members and pending invitations). Ask the organization Owner to free a seat.';
     const state = `All ${input.purchased} ${plural} this organization was gifted are taken (members and pending invitations). A gift's seats are fixed, so none can be added automatically.`;
-    return input.actorRole === 'OWNER'
+    return holdsOrgRole(input.actorRole, 'OWNER')
       ? `${state} Revoke an invitation or remove a member to free one, or ask PageSpace support to change the gift.`
       : `${state} Ask the organization Owner to free a seat.`;
   }
   const state = input.actorRole === 'MEMBER'
     ? 'Every seat in this organization is taken (members and pending invitations).'
     : `All ${input.purchased} ${plural} in this organization are taken (members and pending invitations).`;
-  return input.actorRole === 'OWNER'
+  return holdsOrgRole(input.actorRole, 'OWNER')
     ? `${state} Turn on automatic seat purchase in billing to add seats as you invite, or revoke an invitation or remove a member to free one.`
     : `${state} Ask the organization Owner to turn on automatic seat purchase or to free a seat.`;
 }

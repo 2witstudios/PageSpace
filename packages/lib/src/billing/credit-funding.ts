@@ -45,6 +45,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt } from './credit-core';
 import { grantForInvoice } from './invoice-grant';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from './wallet-funding';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
@@ -196,10 +197,6 @@ async function isGiftedSubscriber(userId: string): Promise<boolean> {
     .where(eq(subscriptions.userId, userId));
   return rows.some((r) => r.gifted === true && (r.status === 'active' || r.status === 'trialing'));
 }
-
-/** Metadata the admin gift-subscription route stamps on the Stripe subscription
- * it creates (`apps/admin/.../gift-subscription/route.ts`). */
-const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
 
 /**
  * Whether THIS invoice is for a gifted subscription, read straight off the

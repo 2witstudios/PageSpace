@@ -49,7 +49,7 @@ import { CreateOrganizationDialog } from '../CreateOrganizationDialog';
 
 const drive = (id: string, name: string, extra: Record<string, unknown> = {}) => ({ id, name, slug: id, ownerId: 'u_me', isOwned: true, isTrashed: false, orgId: null, kind: 'STANDARD', ...extra });
 const organization = { id: 'org_nw', name: 'Northwind Labs', slug: 'northwind-labs', avatarUrl: null, ownerId: 'u_me', createdAt: '2026-10-05T00:00:00Z' };
-const sub = { status: 'incomplete', trialEnd: null, currentPeriodEnd: null, extraSeatQuantity: 0 };
+const sub = { status: 'incomplete', currentPeriodEnd: null, extraSeatQuantity: 0 };
 
 beforeEach(() => {
   vi.clearAllMocks();

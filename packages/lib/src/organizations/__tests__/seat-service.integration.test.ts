@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { mcpTokens, users } from '@pagespace/db/schema/auth';
@@ -164,13 +164,23 @@ async function teardownAll(): Promise<void> {
 let emailSeq = 0;
 const freshEmail = () => `invitee-${emailSeq++}-${createId()}@northwind.test`;
 
-function invite(f: Fixture, stripe: RecordingSeatStripe | undefined, email = freshEmail(), actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
-  return createOrRotateInvitation({
+/**
+ * The inviter's role is read from org_members inside the service, so an ADMIN actor is a real Admin:
+ * the fixture's second member, promoted.
+ */
+async function actorAs(f: Fixture, role: 'OWNER' | 'ADMIN'): Promise<string> {
+  if (role === 'OWNER') return f.ownerId;
+  const adminId = f.memberIds[1];
+  await db.update(orgMembers).set({ role: 'ADMIN' }).where(and(eq(orgMembers.orgId, f.orgId), eq(orgMembers.userId, adminId)));
+  return adminId;
+}
+
+async function invite(f: Fixture, stripe: RecordingSeatStripe | undefined, email = freshEmail(), actorRole: 'OWNER' | 'ADMIN' = 'OWNER', credential: 'session' | 'mcp' = 'session') {
+  return createOrRotateInvitation({ credential,
     orgId: f.orgId,
     email,
     role: 'MEMBER',
-    invitedBy: f.ownerId,
-    actorRole,
+    invitedBy: await actorAs(f, actorRole),
     now: new Date(),
     deliver,
     seatBilling: stripe,
@@ -187,8 +197,8 @@ async function expiredInvite(f: Fixture): Promise<{ id: string; email: string }>
   return { id: row.id, email };
 }
 
-function resend(f: Fixture, invitationId: string, stripe: RecordingSeatStripe | undefined, actorRole: 'OWNER' | 'ADMIN' = 'OWNER') {
-  return resendInvitation({ orgId: f.orgId, invitationId, actorRole, now: new Date(), deliver, seatBilling: stripe });
+async function resend(f: Fixture, invitationId: string, stripe: RecordingSeatStripe | undefined, actorRole: 'OWNER' | 'ADMIN' = 'OWNER', credential: 'session' | 'mcp' = 'session') {
+  return resendInvitation({ credential, orgId: f.orgId, invitationId, actorId: await actorAs(f, actorRole), now: new Date(), deliver, seatBilling: stripe });
 }
 
 const storedExtra = async (orgId: string) => (await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId)))[0]?.extraSeatQuantity;
@@ -313,6 +323,28 @@ describe('seat accounting (real Postgres)', () => {
       expect(stripe.calls).toHaveLength(1);
       expect(stripe.calls[0]).toMatchObject({ itemId: f.itemId, quantity: 1, prorationBehavior: 'create_prorations' });
       expect(await storedExtra(f.orgId)).toBe(1);
+    });
+
+    it('X-1 (partial) [D-OW-26] a key never buys a seat: auto-add ON, the sixth seat invited or re-sent by a key is refused by name, writes no invite and calls no Stripe', async () => {
+      const f = await buildOrg({ members: 5, autoAdd: true });
+      const stripe = new RecordingSeatStripe(0);
+      const byKey = await invite(f, stripe, freshEmail(), 'ADMIN', 'mcp');
+      expect(byKey).toMatchObject({ ok: false, status: 403, reason: 'mcp_token_cannot_move_money' });
+      expect(await db.select().from(orgInvitations).where(eq(orgInvitations.orgId, f.orgId))).toHaveLength(0);
+      const expired = await expiredInvite(f);
+      expect(await resend(f, expired.id, stripe, 'ADMIN', 'mcp')).toMatchObject({ ok: false, status: 403, reason: 'mcp_token_cannot_move_money' });
+      expect(stripe.calls).toEqual([]);
+      expect(await storedExtra(f.orgId)).toBe(0);
+      // The same seat with a signed-in session is bought as before.
+      expect((await invite(f, stripe, freshEmail(), 'ADMIN', 'session')).ok).toBe(true);
+      expect(stripe.calls).toHaveLength(1);
+    });
+
+    it('X-1 (partial) [D-OW-26] within the purchased seats a key invites exactly as a session does', async () => {
+      const f = await buildOrg({ members: 4, autoAdd: true });
+      const stripe = new RecordingSeatStripe(0);
+      expect((await invite(f, stripe, freshEmail(), 'ADMIN', 'mcp')).ok).toBe(true);
+      expect(stripe.calls).toEqual([]);
     });
 
     it('SEAT-4 (partial) auto-add OFF: the sixth seat is refused with the message, writes no invite, and calls no Stripe', async () => {
@@ -511,8 +543,8 @@ describe('seat accounting (real Postgres)', () => {
     it('SEAT-4 (partial) an email that fails to deliver undoes the invite but keeps the paid seat, released at period end', async () => {
       const f = await buildOrg({ members: 5, autoAdd: true });
       const stripe = new RecordingSeatStripe(0);
-      const result = await createOrRotateInvitation({
-        orgId: f.orgId, email: freshEmail(), role: 'MEMBER', invitedBy: f.ownerId, actorRole: 'OWNER', now: new Date(),
+      const result = await createOrRotateInvitation({ credential: 'session',
+        orgId: f.orgId, email: freshEmail(), role: 'MEMBER', invitedBy: f.ownerId, now: new Date(),
         deliver: async () => { throw new Error('smtp down'); }, seatBilling: stripe,
       });
       expect(result).toMatchObject({ ok: false, reason: 'delivery_failed' });

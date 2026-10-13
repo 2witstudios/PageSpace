@@ -35,6 +35,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 // The REAL principal code-exec helper runs too; only its permission reads are faked.
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: (...args: unknown[]) => mockGetUserDrivePermissions(...args),
 }));
 vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
@@ -92,6 +93,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/exec', () => {
     expect(mockExecInWorkspace).toHaveBeenCalledWith({
       session: ROW,
       ctx: CTX,
+      actor: expect.objectContaining({ userId: CTX.userId }),
       command: 'echo hi; exit 3',
       cwd: 'repo',
       timeoutMs: 5000,
@@ -212,7 +214,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/exec', () => {
     it('given an INHERIT key whose owner cannot edit the drive, should 404 and never run', async () => {
       mockGetUserDrivePermissions.mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
       expect((await post({ command: 'true' })).status).toBe(404);
-      expect(mockGetUserDrivePermissions).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(mockGetUserDrivePermissions).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
       expect(mockExecInWorkspace).not.toHaveBeenCalled();
     });
 

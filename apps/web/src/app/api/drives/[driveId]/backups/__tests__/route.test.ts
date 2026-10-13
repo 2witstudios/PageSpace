@@ -107,7 +107,7 @@ describe('GET /api/drives/[driveId]/backups', () => {
       const response = await GET(request, createParams(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(listDriveBackups).toHaveBeenCalledWith(mockDriveId, mockUserId, {
+      expect(listDriveBackups).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }), {
         limit: 10,
         offset: 5,
       });
@@ -120,7 +120,7 @@ describe('GET /api/drives/[driveId]/backups', () => {
       const response = await GET(request, createParams(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(listDriveBackups).toHaveBeenCalledWith(mockDriveId, mockUserId, {
+      expect(listDriveBackups).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }), {
         limit: undefined,
         offset: undefined,
       });
@@ -351,7 +351,7 @@ describe('POST /api/drives/[driveId]/backups', () => {
       });
       await POST(request, createParams(mockDriveId));
 
-      expect(createDriveBackup).toHaveBeenCalledWith(mockDriveId, mockUserId, {
+      expect(createDriveBackup).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }), {
         label: 'Test backup',
         source: 'manual',
       });

@@ -50,6 +50,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 // it uses. Its permission check is the only thing standing between the test and
 // the real DB writes it exists to inspect.
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn(async () => true),
   canActorViewPage: vi.fn(async () => true),
   canActorAccessDrive: vi.fn(async () => true),

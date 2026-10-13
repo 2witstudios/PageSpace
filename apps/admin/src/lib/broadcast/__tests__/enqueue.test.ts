@@ -21,8 +21,9 @@ import {
   enqueueBroadcast,
 } from '../enqueue';
 import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
-const params = { broadcastId: 'bc_1', callerUserId: 'admin_1' };
+const params = { broadcastId: 'bc_1', caller: credentialActor('admin_1', null) };
 
 const jsonResponse = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -45,7 +46,7 @@ describe('enqueueBroadcast', () => {
 
     await expect(enqueueBroadcast(params)).resolves.toEqual({ jobId: 'job_1' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(createUserServiceToken).toHaveBeenCalledWith('admin_1', ['broadcast:enqueue'], '2m');
+    expect(createUserServiceToken).toHaveBeenCalledWith(params.caller, ['broadcast:enqueue'], '2m');
   });
 
   it('treats a 409 (singletonKey dedupe) as success with an unknown jobId', async () => {
