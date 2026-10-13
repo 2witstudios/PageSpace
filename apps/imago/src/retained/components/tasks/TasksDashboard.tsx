@@ -66,6 +66,20 @@ import { TaskFilterSheet, TaskFilterButton } from './TaskFilterSheet';
 import { TaskTableRow } from './TaskTableRow';
 import { TaskLoadingSkeleton, TaskEmptyState } from './TaskStates';
 import { KanbanColumn, KanbanCard } from './TaskKanbanComponents';
+import {
+  ACCOUNT_DUE_CHIPS,
+  ACCOUNT_STATUS_GROUPS,
+  fetchDueChipCounts,
+  groupTasksByDrive,
+  type DueChipCounts,
+} from './account-tasks';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/retained/components/ui/select';
 
 const STATUS_GROUPS: TaskStatusGroup[] = ['todo', 'in_progress', 'done'];
 
@@ -78,6 +92,8 @@ interface ExtendedFilters extends TaskFilters {
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
   statusGroup?: StatusGroupFilter;
+  /** Account view only: the "All drives" select. Not persisted or put in the URL. */
+  driveId?: string;
 }
 
 export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
@@ -227,6 +243,8 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
 
         if (propDriveId) {
           params.set('driveId', propDriveId);
+        } else if (filters.driveId) {
+          params.set('driveId', filters.driveId);
         }
         if (filters.status) {
           params.set('status', filters.status);
@@ -288,6 +306,24 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     if (legacyHref) return;
     fetchTasks();
   }, [legacyHref, filters, fetchTasks]);
+
+  // Due-chip counts for Account › Tasks. They ignore the due chip itself, so
+  // picking a chip never empties the other chips' counts.
+  const [dueCounts, setDueCounts] = useState<DueChipCounts>({});
+  useEffect(() => {
+    if (isLocked) return;
+    let cancelled = false;
+    fetchDueChipCounts({
+      statusGroup: filters.statusGroup ?? 'active',
+      assigneeFilter: filters.assigneeFilter ?? 'mine',
+      driveId: filters.driveId,
+    }).then((counts) => {
+      if (!cancelled) setDueCounts(counts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLocked, filters.statusGroup, filters.assigneeFilter, filters.driveId]);
 
   // Register/unregister editing state for UI refresh protection
   useEffect(() => {
@@ -554,7 +590,8 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
     filters.priority ||
     (filters.dueDateFilter && filters.dueDateFilter !== 'all') ||
     filters.assigneeFilter === 'all' ||
-    (filters.statusGroup && filters.statusGroup !== 'active')
+    (filters.statusGroup && filters.statusGroup !== 'active') ||
+    filters.driveId
   );
 
   const clearFilters = () => {
@@ -721,6 +758,155 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
                   statusConfigsByTaskList={statusConfigsByTaskList}
                   onFiltersChange={handleFiltersChange}
                   onClearFilters={clearFilters}
+                />
+              </>
+            ) : !isLocked ? (
+              <>
+                {/* Account › Tasks: "My tasks", due chips with counts, rows grouped by drive */}
+                <div className="mb-6">
+                  <h1 className="text-3xl font-bold tracking-tight">My tasks</h1>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    Everything assigned to you
+                    {drives && drives.length > 0
+                      ? `, across ${drives.length} ${drives.length === 1 ? 'drive' : 'drives'}`
+                      : ''}
+                    .
+                  </p>
+                </div>
+
+                {error && (
+                  <Alert variant="destructive" className="mb-6">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Error</AlertTitle>
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="mb-6 flex flex-wrap items-center gap-2 border-b pb-3.5">
+                  <div role="group" aria-label="Status" className="flex rounded-[9px] bg-muted p-0.5">
+                    {ACCOUNT_STATUS_GROUPS.map(({ value, label }) => {
+                      const on = (filters.statusGroup ?? 'active') === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => handleFiltersChange({ statusGroup: value })}
+                          className={cn(
+                            'h-7 rounded-[7px] px-3 text-sm transition-colors',
+                            on
+                              ? 'bg-background font-medium shadow-sm'
+                              : 'text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div role="group" aria-label="Due" className="flex gap-1">
+                    {ACCOUNT_DUE_CHIPS.map(({ filter, label }) => {
+                      const on = filters.dueDateFilter === filter;
+                      const count = dueCounts[filter];
+                      return (
+                        <button
+                          key={filter}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => handleFiltersChange({ dueDateFilter: on ? 'all' : filter })}
+                          className={cn(
+                            'flex h-[30px] items-center gap-1.5 rounded-full border px-2.5 text-sm transition-colors',
+                            on
+                              ? 'border-primary/40 bg-primary/10 font-medium text-primary'
+                              : 'border-border text-foreground hover:bg-muted/60'
+                          )}
+                        >
+                          {label}
+                          {count !== undefined && (
+                            <span className="font-mono text-[11px] opacity-70">{count}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex-1" />
+
+                  <Select
+                    value={filters.driveId ?? 'all'}
+                    onValueChange={(v) => handleFiltersChange({ driveId: v === 'all' ? undefined : v })}
+                  >
+                    <SelectTrigger aria-label="Drive" className="h-[30px] w-[160px] text-sm">
+                      <SelectValue placeholder="All drives" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All drives</SelectItem>
+                      {(drives ?? []).map((drive) => (
+                        <SelectItem key={drive.id} value={drive.id}>
+                          {drive.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {tasks.length === 0 ? (
+                  <TaskEmptyState
+                    hasActiveFilters={hasActiveFilters}
+                    onClearFilters={clearFilters}
+                  />
+                ) : (
+                  <div className="space-y-6">
+                    {groupTasksByDrive(tasks, drives ?? []).map((group) => (
+                      <section key={group.driveId} aria-label={group.name}>
+                        <h2 className="flex h-9 items-center gap-2.5 text-sm font-semibold">
+                          <span className="flex h-[22px] w-[22px] items-center justify-center rounded-md bg-muted text-[11px] font-bold">
+                            {group.initial}
+                          </span>
+                          {group.name}
+                          <span className="font-normal text-muted-foreground">{group.tasks.length}</span>
+                        </h2>
+                        {group.tasks.map((task) => (
+                          <TaskCompactRow
+                            key={task.id}
+                            task={task}
+                            onToggleComplete={handleToggleComplete}
+                            onTap={handleOpenDetailSheet}
+                            // The group heading names the drive, so rows do not repeat it.
+                            // This list spans every drive, so the detail sheet resolves
+                            // each task's own permission before it allows a write.
+                            canEdit
+                          />
+                        ))}
+                      </section>
+                    ))}
+                  </div>
+                )}
+
+                {pagination?.hasMore && (
+                  <div className="flex justify-center pt-6">
+                    <Button onClick={handleLoadMore} variant="outline" disabled={loadingMore}>
+                      {loadingMore ? 'Loading...' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
+
+                <TaskDetailSheet
+                  task={liveDetailSheetTask}
+                  driveName={liveDetailSheetTask ? driveNameFor(liveDetailSheetTask) : undefined}
+                  statusConfigs={liveDetailSheetTask ? getConfigsForTask(liveDetailSheetTask) : []}
+                  open={detailSheetOpen}
+                  onOpenChange={setDetailSheetOpen}
+                  onStatusChange={handleStatusChange}
+                  onPriorityChange={handlePriorityChange}
+                  onToggleComplete={handleToggleComplete}
+                  onMultiAssigneeChange={handleMultiAssigneeChange}
+                  onDueDateChange={handleDueDateChange}
+                  onSaveTitle={handleSaveTitle}
+                  onDelete={handleDeleteTask}
+                  onNavigate={handleNavigate}
+                  onTriggersSaved={() => fetchTasks()}
                 />
               </>
             ) : (
@@ -925,7 +1111,7 @@ export function TasksDashboard({ driveId: propDriveId }: TasksDashboardProps) {
       </PullToRefresh>
 
       {/* Stats Footer - desktop only */}
-      {!isMobileTaskLayout && (
+      {!isMobileTaskLayout && isLocked && (
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 py-2 border-t bg-muted/50 text-sm text-muted-foreground">
           <span><strong>{pagination?.total ?? tasks.length}</strong> tasks</span>
           <span className="text-xs sm:text-sm">

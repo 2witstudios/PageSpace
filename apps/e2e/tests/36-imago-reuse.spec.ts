@@ -696,8 +696,8 @@ test('task statuses and anchored workflows persist through retained configuratio
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
   await openTaskConfiguration(page, 'Statuses');
   const statuses = page.getByRole('dialog', { name: 'Manage Status Categories', exact: true });
-  await statuses.getByRole('button', { name: 'Add Status', exact: true }).click();
-  await statuses.getByPlaceholder('Status name...').fill('Review ready');
+  // The add form is open as the dialog opens; "Add status" only re-opens it after Cancel.
+  await statuses.getByLabel('Status name', { exact: true }).fill('Review ready');
   const statusSaved = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks/statuses`);
   await statuses.getByRole('button', { name: 'Add Status', exact: true }).click();
   expect((await statusSaved).ok()).toBe(true);

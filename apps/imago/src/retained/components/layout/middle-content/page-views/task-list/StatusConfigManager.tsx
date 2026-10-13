@@ -30,13 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/retained/components/ui/select';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/retained/components/ui/dropdown-menu';
-import { Plus, Settings2, MoreHorizontal, Trash2, Pencil, AlertTriangle } from 'lucide-react';
+import { Label } from '@/retained/components/ui/label';
+import { Plus, Settings2, Trash2, Pencil, AlertTriangle } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 import type { TaskStatusConfig, TaskStatusGroup } from './task-list-types';
 
@@ -51,6 +46,12 @@ const GROUP_COLORS: Record<TaskStatusGroup, string> = {
   in_progress: 'text-amber-600',
   done: 'text-green-600',
 };
+
+const GROUP_OPTIONS: { value: TaskStatusGroup; label: string }[] = [
+  { value: 'todo', label: 'Not Started' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'done', label: 'Done' },
+];
 
 const COLOR_PRESETS = [
   { name: 'slate',  classes: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',   swatch: 'bg-slate-500' },
@@ -72,6 +73,8 @@ interface StatusConfigManagerProps {
   statusConfigs: TaskStatusConfig[];
   onConfigsChanged: () => void;
   disabled?: boolean;
+  /** The trigger's visible and accessible name; the v3 strip passes "Manage statuses" or "Edit statuses". */
+  triggerLabel?: string;
 }
 
 export function StatusConfigManager({
@@ -79,13 +82,17 @@ export function StatusConfigManager({
   statusConfigs,
   onConfigsChanged,
   disabled = false,
+  triggerLabel = 'Statuses',
 }: StatusConfigManagerProps) {
   const [open, setOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
+  // The add form opens by default each time the dialog opens (board state `adding`).
+  const [adding, setAdding] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
-  const [newColor, setNewColor] = useState(COLOR_PRESETS[0].classes);
-  const [newGroup, setNewGroup] = useState<TaskStatusGroup>('todo');
+  const [newColor, setNewColor] = useState(
+    COLOR_PRESETS.find((preset) => preset.name === 'violet')?.classes ?? COLOR_PRESETS[0].classes,
+  );
+  const [newGroup, setNewGroup] = useState<TaskStatusGroup>('in_progress');
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
   const [editGroup, setEditGroup] = useState<TaskStatusGroup>('todo');
@@ -144,6 +151,11 @@ export function StatusConfigManager({
     }
   };
 
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) setAdding(true);
+  };
+
   const startEditing = (config: TaskStatusConfig) => {
     setEditingId(config.id);
     setEditName(config.name);
@@ -162,11 +174,11 @@ export function StatusConfigManager({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild disabled={disabled}>
         <Button variant="ghost" size="sm" className="h-8 gap-1">
           <Settings2 className="h-3.5 w-3.5" />
-          <span>Statuses</span>
+          <span>{triggerLabel}</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md">
@@ -234,31 +246,30 @@ export function StatusConfigManager({
                     ) : (
                       <>
                         <Badge className={cn('text-xs', config.color)}>{config.name}</Badge>
-                        {/* Metadata hint, not a control — keep it hover-only. */}
-                        <span data-hover-only="" className="text-xs text-muted-foreground ml-auto opacity-0 group-hover:opacity-100">
-                          {config.slug}
-                        </span>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                              <MoreHorizontal className="h-3.5 w-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => startEditing(config)}>
-                              <Pencil className="h-3.5 w-3.5 mr-2" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => setDeleteTarget(config)}
-                              className="text-destructive"
-                              disabled={statusConfigs.length <= 1}
-                            >
-                              <Trash2 className="h-3.5 w-3.5 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                        <span className="text-xs text-muted-foreground font-mono truncate">{config.slug}</span>
+                        <div className="ml-auto flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            aria-label={`Edit ${config.name}`}
+                            title="Edit"
+                            onClick={() => startEditing(config)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-destructive"
+                            aria-label={`Delete ${config.name}`}
+                            title="Delete"
+                            onClick={() => setDeleteTarget(config)}
+                            disabled={statusConfigs.length <= 1}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </>
                     )}
                   </div>
@@ -270,42 +281,60 @@ export function StatusConfigManager({
           {/* Add new status */}
           {adding ? (
             <div className="border rounded-lg p-3 space-y-3">
-              <Input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="Status name..."
-                autoFocus
-                className="h-8"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleAddStatus();
-                  if (e.key === 'Escape') setAdding(false);
-                }}
-              />
-              <div className="flex items-center gap-2">
-                <Select value={newGroup} onValueChange={(v) => setNewGroup(v as TaskStatusGroup)}>
-                  <SelectTrigger className="h-8 w-32">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="todo">Not Started</SelectItem>
-                    <SelectItem value="in_progress">In Progress</SelectItem>
-                    <SelectItem value="done">Done</SelectItem>
-                  </SelectContent>
-                </Select>
+              <div className="space-y-1.5">
+                <Label htmlFor="status-name" className="text-xs">Status name</Label>
+                <Input
+                  id="status-name"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="Status name..."
+                  autoFocus
+                  className="h-8"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleAddStatus();
+                    if (e.key === 'Escape') setAdding(false);
+                  }}
+                />
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {COLOR_PRESETS.map((preset) => (
-                  <button
-                    key={preset.name}
-                    aria-label={preset.name}
-                    className={cn(
-                      'w-6 h-6 rounded border-2 transition-colors',
-                      preset.swatch,
-                      newColor === preset.classes ? 'border-primary' : 'border-transparent'
-                    )}
-                    onClick={() => setNewColor(preset.classes)}
-                  />
-                ))}
+              <div role="radiogroup" aria-label="Group" className="flex gap-1 rounded-lg bg-muted p-0.5 w-fit">
+                {GROUP_OPTIONS.map((option) => {
+                  const checked = newGroup === option.value;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      onClick={() => setNewGroup(option.value)}
+                      className={cn(
+                        'h-6 rounded-md px-2 text-xs',
+                        checked ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground',
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div role="radiogroup" aria-label="Color" className="flex flex-wrap gap-1.5">
+                {COLOR_PRESETS.map((preset) => {
+                  const checked = newColor === preset.classes;
+                  return (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      role="radio"
+                      aria-checked={checked}
+                      aria-label={preset.name}
+                      className={cn(
+                        'w-6 h-6 rounded border-2 transition-colors',
+                        preset.swatch,
+                        checked ? 'border-primary' : 'border-transparent'
+                      )}
+                      onClick={() => setNewColor(preset.classes)}
+                    />
+                  );
+                })}
               </div>
               <div className="flex gap-2 justify-end">
                 <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
@@ -315,7 +344,7 @@ export function StatusConfigManager({
           ) : (
             <Button variant="outline" size="sm" className="w-full" onClick={() => setAdding(true)}>
               <Plus className="h-3.5 w-3.5 mr-1" />
-              Add Status
+              Add status
             </Button>
           )}
         </div>

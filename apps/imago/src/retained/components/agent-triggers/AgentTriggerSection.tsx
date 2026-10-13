@@ -40,6 +40,8 @@ export interface AgentTriggerSectionProps {
   onChange: (next: AgentTriggerValue) => void;
   promptPlaceholder?: string;
   disabled?: boolean;
+  /** Shows the Advanced instruction/context pickers. Defaults to true. */
+  showAdvanced?: boolean;
 }
 
 /**
@@ -59,6 +61,7 @@ export function AgentTriggerSection({
   onChange,
   promptPlaceholder,
   disabled,
+  showAdvanced = true,
 }: AgentTriggerSectionProps) {
   const advancedCount =
     (value.instructionPageId ? 1 : 0) + value.contextPageIds.length;
@@ -99,6 +102,7 @@ export function AgentTriggerSection({
         </p>
       </div>
 
+      {showAdvanced && (
       <Collapsible>
         <CollapsibleTrigger asChild>
           <Button
@@ -150,6 +154,7 @@ export function AgentTriggerSection({
           </div>
         </CollapsibleContent>
       </Collapsible>
+      )}
     </div>
   );
 }

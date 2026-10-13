@@ -160,7 +160,7 @@ export function TriggerPagePicker(props: Props) {
             role="combobox"
             aria-expanded={open}
             className={cn(
-              'w-full justify-between font-normal',
+              'h-[34px] w-full justify-between rounded-lg px-2.5 text-[13px] font-normal',
               disabled && 'pointer-events-none opacity-60',
             )}
           >

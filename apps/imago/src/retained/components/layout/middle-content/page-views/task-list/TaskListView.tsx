@@ -1273,6 +1273,8 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
         pageId={page.id}
         statusConfigs={statusConfigs}
         onConfigsChanged={() => mutateTasks()}
+        // The board calls this control "Edit statuses"; the list calls it "Manage statuses".
+        triggerLabel={viewMode === 'kanban' ? 'Edit statuses' : 'Manage statuses'}
       />
     ) : null,
     // The strip's button serves both layouts: the table's field, or the compact list's when the
