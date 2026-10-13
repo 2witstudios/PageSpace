@@ -191,8 +191,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Every workspace package the web app imports (db, lib, browser-worker, editor, sdk): the web auth
+      # suites below load modules that reach @pagespace/browser-worker's built exports, so building only
+      # db and lib left them failing to resolve it.
       - name: Build workspace packages
-        run: bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build
+        run: bun run build --filter='web^...'
 
       - name: Run database migrations
         run: bun run db:migrate
