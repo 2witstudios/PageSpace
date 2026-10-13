@@ -12,7 +12,7 @@
  * can be searched for either. Deletes every row it creates, children before parents, users
  * last, and ends the pool.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
@@ -43,10 +43,15 @@ import {
   getConversationSpend,
   setConversationSpend,
   getOrgPoolSplit,
+  listDriveWalletCaps,
+  setDriveWalletCap,
+  setSeatCap,
+  listOrgSeatCaps,
+  setOrgPoolPaused,
   getDriveSpend,
 } from '../drive-wallet-service';
 import { encodeAutomationRef } from '../../billing/automation-attribution';
-import { credentialActor } from '../../permissions/access-actor';
+import { credentialActor, automationActor, inDrives } from '../../permissions/access-actor';
 
 const accountActor = (userId: string) => credentialActor(userId, { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' });
 
@@ -699,5 +704,190 @@ describe('drive-wallet service (real Postgres)', () => {
     expect([a, b].filter((r) => r.ok && r.duplicate)).toHaveLength(1);
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 1_000);
     expect((await walletRow(world.productWalletId)).topupRemainingCents).toBe(1_000);
+  });
+  it('refuses outsider reads and writes without exposing or changing money', async () => {
+    if (!world) return;
+    const w = world;
+    const actor = credentialActor(w.ids.outsider, null);
+    const before = await walletRow(w.productWalletId);
+    const results = [
+      await getDriveWallet(actor, w.productId, 'session'),
+      await createDriveWallet(actor, w.productId, { allocationCents: 100 }, 'session'),
+      await updateDriveWallet(actor, w.productId, { paused: true }, 'session'),
+      await deleteDriveWallet(actor, w.productId, 'session'),
+      await topUpDriveWallet(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session'),
+      await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session'),
+      await listDriveWalletCaps(actor, w.productId, 'session'),
+      await setDriveWalletCap(actor, w.productId, w.ids.marcus, { dailyCents: 10 }, 'session'),
+    ];
+    for (const result of results) expect(result).toMatchObject({ ok: false, status: 404 });
+    expect(await walletRow(w.productWalletId)).toEqual(before);
+  });
+
+  it('reports an absent wallet to an authorized admin and refuses money writes', async () => {
+    if (!world) return;
+    const w = world;
+    await db.delete(creditLedger).where(eq(creditLedger.walletId, w.productWalletId));
+    await db.delete(wallets).where(eq(wallets.id, w.productWalletId));
+    const actor = credentialActor(w.ids.priya, null);
+    const before = await walletRow(w.poolId);
+    expect(await getDriveWallet(actor, w.productId, 'session')).toMatchObject({ ok: true, wallet: null });
+    const results = [
+      await updateDriveWallet(actor, w.productId, { paused: true }, 'session'),
+      await deleteDriveWallet(actor, w.productId, 'session'),
+      await topUpDriveWallet(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session'),
+      await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session'),
+      await listDriveWalletCaps(actor, w.productId, 'session'),
+      await setDriveWalletCap(actor, w.productId, w.ids.marcus, { dailyCents: 10 }, 'session'),
+    ];
+    for (const result of results) expect(result).toMatchObject({ ok: false, status: 404, code: 'no_wallet' });
+    expect(await walletRow(w.poolId)).toEqual(before);
+  });
+
+  it('rejects malformed allocations and top-ups without balance or ledger changes', async () => {
+    if (!world) return;
+    const w = world;
+    const actor = credentialActor(w.ids.priya, null);
+    const before = await walletRow(w.productWalletId);
+    const poolBefore = await walletRow(w.poolId);
+    const ledgerBefore = await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.productWalletId));
+    for (const amount of [-1, 0.5]) {
+      expect(await createDriveWallet(actor, w.productId, { allocationCents: amount }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
+      expect(await updateDriveWallet(actor, w.productId, { allocationCents: amount }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
+      expect(await topUpDriveWallet(actor, w.productId, { amountCents: amount, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 400, code: 'invalid_amount' });
+    }
+    expect(await updateDriveWallet(actor, w.productId, {}, 'session')).toMatchObject({ ok: false, status: 400 });
+    expect(await createDriveWallet(actor, w.productId, { allocationCents: 100 }, 'session')).toMatchObject({ ok: false, status: 409, code: 'wallet_exists' });
+    expect(await walletRow(w.productWalletId)).toEqual(before);
+    expect(await walletRow(w.poolId)).toEqual(poolBefore);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.productWalletId))).toEqual(ledgerBefore);
+  });
+
+  it('repays drive debt before exposing top-up credit and resumes an overdrawn wallet', async () => {
+    if (!world) return;
+    const w = world;
+    await db.update(wallets).set({ status: 'over', debtCents: 300 }).where(eq(wallets.id, w.productWalletId));
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, amountCents: 500, paidDebtCents: 300, duplicate: false });
+    expect(await walletRow(w.productWalletId)).toMatchObject({ status: 'active', debtCents: 0, topupRemainingCents: 200 });
+    expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 500);
+    expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId))).toEqual([expect.objectContaining({ originalCents: 500, remainingCents: 200 })]);
+  });
+
+  it('maps donation refusals and retries without charging the donor twice', async () => {
+    if (!world) return;
+    const w = world;
+    const actor = credentialActor(w.ids.marcus, null);
+    const [root] = await db.select().from(wallets).where(personalRootWalletOf(w.ids.marcus));
+    const before = await walletRow(root.id);
+    expect(await donateToDrive(actor, w.productId, { amountCents: 6000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 402, code: 'insufficient_funds' });
+    expect(await donateToDrive(actor, w.productId, { amountCents: -1, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 400 });
+    await db.update(wallets).set({ donationsEnabled: false }).where(eq(wallets.id, w.productWalletId));
+    expect(await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'donations_disabled' });
+    await db.update(wallets).set({ donationsEnabled: true }).where(eq(wallets.id, w.productWalletId));
+    process.env.DEPLOYMENT_MODE = 'onprem';
+    expect(await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'billing_disabled' });
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'billing_disabled' });
+    expect(await walletRow(root.id)).toEqual(before);
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const key = createId();
+    expect(await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, amountCents: 100, duplicate: false });
+    expect(await donateToDrive(actor, w.productId, { amountCents: 100, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, amountCents: 100, duplicate: true });
+    expect((await walletRow(root.id)).monthlyRemainingCents).toBe(before.monthlyRemainingCents - 100);
+    expect((await walletRow(w.productWalletId)).topupRemainingCents).toBe(100);
+  });
+
+  it('refuses a top-up whose wallet was removed after authorization without debiting its funder', async () => {
+    if (!world) return;
+    const w = world;
+    const before = await walletRow(w.poolId);
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session', {
+      afterAccess: async () => {
+        await db.delete(creditLedger).where(eq(creditLedger.walletId, w.productWalletId));
+        await db.delete(wallets).where(eq(wallets.id, w.productWalletId));
+      },
+    })).toMatchObject({ ok: false, status: 404, code: 'no_wallet' });
+    expect(await walletRow(w.poolId)).toEqual(before);
+  });
+
+  it('shows empty pool and seat views before an organization receives a pool', async () => {
+    if (!world) return;
+    const w = world;
+    await db.delete(creditLedger).where(inArray(creditLedger.walletId, [w.productWalletId, w.researchWalletId]));
+    await db.delete(wallets).where(eq(wallets.parentWalletId, w.poolId));
+    await db.delete(wallets).where(eq(wallets.id, w.poolId));
+    expect(await listOrgSeatCaps(w.orgId)).toMatchObject({ walletId: null, seats: [] });
+    expect(await getOrgPoolSplit(w.orgId)).toMatchObject({ walletId: null, availableCents: 0, driveWallets: [], drivesWithoutWallet: [] });
+    expect(await createDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 100 }, 'session')).toMatchObject({ ok: false, status: 409, code: 'no_org_pool' });
+    expect(await setSeatCap(w.ids.priya, w.orgId, w.ids.marcus, { dailyCents: 100 })).toMatchObject({ ok: false, status: 409, code: 'no_org_pool' });
+    expect(await setOrgPoolPaused(w.ids.priya, w.orgId, true)).toMatchObject({ ok: false, status: 409, code: 'no_org_pool' });
+  });
+  it('creates a personal drive wallet under its lead root, funds it and lists only the lead funds', async () => {
+    if (!world) return;
+    const w = world;
+    const actor = credentialActor(w.ids.dana, null);
+    const drive = await factories.createDrive(w.ids.dana);
+    try {
+      expect(await getAlwaysOwnCredits(w.ids.dana, null)).toEqual({ ok: true, alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false });
+      expect(await createDriveWallet(actor, drive.id, { allocationCents: 100 }, 'session')).toMatchObject({ ok: true });
+      const [child] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, drive.id)));
+      const [root] = await db.select().from(wallets).where(personalRootWalletOf(w.ids.dana));
+      expect(child).toMatchObject({ ownerType: 'user', userId: w.ids.dana, orgId: null, parentWalletId: root.id });
+      await db.update(wallets).set({ monthlyRemainingCents: 1000 }).where(eq(wallets.id, root.id));
+      expect(await topUpDriveWallet(actor, drive.id, { amountCents: 250, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+      expect((await walletRow(root.id)).monthlyRemainingCents).toBe(750);
+      expect((await walletRow(child.id)).topupRemainingCents).toBe(250);
+      const view = await listMyWallets(actor, 'session');
+      expect(view.funds.driveWallets).toEqual([expect.objectContaining({ driveId: drive.id, walletId: child.id })]);
+      expect(view.funds.pools).toEqual([]);
+    } finally {
+      const rows = await db.select({ id: wallets.id }).from(wallets).where(eq(wallets.subjectId, drive.id));
+      await db.delete(creditLedger).where(inArray(creditLedger.walletId, rows.map(row => row.id)));
+      await db.delete(wallets).where(eq(wallets.subjectId, drive.id));
+      await db.delete(drives).where(eq(drives.id, drive.id));
+    }
+  });
+
+  it('refuses a donation after the donor root disappears and does not create a funding leg', async () => {
+    if (!world) return;
+    const w = world;
+    const before = await walletRow(w.productWalletId);
+    expect(await donateToDrive(credentialActor(w.ids.marcus, null), w.productId, { amountCents: 100, idempotencyKey: createId() }, 'session', {
+      afterAccess: async () => { await db.delete(wallets).where(personalRootWalletOf(w.ids.marcus)); },
+    })).toMatchObject({ ok: false, status: 402, code: 'insufficient_funds' });
+    expect(await walletRow(w.productWalletId)).toEqual(before);
+    expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId))).toEqual([]);
+  });
+
+  it('refuses a wallet write after its drive disappears without debiting the pool', async () => {
+    if (!world) return;
+    const w = world;
+    const before = await walletRow(w.poolId);
+    expect(await createDriveWallet(credentialActor(w.ids.priya, null), w.researchId, { allocationCents: 100 }, 'session', {
+      afterAccess: async () => { await db.delete(drives).where(eq(drives.id, w.researchId)); },
+    })).toMatchObject({ ok: false, status: 404 });
+    expect(await walletRow(w.poolId)).toEqual(before);
+  });
+
+  it.each(['weak', 'expired'] as const)('refuses %s credentials at drive-wallet and conversation entry points before a source changes', async (kind) => {
+    if (!world) return;
+    const w = world;
+    await db.update(organizations).set({ policies: { requireStrongSignIn: true, maximumSessionAgeMinutes: 15 } }).where(eq(organizations.id, w.orgId));
+    const actor = credentialActor(w.ids.marcus, { authenticatedAtMs: kind === 'expired' ? Date.now() - 3600000 : Date.now(), assurance: kind === 'weak' ? 'single_factor' : 'user_verified_passkey' });
+    const [conversation] = await db.insert(conversations).values({ userId: w.ids.marcus, type: 'drive', contextId: w.productId, title: 'Policy-bound spend', chosenWalletId: w.productWalletId }).returning();
+    const expected = { ok: false, status: 403, code: kind === 'weak' ? 'org_strong_sign_in_required' : 'org_reauthentication_required' };
+    expect(await getDriveWallet(actor, w.productId, 'session')).toMatchObject(expected);
+    expect(await getConversationSpend(actor, conversation.id)).toMatchObject(expected);
+    expect(await setConversationSpend(actor, conversation.id, null, 'session')).toMatchObject(expected);
+    expect((await db.select().from(conversations).where(eq(conversations.id, conversation.id)))[0].chosenWalletId).toBe(w.productWalletId);
+  });
+
+  it('confines an automation source reader and writer to the automation drive', async () => {
+    if (!world) return;
+    const w = world;
+    const [conversation] = await db.insert(conversations).values({ userId: w.ids.priya, type: 'drive', contextId: w.productId, title: 'Scoped automation', chosenWalletId: w.productWalletId }).returning();
+    const actor = automationActor(w.ids.priya, 'scheduled workflow', inDrives(w.researchId));
+    expect(await getConversationSpend(actor, conversation.id)).toMatchObject({ ok: false, status: 404 });
+    expect(await setConversationSpend(actor, conversation.id, null, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect((await db.select().from(conversations).where(eq(conversations.id, conversation.id)))[0].chosenWalletId).toBe(w.productWalletId);
   });
 });

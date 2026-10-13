@@ -424,4 +424,86 @@ describe('wallet funding against Postgres', () => {
       db.insert(walletFundingLegs).values({ walletId: w, funderKind: 'donation', funderUserId: owner, originalCents: 100, remainingCents: 100, nonRefundable: false }),
     ).rejects.toMatchObject({ cause: expect.objectContaining({ constraint: 'wallet_funding_legs_donation_non_refundable' }) });
   });
+  it.each(['named funder', 'wallet owner', 'org owner'] as const)('records a refundable owner leg under its %s and removes only the refunded cents', async (payer) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const funder = await user();
+    let parentId: string;
+    let orgId: string | undefined;
+    if (payer === 'org owner') {
+      const [org] = await db.insert(organizations).values({ name: 'Refund org', slug: `refund-${createId()}`, ownerId: owner }).returning();
+      created.orgs.push(org.id);
+      orgId = org.id;
+      const [pool] = await db.insert(wallets).values({ ownerType: 'org', orgId }).returning();
+      created.rootWallets.push(pool.id);
+      parentId = pool.id;
+    } else {
+      parentId = await personalRoot(owner, 0);
+    }
+    const drive = await factories.createDrive(owner, { orgId });
+    created.drives.push(drive.id);
+    const target = await childWallet({
+      ownerType: orgId ? 'org' : 'user', orgId, userId: orgId ? null : owner,
+      subjectType: 'drive', subjectId: drive.id, parentWalletId: parentId,
+    });
+    const leg = await db.transaction(async tx => {
+      const [row] = await tx.insert(walletFundingLegs).values({
+        walletId: target, funderKind: 'owner', funderUserId: payer === 'named funder' ? funder : null,
+        funderOrgId: orgId, originalCents: 500, remainingCents: 500, nonRefundable: false,
+      }).returning();
+      await tx.update(wallets).set({ topupRemainingCents: 500 }).where(eq(wallets.id, target));
+      return row;
+    });
+    expect(await refundFundingLeg(leg.id, 200)).toEqual({ kind: 'refund', legId: leg.id, cents: 200, remainingCents: 300 });
+    expect((await walletRow(target)).topupRemainingCents).toBe(300);
+    expect((await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.id, leg.id)))[0].remainingCents).toBe(300);
+    const recordedUnder = payer === 'named funder' ? funder : owner;
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, target))).toEqual([
+      expect.objectContaining({ userId: recordedUnder, entryType: 'leg_refund', amountCents: -200, appliedCents: -200 }),
+    ]);
+    expect(await refundFundingLeg(leg.id, 300)).toEqual({ kind: 'refund', legId: leg.id, cents: 300, remainingCents: 0 });
+    expect((await walletRow(target)).topupRemainingCents).toBe(0);
+    expect((await walletRow(parentId)).topupRemainingCents).toBe(0);
+    expect(await refundFundingLeg(leg.id, 1)).toEqual({ kind: 'refuse', legId: leg.id, reason: 'exceeds_remaining' });
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, target))).toHaveLength(2);
+  });
+
+  it('refuses missing, malformed and non-refundable owner-leg refunds without changing money', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const root = await personalRoot(owner, 0);
+    const target = await childWallet({ userId: owner, subjectType: 'drive', subjectId: `drv_${createId()}`, parentWalletId: root });
+    const leg = await db.transaction(async tx => {
+      const [row] = await tx.insert(walletFundingLegs).values({ walletId: target, funderKind: 'owner', funderUserId: owner, originalCents: 500, remainingCents: 500, nonRefundable: false }).returning();
+      await tx.update(wallets).set({ topupRemainingCents: 500 }).where(eq(wallets.id, target));
+      return row;
+    });
+    for (const amount of [-1, 0, 0.5]) {
+      expect(await refundFundingLeg(leg.id, amount)).toEqual({ kind: 'refuse', legId: leg.id, reason: 'invalid_amount' });
+    }
+    const missing = createId();
+    expect(await refundFundingLeg(missing, 100)).toEqual({ kind: 'refuse', legId: missing, reason: 'invalid_amount' });
+    await db.update(walletFundingLegs).set({ nonRefundable: true }).where(eq(walletFundingLegs.id, leg.id));
+    expect(await refundFundingLeg(leg.id, 100)).toEqual({ kind: 'refuse', legId: leg.id, reason: 'non_refundable' });
+    expect((await walletRow(target)).topupRemainingCents).toBe(500);
+    expect((await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.id, leg.id)))[0].remainingCents).toBe(500);
+    expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, target))).toEqual([]);
+  });
+
+  it('does not create a pool or funding proof for missing invoice identity or disabled billing', async () => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    const [org] = await db.insert(organizations).values({ name: 'Unfunded org', slug: `unfunded-${createId()}`, ownerId: owner, stripeCustomerId: `cus_${createId()}` }).returning();
+    created.orgs.push(org.id);
+    expect(await applyOrgPoolRefill({ customer: { id: org.stripeCustomerId ?? '' } })).toEqual({ kind: 'nothing', orgId: org.id, reason: 'no_invoice_id' });
+    expect(await applyOrgPoolRefill({ id: createId(), customer: null })).toEqual({ kind: 'not_org' });
+    process.env.DEPLOYMENT_MODE = 'onprem';
+    try {
+      expect(await applyOrgPoolRefill({ id: createId(), customer: org.stripeCustomerId })).toEqual({ kind: 'billing_disabled' });
+    } finally {
+      process.env.DEPLOYMENT_MODE = 'cloud';
+    }
+    expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual([]);
+    expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toEqual([]);
+  });
 });
