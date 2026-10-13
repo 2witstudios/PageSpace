@@ -466,6 +466,12 @@ export async function createConversationInSession(input: {
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<void> {
+  // The row is inserted inside the membership write's transaction, so its `created` event waits for that commit:
+  // emitted earlier, a sidebar re-reads the listing before the thread is in it and stays stale until its poll.
+  const afterCommit: Array<() => void> = [];
+  const queue = (emit: () => void) => {
+    afterCommit.push(emit);
+  };
   await createConversationInSessionWith<DbExecutor>(
     {
       ...buildClaimDeps(input.actor),
@@ -473,10 +479,12 @@ export async function createConversationInSession(input: {
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
+          afterCommit: queue,
         }),
       createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
         await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
+          afterCommit: queue,
         });
       },
       findConversationIn: async (conversationId, tx) => {
@@ -494,6 +502,7 @@ export async function createConversationInSession(input: {
     },
     { ...input, userId: input.actor.userId },
   );
+  for (const emit of afterCommit) emit();
 }
 
 /**
