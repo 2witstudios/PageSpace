@@ -98,7 +98,7 @@ export function BillingAddressForm({
 
   if (!editing && !hasAddress) {
     return (
-      <div className="text-center py-6 border rounded-lg bg-muted/30">
+      <div className="flex flex-col items-center gap-2 py-4 text-center">
         <MapPin className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
         <p className="text-sm text-muted-foreground mb-4">No billing address on file</p>
         <Button variant="outline" onClick={() => setEditing(true)}>
@@ -110,7 +110,7 @@ export function BillingAddressForm({
 
   if (!editing) {
     return (
-      <div className="border rounded-lg bg-card p-4">
+      <div>
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             {name && <div className="font-medium">{name}</div>}
@@ -144,7 +144,7 @@ export function BillingAddressForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border rounded-lg bg-card p-4 space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="name">Name</Label>
         <Input
@@ -252,7 +252,7 @@ export function BillingAddressForm({
               Saving...
             </>
           ) : (
-            'Save Address'
+            'Save address'
           )}
         </Button>
       </div>

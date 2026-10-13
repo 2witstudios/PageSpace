@@ -79,6 +79,14 @@ export function formatCreditCountSigned(cents: number): string {
   return formatCreditCount(cents);
 }
 
+/**
+ * Whole credits with thousands separators ("1,000", "612"). Fractions round to the nearest
+ * credit: the account screens show balances as whole numbers, never "$" and never decimals.
+ */
+export function formatWholeCredits(cents: number): string {
+  return Math.round(cents / 100).toLocaleString('en-US');
+}
+
 /** Bounds (whole cents) for a custom top-up amount, from the canonical billing config. */
 export const TOPUP_MIN_CENTS = CREDIT_TOPUP_MIN_CENTS;
 export const TOPUP_MAX_CENTS = CREDIT_TOPUP_MAX_CENTS;
@@ -112,11 +120,27 @@ export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
     : `${MONTHLY_CREDITS[tier]} credits to start`;
 }
 
-/** Short table-cell form: "15 credits/mo" or "5 credits to start". */
+/** Short table-cell form: "15 credits/mo" or "5 credits to start", in whole credits. */
 export function creditsCellPhrase(tier: SubscriptionTier, cents: number): string {
   return CREDITS_REFILL[tier]
-    ? `${formatCreditCount(cents)} credits/mo`
-    : `${formatCreditCount(cents)} credits to start`;
+    ? `${formatWholeCredits(cents)} credits/mo`
+    : `${formatWholeCredits(cents)} credits to start`;
+}
+
+/**
+ * Included-allowance sentence for a tier, in whole credits: "900 credits included each month"
+ * for a refilling tier, "500 credits to start" for the free tier's one-time grant.
+ */
+export function includedCreditsPhrase(tier: SubscriptionTier, cents: number): string {
+  return CREDITS_REFILL[tier]
+    ? `${formatWholeCredits(cents)} credits included each month`
+    : `${formatWholeCredits(cents)} credits to start`;
+}
+
+/** Top-up rate from the smallest buyable pack: "10 credits per $10". */
+export function topUpRatePhrase(): string {
+  const pack = CREDIT_PACK_LIST[0];
+  return `${formatWholeCredits(pack.cents)} credits per ${formatCreditDollars(pack.cents)}`;
 }
 
 /** Buyable top-up packs, sorted by ascending credit value. */

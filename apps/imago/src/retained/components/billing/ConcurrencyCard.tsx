@@ -1,9 +1,7 @@
 'use client';
 
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { Gauge } from 'lucide-react';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 
 interface ConcurrencyResponse {
@@ -33,39 +31,32 @@ export function ConcurrencyCard() {
     { refreshInterval: 5000, revalidateOnFocus: false },
   );
 
+  if (isLoading) {
+    return <Skeleton className="h-4 w-40" />;
+  }
+
+  if (error || !data) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Could not load your concurrency status. Please refresh and try again.
+      </p>
+    );
+  }
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Gauge className="h-5 w-5" />
-          Concurrency
-        </CardTitle>
-        <CardDescription>AI calls in flight right now</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <Skeleton className="h-4 w-40" />
-        ) : error || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load your concurrency status. Please refresh and try again.
-          </p>
-        ) : (
-          <div className="space-y-1 text-sm">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-medium">In-flight AI calls</span>
-              <span className="tabular-nums text-muted-foreground">
-                {data.inFlightHolds.count} / {data.inFlightHolds.limit}
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Includes chat, voice, and agent-session sandbox runs combined — this is what an
-              agent-session run checks against before starting. Your tier&apos;s separate
-              code-execution ceiling is {data.codeExecutionLimit} concurrent runs (enforced per
-              server instance).
-            </p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-1 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-medium">In-flight AI calls</span>
+        <span className="tabular-nums text-muted-foreground">
+          {data.inFlightHolds.count} / {data.inFlightHolds.limit}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Includes chat, voice, and agent-session sandbox runs combined — this is what an
+        agent-session run checks against before starting. Your tier&apos;s separate
+        code-execution ceiling is {data.codeExecutionLimit} concurrent runs (enforced per
+        server instance).
+      </p>
+    </div>
   );
 }

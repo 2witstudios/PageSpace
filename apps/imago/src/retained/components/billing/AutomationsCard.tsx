@@ -2,13 +2,13 @@
 
 import { useState } from 'react';
 import useSWR from 'swr';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Switch } from '@/retained/components/ui/switch';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { Sparkles, Lock } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import { UpgradeLink } from './UpgradeLink';
+import { SettingsGroup, SettingsRow, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 interface AutomationView {
   pulse: { enabled: boolean };
@@ -60,70 +60,64 @@ export function AutomationsCard() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5" />
-          Automations
-        </CardTitle>
-        <CardDescription>
-          Background AI that runs on your behalf. Turning these off stops them from
-          spending your credits automatically.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        {isLoading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        ) : error || !data ? (
-          <p className="text-sm text-muted-foreground">
-            Could not load automation settings. Please refresh and try again.
-          </p>
-        ) : (
-          <div className="divide-y">
+    <SettingsSection
+      title="Automations"
+      description="Background AI that runs on your behalf. Turning these off stops them from spending your credits automatically."
+    >
+      {isLoading ? (
+        <div className="space-y-4">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      ) : error || !data ? (
+        <p className="text-sm text-muted-foreground">
+          Could not load automation settings. Please refresh and try again.
+        </p>
+      ) : (
+        <SettingsGroup label="Automations">
+          <ToggleRow
+            title="Pulse"
+            description="A short daily summary of what changed in your workspace."
+            checked={data.pulse.enabled}
+            disabled={saving === 'pulse'}
+            onCheckedChange={(v) => update('pulseEnabled', v)}
+          />
+          {data.memory.available ? (
             <ToggleRow
-              title="Pulse"
-              description="A short daily summary of what changed in your workspace."
-              checked={data.pulse.enabled}
-              disabled={saving === 'pulse'}
-              onCheckedChange={(v) => update('pulseEnabled', v)}
+              title="Memory"
+              description="Learns your preferences from conversations to personalize AI replies."
+              checked={data.memory.enabled}
+              disabled={saving === 'memory'}
+              onCheckedChange={(v) => update('memoryEnabled', v)}
             />
-            {data.memory.available ? (
-              <ToggleRow
-                title="Memory"
-                description="Learns your preferences from conversations to personalize AI replies."
-                checked={data.memory.enabled}
-                disabled={saving === 'memory'}
-                onCheckedChange={(v) => update('memoryEnabled', v)}
-              />
-            ) : (
-              <div className="flex items-center justify-between gap-4 py-4">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-1.5 text-sm font-medium">
-                    Memory
-                    <Lock className="h-3.5 w-3.5 text-muted-foreground" />
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    Learns your preferences from conversations.{' '}
-                    <UpgradeLink
-                      href="/settings/plan"
-                      className="underline underline-offset-2"
-                      fallback="Available on paid plans"
-                    >
-                      Upgrade to enable
-                    </UpgradeLink>
-                    .
-                  </p>
-                </div>
-                <Switch checked={false} disabled aria-label="Memory (upgrade required)" />
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          ) : (
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-1.5">
+                  Memory
+                  <Lock className="h-3.5 w-3.5 text-muted-foreground" />
+                </span>
+              }
+              hint={
+                <>
+                  Learns your preferences from conversations.{' '}
+                  <UpgradeLink
+                    href="/settings/plan"
+                    className="underline underline-offset-2"
+                    fallback="Available on paid plans"
+                  >
+                    Upgrade to enable
+                  </UpgradeLink>
+                  .
+                </>
+              }
+            >
+              <Switch checked={false} disabled aria-label="Memory (upgrade required)" />
+            </SettingsRow>
+          )}
+        </SettingsGroup>
+      )}
+    </SettingsSection>
   );
 }
 
@@ -141,17 +135,13 @@ function ToggleRow({
   onCheckedChange: (value: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-4">
-      <div className="space-y-0.5">
-        <div className="text-sm font-medium">{title}</div>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
+    <SettingsRow label={title} hint={description}>
       <Switch
         checked={checked}
         disabled={disabled}
         onCheckedChange={onCheckedChange}
         aria-label={title}
       />
-    </div>
+    </SettingsRow>
   );
 }
