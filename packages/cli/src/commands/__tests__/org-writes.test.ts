@@ -116,10 +116,18 @@ describe('org renderers (pure)', () => {
       suspended: { guests: 2 },
       restored: {},
       blocked: {},
-      auditRecorded: true,
     });
     expect(change).toContain('Changed: requireStrongSignIn=on');
     expect(change).toContain('suspended: guests 2');
+    expect(change).not.toContain('sign-in now refuses');
+    expect(renderPolicyChange({
+      policies: { requireStrongSignIn: true } as never,
+      changed: ['requireStrongSignIn'],
+      suspended: {},
+      restored: {},
+      blocked: {},
+      signInBlocked: { members: 3, guests: 1, credentials: 7 },
+    })).toContain('sign-in now refuses: 3 members, 1 guests, 7 credentials');
 
     const audit = renderAuditLog({
       entries: [{ timestamp: '2026-09-17T00:00:00.000Z', category: 'membership', eventType: 'org.member.removed', actorId: 'u1', actorName: 'Jono', resourceType: 'organization_member', resourceId: 'u2', driveId: null, details: {} }],
@@ -176,7 +184,7 @@ describe('pagespace orgs <write verbs>', () => {
     const ctx = createFakeContext({
       sdk: fakeSdk({
         organizations: {
-          updatePolicies: async (input: unknown) => (calls.push(input), { policies: { requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }, changed: ['requireStrongSignIn', 'maximumSessionAgeMinutes'], suspended: {}, restored: {}, blocked: {}, auditRecorded: true }),
+          updatePolicies: async (input: unknown) => (calls.push(input), { policies: { requireStrongSignIn: true, maximumSessionAgeMinutes: 60 }, changed: ['requireStrongSignIn', 'maximumSessionAgeMinutes'], suspended: {}, restored: {}, blocked: {} }),
         },
       }),
     });
@@ -214,7 +222,7 @@ describe('pagespace orgs <write verbs>', () => {
     let called = false;
     const sdk = fakeSdk({
       organizations: {
-        updatePolicies: async () => ((called = true), { policies: {}, changed: [], suspended: {}, restored: {}, blocked: {}, auditRecorded: true }),
+        updatePolicies: async () => ((called = true), { policies: {}, changed: [], suspended: {}, restored: {}, blocked: {} }),
         changeMemberRole: async () => ((called = true), { userId: 'u2', role: 'MEMBER' }),
         answerGuestApproval: async () => ((called = true), { decided: 'declined' }),
       },

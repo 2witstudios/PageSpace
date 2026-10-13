@@ -384,7 +384,8 @@ export const updateOrgPolicies = defineOperation({
     restored: z.record(z.string(), z.number()),
     /** What it forbids that is blocked where used rather than suspended, counted by kind. */
     blocked: z.record(z.string(), z.number()),
-    auditRecorded: z.boolean(),
+    /** Members, guests and credentials a tightened sign-in policy now refuses (D-OW-45), or null when it changed nothing there. */
+    signInBlocked: z.object({ members: z.number(), guests: z.number(), credentials: z.number() }).nullable().optional(),
     publishedVisibility: z.object({ parked: z.number(), restored: z.number(), failed: z.number() }).optional(),
   }),
   requiredScope: 'account',

@@ -147,7 +147,9 @@ export function renderPolicyChange(value: Out<'updatePolicies'>): string {
     ...counts('suspended', value.suspended),
     ...counts('restored', value.restored),
     ...counts('blocked where used', value.blocked),
-    ...(value.auditRecorded ? [] : ['  warning: the change applied but its audit entry was not recorded']),
+    ...(value.signInBlocked && value.signInBlocked.members + value.signInBlocked.guests + value.signInBlocked.credentials > 0
+      ? [`  sign-in now refuses: ${value.signInBlocked.members} members, ${value.signInBlocked.guests} guests, ${value.signInBlocked.credentials} credentials`]
+      : []),
     '',
   ].join('\n');
 }

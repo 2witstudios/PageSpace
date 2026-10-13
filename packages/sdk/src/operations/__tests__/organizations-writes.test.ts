@@ -205,8 +205,12 @@ describe('org writes — responses', () => {
       publishedApps: true,
       integrationsAllowlist: null,
     };
-    const answer = { policies, changed: ['guests'], suspended: { guests: 2 }, restored: {}, blocked: {}, auditRecorded: true };
+    const answer = { policies, changed: ['guests'], suspended: { guests: 2 }, restored: {}, blocked: {} };
     expect(updateOrgPolicies.outputSchema.parse(answer)).toEqual(answer);
+    // The server's answer since the in-transaction audit outbox: no auditRecorded, plus the sign-in counts.
+    const signIn = { ...answer, signInBlocked: { members: 3, guests: 1, credentials: 7 } };
+    expect(updateOrgPolicies.outputSchema.parse(signIn)).toEqual(signIn);
+    expect(updateOrgPolicies.outputSchema.parse({ ...answer, signInBlocked: null })).toEqual({ ...answer, signInBlocked: null });
   });
 
   it('X-1 (partial) [D-OW-26] a key\'s policy change cannot name a money policy: the seat allowance and the wallet fallback are not inputs', () => {
