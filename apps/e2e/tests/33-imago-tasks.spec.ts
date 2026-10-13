@@ -168,7 +168,7 @@ test('a task added in the Table view, then ticked, stays added and done across r
   // The list pane opens the list as the object, in the Table view a new viewer starts in.
   await page.locator('[data-slot="list"]').getByRole('link', { name: new RegExp(`^${LIST}\\b`) }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${listPageId}`)));
-  await expect(page.getByRole('button', { name: 'Table view', exact: true })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true })).toHaveAttribute('aria-current', 'page');
   await treeOf(page).getByRole('button', { name: 'All', exact: true }).click();
 
   const tree = treeOf(page);
@@ -203,16 +203,16 @@ test('a task moved with the status selector stays in its Kanban column across a 
   const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Draft the post' });
   await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Pick a date' });
 
-  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
   await expect(card(column(page, 'To Do'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 2 tasks');
 
-  await page.getByRole('button', { name: 'Table view', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
   const moved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
   await treeOf(page).getByRole('combobox', { name: 'Status of Draft the post', exact: true }).click();
   await page.getByRole('option', { name: 'In Progress', exact: true }).click();
   await expectOk(await moved);
-  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
   await expect(card(column(page, 'In Progress'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'In Progress').getByRole('heading')).toHaveAccessibleName('In Progress, 1 task');
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 1 task');
@@ -228,7 +228,7 @@ test('a task moved with the status selector stays in its Kanban column across a 
 test('a card dragged to another column on the Board stays there across a reload', async ({ browser, baseURL }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
   const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Order banners' });
-  await page.getByRole('button', { name: 'Kanban view', exact: true }).click();
+  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
 
   const handle = page.getByRole('button', { name: 'Drag Order banners', exact: true });
   const from = await handle.boundingBox();

@@ -37,7 +37,7 @@ export async function openTaskConfiguration(page: Page, name: 'Statuses' | 'Work
 /** The same task actions are a row menu in wide panes and a detail sheet in narrow panes. */
 export async function openTaskActions(page: Page, taskId: string, title: string): Promise<Locator> {
   const object = page.locator('[data-slot="object"]');
-  await object.getByRole('button', { name: 'Table view', exact: true }).click();
+  await object.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
   const row = object.locator(`[data-task-id="${taskId}"]:visible`);
   await expect(row).toBeVisible();
   const actions = row.getByRole('button', { name: `Actions for ${title}`, exact: true });

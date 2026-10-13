@@ -136,7 +136,9 @@ test('read-only members cannot edit document or canvas, including while permissi
   await page.locator('.retained-ui .tiptap').first().click(); await page.keyboard.type('Attempted mutation');
   expect(writes).toEqual([]);
   await page.goto(imagoPath(user.homeDriveId, `files/${canvas.id}`));
-  await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeDisabled();
+  await expect(page.getByRole('tab', { name: 'Settings', exact: true })).toBeDisabled();
+  await expect(page.getByRole('tab', { name: 'View', exact: true })).toBeEnabled();
+  await expect(page.getByRole('tab', { name: 'Code', exact: true })).toBeEnabled();
   await expect(page.locator('iframe').first()).toBeVisible();
 });
 
@@ -340,12 +342,12 @@ test('code, sheet and canvas edits persist through their original editors', asyn
   await expect.poll(async () => (JSON.parse((await browserGet(page, `/api/pages/${sheet.id}`)).body) as { content: string }).content, { timeout: 15_000 }).toContain('123');
   await page.reload(); await expect(page.getByRole('grid').first()).toContainText('123');
   await page.goto(imagoPath(user.homeDriveId, `files/${canvas.id}`));
-  await page.getByRole('button', { name: 'Code', exact: true }).click();
+  await page.getByRole('tab', { name: 'Code', exact: true }).click();
   await expect(input).toBeEditable();
   await expect(page.locator('[data-slot="object"] .view-lines')).toContainText('<h1>Before</h1>');
   await input.focus(); await page.keyboard.press('Control+A'); await page.keyboard.type('After canvas edit');
   await expect.poll(async () => (await db.select({ content: pages.content }).from(pages).where(eq(pages.id, canvas.id)))[0]?.content).toBe('After canvas edit');
-  await page.getByRole('button', { name: 'View', exact: true }).click();
+  await page.getByRole('tab', { name: 'View', exact: true }).click();
   const preview = await browserGet(page, `/api/canvas/${canvas.id}/preview`);
   expect(preview.body).toContain('After canvas edit');
   expect(preview.coep).toBe('credentialless');
