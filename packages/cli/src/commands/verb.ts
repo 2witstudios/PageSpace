@@ -95,7 +95,7 @@ export function verbHandler<TInput, TOutput>(spec: VerbSpec<TInput, TOutput>): C
         return EXIT_RUNTIME_ERROR;
       }
     }
-    const result = await callSdk(ctx.stderr, () => spec.call(ctx.sdk, input.value));
+    const result = await callSdk(ctx, () => spec.call(ctx.sdk, input.value));
     if (!result.ok) return EXIT_RUNTIME_ERROR;
     ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : spec.render(result.value, input.value));
     return EXIT_SUCCESS;

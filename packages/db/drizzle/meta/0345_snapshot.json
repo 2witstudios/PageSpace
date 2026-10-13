@@ -1,6 +1,6 @@
 {
-  "id": "26dea859-358c-4efb-bf18-2f0dfbfb5cd2",
-  "prevId": "a7709f6c-9d6b-417f-89b4-dc7d7db40686",
+  "id": "518d56c8-101c-4ce0-8985-f3e0a190cb2d",
+  "prevId": "cb70c503-40c9-4253-9861-1889ff070d4e",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -4507,6 +4507,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         },
         "aiProvider": {
           "name": "aiProvider",
@@ -13984,6 +13991,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "occurrences": {
           "name": "occurrences",
           "type": "integer",
@@ -14131,6 +14145,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "memoryOrgIds": {
+          "name": "memoryOrgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "enabled": {
           "name": "enabled",
           "type": "boolean",
@@ -14165,6 +14186,51 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_bio_page_idx": {
+          "name": "user_personalization_bio_page_idx",
+          "columns": [
+            {
+              "expression": "bioPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_writing_style_page_idx": {
+          "name": "user_personalization_writing_style_page_idx",
+          "columns": [
+            {
+              "expression": "writingStylePageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_personalization_rules_page_idx": {
+          "name": "user_personalization_rules_page_idx",
+          "columns": [
+            {
+              "expression": "rulesPageId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -26399,12 +26465,7 @@
         }
       },
       "policies": {},
-      "checkConstraints": {
-        "organizations_avatar_url_chk": {
-          "name": "organizations_avatar_url_chk",
-          "value": "\"organizations\".\"avatarUrl\" IS NULL OR \"organizations\".\"avatarUrl\" ~ ('^/api/orgs/' || \"organizations\".\"id\" || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.org_guest_holds": {

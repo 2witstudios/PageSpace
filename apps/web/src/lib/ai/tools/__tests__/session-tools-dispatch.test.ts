@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { agentDispatchPayloadSchema } from '@pagespace/lib/auth/agent-dispatch-payload';
 import { dispatchThroughChatPipeline } from '../session-tools-runtime';
-import { automationActor, credentialActor } from '@pagespace/lib/permissions/access-actor';
+import { automationActor, credentialActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 // The dispatch SIGNS an internal hop rather than replaying the caller's browser
 // credential — everything else the runtime module wires (db listings, sandbox
@@ -120,7 +120,7 @@ describe('dispatchThroughChatPipeline', () => {
   it('SEC-2 (partial) an automation signed nothing in, so its dispatch carries no evidence', async () => {
     const fetchMock = fetchAdmitted();
 
-    await dispatchThroughChatPipeline({ ...DISPATCH_INPUT, actor: automationActor('user-1', 'workflow:cron') });
+    await dispatchThroughChatPipeline({ ...DISPATCH_INPUT, actor: automationActor('user-1', 'workflow:cron', inDrives('drive-1')) });
 
     expect(sentPayload(fetchMock).authentication).toBeNull();
   });

@@ -17,7 +17,7 @@ import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { automationActor } from '@pagespace/lib/permissions/access-actor';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
 
@@ -72,7 +72,7 @@ export async function executeCalendarTrigger(
 
     // Verify the scheduling user still has drive access (may have been removed since scheduling)
     // An automation runs as its scheduler (D-OW-34): membership applies, sign-in policy does not.
-    const hasDriveAccess = await isUserDriveMember(automationActor(scheduledById, 'calendar-trigger'), trigger.driveId);
+    const hasDriveAccess = await isUserDriveMember(automationActor(scheduledById, 'calendar-trigger', inDrives(trigger.driveId)), trigger.driveId);
     if (!hasDriveAccess) {
       const error = 'Scheduling user no longer has access to the drive';
       return { success: false, durationMs: Date.now() - startTime, error };

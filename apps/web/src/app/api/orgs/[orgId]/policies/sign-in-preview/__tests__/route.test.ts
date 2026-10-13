@@ -28,7 +28,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session);
-  vi.mocked(countOrgSignInBlocked).mockResolvedValue({ members: 4, credentials: 9 });
+  vi.mocked(countOrgSignInBlocked).mockResolvedValue({ members: 4, guests: 2, credentials: 9 });
 });
 
 describe('sign-in policy preview', () => {
@@ -36,7 +36,7 @@ describe('sign-in policy preview', () => {
     as('ADMIN');
     const res = await GET(req('?requireStrongSignIn=true&maximumSessionAgeMinutes=60'), ctx);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ members: 4, credentials: 9 });
+    expect(await res.json()).toEqual({ members: 4, guests: 2, credentials: 9 });
     expect(countOrgSignInBlocked).toHaveBeenCalledWith({ fake: true }, 'org_nw', { requireStrongSignIn: true, maximumSessionAgeMinutes: 60 });
   });
 

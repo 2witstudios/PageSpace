@@ -35,7 +35,7 @@ export async function GET(request: Request, context: RouteContext) {
   const refused = await refuseDriveCredential(request, gate, driveId);
   if (refused) return refused;
   try {
-    const result = await listPendingDriveJoinRequests(gate.userId, driveId);
+    const result = await listPendingDriveJoinRequests(gate.actor, driveId);
     if (!result.ok) return orgRefusalResponse(result);
     auditRequest(request, {
       eventType: 'data.read',

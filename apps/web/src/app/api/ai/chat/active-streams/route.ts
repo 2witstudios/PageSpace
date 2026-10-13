@@ -28,6 +28,7 @@ export async function GET(request: Request) {
       });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
@@ -104,7 +105,7 @@ export async function GET(request: Request) {
           details: { reason: 'page_view_denied', method: 'GET' },
           riskScore: 0.5,
         });
-        return deniedResponse(actorFromAuth(auth), channelId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
+        return deniedResponse(actor, channelId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
       }
     }
 

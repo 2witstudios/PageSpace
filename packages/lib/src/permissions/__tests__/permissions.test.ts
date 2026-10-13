@@ -6,6 +6,7 @@ vi.mock('../actor-authentication', () => ({
   checkActorResourceAuthentication: async () => ({ allowed: true }),
   filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
   filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  dropWithheldDerivedPages: async (_actor: unknown, ids: readonly string[]) => [...ids],
   explainOrgAuthenticationDenial: async () => null,
 }));
 

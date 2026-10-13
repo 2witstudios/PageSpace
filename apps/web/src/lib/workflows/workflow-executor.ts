@@ -41,7 +41,7 @@ import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
 import { claimedRunOwner } from '@pagespace/lib/permissions/automation-ownership';
-import { automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -89,14 +89,27 @@ export interface WorkflowExecutionResult {
  * doesn't need to know which kind of trigger it serves.
  */
 /**
- * The actor every run reads and writes as (D-OW-34, D-OW-45): the workflow's creator, as an automation. No one signs in
- * for a scheduled, triggered or manual run, so org sign-in policy does not apply; membership and every other policy do.
+ * The actor a run reads and writes as (D-OW-34, D-OW-45, D-OW-62). A manual Run is a person pressing a button in an
+ * authenticated request: it runs as THAT credential (`actingActor`), so the org sign-in policy applies to it as to any
+ * request. A scheduled or triggered run has no one signing in: it runs as the workflow's creator, an automation
+ * CONFINED to the workflow's own drive (plus its agent's home drive, part of the same configuration), so an
+ * automation is never a way to read a drive its creator could open only by signing in.
  */
-function workflowActor(input: Pick<WorkflowExecutionInput, 'createdBy' | 'source'>): AccessActor {
-  return automationActor(input.createdBy, `workflow:${input.source.table}`);
+function workflowActor(
+  input: Pick<WorkflowExecutionInput, 'createdBy' | 'source' | 'driveId' | 'actingActor'>,
+  agentDriveId?: string | null,
+): AccessActor {
+  if (input.actingActor) return input.actingActor;
+  const drives = agentDriveId && agentDriveId !== input.driveId ? [input.driveId, agentDriveId] : [input.driveId];
+  return automationActor(input.createdBy, `workflow:${input.source.table}`, inDrives(...drives));
 }
 
 export interface WorkflowExecutionInput {
+  /**
+   * The person who pressed Run, as their request's credential (D-OW-62): a manual run reads and writes as them, under
+   * their org's sign-in policy. Absent for scheduled and triggered runs, which run as the confined creator automation.
+   */
+  actingActor?: AccessActor;
   workflowId: string;
   workflowName: string;
   driveId: string;
@@ -469,9 +482,10 @@ async function runToolStep(
     };
   }
 
+  const stepActor = workflowActor(input);
   const executionContext: ToolExecutionContext = {
-    userId: input.createdBy,
-    accessActor: workflowActor(input),
+    userId: stepActor.userId,
+    accessActor: stepActor,
     timezone: input.timezone,
     creditSpend: input.creditSpend,
   };
@@ -817,9 +831,10 @@ async function runExecution(
     }
 
     // 7. Build execution context
+    const agentActor = workflowActor(input, agent.driveId);
     const executionContext: ToolExecutionContext = {
-      userId: input.createdBy,
-      accessActor: workflowActor(input),
+      userId: agentActor.userId,
+      accessActor: agentActor,
       timezone: input.timezone,
       creditSpend: input.creditSpend,
       aiProvider: agent.aiProvider ?? undefined,

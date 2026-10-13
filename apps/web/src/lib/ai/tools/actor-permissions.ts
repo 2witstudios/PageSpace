@@ -21,24 +21,16 @@ import {
   hasAppDriveMembership,
 } from '@pagespace/lib/permissions/app-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
-import { checkActorDriveAuthentication, checkActorResourceAuthentication } from '@pagespace/lib/permissions/actor-authentication';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages } from '@pagespace/lib/permissions/actor-authentication';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 
-/**
- * The access actor this tool call runs as (D-OW-45): the credential that drove the turn, or the automation that
- * runs as its creator. Its user must be the context's user; a context that disagrees with itself refuses, never
- * guesses.
- */
-export function toolActor(context: ToolExecutionContext): AccessActor {
-  if (context.accessActor.userId !== context.userId) {
-    throw new Error('Tool context actor does not match its user');
-  }
-  return context.accessActor;
-}
+// toolActor lives in its own dependency-free module: tool-name catalogs the browser imports (sandbox-tools,
+// sandbox-git-tools) need it, and this module pulls the server-only permission layer.
+import { toolActor } from './tool-actor';
+export { toolActor };
 
 /**
  * SEC-2/3: the org sign-in policy of the page's (or drive's) org, asked of the person (or automation) driving the
@@ -429,6 +421,19 @@ export async function canActorAdministerDrive(
   return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
 }
 
+/**
+ * D-OW-62: an agent's membership listing knows nothing of the credential driving it, so pages restating org-derived
+ * content (memory pages) that a contributing org's sign-in policy withholds from that credential are dropped here, as
+ * the user listing (getUserAccessiblePagesInDriveWithDetails) drops them.
+ */
+async function withoutWithheldDerivedPages(
+  context: ToolExecutionContext,
+  listed: PageWithPermissions[],
+): Promise<PageWithPermissions[]> {
+  const readable = new Set(await dropWithheldDerivedPages(toolActor(context), listed.map((page) => page.id)));
+  return listed.filter((page) => readable.has(page.id));
+}
+
 export async function getActorAccessiblePagesInDrive(
   context: ToolExecutionContext,
   driveId: string,
@@ -437,7 +442,7 @@ export async function getActorAccessiblePagesInDrive(
   if (!(await passesDriveSignInPolicy(context, driveId))) return [];
   const agentPageId = await resolveActingAgentId(context);
   const actorPages = agentPageId
-    ? await getAgentAccessiblePagesInDrive(agentPageId, driveId)
+    ? await withoutWithheldDerivedPages(context, await getAgentAccessiblePagesInDrive(agentPageId, driveId))
     : await getUserAccessiblePagesInDriveWithDetails(toolActor(context), driveId);
   if (!hasAppTokenCeiling(context)) return actorPages;
   // Inherit rows apply no ceiling — the key acts as its owner.

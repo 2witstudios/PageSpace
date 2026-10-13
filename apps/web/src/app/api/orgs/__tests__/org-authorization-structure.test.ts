@@ -80,13 +80,13 @@ describe('ORG-5 every org route and org authority decision goes through the one 
       const name = rel(route, API);
       expect(source, `${name} must use org-route-auth`).toMatch(/from '@\/lib\/orgs\/org-route-auth'/);
       expect(source, `${name} must not authenticate on its own`).not.toMatch(/authenticateRequestWithOptions/);
-      expect(source, `${name} must call the gate`).toMatch(/\b(?:authorizeOrgRequest|authorizeOrgBillingRequest|authenticateOrgRequest)\(/);
+      expect(source, `${name} must call the gate`).toMatch(/\b(?:authorizeOrgRequest|authorizeOrgBillingRequest|authorizeOrgDeparture|authenticateOrgRequest)\(/);
     }
   });
 
   it('ORG-5 a route that does not ask requireOrgRole itself is listed with its reason, and its service asks it', () => {
     const unlisted = ROUTES.map((route) => [rel(route, API), read(route)] as const)
-      .filter(([, source]) => !/\b(?:authorizeOrgRequest|authorizeOrgBillingRequest)\(/.test(source))
+      .filter(([, source]) => !/\b(?:authorizeOrgRequest|authorizeOrgBillingRequest|authorizeOrgDeparture)\(/.test(source))
       .map(([name]) => name);
     expect(unlisted.sort()).toEqual(Object.keys(NO_ORG_ROLE_IN_ROUTE).sort());
     for (const { service } of Object.values(NO_ORG_ROLE_IN_ROUTE)) {

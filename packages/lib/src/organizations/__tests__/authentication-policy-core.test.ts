@@ -6,8 +6,10 @@ import {
   decideSignInPolicyChange,
   lockedOrgDrives,
   normalizeMaximumSessionAgeMinutes,
+  policyInForce,
   signInPolicyLoosened,
   signInPolicyTightened,
+  strictestAuthenticationPolicy,
   type OrgAuthenticationPolicy,
 } from '../authentication-policy-core';
 
@@ -33,7 +35,7 @@ describe('organization authentication policy decision', () => {
   it('SEC-3 (partial) immediately before expiry the original authentication remains usable', () => {
     expect(decideOrgAuthentication({ policy: { ...unrestricted, maximumSessionAgeMinutes: 15 }, authentication: { ...strong, authenticatedAtMs: nowMs - 15 * 60_000 + 1 }, nowMs })).toEqual({ allowed: true });
   });
-  it.each([null, { ...strong, authenticatedAtMs: NaN }, { ...strong, authenticatedAtMs: nowMs + 1 }, { ...strong, authenticatedAtMs: -1 }])('SEC-3 (partial) malformed, missing and future authentication evidence fails closed', (authentication) => {
+  it.each([null, { ...strong, authenticatedAtMs: NaN }, { ...strong, authenticatedAtMs: nowMs + 120_001 }, { ...strong, authenticatedAtMs: -1 }])('SEC-3 (partial) malformed, missing and future authentication evidence fails closed', (authentication) => {
     expect(decideOrgAuthentication({ policy: { ...unrestricted, maximumSessionAgeMinutes: 60 }, authentication, nowMs })).toEqual({ allowed: false, code: 'org_reauthentication_required' });
   });
   it('SEC-2 (partial) SEC-3 (partial) fresh single-factor evidence does not satisfy both policies', () => {
@@ -103,6 +105,15 @@ describe('changing a sign-in policy (D-OW-45)', () => {
     expect(decideSignInPolicyChange({ before: damaged, after: hourly, authentication: single, nowMs })).toEqual({ allowed: true });
     expect(decideSignInPolicyChange({ before: damaged, after: hourly, authentication: { ...single, authenticatedAtMs: nowMs - 15 * 60_000 }, nowMs })).toEqual({ allowed: false, code: 'org_reauthentication_required' });
   });
+  it('SEC-2 (partial) D-OW-53(3) turning strong sign-in on while the stored age is damaged is judged at the 15-minute floor, so a fresh passkey can do it (no re-auth loop)', () => {
+    const damaged = { ...unrestricted, maximumSessionAgeMinutes: 0 };
+    const damagedStrong = { requireStrongSignIn: true, maximumSessionAgeMinutes: 0 };
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: strong, nowMs })).toEqual({ allowed: true });
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: single, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_strong_sign_in_required' });
+    expect(decideSignInPolicyChange({ before: damaged, after: damagedStrong, authentication: { ...strong, authenticatedAtMs: nowMs - 16 * 60_000 }, nowMs }))
+      .toEqual({ allowed: false, code: 'org_policy_would_lock_out_actor', requires: 'org_reauthentication_required' });
+  });
   it('signInPolicyLoosened names only a change that admits more credentials', () => {
     expect(signInPolicyLoosened(strongOn, unrestricted)).toBe(true);
     expect(signInPolicyLoosened(hourly, { ...hourly, maximumSessionAgeMinutes: 61 })).toBe(true);
@@ -169,5 +180,45 @@ describe('counting who a sign-in policy blocks (POL-1, D-OW-45)', () => {
     expect(countSignInBlocked({ policy: { requireStrongSignIn: true, maximumSessionAgeMinutes: null }, credentials: rows, nowMs })).toEqual({ members: 2, credentials: 4 });
     expect(countSignInBlocked({ policy: unrestricted, credentials: rows, nowMs })).toEqual({ members: 0, credentials: 0 });
     expect(countSignInBlocked({ policy: unrestricted, credentials: [], nowMs })).toEqual({ members: 0, credentials: 0 });
+  });
+
+  it('SEC-3 (partial) the policy in force reads a damaged stored age as the strictest valid age, so it stays repairable', () => {
+    expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: 0 })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: 15 });
+    expect(policyInForce({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 })).toEqual({ requireStrongSignIn: true, maximumSessionAgeMinutes: 60 });
+    expect(policyInForce({ requireStrongSignIn: false, maximumSessionAgeMinutes: null })).toEqual({ requireStrongSignIn: false, maximumSessionAgeMinutes: null });
+  });
+});
+
+describe('several orgs governing one resource (derived content, D-OW-62)', () => {
+  const credentials = [
+    strong,
+    { authenticatedAtMs: nowMs - 1000, assurance: 'single_factor' as const },
+    { authenticatedAtMs: nowMs - 45 * 60_000, assurance: 'user_verified_passkey' as const },
+    { authenticatedAtMs: nowMs - 90 * 60_000, assurance: 'single_factor' as const },
+    null,
+  ];
+  const policies: OrgAuthenticationPolicy[] = [
+    unrestricted,
+    { requireStrongSignIn: true, maximumSessionAgeMinutes: null },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 60 },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 30 },
+    { requireStrongSignIn: false, maximumSessionAgeMinutes: 0 },
+  ];
+
+  it('SEC-2 (partial) SEC-3 (partial) the strictest policy refuses exactly the credentials any one of the policies refuses', () => {
+    for (const a of policies) {
+      for (const b of policies) {
+        const combined = strictestAuthenticationPolicy([a, b]);
+        if (combined === null) throw new Error('two governing policies fold into one');
+        for (const authentication of credentials) {
+          const anyRefuses = [a, b].some((policy) => !decideOrgAuthentication({ policy, authentication, nowMs }).allowed);
+          expect(decideOrgAuthentication({ policy: combined, authentication, nowMs }).allowed).toBe(!anyRefuses);
+        }
+      }
+    }
+  });
+
+  it('SEC-2 (partial) no governing policy is no policy', () => {
+    expect(strictestAuthenticationPolicy([])).toBeNull();
   });
 });

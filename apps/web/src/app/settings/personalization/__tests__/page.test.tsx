@@ -2,6 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, vi, beforeEach } from 'vitest';
 import { assert } from '@/lib/memory/__tests__/riteway';
 import PersonalizationSettingsPage from '../page';
+import { useOrgReauthStore } from '@/stores/useOrgReauthStore';
 
 /**
  * The personalization screen no longer edits content — that lives as pages in
@@ -162,6 +163,73 @@ describe('personalization settings page', () => {
       should: 'invite the user to write in it rather than looking broken',
       actual: screen.getByText(/Nothing here yet/i) !== null,
       expected: true,
+    });
+  });
+});
+
+describe('personalization settings page when an org withholds the memory (D-OW-62)', () => {
+  const withheldPage = (field: string, title: string, pageId: string) => ({
+    field,
+    title,
+    pageId,
+    href: `/dashboard/drive-1/${pageId}`,
+    preview: '',
+    isEmpty: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.useAuth.mockReturnValue({ user: { id: 'u1' }, isLoading: false });
+    useOrgReauthStore.getState().dismiss();
+    swrData = {
+      personalization: {
+        enabled: true,
+        memoryFolderHref: '/dashboard/drive-1/folder-1',
+        pages: [
+          withheldPage('bio', 'About You', 'p-bio'),
+          withheldPage('writingStyle', 'Communication', 'p-style'),
+          withheldPage('rules', 'Rules', 'p-rules'),
+        ],
+      },
+      signInRequired: { code: 'org_strong_sign_in_required', orgIds: ['org_a'] },
+    };
+  });
+
+  it('SEC-2 (partial) says the memory is withheld, not empty, and offers the passkey prompt', () => {
+    render(<PersonalizationSettingsPage />);
+
+    assert({
+      given: 'memory an org sign-in policy withholds from this sign-in',
+      should: 'explain why it is hidden',
+      actual: screen.getByText(/Your AI memory is hidden because an organization it draws from requires strong sign-in \(passkey\)/) !== null,
+      expected: true,
+    });
+    assert({
+      given: 'withheld memory pages',
+      should: 'mark each page withheld instead of calling it empty',
+      actual: [screen.getAllByText(/Hidden until you sign in as your organization asks/).length, screen.queryByText(/Nothing here yet/i)],
+      expected: [3, null],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Use your passkey' }));
+
+    assert({
+      given: 'the person choosing to unlock',
+      should: 'open the re-authentication prompt with the passkey requirement for the refusing org',
+      actual: useOrgReauthStore.getState().denials,
+      expected: [{ code: 'org_strong_sign_in_required', orgId: 'org_a' }],
+    });
+  });
+
+  it('shows no withheld notice when the memory is served', () => {
+    setData();
+    render(<PersonalizationSettingsPage />);
+
+    assert({
+      given: 'memory every org admits',
+      should: 'show the previews with no withheld notice',
+      actual: [screen.queryByText(/is hidden because/), screen.getByText('Software engineer') !== null],
+      expected: [null, true],
     });
   });
 });

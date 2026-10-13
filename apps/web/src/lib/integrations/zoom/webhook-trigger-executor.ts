@@ -14,7 +14,7 @@ import { automationSpend } from '@pagespace/lib/billing/spend-target';
 import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { automationActor } from '@pagespace/lib/permissions/access-actor';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'webhook-trigger-executor' });
 
@@ -61,7 +61,7 @@ export async function executeWebhookTrigger(
 
     // 2. Verify the connection owner still has access to the workflow's drive
     // An automation runs as the connection owner (D-OW-34): membership applies, sign-in policy does not.
-    const hasDriveAccess = await isUserDriveMember(automationActor(connection.userId, 'zoom-webhook-trigger'), workflow.driveId);
+    const hasDriveAccess = await isUserDriveMember(automationActor(connection.userId, 'zoom-webhook-trigger', inDrives(workflow.driveId)), workflow.driveId);
     if (!hasDriveAccess) {
       const error = 'Connection owner no longer has access to the drive';
       return { success: false, durationMs: Date.now() - startTime, error };

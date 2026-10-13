@@ -34,6 +34,7 @@ export async function POST(
     // Verify authentication
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'file', resourceId: id, details: { action: 'convert' } });
@@ -75,12 +76,12 @@ export async function POST(
 
     const canView = await canPrincipalViewPage(auth, filePage.id);
     if (!canView) {
-      return deniedResponse(actorFromAuth(auth), filePage.id, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
+      return deniedResponse(actor, filePage.id, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
     }
 
     const canEdit = await canPrincipalEditPage(auth, filePage.id);
     if (!canEdit) {
-      return deniedResponse(actorFromAuth(auth), filePage.id, NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 }));
+      return deniedResponse(actor, filePage.id, NextResponse.json({ error: 'You do not have permission to convert this file' }, { status: 403 }));
     }
 
     if (!filePage.filePath) {
@@ -99,7 +100,7 @@ export async function POST(
 
     // Create opaque service token for processor authentication (validates page permissions)
     const { token: serviceToken } = await createPageServiceToken(
-      actorFromAuth(auth),
+      actor,
       filePage.id,
       ['files:read'],
       '5m'

@@ -9,6 +9,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { activitySignInCondition } from '@/lib/activities/activity-sign-in-filter';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -206,6 +207,11 @@ export async function GET(request: Request) {
     if (params.resourceType) {
       filterConditions.push(eq(activityLogs.resourceType, params.resourceType as typeof activityLogs.resourceType._.data));
     }
+
+    // SEC-2/3 (D-OW-45, D-OW-62): rows the credential may not read (an org drive its sign-in policy refuses, a memory
+    // page a contributing org withholds) are left out in SQL, so pages and counts stay exact.
+    const signIn = await activitySignInCondition(actorFromAuth(auth), filterConditions.length > 0 ? and(...filterConditions) : undefined);
+    if (signIn) filterConditions.push(signIn);
 
     const finalWhereCondition = filterConditions.length > 0
       ? and(...filterConditions)

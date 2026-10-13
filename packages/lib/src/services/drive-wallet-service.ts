@@ -140,7 +140,7 @@ async function walletAccess(actor: AccessActor, driveId: string, credential: Wal
   // SEC-2/3 (D-OW-45): reading or spending an org drive's wallet is org content, so a credential the drive's org
   // refuses is refused here — with the code that lets the person sign in again, since they hold standing on it.
   const signIn = await checkActorDriveAuthentication(actor, driveId);
-  if (!signIn.allowed) return signInRequired(signIn.code);
+  if (!signIn.allowed) return signIn.code === 'automation_out_of_scope' ? notFound() : signInRequired(signIn.code);
   const role = walletViewerRole(standing);
   if (role === 'none') return notFound();
   // [D-OW-26] a token reads as a consumer and may take no write, whatever the person's role.
