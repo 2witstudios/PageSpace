@@ -13,6 +13,7 @@ import { parseOrgPolicies } from '../../organizations/policies-core';
 import { HELD_DRIVES, automationActor, credentialActor, inDrives } from '../access-actor';
 import {
   checkActorDriveAuthentication,
+  checkActorOrgAuthentication,
   checkActorResourceAuthentication,
   explainOrgAuthenticationDenial,
   filterDrivesForActor,
@@ -91,6 +92,28 @@ describe('pages that restate org-derived content (memory pages, D-OW-62)', () =>
     const held = automationActor('user-1', 'memory-discovery', HELD_DRIVES);
     expect(await checkActorResourceAuthentication(held, MEMORY_PAGE)).toEqual({ allowed: true });
     expect(await checkActorResourceAuthentication(stale(), 'page-mine')).toEqual({ allowed: true });
+    expect(getOrgPolicies).not.toHaveBeenCalled();
+  });
+});
+
+describe('the org\'s own sign-in policy (checkActorOrgAuthentication)', () => {
+  it('SEC-3 (partial) a credential older than the org\'s maximum age is refused acting on the org; a fresh one is admitted', async () => {
+    const stale = credentialActor('user-1', { authenticatedAtMs: Date.now() - 2 * HOUR, assurance: 'single_factor' });
+    const fresh = credentialActor('user-1', { authenticatedAtMs: Date.now() - 1000, assurance: 'single_factor' });
+    expect(await checkActorOrgAuthentication(stale, 'org-a')).toEqual({ allowed: false, code: 'org_reauthentication_required' });
+    expect(await checkActorOrgAuthentication(fresh, 'org-a')).toEqual({ allowed: true });
+  });
+
+  it('D-OW-53(3) a damaged stored maximum age is held to the 15-minute floor, so a freshly signed-in Admin can repair it', async () => {
+    vi.mocked(getOrgPolicies).mockResolvedValue({ ...parseOrgPolicies({}), maximumSessionAgeMinutes: 0 });
+    const fresh = credentialActor('user-1', { authenticatedAtMs: Date.now() - 60_000, assurance: 'single_factor' });
+    const twentyMinutes = credentialActor('user-1', { authenticatedAtMs: Date.now() - 20 * 60_000, assurance: 'single_factor' });
+    expect(await checkActorOrgAuthentication(fresh, 'org-a')).toEqual({ allowed: true });
+    expect(await checkActorOrgAuthentication(twentyMinutes, 'org-a')).toEqual({ allowed: false, code: 'org_reauthentication_required' });
+  });
+
+  it('an automation never reaches org admin routes, so sign-in policy never applies to it and nothing is read', async () => {
+    expect(await checkActorOrgAuthentication(automationActor('user-1', 'workflow', inDrives('drive-1')), 'org-a')).toEqual({ allowed: true });
     expect(getOrgPolicies).not.toHaveBeenCalled();
   });
 });
