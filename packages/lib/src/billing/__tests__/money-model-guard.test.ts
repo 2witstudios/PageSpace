@@ -11,6 +11,7 @@ import {
   findCopyHits,
   findMoneyModelDefinitions,
   isMoneyName,
+  resolveBindings,
 } from '../../__tests__/seams/money-conversion-scan';
 
 /**
@@ -37,6 +38,13 @@ const MONEY_MODEL = 'packages/lib/src/billing/money-model.ts';
 const ROOTS = ['apps', 'packages', 'scripts'] as const;
 
 const flagged = (code: string) => findConversionsInSource(code).length > 0;
+
+describe('money conversion binding resolution', () => {
+  it('preserves dollar characters in a money field when renaming every alias use', () => {
+    expect(resolveBindings('const { $$remainingCents: r } = view;\nconst first = r / 100;\nconst second = r / 100;'))
+      .toBe('const { $$remainingCents: r } = view;\nconst first = $$remainingCents / 100;\nconst second = $$remainingCents / 100;');
+  });
+});
 
 describe('MON-5 (partial) no second credit or cents conversion outside money-model.ts', () => {
   it('MON-5 (partial) the scanner sees the repo: money-model.ts and every app are scanned', () => {
