@@ -14,10 +14,6 @@ import {
 import {
   brandChipClass,
   brandSummaryClass,
-  driveInitialClass,
-  driveLinkClass,
-  driveMenuClass,
-  driveNoteClass,
 } from './brand-chip/brand-chip-class';
 import {
   notFoundClass,
@@ -44,17 +40,12 @@ const selectorOf = (cls: string): string => `.${cls.replace(/[:/.]/g, (char) => 
 describe('brand chip classes', () => {
   test('exact strings', () => {
     assert({
-      given: 'the brand chip, its summary, the drive menu, a drive row (open and not), its initial and the menu note',
+      given: 'the brand chip and its summary',
       should: 'return the token-locked class strings',
-      actual: [brandChipClass, brandSummaryClass, driveMenuClass, driveLinkClass(true), driveLinkClass(false), driveInitialClass, driveNoteClass],
+      actual: [brandChipClass, brandSummaryClass],
       expected: [
         'flex size-spine-brand items-center justify-center rounded-spine-brand bg-spine-tile font-bold text-spine',
-        'group relative flex cursor-pointer summary-plain',
-        'absolute top-0 left-rail-tooltip-x z-popover m-0 flex w-popover list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised',
-        'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:no-underline bg-accent-soft',
-        'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:no-underline hover:bg-surface-overlay',
-        'flex size-avatar-xs flex-none items-center justify-center rounded-md border border-hairline bg-surface-raised text-2xs font-semibold',
-        'px-2 py-row-y text-sm text-ink-muted',
+        'group relative flex cursor-pointer border-0 bg-transparent p-0 summary-plain',
       ],
     });
   });
@@ -98,11 +89,6 @@ describe('frame menu class modules against the theme', () => {
     const classes = [
       brandChipClass,
       brandSummaryClass,
-      driveMenuClass,
-      driveLinkClass(true),
-      driveLinkClass(false),
-      driveInitialClass,
-      driveNoteClass,
       accountMenuClass,
       accountNameClass,
       accountItemClass,

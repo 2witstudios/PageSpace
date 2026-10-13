@@ -5,14 +5,15 @@
 export type ListPane = 'closed' | 'list' | 'tree';
 
 /** The rail destination a stage belongs to; `account` is reached from the avatar. */
-export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'account';
+export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'account' | 'notifications';
 
 /** What the middle pane holds. Pages (documents, channels, task lists) are drive-scoped. */
 export type StageObject =
   | { readonly kind: 'page'; readonly pageId: string }
   | { readonly kind: 'conversation'; readonly conversationId: string }
   | { readonly kind: 'settings'; readonly title?: string; readonly tool?: DriveTool }
-  | { readonly kind: 'account' };
+  | { readonly kind: 'account' }
+  | { readonly kind: 'notifications' };
 
 /** The drive tools under the spine's divider (SPEC v3 spine; IMC-1.4). */
 export type DriveTool = 'calendar' | 'agents' | 'workflows' | 'activity' | 'members' | 'trash';
@@ -64,7 +65,7 @@ const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'sett
 export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
 
 /** First segments that name a route, never a drive. */
-const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', ...listSections];
+const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', 'notifications', ...listSections];
 
 /**
  * Drive, page and conversation ids are cuid2s. Anything else (dots, percent
@@ -139,6 +140,11 @@ export const stageFor = (pathname: string): Stage => {
   if (first === undefined) return root;
   if (first === 'p' && isId(rest[0])) return { driveId: null, section: 'files', list: 'closed', object: { kind: 'page', pageId: rest[0] } };
   if (first === 'dm' || first === 'account') return userStage(first, rest);
+  if (first === 'notifications') {
+    return rest.length === 0
+      ? { driveId: null, section: 'notifications', list: 'closed', object: { kind: 'notifications' } }
+      : root;
+  }
   if (reserved.includes(first) || !isId(first)) return root;
   return driveStage(first, rest);
 };
@@ -212,6 +218,9 @@ export const chatContextFor = (
   if (object?.kind === 'account') {
     return { density: 'dense', contextLabel: 'Account in context', placeholder: 'Ask anything…' };
   }
+  if (object?.kind === 'notifications') {
+    return { density: 'dense', contextLabel: 'Notifications in context', placeholder: 'Ask about your notifications…' };
+  }
   // Only the list sections open pages and conversations (stageFor).
   if (object !== null && isListSection(stage.section)) {
     const name = objectName(stage.section, object, named(names.object));
@@ -261,6 +270,7 @@ export const chatChipFor = (stage: Stage, names: { readonly object?: string; rea
   const { object } = stage;
   if (object?.kind === 'settings') return named(names.screen) ?? object.title ?? 'Drive settings';
   if (object?.kind === 'account') return named(names.screen) ?? 'Account';
+  if (object?.kind === 'notifications') return 'Notifications';
   if (object !== null) return named(names.object) ?? null;
   return isListSection(stage.section) ? sectionNames[stage.section] : null;
 };

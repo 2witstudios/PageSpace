@@ -116,6 +116,9 @@ export function UserSafetyMenu({ userId, displayName, conversationId, onBlocked,
               maxLength={2000}
               rows={4}
             />
+            <span className="block text-right text-xs text-muted-foreground">
+              {`${reason.length.toLocaleString('en-US')} / 2,000`}
+            </span>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setReportOpen(false)} disabled={submitting}>

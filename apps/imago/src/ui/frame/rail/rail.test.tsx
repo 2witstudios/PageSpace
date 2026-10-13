@@ -139,7 +139,7 @@ describe('Rail', () => {
       given: 'the badges and notification-count routes failing',
       should: 'keep the rail and show no count on Messages or the bell',
       actual: [control(container, 'Messages').tagName, control(container, 'Notifications').tagName, container.querySelector('.bg-notice')],
-      expected: ['A', 'A', null],
+      expected: ['A', 'BUTTON', null],
     });
   });
 
@@ -273,7 +273,7 @@ describe('Rail', () => {
       control(container, 'Notifications, 3 unread');
     });
     const bell = control(container, 'Notifications, 3 unread');
-    const shown = [bell.getAttribute('href'), bell.querySelector('[aria-hidden="true"].bg-notice')?.textContent];
+    const shown = [bell.tagName, bell.querySelector('[aria-hidden="true"].bg-notice')?.textContent];
     count = 4;
     rt.emit('notification:new', { type: 'TASK_ASSIGNED' });
     await settle(() => {
@@ -282,9 +282,9 @@ describe('Rail', () => {
 
     assert({
       given: 'three unread notifications, then a fourth arriving over realtime',
-      should: 'link the bell to /notifications with the amber count, and refetch the count on notification:new',
+      should: 'show the bell as a popover trigger with the amber count, and refetch the count on notification:new',
       actual: [shown, to(requests, NOTIFICATIONS).length],
-      expected: [['/notifications', '3'], 2],
+      expected: [['BUTTON', '3'], 2],
     });
   });
 });

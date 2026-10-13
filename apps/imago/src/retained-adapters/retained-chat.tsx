@@ -21,6 +21,7 @@ import { renderLoadingState, renderErrorState } from '@/ui/frame/edge-state/edge
 import { HomeLine } from '@/retained/components/ai/chat/layouts/HomeLine';
 import { HomeSuggestions } from '@/retained/components/ai/chat/layouts/HomeSuggestions';
 import { useHomeSignals } from '@/retained/hooks/useHomeSignals';
+import { OnboardingGate } from '@/retained/components/onboarding/OnboardingGate';
 
 /** Classic's Home line and suggestions for a new, empty conversation; picking one fills the composer. */
 function HomeWelcome() {
@@ -99,6 +100,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">{home
       ? <HomeWelcome />
       : <ChatMessagesArea messages={[]} isLoading={false} isStreaming={false} />}</div>
+    {home && <OnboardingGate />}
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}
     <div className="p-2">{aboveComposer}<ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}

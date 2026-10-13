@@ -21,6 +21,25 @@ const { AvatarMenu, ME, profileFrom } = await import('./avatar-menu');
 
 const settle = (check: () => void): Promise<void> => act(() => vi.waitFor(check, { timeout: 1000, interval: 5 }));
 
+const CREDITS_BODY = {
+  billingEnabled: true,
+  subscriptionTier: 'pro',
+  monthly: { remaining: 612, allowance: 900, periodEnd: '2026-11-03T12:00:00.000Z' },
+  topup: { remaining: 0 },
+  debt: 0,
+  spendable: 612,
+  reserved: 0,
+};
+
+const web = (verified: boolean) =>
+  fakeWeb({
+    [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', image: '/api/avatar/user-1.png', emailVerified: verified }),
+    'GET /api/credits': () => Response.json(CREDITS_BODY),
+  });
+
+const rowsOf = (container: HTMLElement) =>
+  [...container.querySelectorAll('ul[aria-label="Account"] > li')].map((item) => item.textContent?.replace(/\s+/g, ' ').trim());
+
 beforeEach(() => {
   signOut.mockClear();
 });
@@ -30,42 +49,58 @@ afterEach(() => {
 });
 
 describe('AvatarMenu', () => {
-  test('the signed-in user and the actions', async () => {
-    const web = fakeWeb({ [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', image: '/api/avatar/user-1.png' }) });
+  test('the signed-in user, the credits card and the rows', async () => {
+    const fake = web(true);
     const container = mount(
-      <ImagoSWRProvider client={web.client}>
+      <ImagoSWRProvider client={fake.client}>
         <AvatarMenu />
       </ImagoSWRProvider>,
     );
     await settle(() => {
-      if (!container.textContent?.includes('Ada Lovelace')) throw new Error('profile not loaded');
+      if (!container.textContent?.includes('Ada Lovelace') || !container.textContent?.includes('/ 900 credits')) throw new Error('not loaded');
     });
-    const account = container.querySelector<HTMLAnchorElement>('a[href="/account"]');
-    const navigated = vi.fn((event: Event) => event.preventDefault());
-    account?.addEventListener('click', navigated);
 
     assert({
-      given: 'the profile from /api/auth/me',
-      should: 'load it once and draw the avatar from its same-origin picture, with Account, the theme, Classic and Sign out in the menu',
+      given: 'the profile from /api/auth/me and the balance from /api/credits',
+      should: 'load each once, draw the avatar from its same-origin picture, and list the account rows',
       actual: [
-        web.count(`GET ${ME}`),
+        fake.count(`GET ${ME}`),
+        fake.count('GET /api/credits'),
         container.querySelector('summary img')?.getAttribute('src'),
-        [...container.querySelectorAll('ul[aria-label="Account"] a, ul[aria-label="Account"] [role="radiogroup"], ul[aria-label="Account"] button')].map(
-          (element) => element.getAttribute('href') ?? element.getAttribute('aria-label') ?? element.textContent,
-        ),
+        container.textContent?.includes('ada@example.com'),
+        rowsOf(container).at(-1),
+        container.querySelectorAll('a[href="/account/profile"]').length,
       ],
-      expected: [1, '/api/avatar/user-1.png', ['/account', 'Theme', '/dashboard', 'Sign out']],
+      expected: [1, 1, '/api/avatar/user-1.png', true, 'Log out', 1],
     });
   });
 
-  test('sign out', () => {
+  test('a verified account has no Verify Email row', async () => {
+    const container = mount(
+      <ImagoSWRProvider client={web(true).client}>
+        <AvatarMenu />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!container.textContent?.includes('Ada Lovelace')) throw new Error('not loaded');
+    });
+
+    assert({
+      given: 'a verified email',
+      should: 'leave out the Verify Email row',
+      actual: rowsOf(container).some((row) => row?.startsWith('Verify Email')),
+      expected: false,
+    });
+  });
+
+  test('Log out', () => {
     const container = mount(<AvatarMenu />);
-    const button = [...container.querySelectorAll('button')].find((element) => element.textContent === 'Sign out');
+    const button = [...container.querySelectorAll('button')].find((element) => element.textContent === 'Log out');
     act(() => button?.click());
     act(() => button?.click());
 
     assert({
-      given: 'Sign out pressed twice',
+      given: 'Log out pressed twice',
       should: 'start sign-out once, through the browser’s fetch and navigation, and disable the button',
       actual: [signOut.mock.calls.length, typeof signOut.mock.calls[0]?.[0]?.fetch, typeof signOut.mock.calls[0]?.[0]?.navigate, button?.disabled],
       expected: [1, 'function', 'function', true],
@@ -76,19 +111,19 @@ describe('AvatarMenu', () => {
 describe('profileFrom()', () => {
   test('what /api/auth/me says', () => {
     assert({
-      given: 'a name and a same-origin picture, an off-site or protocol-relative picture, and an error body',
-      should: 'keep only a non-empty name and a same-origin path',
+      given: 'a name, an email and a same-origin picture; an off-site picture; a blank name; and an error body',
+      should: 'keep only a non-empty name, the email, a same-origin path and the verified flag',
       actual: [
-        profileFrom({ name: 'Ada', image: '/a.png' }),
+        profileFrom({ name: 'Ada', email: 'ada@x.io', image: '/a.png', emailVerified: false }),
         profileFrom({ name: 'Ada', image: 'https://evil.example/a.png' }),
         profileFrom({ name: ' ', image: '//evil.example/a.png' }),
         profileFrom(undefined),
       ],
       expected: [
-        { name: 'Ada', image: '/a.png' },
-        { name: 'Ada', image: null },
-        { name: null, image: null },
-        { name: null, image: null },
+        { name: 'Ada', email: 'ada@x.io', image: '/a.png', emailVerified: false },
+        { name: 'Ada', email: null, image: null, emailVerified: null },
+        { name: null, email: null, image: null, emailVerified: null },
+        { name: null, email: null, image: null, emailVerified: null },
       ],
     });
   });

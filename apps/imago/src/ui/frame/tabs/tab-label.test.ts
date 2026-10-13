@@ -45,6 +45,17 @@ describe('tabLabelFor() (IMC-1.5)', () => {
   });
 });
 
+describe('tabLabelFor() notifications (IMC-9.14)', () => {
+  test('the page is named Notifications', () => {
+    assert({
+      given: '/notifications',
+      should: 'label its tab Notifications, not a drive tool',
+      actual: tabLabelFor('/notifications'),
+      expected: { kind: 'screen', title: 'Notifications' },
+    });
+  });
+});
+
 describe('pageTabOf()', () => {
   test('the page API body', () => {
     assert({

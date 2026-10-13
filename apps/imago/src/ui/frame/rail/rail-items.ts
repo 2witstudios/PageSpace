@@ -2,7 +2,7 @@ import type { IconName } from '../../components/icon/icon-names';
 import type { DriveTool, Section, Stage } from '../stage/stage';
 
 /** The spine's destinations; the account is reached from the avatar. */
-export type RailItemId = Exclude<Section, 'account'> | DriveTool;
+export type RailItemId = Exclude<Section, 'account' | 'notifications'> | DriveTool;
 
 export type RailItem = {
   readonly id: RailItemId;
@@ -75,7 +75,7 @@ export const railDrive = (stage: Stage, homeDriveId: string | null): string | nu
 
 /** The URL alone picks the active item; the account belongs to the avatar. */
 export const activeRailItem = (stage: Stage): RailItemId | null => {
-  if (stage.section === 'account') return null;
+  if (stage.section === 'account' || stage.section === 'notifications') return null;
   if (stage.object?.kind === 'settings' && stage.object.tool !== undefined) return stage.object.tool;
   return stage.section;
 };

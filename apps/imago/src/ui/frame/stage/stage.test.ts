@@ -578,3 +578,33 @@ describe('imagoStartsCollapsedAt()', () => {
     });
   });
 });
+
+describe('stageFor() notifications (IMC-9.14)', () => {
+  test('the notifications page', () => {
+    assert({
+      given: '/notifications',
+      should: 'open the notifications object with no drive and no list pane, so Imago docks beside it',
+      actual: stageFor('/notifications'),
+      expected: { driveId: null, section: 'notifications', list: 'closed', object: { kind: 'notifications' } },
+    });
+  });
+
+  test('a path beneath it is no notifications stage', () => {
+    assert({
+      given: '/notifications/anything',
+      should: 'fall back to the root rather than read notifications as a drive',
+      actual: stageFor('/notifications/anything').section,
+      expected: 'chat',
+    });
+  });
+
+  test('Imago’s context and chip name the page', () => {
+    const stage = stageFor('/notifications');
+    assert({
+      given: 'the notifications page',
+      should: 'name Imago’s context and chip Notifications',
+      actual: [chatContextFor(stage).contextLabel, chatChipFor(stage, {})],
+      expected: ['Notifications in context', 'Notifications'],
+    });
+  });
+});

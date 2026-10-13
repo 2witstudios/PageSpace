@@ -31,7 +31,7 @@ const deferredWeb = () => {
 
 const page = (id: string, title: string) => ({ id, label: title, type: 'page', data: { pageType: 'DOCUMENT', driveId: 'd-1' } });
 
-let seen: PaletteSearch = { status: 'idle', results: [] };
+let seen: PaletteSearch = { status: 'idle', results: [], people: [] };
 
 function Probe({ path, client, delayMs }: { path: string | null; client: ReturnType<typeof deferredWeb>['client']; delayMs: number }) {
   seen = usePaletteSearch(path, { client, delayMs });
@@ -42,7 +42,7 @@ const settle = (check: () => void): Promise<void> => act(() => vi.waitFor(check,
 
 afterEach(() => {
   unmountAll();
-  seen = { status: 'idle', results: [] };
+  seen = { status: 'idle', results: [], people: [] };
 });
 
 describe('usePaletteSearch()', () => {
@@ -65,7 +65,7 @@ describe('usePaletteSearch()', () => {
       expected: [
         { status: 'loading', sent: 0 },
         ['/api/mentions/search?q=road'],
-        { status: 'done', results: [{ id: 'p-1', title: 'Roadmap', pageType: 'DOCUMENT', driveId: 'd-1' }] },
+        { status: 'done', results: [{ id: 'p-1', title: 'Roadmap', pageType: 'DOCUMENT', driveId: 'd-1' }], people: [] },
       ],
     });
     container.remove();
@@ -157,7 +157,7 @@ describe('usePaletteSearch()', () => {
       given: '"road" answered and "roads" typed, before "roads" answers',
       should: 'list nothing rather than the answer for "road", which Enter would open',
       actual: seen,
-      expected: { status: 'loading', results: [] },
+      expected: { status: 'loading', results: [], people: [] },
     });
   });
 
@@ -176,7 +176,7 @@ describe('usePaletteSearch()', () => {
       given: 'the server refusing the search',
       should: 'list nothing and say it failed',
       actual: seen,
-      expected: { status: 'error', results: [] },
+      expected: { status: 'error', results: [], people: [] },
     });
   });
 
@@ -188,7 +188,7 @@ describe('usePaletteSearch()', () => {
       given: 'no search path',
       should: 'ask nothing and list nothing',
       actual: [seen, web.sent.length],
-      expected: [{ status: 'idle', results: [] }, 0],
+      expected: [{ status: 'idle', results: [], people: [] }, 0],
     });
   });
 });

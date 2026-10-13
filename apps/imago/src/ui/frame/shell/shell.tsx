@@ -24,6 +24,7 @@ import { AskPill, ClosePage, CloseImago, CloseSidebar, CollapseImago, ShowSideba
 import { EmptyMiddle } from '../empty-middle/empty-middle';
 import { PageHead } from '../../files/page-head/page-head';
 import { ConversationHead } from '../../messages/dm-head/conversation-head';
+import { AppBanner } from '../banners/app-banner';
 import { TabBar } from '../tabs/tab-bar';
 import { sectionPath } from '../tabs/tabs-model';
 import { columnsFor, type Columns } from '../stage/columns';
@@ -61,6 +62,7 @@ const titles: Readonly<Record<Section, string>> = {
   tasks: 'Tasks',
   settings: 'Settings',
   account: 'Account',
+  notifications: 'Notifications',
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
@@ -165,7 +167,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const collapsedSections = useUiState(selectCollapsed);
   const imagoCollapsed = useUiState(selectImagoCollapsed);
   const imagoClosed = useUiState(selectImagoClosed);
-  const { data, error } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
+  const { data } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
   // Screens whose boards open with Imago folded fold it on entry; reopening it there is the viewer's choice.
@@ -201,16 +203,12 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         layout={layout}
         homeDriveId={homeDriveId}
         brand={
-          <BrandChip
-            stage={stage}
-            currentId={railDrive(stage, homeDriveId)}
-            drives={drives}
-            failed={error !== undefined}
-          />
+          <BrandChip currentId={railDrive(stage, homeDriveId)} drives={drives} />
         }
         footer={<AvatarMenu active={stage.section === 'account'} />}
       />
     ),
+    banner: <AppBanner />,
     tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
     list: missing ? null : listFor(stage, layout),
     object: (
