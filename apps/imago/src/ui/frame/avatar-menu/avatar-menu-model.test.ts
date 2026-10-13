@@ -63,3 +63,15 @@ describe('countOf() and resetLabel()', () => {
     });
   });
 });
+
+describe('creditsCardOf() with no monthly allowance', () => {
+  test('shows an empty meter rather than dividing by zero', () => {
+    const card = creditsCardOf(balance({ monthly: { remaining: 0, allowance: 0, periodEnd: null }, spendable: 0, topup: { remaining: 0 } }));
+    assert({ given: 'a zero allowance', should: 'report 0 percent', actual: card?.percent, expected: 0 });
+  });
+
+  test('clamps the meter to 0-100', () => {
+    const over = creditsCardOf(balance({ spendable: 5000, topup: { remaining: 0 } }));
+    assert({ given: 'more credits left than the allowance', should: 'cap at 100 percent', actual: over?.percent, expected: 100 });
+  });
+});

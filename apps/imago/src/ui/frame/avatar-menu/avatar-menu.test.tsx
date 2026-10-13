@@ -75,6 +75,33 @@ describe('AvatarMenu', () => {
     });
   });
 
+  test('Verify Email resends the verification mail and closes the menu', async () => {
+    const fake = fakeWeb({
+      [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', emailVerified: false }),
+      'GET /api/credits': () => Response.json(CREDITS_BODY),
+      'POST /api/auth/resend-verification': () => Response.json({ message: 'sent' }),
+    });
+    const container = mount(
+      <ImagoSWRProvider client={fake.client}>
+        <AvatarMenu />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!rowsOf(container).some((row) => row?.startsWith('Verify Email'))) throw new Error('no row');
+    });
+    const verify = [...container.querySelectorAll('ul[aria-label="Account"] button')].find((button) => button.textContent?.startsWith('Verify Email'));
+    act(() => (verify as HTMLButtonElement).click());
+    await settle(() => {
+      if (fake.count('POST /api/auth/resend-verification') === 0) throw new Error('not resent');
+    });
+    assert({
+      given: 'Verify Email pressed',
+      should: 'post the resend once and close the menu',
+      actual: [fake.count('POST /api/auth/resend-verification'), container.querySelector('details')?.hasAttribute('open')],
+      expected: [1, false],
+    });
+  });
+
   test('a verified account has no Verify Email row', async () => {
     const container = mount(
       <ImagoSWRProvider client={web(true).client}>

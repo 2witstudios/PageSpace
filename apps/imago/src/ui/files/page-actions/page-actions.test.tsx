@@ -25,7 +25,7 @@ vi.mock('./page-actions-flag', () => ({
 }));
 vi.mock('../page-object/page-object', () => ({ usePage: () => ({ data: state.page }), pageKey: (id: string) => `/api/pages/${id}` }));
 
-import { PageActionsMenu } from './page-actions';
+import { PageActionsMenu, exportStem, menuPageOf } from './page-actions';
 
 const openMenu = (onDialog = vi.fn()) => {
   render(
@@ -133,5 +133,48 @@ describe('PageActionsMenu with the header flag on (IMC-9.3)', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Export as Markdown' }));
     await vi.waitFor(() => expect(state.client.apiStream).toHaveBeenCalledWith('/api/pages/plan/export/markdown'));
     await vi.waitFor(() => expect(state.toast.success).toHaveBeenCalledWith('Exported as Markdown', { id: 'id' }));
+  });
+});
+
+describe('PageActionsMenu failures and gaps (IMC-9.3)', () => {
+  it('toasts a failed export instead of throwing', async () => {
+    state.absorb = true;
+    state.client.apiStream.mockRejectedValue(new Error('boom'));
+    openMenu();
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Export' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export as DOCX' }));
+    await vi.waitFor(() => expect(state.toast.error).toHaveBeenCalledWith('Failed to export as DOCX', { id: 'id' }));
+  });
+
+  it('prints the page from the Print item', () => {
+    state.absorb = true;
+    const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+    openMenu();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Print' }));
+    expect(print).toHaveBeenCalled();
+  });
+
+  it('renders nothing while the page has not loaded', () => {
+    state.page = undefined;
+    openMenu();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+});
+
+describe('menuPageOf / exportStem', () => {
+  it('rejects a body that is not a page the menu knows', () => {
+    expect(menuPageOf(null)).toBeNull();
+    expect(menuPageOf('page')).toBeNull();
+    expect(menuPageOf({ title: 'T' })).toBeNull();
+    expect(menuPageOf({ title: 'T', type: 'NOT_A_TYPE' })).toBeNull();
+  });
+
+  it('reads privacy and parent defensively', () => {
+    expect(menuPageOf({ title: 'T', type: 'DOCUMENT' })).toEqual({ title: 'T', type: 'DOCUMENT', isPrivate: false, parentId: null });
+  });
+
+  it('falls back to "download" when a title has nothing a file name can keep', () => {
+    expect(exportStem('***')).toBe('download');
+    expect(exportStem('Q4 Launch: Plan!')).toBe('q4-launch-plan');
   });
 });

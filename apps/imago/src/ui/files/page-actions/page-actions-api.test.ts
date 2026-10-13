@@ -102,3 +102,36 @@ describe('menu writes (IMC-9.3)', () => {
     });
   });
 });
+
+describe('favoriteIdOf() on malformed bodies', () => {
+  test('is undefined for anything that is not a favorites list', () => {
+    assert({ given: 'null', should: 'return undefined', actual: favoriteIdOf(null, 'plan'), expected: undefined });
+    assert({ given: 'a body without a favorites array', should: 'return undefined', actual: favoriteIdOf({ favorites: 'x' }, 'plan'), expected: undefined });
+  });
+
+  test('skips entries that are not objects', () => {
+    assert({
+      given: 'a list with junk entries before the match',
+      should: 'still find the page',
+      actual: favoriteIdOf({ favorites: [null, 'x', { id: 'row', itemType: 'page', page: { id: 'plan' } }] }, 'plan'),
+      expected: 'row',
+    });
+  });
+
+  test('does not match an entry whose page reference is missing', () => {
+    assert({
+      given: 'a page favorite with no page',
+      should: 'return undefined',
+      actual: favoriteIdOf({ favorites: [{ id: 'row', itemType: 'page' }] }, 'plan'),
+      expected: undefined,
+    });
+  });
+});
+
+describe('removeFavorite() when the server does not have the favorite', () => {
+  test('makes no DELETE', async () => {
+    const { client, calls } = fakeClient({ [pageActionPaths.favorites]: { favorites: [] } });
+    await removeFavorite(client, 'plan');
+    assert({ given: 'a page that is not in the server list', should: 'only read the list', actual: calls.length, expected: 1 });
+  });
+});

@@ -149,3 +149,15 @@ describe('driveStatus()', () => {
     });
   });
 });
+
+describe('drivesFrom() last access', () => {
+  test('keeps a drive’s last-accessed time when the server sends one', () => {
+    const body = [{ ...apiDrive('d-1', 'Alpha'), lastAccessedAt: '2026-10-02T00:00:00.000Z' }];
+    assert({
+      given: 'a drive with a last-accessed timestamp',
+      should: 'carry it through',
+      actual: drivesFrom(body, null)?.[0]?.lastAccessedAt,
+      expected: '2026-10-02T00:00:00.000Z',
+    });
+  });
+});

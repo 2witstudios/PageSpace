@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   toast: { loading: vi.fn(() => 'id'), success: vi.fn(), error: vi.fn() },
   mutate: vi.fn(async () => undefined),
   openQuickCreate: vi.fn(),
+  page: { title: 'Q4 Launch Plan', type: 'DOCUMENT', isPrivate: false, parentId: null } as Record<string, unknown> | undefined,
 }));
 
 vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ children }: { children: unknown }) => children }));
@@ -18,7 +19,7 @@ vi.mock('swr', () => ({ default: () => ({ data: state.tree }), useSWRConfig: () 
 vi.mock('@/retained/lib/auth/auth-fetch', () => ({ patch: state.patch, del: state.del }));
 vi.mock('@/retained/stores/useUIStore', () => ({ useUIStore: { getState: () => ({ openQuickCreate: state.openQuickCreate }) } }));
 vi.mock('../page-object/page-object', () => ({
-  usePage: () => ({ data: { title: 'Q4 Launch Plan', type: 'DOCUMENT', isPrivate: false, parentId: null } }),
+  usePage: () => ({ data: state.page }),
   pageKey: (id: string) => `/api/pages/${id}`,
 }));
 vi.mock('@/retained/components/dialogs/MovePageDialog', () => ({ MovePageDialog: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <p>Move dialog</p> : null) }));
@@ -37,7 +38,10 @@ const show = (dialog: PageActionDialog | null, onClose = vi.fn()) => {
 afterEach(() => {
   cleanup();
   state.tree = [{ id: 'plan', children: [{ id: 'kid' }] }];
+  state.page = { title: 'Q4 Launch Plan', type: 'DOCUMENT', isPrivate: false, parentId: null };
   vi.clearAllMocks();
+  state.patch.mockImplementation(async () => ({}));
+  state.del.mockImplementation(async () => ({}));
 });
 
 describe('PageHeadDialogs (IMC-9.4, 9.5)', () => {
@@ -77,5 +81,31 @@ describe('PageHeadDialogs (IMC-9.4, 9.5)', () => {
   it('Add child page opens the create palette under the page', () => {
     openAddChild('plan');
     expect(state.openQuickCreate).toHaveBeenCalledWith('plan', null);
+  });
+});
+
+describe('PageHeadDialogs failures (IMC-9.4, 9.5)', () => {
+  it('a failed rename toasts the error and still closes', async () => {
+    state.patch.mockRejectedValue(new Error('nope'));
+    const onClose = show('rename');
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Q1 Plan' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rename' }));
+    await waitFor(() => expect(state.toast.error).toHaveBeenCalledWith('Error renaming page.', { id: 'id' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('a failed trash toasts the error and still closes', async () => {
+    state.del.mockRejectedValue(new Error('nope'));
+    state.tree = [{ id: 'plan' }];
+    const onClose = show('trash');
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }));
+    await waitFor(() => expect(state.toast.error).toHaveBeenCalledWith('Error moving page to trash.', { id: 'id' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('renders no dialogs until the page has loaded', () => {
+    state.page = undefined;
+    show('rename');
+    expect(screen.queryByLabelText('Name')).toBeNull();
   });
 });

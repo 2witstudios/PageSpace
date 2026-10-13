@@ -20,3 +20,14 @@ describe('multi-select copy (IMC-9.6)', () => {
     assert({ given: 'three pages trashed', should: 'confirm they moved', actual: trashedToast(3), expected: 'Successfully moved 3 pages to trash' });
   });
 });
+
+describe('multi-select copy for one page (IMC-9.6)', () => {
+  test('the trash confirm uses the singular for one page', () => {
+    assert({
+      given: 'one page',
+      should: 'say "1 page", not "1 pages"',
+      actual: trashConfirmBody(1),
+      expected: 'This will move 1 page and all their children to the trash. You can restore them later.',
+    });
+  });
+});
