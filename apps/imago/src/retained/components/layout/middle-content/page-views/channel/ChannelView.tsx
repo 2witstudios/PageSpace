@@ -46,7 +46,6 @@ import {
 import { isFirstInGroup, formatMessageDate } from '@/retained/lib/messages/grouping';
 import { unreadBoundary } from './unread-boundary';
 import { MessageDateSeparator } from '@/retained/components/messages/MessageDateSeparator';
-import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/retained/lib/utils';
 import { useFindStore } from '@/retained/stores/useFindStore';
 import { useDraft } from '@/retained/hooks/useDraft';
@@ -798,10 +797,10 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                         const displayName = isAi ? m.aiMeta!.senderName : m.user?.name;
                         const aiLabel = isAi
                           ? m.aiMeta!.senderType === 'global_assistant'
-                            ? 'global assistant'
+                            ? 'Global assistant'
                             : m.aiMeta!.senderType === 'webhook'
-                              ? 'webhook'
-                              : 'agent'
+                              ? 'Webhook'
+                              : 'Agent'
                           : null;
                         const avatarFallback = isAi
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]
@@ -879,7 +878,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                                           {new Date(m.createdAt).toLocaleTimeString()}
                                       </span>
                                       {m.editedAt && (
-                                        <span className="text-xs text-muted-foreground italic">(Edited)</span>
+                                        <span className="text-xs text-muted-foreground italic">(edited)</span>
                                       )}
                                       {isPending && (
                                         <span className="text-xs text-muted-foreground">Sending…</span>
@@ -949,7 +948,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                                     )}
                                     {m.content && <MessageLinkPreviews content={m.content} />}
                                     {!isFirst && m.editedAt && (
-                                      <span className="text-xs text-muted-foreground italic">(Edited)</span>
+                                      <span className="text-xs text-muted-foreground italic">(edited)</span>
                                     )}
                                   </>
                                 )}
@@ -966,7 +965,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                                     <MessageSquareText size={12} aria-hidden />
                                     {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                                     {m.lastReplyAt
-                                      ? ` · ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      ? ` · Last reply ${new Date(m.lastReplyAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
                                       : ''}
                                   </button>
                                 )}
@@ -1017,7 +1016,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                 value={inputValue}
                 onChange={setInputValue}
                 onSubmit={handleTopLevelSubmit}
-                placeholder="Type a message... (use @ to mention, supports **markdown**)"
+                placeholder={`Message #${page.title} — @ to mention a person, page or agent`}
                 driveId={page.driveId}
                 attachmentsEnabled
                 quotedPreview={quotedPreview}

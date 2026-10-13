@@ -7,6 +7,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/retained/components/ui/popover';
+import { EmojiPickerPopover } from '@/retained/components/ui/emoji-picker';
+import { Smile } from 'lucide-react';
 
 export interface Reaction {
   id: string;
@@ -213,6 +215,17 @@ export function MessageReactions({
           onReactionClick={handleReactionClick}
         />
       ))}
+      {canReact && (
+        <EmojiPickerPopover onEmojiSelect={onAddReaction} side="top" align="start">
+          <button
+            type="button"
+            aria-label="Add reaction"
+            className="inline-flex h-6 w-7 items-center justify-center rounded-full border border-border/50 text-muted-foreground hover:bg-muted"
+          >
+            <Smile size={14} aria-hidden />
+          </button>
+        </EmojiPickerPopover>
+      )}
     </div>
   );
 }

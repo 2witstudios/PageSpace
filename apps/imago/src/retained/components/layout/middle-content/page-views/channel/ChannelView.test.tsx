@@ -6,11 +6,15 @@ import { assert } from 'riteway/vitest';
 import { mount, unmountAll } from '@/ui/test-support/dom';
 import ChannelView from './ChannelView';
 
-const fixtures = vi.hoisted(() => ({ messages: [] as unknown[], lastReadAt: null as string | null }));
+const fixtures = vi.hoisted(() => ({
+  messages: [] as unknown[],
+  lastReadAt: null as string | null,
+  inputProps: null as Record<string, unknown> | null,
+}));
 
 vi.mock('@/retained/hooks/useAuth', () => ({ useAuth: () => ({ user: { id: 'me', name: 'Jono' } }) }));
 vi.mock('@/retained/hooks/usePermissions', () => ({
-  usePermissions: () => ({ permissions: { canEdit: true } }),
+  usePermissions: () => ({ permissions: { canEdit: true, canView: true } }),
   getPermissionErrorMessage: () => 'You cannot send here',
 }));
 vi.mock('@/retained/hooks/useMobile', () => ({ useMobile: () => false }));
@@ -27,7 +31,10 @@ vi.mock('@/retained/lib/auth/auth-fetch', () => ({
   fetchJSON: async () => ({}),
 }));
 vi.mock('@/retained/components/shared/MessageInput', () => ({
-  MessageInput: () => null,
+  MessageInput: (props: Record<string, unknown>) => {
+    fixtures.inputProps = props;
+    return null;
+  },
   buildEditingSessionKey: () => 'channel:c1',
 }));
 vi.mock('@/retained/components/shared/PageWebhooksDialog', () => ({ PageWebhooksDialog: () => null }));
@@ -156,6 +163,146 @@ describe('ChannelView', () => {
         should: 'not draw its own Webhooks button (the strip has it)',
         actual: stripped.querySelector('button[aria-label="Incoming Webhooks"]'),
         expected: null,
+      });
+    });
+  });
+});
+
+describe('ChannelView posts and composer copy', () => {
+  test('gives the composer the channel placeholder', async () => {
+    fixtures.inputProps = null;
+    mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a channel named Launch',
+        should: 'ask the composer to message #Launch with the mention hint',
+        actual: fixtures.inputProps?.placeholder ?? null,
+        expected: 'Message #Launch — @ to mention a person, page or agent',
+      });
+    });
+  });
+
+  test('labels an agent post with an Agent badge', async () => {
+    fixtures.messages = [
+      message('ag', '2026-10-05T08:00:00.000Z', 'them', 'Morning digest', {
+        userId: null,
+        user: null,
+        aiMeta: { senderType: 'agent', senderName: 'Launch Agent' },
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a post from an agent',
+        should: 'show the Agent badge beside the agent name',
+        actual: container.querySelector('[data-message-id="ag"]')?.textContent?.includes('Agent') ?? false,
+        expected: true,
+      });
+    });
+  });
+
+  test('marks an edited post as (edited)', async () => {
+    fixtures.messages = [
+      message('e1', '2026-10-05T08:00:00.000Z', 'them', 'Fixed copy', { editedAt: '2026-10-05T08:05:00.000Z' }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a message with an editedAt time',
+        should: 'show the (edited) marker',
+        actual: container.querySelector('[data-message-id="e1"]')?.textContent?.includes('(edited)') ?? false,
+        expected: true,
+      });
+    });
+  });
+
+  test('summarises a thread as "N replies · Last reply <time>"', async () => {
+    fixtures.messages = [
+      message('t1', '2026-10-05T08:00:00.000Z', 'them', 'Root', {
+        replyCount: 5,
+        lastReplyAt: '2026-10-05T18:03:00.000Z',
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      const summary = container.querySelector('[data-testid="thread-footer-t1"]')?.textContent ?? '';
+      assert({
+        given: 'a root with five replies and a last reply time',
+        should: 'read "5 replies · Last reply <time>" with no relative age',
+        actual: { replies: summary.startsWith('5 replies · Last reply '), relative: /ago/.test(summary) },
+        expected: { replies: true, relative: false },
+      });
+    });
+  });
+
+  test('gives each reaction row an Add reaction control', async () => {
+    fixtures.messages = [
+      message('r1', '2026-10-05T08:00:00.000Z', 'them', 'Ship it', {
+        reactions: [{ id: 'x1', emoji: '👍', userId: 'them', user: { id: 'them', name: 'Sam' } }],
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a message with a reaction chip and a viewer who can react',
+        should: 'show an "Add reaction" button beside the chips',
+        actual: container.querySelector('[data-message-id="r1"] button[aria-label="Add reaction"]') !== null,
+        expected: true,
+      });
+    });
+  });
+
+  test('draws no "new" divider once every post is read', async () => {
+    fixtures.lastReadAt = '2026-10-05T10:00:00.000Z';
+    fixtures.messages = [message('seen', '2026-10-05T09:00:00.000Z', 'them', 'Already read')];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'lastReadAt is after the newest post',
+        should: 'draw no New messages divider',
+        actual: container.querySelector('[aria-label="New messages"]'),
+        expected: null,
+      });
+    });
+  });
+
+  test('shows the reaction chip with its count once a reaction is added', async () => {
+    fixtures.messages = [
+      message('r2', '2026-10-05T08:00:00.000Z', 'them', 'Ship it', {
+        reactions: [{ id: 'x2', emoji: '👍', userId: 'me', user: { id: 'me', name: 'Jono' } }],
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      const chip = container.querySelector('[data-message-id="r2"] button[aria-label="Add reaction"]')?.previousElementSibling;
+      assert({
+        given: 'the viewer has reacted with a thumbs up',
+        should: 'show the 👍 chip with a count of 1 before the Add reaction control',
+        actual: chip?.textContent ?? null,
+        expected: '👍1',
+      });
+    });
+  });
+
+  test('labels a file attachment card Download <file name>', async () => {
+    fixtures.messages = [
+      message('f1', '2026-10-05T08:00:00.000Z', 'them', 'Here it is', {
+        attachments: [
+          {
+            fileId: 'file-1',
+            position: 0,
+            attachmentMeta: { originalName: 'onboarding-v3.pdf', mimeType: 'application/pdf', size: 2400000 },
+          },
+        ],
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a PDF attached to a post',
+        should: 'expose its card as a Download control named for the file',
+        actual: container.querySelector('a[aria-label="Download onboarding-v3.pdf"]') !== null,
+        expected: true,
       });
     });
   });
