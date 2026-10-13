@@ -170,6 +170,33 @@ describe('drive-wallet service (real Postgres)', () => {
   // What each role sees (SPEND-9, SPEND-10)
   // -------------------------------------------------------------------------
 
+  it.each(['weak', 'expired'] as const)('SEC-2 (partial) SEC-3 (partial) Given a %s org credential, should withhold all org overview legs while keeping personal credits and admitting a current passkey', async kind => {
+    if (!world) return;
+    const userId = world.ids.priya;
+    await db.insert(wallets).values({ userId, monthlyRemainingCents: 5000 });
+    await updateDriveWallet(accountActor(userId), world.productId, { donationsEnabled: true }, 'session');
+    expect(await donateToDrive(accountActor(userId), world.productId, { amountCents: 200, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+    const personalDrive = await factories.createDrive(userId);
+    expect(await createDriveWallet(accountActor(userId), personalDrive.id, { allocationCents: 0 }, 'session')).toMatchObject({ ok: true });
+    await updateDriveWallet(accountActor(userId), personalDrive.id, { donationsEnabled: true }, 'session');
+    expect(await donateToDrive(accountActor(userId), personalDrive.id, { amountCents: 200, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+    await db.update(organizations).set({ policies: { requireStrongSignIn: true, maximumSessionAgeMinutes: 15 } }).where(eq(organizations.id, world.orgId));
+    const refused = credentialActor(userId, { authenticatedAtMs: kind === 'expired' ? Date.now() - 3600000 : Date.now(), assurance: kind === 'weak' ? 'single_factor' : 'user_verified_passkey' });
+    const hidden = await listMyWallets(refused, 'session');
+    expect(hidden.personal.remainingCents).toBe(4600);
+    expect({ seats: hidden.seats, pools: hidden.funds.pools }).toEqual({ seats: [], pools: [] });
+    expect(hidden.driveWallets.map(wallet => wallet.driveId)).toEqual([personalDrive.id]);
+    expect(hidden.funds.donations.map(donation => donation.driveId)).toEqual([personalDrive.id]);
+    expect(JSON.stringify(hidden)).not.toContain(world.orgId);
+    expect(JSON.stringify(hidden)).not.toContain(world.poolId);
+    const allowed = await listMyWallets(accountActor(userId), 'session');
+    expect(allowed.personal).toEqual(hidden.personal);
+    expect(allowed.seats.map(seat => seat.orgId)).toEqual([world.orgId]);
+    expect(allowed.funds.pools.map(pool => pool.orgId)).toEqual([world.orgId]);
+    expect(allowed.funds.donations.map(donation => donation.driveId).sort()).toEqual([world.productId, personalDrive.id].sort());
+    expect(allowed.funds.donations.find(donation => donation.driveId === personalDrive.id)).toEqual(hidden.funds.donations[0]);
+  });
+
   it('SPEND-9 (partial) X-6 (partial) a MEMBER sees the remaining amount and their own cap only — never the pool balance or another consumer\'s spend', async () => {
     if (!world) return;
     const read = await getDriveWallet(credentialActor(world.ids.marcus, null), world.productId, 'session');

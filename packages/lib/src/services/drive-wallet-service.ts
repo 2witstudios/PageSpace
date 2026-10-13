@@ -30,7 +30,7 @@ import {
 } from '@pagespace/db/schema/wallets';
 import { isBillingEnabled } from '../deployment-mode';
 import { getDriveIdsForUser, getUserDriveAccess, holdsDriveAccess } from '../permissions/permissions';
-import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
+import { checkActorDriveAuthentication, checkActorOrgAuthentication, filterDrivesForActor } from '../permissions/actor-authentication';
 import { loadDriveWalletStanding, type DriveWalletStanding } from '../permissions/spend-standing';
 import { holdsOrgRole } from '../organizations/authorize-core';
 import {
@@ -1261,12 +1261,35 @@ export async function listMyWallets(actor: AccessActor, credential: WalletCreden
     funds: { driveWallets: [], pools: [], donations: [] },
   };
 
-  const donations = await db
-    .select({ walletId: walletFundingLegs.walletId, subjectId: wallets.subjectId, originalCents: walletFundingLegs.originalCents, remainingCents: walletFundingLegs.remainingCents, createdAt: walletFundingLegs.createdAt })
+  const orgAdmissions = new Map<string, Promise<boolean>>();
+  const admitsOrg = (orgId: string): Promise<boolean> => {
+    const existing = orgAdmissions.get(orgId);
+    if (existing) return existing;
+    const decision = checkActorOrgAuthentication(actor, orgId).then(result => result.allowed);
+    orgAdmissions.set(orgId, decision);
+    return decision;
+  };
+
+  // Funding history still contains org content (drive names and balances).
+  // Read only its resource references until the credential admits those orgs.
+  const donationRefs = await db
+    .select({ id: walletFundingLegs.id, subjectId: wallets.subjectId, orgId: wallets.orgId })
     .from(walletFundingLegs)
     .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
     .where(and(eq(walletFundingLegs.funderUserId, userId), eq(walletFundingLegs.funderKind, 'donation')))
     .limit(500);
+  const donationDriveIds = await filterDrivesForActor(actor, [...new Set(donationRefs.flatMap(ref => ref.subjectId ? [ref.subjectId] : []))]);
+  const admittedDonationIds: string[] = [];
+  for (const ref of donationRefs) {
+    if (ref.orgId && !(await admitsOrg(ref.orgId))) continue;
+    if (ref.subjectId && !donationDriveIds.has(ref.subjectId)) continue;
+    admittedDonationIds.push(ref.id);
+  }
+  const donations = admittedDonationIds.length === 0 ? [] : await db
+    .select({ walletId: walletFundingLegs.walletId, subjectId: wallets.subjectId, originalCents: walletFundingLegs.originalCents, remainingCents: walletFundingLegs.remainingCents, createdAt: walletFundingLegs.createdAt })
+    .from(walletFundingLegs)
+    .innerJoin(wallets, eq(wallets.id, walletFundingLegs.walletId))
+    .where(and(eq(walletFundingLegs.funderUserId, userId), inArray(walletFundingLegs.id, admittedDonationIds)));
   const donationDriveNames = await driveNamesById(donations.flatMap((d) => (d.subjectId ? [d.subjectId] : [])));
   result.funds.donations = donations.map((d) => ({
     walletId: d.walletId,
@@ -1303,8 +1326,12 @@ export async function listMyWallets(actor: AccessActor, credential: WalletCreden
     .from(orgMembers)
     .where(eq(orgMembers.userId, userId))
     .limit(200);
-  const orgNames = await orgNamesById(memberships.map((m) => m.orgId));
-  for (const m of memberships) {
+  const admittedMemberships: typeof memberships = [];
+  for (const membership of memberships) {
+    if (await admitsOrg(membership.orgId)) admittedMemberships.push(membership);
+  }
+  const orgNames = await orgNamesById(admittedMemberships.map((m) => m.orgId));
+  for (const m of admittedMemberships) {
     const pool = await orgPoolRow(db, m.orgId);
     if (!pool) continue;
     const orgName = orgNames.get(m.orgId) ?? null;

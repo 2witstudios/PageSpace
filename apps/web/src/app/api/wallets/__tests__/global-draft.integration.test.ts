@@ -19,6 +19,7 @@ vi.mock('@/lib/auth', () => ({ authenticateRequestWithOptions: vi.fn(), isMCPAut
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { PUT, GET } from '../conversations/[conversationId]/route';
+import { GET as GET_WALLETS } from '../route';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 
 const ids: { users: string[]; drives: string[]; wallets: string[]; orgs: string[] } = { users: [], drives: [], wallets: [], orgs: [] };
@@ -57,6 +58,9 @@ describe('SPEND-2 (partial) SPEND-3 (partial) fresh global draft through the rea
     expect({ read: read.status, write: write.status }).toEqual({ read: 403, write: 403 });
     expect(await read.json()).toMatchObject({ code: kind === 'weak' ? 'org_strong_sign_in_required' : 'org_reauthentication_required' });
     expect((await db.select().from(conversations).where(eq(conversations.id, orgConv.id)))[0].chosenWalletId).toBe(child.id);
+    const overview = await GET_WALLETS(new Request('http://app.test/api/wallets'));
+    expect(overview.status).toBe(200);
+    expect(await overview.json()).toMatchObject({ personal: { remainingCents: 10000 }, seats: [], driveWallets: [], funds: { pools: [] } });
     for (const id of [personal.id, global.id]) {
       const ownUrl = `http://app.test/api/wallets/conversations/${id}`;
       expect((await GET(new Request(ownUrl), ctx(id))).status).toBe(200);
