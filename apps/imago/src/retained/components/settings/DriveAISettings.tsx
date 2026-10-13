@@ -2,23 +2,46 @@
 
 import { useState, useEffect } from 'react';
 import { Button } from '@/retained/components/ui/button';
+import { Label } from '@/retained/components/ui/label';
+import { Skeleton } from '@/retained/components/ui/skeleton';
 import { Textarea } from '@/retained/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
-import { Loader2, Save, Brain } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 interface DriveAISettingsProps {
   driveId: string;
 }
 
+const MAX_CONTEXT_LENGTH = 10000;
+/** One id for the whole editor: a dirty context must not be clobbered by a SWR refresh (useEditingStore). */
+const EDITING_ID = 'drive-context';
+
+/**
+ * The drive context editor (C-Settings-Context): a live "N / 10,000" counter, Revert and Save
+ * context (PATCH drivePrompt), and the three-bullet "How it works". The "Last change by" line
+ * waits for the attribution API, so it is not drawn.
+ */
 export function DriveAISettings({ driveId }: DriveAISettingsProps) {
   const [driveContext, setDriveContext] = useState('');
   const [originalContext, setOriginalContext] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const startEditing = useEditingStore((s) => s.startEditing);
+  const endEditing = useEditingStore((s) => s.endEditing);
 
   const hasChanges = driveContext !== originalContext;
+
+  useEffect(() => {
+    if (hasChanges) startEditing(EDITING_ID, 'form', { componentName: 'DriveAISettings' });
+    else endEditing(EDITING_ID);
+  }, [hasChanges, startEditing, endEditing]);
+
+  useEffect(() => {
+    return () => endEditing(EDITING_ID);
+  }, [endEditing]);
 
   useEffect(() => {
     const fetchDrive = async () => {
@@ -55,79 +78,54 @@ export function DriveAISettings({ driveId }: DriveAISettingsProps) {
 
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="w-5 h-5" />
-            Drive Context
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-6 w-40" />
+        <Skeleton className="h-96 w-full" />
+      </div>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Brain className="w-5 h-5" />
-          Drive Context
-        </CardTitle>
-        <CardDescription>
-          Workspace memory that persists across AI conversations. The AI can also update this context
-          as it learns about your project, similar to how CLAUDE.md works in Claude Code.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="flex flex-col gap-10">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-4">
+          <Label htmlFor="drive-context" className="text-sm font-medium">
+            Drive context
+          </Label>
+          <span className="text-xs tabular-nums text-muted-foreground" data-context-counter="">
+            {driveContext.length.toLocaleString('en-US')} / {MAX_CONTEXT_LENGTH.toLocaleString('en-US')}
+          </span>
+        </div>
         <Textarea
+          id="drive-context"
+          aria-label="Drive context"
           value={driveContext}
           onChange={(e) => setDriveContext(e.target.value)}
-          placeholder="Add context about this workspace...
-
-Examples:
-- Project structure: /docs for documentation, /api-specs for API definitions
-- Tech stack: Next.js 15, TypeScript, PostgreSQL
-- Conventions: Use PascalCase for components, camelCase for functions
-- Preferences: Prefer concise responses, always include code examples"
-          className="min-h-[250px] font-mono text-sm"
-          maxLength={10000}
+          rows={18}
+          className="font-mono text-sm"
+          maxLength={MAX_CONTEXT_LENGTH}
         />
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-muted-foreground">
-            {driveContext.length.toLocaleString()} / 10,000 characters
-          </p>
-          <Button
-            onClick={handleSave}
-            disabled={saving || !hasChanges}
-          >
-            {saving ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Save className="h-4 w-4 mr-2" />
-                Save Context
-              </>
-            )}
-          </Button>
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-xs text-muted-foreground">Visible to everyone in the drive · editable by owners and admins</span>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setDriveContext(originalContext)} disabled={saving || !hasChanges}>
+              Revert
+            </Button>
+            <Button onClick={handleSave} disabled={saving || !hasChanges}>
+              {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save context
+            </Button>
+          </div>
         </div>
-        <div className="pt-4 border-t">
-          <h4 className="text-sm font-medium mb-2">How it works</h4>
-          <ul className="text-sm text-muted-foreground space-y-1">
-            <li>• This context is included in AI conversations when working in this drive</li>
-            <li>• The AI can use the update_drive_context tool to add information it learns</li>
-            <li>• AI agents (AI Chat pages) can optionally include this context via their settings</li>
-            <li>• Context is visible to all drive members but only editable by owners and admins</li>
-          </ul>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+
+      <SettingsSection title="How it works">
+        <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-sm text-muted-foreground">
+          <li>Included in AI conversations whenever you work in this drive.</li>
+          <li>Imago can add what it learns with Update Context.</li>
+          <li>AI Chat pages can opt in to this context from their own settings.</li>
+        </ul>
+      </SettingsSection>
+    </div>
   );
 }

@@ -2,15 +2,18 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Badge } from '@/retained/components/ui/badge';
-import { Plus, Pencil, Trash2, GripVertical, Star, Shield, Users, Eye } from 'lucide-react';
+import { Plus, Trash2, GripVertical, Star, Shield, Users, Eye } from 'lucide-react';
+import { cn } from '@/retained/lib/utils';
+import { SettingsGroup, SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 import { toast } from 'sonner';
 import { useSocket } from '@/retained/hooks/useSocket';
 import type { DriveEventPayload } from '@/retained-adapters/ui-contracts';
 import { fetchWithAuth, del } from '@/retained/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/retained/lib/utils';
 import { RoleEditor } from './RoleEditor';
+
+const ROLES_LEDE = 'Bundles of page permissions you can hand to people, agents and apps.';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -83,6 +86,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
     try {
       await del(`/api/drives/${driveId}/roles/${roleId}`);
       toast.success('Role deleted successfully');
+      if (editingRole?.id === roleId) setEditingRole(null);
       fetchRoles();
     } catch (error) {
       console.error('Error deleting role:', error);
@@ -104,163 +108,134 @@ export function RolesManager({ driveId }: RolesManagerProps) {
     return `${pageCount} page${pageCount === 1 ? '' : 's'}`;
   };
 
+  const selectRole = (role: Role) => {
+    setIsCreating(false);
+    setEditingRole(role);
+  };
+
+  const startCreate = () => {
+    setEditingRole(null);
+    setIsCreating(true);
+  };
+
+  const newRoleButton = (
+    <Button onClick={startCreate}>
+      <Plus className="w-4 h-4 mr-2" />
+      New role
+    </Button>
+  );
+
   if (loading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>Roles</CardTitle>
-          <CardDescription>Loading roles...</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex justify-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
-          </div>
-        </CardContent>
-      </Card>
+      <SettingsScreen title="Roles" lede={ROLES_LEDE}>
+        <div className="flex justify-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-foreground" />
+        </div>
+      </SettingsScreen>
     );
   }
 
-  // Show editor if creating or editing
-  if (isCreating || editingRole) {
-    return (
-      <RoleEditor
-        driveId={driveId}
-        role={editingRole}
-        onSave={handleRoleSaved}
-        onCancel={() => {
-          setEditingRole(null);
-          setIsCreating(false);
-        }}
-      />
-    );
-  }
+  const editorOpen = isCreating || editingRole !== null;
 
   return (
     <>
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Roles</CardTitle>
-              <CardDescription>
-                Create custom roles to define access levels for drive members
-              </CardDescription>
+      <SettingsScreen title="Roles" lede={ROLES_LEDE} actions={newRoleButton}>
+        <SettingsGroup label="Role list">
+          {/* Built-in Admin role - always first, not editable */}
+          <div className="flex items-center gap-3 px-4 py-3">
+            <Shield className="h-4 w-4 flex-none text-muted-foreground" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-foreground">Admin</span>
+                <Badge variant="outline" className="text-xs">
+                  Built-in
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">Full access to all pages and settings</p>
             </div>
-            <Button onClick={() => setIsCreating(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Create Role
-            </Button>
           </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            {/* Built-in Admin role - always first, not editable */}
-            <div className="flex items-center gap-3 p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20">
-              <div className="w-4 h-4 flex items-center justify-center">
-                <Shield className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-              </div>
 
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
-                    Admin
-                  </Badge>
-                  <Badge variant="outline" className="text-xs">
-                    Built-in
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Full access to all pages and settings. Cannot be modified.
-                </p>
+          {/* Built-in Member role - default for all drive members */}
+          <div className="flex items-center gap-3 px-4 py-3">
+            <Users className="h-4 w-4 flex-none text-muted-foreground" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-foreground">Member</span>
+                <Badge variant="outline" className="text-xs">
+                  Built-in
+                </Badge>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Eye className="w-3 h-3" aria-hidden="true" />
+                  View only
+                </span>
               </div>
-
-              <div className="w-[72px]" /> {/* Spacer for action buttons alignment */}
+              <p className="text-xs text-muted-foreground">
+                View only · read access to non-private pages
+              </p>
             </div>
+          </div>
 
-            {/* Built-in Member role - default for all drive members */}
-            <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20">
-              <div className="w-4 h-4 flex items-center justify-center">
-                <Users className="w-4 h-4 text-muted-foreground" />
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <Badge variant="secondary">
-                    Member
-                  </Badge>
-                  <Badge variant="outline" className="text-xs">
-                    Built-in
-                  </Badge>
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Eye className="w-3 h-3" />
-                    View only
-                  </span>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Default role for all members. Read-only access to non-private pages. Cannot be modified.
-                </p>
-              </div>
-
-              <div className="w-[72px]" /> {/* Spacer for action buttons alignment */}
+          {roles.length === 0 ? (
+            <div className="px-4 py-3 text-sm text-muted-foreground">
+              Create custom roles to define access levels for your team.
             </div>
-
-            {roles.length === 0 ? (
-              <div className="text-center py-8 border border-dashed border-border rounded-lg">
-                <p className="text-muted-foreground mb-4">
-                  Create custom roles to define access levels for your team.
-                </p>
-                <Button variant="outline" onClick={() => setIsCreating(true)}>
-                  <Plus className="w-4 h-4 mr-2" />
-                  Create Role
-                </Button>
-              </div>
-            ) : (
-              roles.map((role) => (
+          ) : (
+            roles.map((role) => {
+              const selected = editingRole?.id === role.id;
+              return (
                 <div
                   key={role.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border border-border hover:bg-muted/50 transition-colors"
+                  className={cn('flex items-center gap-3 px-4 py-3', selected && 'bg-muted')}
                 >
-                  <GripVertical className="w-4 h-4 text-muted-foreground cursor-grab" />
+                  <GripVertical className="h-4 w-4 flex-none text-muted-foreground" aria-hidden="true" />
 
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Badge className={getRoleColorClasses(role.color)}>
-                        {role.name}
-                      </Badge>
+                  <button
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => selectRole(role)}
+                    className="min-w-0 flex-1 rounded-md text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge className={getRoleColorClasses(role.color)}>{role.name}</Badge>
                       {role.isDefault && (
                         <Badge variant="outline" className="text-xs">
-                          <Star className="w-3 h-3 mr-1" />
+                          <Star className="w-3 h-3 mr-1" aria-hidden="true" />
                           Default
                         </Badge>
                       )}
                     </div>
-                    <p className="text-sm text-muted-foreground truncate">
+                    <p className="mt-1 truncate text-xs text-muted-foreground">
                       {role.description || getPermissionSummary(role.permissions)}
                     </p>
-                  </div>
+                  </button>
 
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setEditingRole(role)}
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setDeletingRoleId(role.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Delete ${role.name}`}
+                    onClick={() => setDeletingRoleId(role.id)}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
-              ))
-            )}
-          </div>
-        </CardContent>
-      </Card>
+              );
+            })
+          )}
+        </SettingsGroup>
+
+        {editorOpen && (
+          <RoleEditor
+            key={editingRole?.id ?? 'new'}
+            driveId={driveId}
+            role={editingRole}
+            onSave={handleRoleSaved}
+            onCancel={() => {
+              setEditingRole(null);
+              setIsCreating(false);
+            }}
+          />
+        )}
+      </SettingsScreen>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deletingRoleId} onOpenChange={() => setDeletingRoleId(null)}>

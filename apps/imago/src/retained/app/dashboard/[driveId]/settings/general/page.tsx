@@ -5,18 +5,22 @@ import { useParams, useRouter } from '@/retained-adapters/navigation';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Label } from '@/retained/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
 import { Skeleton } from '@/retained/components/ui/skeleton';
-import { ChevronLeft, Shield, Users, Bot, Plug2, Loader2, Home } from 'lucide-react';
+import { Shield, Loader2, Home } from 'lucide-react';
 import Link from '@/retained-adapters/link';
 import { useDriveStore } from '@/retained/hooks/useDrive';
+import type { TreePage } from '@/retained/hooks/usePageTree';
 import { usePageTree } from '@/retained/hooks/usePageTree';
 import { findNodeAndParent } from '@/retained/lib/tree/tree-utils';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { PagePickerPopover } from '@/retained/components/common/PagePickerPopover';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
+import { homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import useSWR from 'swr';
+import { SettingsGroup, SettingsRow, SettingsScreen, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
+import { ImagoAccessSection } from '@/ui/settings/imago-access/imago-access-section';
 
 interface DriveMember {
   id: string;
@@ -33,11 +37,21 @@ interface AgentMembersResponse {
   agentMembers: { id: string }[];
 }
 
-interface AppMembersResponse {
-  appMembers: { id: string }[];
-}
-
 const fetcher = (url: string) => fetchWithAuth(url).then((r) => r.json());
+
+/** The page's title path from the root down to it, as the sidebar tree nests it ("Launch / Q4 Launch Plan"). */
+const titlePath = (tree: TreePage[], pageId: string): string[] => {
+  const found = findNodeAndParent(tree, pageId);
+  if (!found) return [];
+  const ancestors: string[] = [];
+  let parent = found.parent;
+  while (parent) {
+    ancestors.unshift(parent.title ?? 'Untitled');
+    const up = findNodeAndParent(tree, parent.id);
+    parent = up?.parent ?? null;
+  }
+  return [...ancestors, found.node.title ?? 'Untitled'];
+};
 
 export default function GeneralSettingsPage() {
   const params = useParams();
@@ -65,6 +79,8 @@ export default function GeneralSettingsPage() {
 
   const drive = drives.find((d) => d.id === driveId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
+  // A Home drive cannot be renamed: its guard's words stand where the field would be.
+  const renameRefusal = drive ? homeDriveActionError(drive, 'rename') : null;
 
   useEffect(() => {
     if (drive && !useEditingStore.getState().isAnyEditing()) setName(drive.name);
@@ -78,18 +94,25 @@ export default function GeneralSettingsPage() {
     drive ? `/api/drives/${driveId}/agents/members` : null,
     fetcher
   );
-  const { data: appMembersData } = useSWR<AppMembersResponse>(
-    drive ? `/api/drives/${driveId}/apps/members` : null,
-    fetcher
-  );
 
   const homePageId = drive?.homePageId ?? null;
   // Memoized: the controlled name input re-renders this page per keystroke,
-  // and findNodeAndParent is a full tree walk.
-  const homePageNode = useMemo(
-    () => (homePageId ? findNodeAndParent(tree, homePageId)?.node ?? null : null),
+  // and the title path is a full tree walk.
+  const homePathTitles = useMemo(
+    () => (homePageId ? titlePath(tree, homePageId) : []),
     [tree, homePageId]
   );
+
+  const handleSetHomePage = async (pageId: string | null) => {
+    if (!pageId) return;
+    try {
+      await patch(`/api/drives/${driveId}`, { homePageId: pageId });
+      updateDriveInStore(driveId, { homePageId: pageId });
+      toast.success('Home page set');
+    } catch {
+      toast.error('Failed to set home page');
+    }
+  };
 
   const handleClearHomePage = async () => {
     if (isClearingHomePage) return;
@@ -122,7 +145,7 @@ export default function GeneralSettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
+      <div className="mx-auto w-full max-w-2xl space-y-6 px-6 py-10">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-40 w-full" />
         <Skeleton className="h-40 w-full" />
@@ -151,138 +174,116 @@ export default function GeneralSettingsPage() {
 
   const humanCount = membersData?.members?.length ?? 0;
   const agentCount = agentMembersData?.agentMembers?.length ?? 0;
-  const appCount = appMembersData?.appMembers?.length ?? 0;
   const topAvatars = (membersData?.members ?? []).slice(0, 5);
+  const nameDirty = name.trim() !== '' && name.trim() !== drive.name;
 
   return (
-    <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-2xl space-y-6">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push(`/dashboard/${driveId}/settings`)}
-          className="mb-4"
-        >
-          <ChevronLeft className="h-4 w-4 mr-1" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold mb-1">General</h1>
-        <p className="text-muted-foreground">Basic drive settings</p>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Drive Name</CardTitle>
-          <CardDescription>Update the display name for this drive</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-1.5">
+    <SettingsScreen title="General" lede="Basic drive settings">
+      <SettingsSection
+        title="Drive name"
+        description="Shown in the spine, in links and to everyone you invite."
+      >
+        <SettingsGroup>
+          <div className="flex flex-col gap-2 px-4 py-3">
             <Label htmlFor="drive-name">Name</Label>
-            <Input
-              id="drive-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onFocus={() => startEditing('drive-settings-rename', 'form', { componentName: 'GeneralSettingsPage' })}
-              onBlur={() => endEditing('drive-settings-rename')}
-              onKeyDown={(e) => e.key === 'Enter' && handleSave()}
-              placeholder="Drive name"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id="drive-name"
+                value={name}
+                disabled={renameRefusal !== null}
+                onChange={(e) => setName(e.target.value)}
+                onFocus={() => startEditing('drive-settings-rename', 'form', { componentName: 'GeneralSettingsPage' })}
+                onBlur={() => endEditing('drive-settings-rename')}
+                onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+                placeholder="Drive name"
+              />
+              <Button onClick={handleSave} disabled={isSaving || renameRefusal !== null || !nameDirty}>
+                {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Save
+              </Button>
+            </div>
+            {renameRefusal === null ? (
+              <span className="text-xs text-muted-foreground">
+                Slug <code>{drive.slug}</code> stays the same when you rename.
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">{renameRefusal}</span>
+            )}
           </div>
-          <Button
-            onClick={handleSave}
-            disabled={isSaving || !name.trim() || name.trim() === drive.name}
-          >
-            {isSaving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            Save
-          </Button>
-        </CardContent>
-      </Card>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Home Page</CardTitle>
-          <CardDescription>The page people land on when they enter this drive</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <SettingsSection
+        title="Home page"
+        description="The page people land on when they enter this drive."
+      >
+        <SettingsGroup>
           {homePageId ? (
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2 text-sm min-w-0">
-                <Home className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                <Link
-                  href={`/dashboard/${driveId}/${homePageId}`}
-                  className="truncate font-medium hover:underline"
-                >
-                  {homePageNode?.title ?? 'Unknown page'}
-                </Link>
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-2">
+                  <Home className="h-4 w-4 flex-none text-muted-foreground" />
+                  <Link href={`/dashboard/${driveId}/${homePageId}`} className="truncate hover:underline">
+                    {homePathTitles[homePathTitles.length - 1] ?? 'Unknown page'}
+                  </Link>
+                </span>
+              }
+              hint={homePathTitles.length > 1 ? homePathTitles.join(' / ') : undefined}
+            >
+              <div className="w-56">
+                <PagePickerPopover driveId={driveId} value={null} onChange={handleSetHomePage} placeholder="Change" />
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleClearHomePage}
-                disabled={isClearingHomePage}
-              >
+              <Button variant="outline" size="sm" onClick={handleClearHomePage} disabled={isClearingHomePage}>
                 {isClearingHomePage && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                 Clear
               </Button>
-            </div>
+            </SettingsRow>
           ) : (
-            <p className="text-sm text-muted-foreground">
-              None — right-click a page in the sidebar to set one
-            </p>
+            <SettingsRow label="No home page" hint="Right-click a page in the sidebar to set one">
+              <div className="w-56">
+                <PagePickerPopover driveId={driveId} value={null} onChange={handleSetHomePage} placeholder="Choose a page" />
+              </div>
+            </SettingsRow>
           )}
-        </CardContent>
-      </Card>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Members Overview</CardTitle>
-          <CardDescription>Current members of this drive</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-6">
-            <div className="flex items-center gap-2 text-sm">
-              <Users className="h-4 w-4 text-muted-foreground" />
+      <ImagoAccessSection driveId={driveId} />
+
+      <SettingsSection
+        title="Members overview"
+        description="Current members of this drive."
+        actions={
+          <Link href={`/dashboard/${driveId}/members`} className="text-sm font-medium text-accent">
+            Manage members →
+          </Link>
+        }
+      >
+        <SettingsGroup>
+          <div className="flex flex-col gap-3 px-4 py-3">
+            <div className="flex gap-6 text-sm">
               <span>
-                {humanCount} {humanCount === 1 ? 'member' : 'members'}
+                <span className="font-semibold">{humanCount}</span> {humanCount === 1 ? 'person' : 'people'}
+              </span>
+              <span>
+                <span className="font-semibold">{agentCount}</span> {agentCount === 1 ? 'agent' : 'agents'}
               </span>
             </div>
-            <div className="flex items-center gap-2 text-sm">
-              <Bot className="h-4 w-4 text-muted-foreground" />
-              <span>
-                {agentCount} {agentCount === 1 ? 'agent' : 'agents'}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <Plug2 className="h-4 w-4 text-muted-foreground" />
-              <span>
-                {appCount} {appCount === 1 ? 'app' : 'apps'}
-              </span>
-            </div>
+            {topAvatars.length > 0 && (
+              <div className="flex -space-x-2">
+                {topAvatars.map((m) => (
+                  <Avatar key={m.id} className="h-8 w-8 border-2 border-background">
+                    <AvatarImage src={m.profile?.avatar ?? undefined} alt={m.user.name ?? m.user.email} />
+                    <AvatarFallback className="text-xs">
+                      {(m.user.name ?? m.user.email).slice(0, 2).toUpperCase()}
+                    </AvatarFallback>
+                  </Avatar>
+                ))}
+              </div>
+            )}
           </div>
-          {topAvatars.length > 0 && (
-            <div className="flex -space-x-2">
-              {topAvatars.map((m) => (
-                <Avatar key={m.id} className="h-8 w-8 border-2 border-background">
-                  <AvatarImage
-                    src={m.profile?.avatar ?? undefined}
-                    alt={m.user.name ?? m.user.email}
-                  />
-                  <AvatarFallback className="text-xs">
-                    {(m.user.name ?? m.user.email).slice(0, 2).toUpperCase()}
-                  </AvatarFallback>
-                </Avatar>
-              ))}
-            </div>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => router.push(`/dashboard/${driveId}/members`)}
-          >
-            Manage Members
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+        </SettingsGroup>
+      </SettingsSection>
+    </SettingsScreen>
   );
 }
