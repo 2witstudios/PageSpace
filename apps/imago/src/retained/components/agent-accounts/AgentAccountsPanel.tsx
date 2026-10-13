@@ -9,7 +9,9 @@ import { Button } from '@/retained/components/ui/button';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import { useAgentAccounts, type AgentAccountScope } from '@/retained/hooks/useAgentAccounts';
+import { SettingsGroup, SettingsRow, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 import { AddAgentAccountDialog } from './AddAgentAccountDialog';
+import { AddAgentAccountForm } from './AddAgentAccountForm';
 
 const hostOf = (origin: string) => origin.replace(/^https:\/\//, '').replace(/:443$/, '');
 
@@ -17,8 +19,11 @@ const hostOf = (origin: string) => origin.replace(/^https:\/\//, '').replace(/:4
  * The Accounts settings for an agent page, or for the global assistant in personal settings (G2).
  * Lists accounts by name, site and status — never a key, which the browser never receives — shows which
  * acknowledgment was given when each was added, and revokes.
+ *
+ * `layout="card"` is the agent page's card, with the add dialog. `layout="page"` is the account route's
+ * screen: the accounts as one grouped list, and the add form inline beneath it rather than in a modal.
  */
-export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScope }) {
+export function AgentAccountsPanel({ scope, layout = 'card' }: { readonly scope: AgentAccountScope; readonly layout?: 'card' | 'page' }) {
   const { configured, accounts, isLoading, error, mutate } = useAgentAccounts(scope);
   const [adding, setAdding] = useState(false);
 
@@ -32,6 +37,46 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
       toast.error('The account could not be revoked.');
     }
   };
+
+  if (layout === 'page') {
+    return (
+      <div className="flex flex-col gap-10">
+        {!configured && <p className="text-sm text-muted-foreground">Agent accounts are not set up on this PageSpace deployment.</p>}
+        {isLoading && <Skeleton className="h-12 w-full" />}
+        {error && <p className="text-sm text-status-danger">Accounts could not be loaded.</p>}
+        {configured && !isLoading && accounts.length === 0 && <p className="text-sm text-muted-foreground">No accounts yet.</p>}
+        {accounts.length > 0 && (
+          <SettingsGroup label="Accounts">
+            {accounts.map((account) => (
+              <SettingsRow
+                key={account.id}
+                label={
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="truncate">{account.name}</span>
+                    <Badge variant={account.status === 'active' ? 'secondary' : 'destructive'}>{account.status}</Badge>
+                    {!account.ready && account.status === 'active' && <Badge variant="outline">Not ready — add it again</Badge>}
+                    <Badge variant="outline">{account.acknowledgment === 'personal_login_acknowledged' ? 'Personal login (acknowledged)' : 'Dedicated account'}</Badge>
+                  </span>
+                }
+                hint={`${account.allowedOrigins.map(hostOf).join(', ')}${account.lastUsedAt ? ` · last used ${new Date(account.lastUsedAt).toLocaleString()}` : ''}`}
+              >
+                {account.status === 'active' && (
+                  <Button type="button" size="sm" variant="outline" aria-label={`Revoke ${account.name}`} onClick={() => revoke(account.id, account.name)}>
+                    Revoke
+                  </Button>
+                )}
+              </SettingsRow>
+            ))}
+          </SettingsGroup>
+        )}
+        {configured && (
+          <SettingsSection title="Add an account" description="The key is encrypted and never shown again.">
+            <AddAgentAccountForm scope={scope} onCreated={() => void mutate()} />
+          </SettingsSection>
+        )}
+      </div>
+    );
+  }
 
   return (
     <Card>
