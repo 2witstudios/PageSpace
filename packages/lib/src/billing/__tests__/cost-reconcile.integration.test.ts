@@ -20,7 +20,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, and, asc } from '@pagespace/db/operators';
 import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
-import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { wallets, walletFundingLegs, walletDebtNotices, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { notifications } from '@pagespace/db/schema/notifications';
 import { users } from '@pagespace/db/schema/auth';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { factories } from '@pagespace/db/test/factories';
@@ -224,17 +225,17 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
           monthlyAllowanceCents: input.allocationCents,
           topupRemainingCents: input.ownerLegCents + input.donationLegCents,
         }).returning({ id: wallets.id });
-        const [ownerLeg] = await tx.insert(walletFundingLegs).values({
+        const [ownerLeg] = input.ownerLegCents > 0 ? await tx.insert(walletFundingLegs).values({
           walletId: drive.id, funderKind: 'owner', funderUserId: user.id,
           originalCents: input.ownerLegCents, remainingCents: input.ownerLegCents, nonRefundable: false,
           createdAt: new Date(Date.now() - 120_000),
-        }).returning({ id: walletFundingLegs.id });
-        const [donationLeg] = await tx.insert(walletFundingLegs).values({
+        }).returning({ id: walletFundingLegs.id }) : [null];
+        const [donationLeg] = input.donationLegCents > 0 ? await tx.insert(walletFundingLegs).values({
           walletId: drive.id, funderKind: 'donation', funderUserId: user.id,
           originalCents: input.donationLegCents, remainingCents: input.donationLegCents, nonRefundable: true,
           createdAt: new Date(Date.now() - 60_000),
-        }).returning({ id: walletFundingLegs.id });
-        return { userId: user.id, rootId: root.id, driveId: drive.id, ownerLegId: ownerLeg.id, donationLegId: donationLeg.id };
+        }).returning({ id: walletFundingLegs.id }) : [null];
+        return { userId: user.id, rootId: root.id, driveId: drive.id, ownerLegId: ownerLeg?.id ?? '', donationLegId: donationLeg?.id ?? '' };
       });
     }
 
@@ -249,6 +250,7 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
 
     async function deleteWorld(w: DriveWorld): Promise<void> {
       await db.delete(creditLedger).where(eq(creditLedger.userId, w.userId));
+      await db.delete(notifications).where(eq(notifications.userId, w.userId));
       await db.delete(wallets).where(eq(wallets.id, w.driveId));
       await cleanup(w.userId);
     }
@@ -468,6 +470,43 @@ describe('applyCorrection transaction atomicity (Postgres)', () => {
         const corrections = await db.select().from(creditLedger)
           .where(and(eq(creditLedger.userId, w.userId), eq(creditLedger.entryType, 'adjustment')));
         expect(corrections).toHaveLength(1);
+      } finally {
+        await dropWorld(w);
+      }
+    });
+
+    it('HIST-01 a correction that lands debt tells the wallet\'s funder once — after commit, deduplicated on retry', async () => {
+      if (!dbAvailable) return;
+      // A drive wallet with nothing: allowance 0, no legs, and an empty root. A later
+      // cost correction on a call it settled can only overshoot into debt — the review's
+      // correction-first scenario (#2760). The root carries it, so its owner is the funder.
+      const w = await driveWorld({ rootMonthlyCents: 0, allocationCents: 0, ownerLegCents: 0, donationLegCents: 0 });
+      try {
+        const genId = `gen-debt-notice-${w.userId}`;
+        const logId = await chargeThenReconcile(w, genId, 1.6, undefined, 1.0);
+
+        // The correction charged the extra, found nothing, and left debt behind.
+        const root = await wallet(w.rootId);
+        const drive = await wallet(w.driveId);
+        const debtCents = (root.debtCents ?? 0) + (drive.debtCents ?? 0);
+        expect(debtCents).toBeGreaterThan(0);
+
+        // The funder was told, exactly once, AFTER the correction committed.
+        const notices = await db.select().from(walletDebtNotices);
+        expect(notices).toHaveLength(1);
+        const told = await db.select().from(notifications).where(eq(notifications.userId, w.userId));
+        expect(told.filter((n) => n.type === 'WALLET_DEBT')).toHaveLength(1);
+
+        // A duplicate retry (same generation re-marked pending) re-corrects nothing and
+        // must not re-notify — the claim misses, and the period dedupe holds regardless.
+        await db.update(aiUsageLogs).set({ reconcileStatus: 'pending', reconciledAt: null }).where(eq(aiUsageLogs.id, logId));
+        await reconcileOpenRouterCosts({ fetcher: async (id) => (id === genId ? { totalCost: 1.6 } : 'not_found') });
+
+        expect((await wallet(w.rootId)).debtCents).toBe(root.debtCents);
+        expect((await wallet(w.driveId)).debtCents).toBe(drive.debtCents);
+        expect(await db.select().from(walletDebtNotices)).toHaveLength(1);
+        const toldAgain = await db.select().from(notifications).where(eq(notifications.userId, w.userId));
+        expect(toldAgain.filter((n) => n.type === 'WALLET_DEBT')).toHaveLength(1);
       } finally {
         await dropWorld(w);
       }

@@ -33,6 +33,7 @@ import {
   openRouterBaseUrl,
 } from './credit-pricing';
 import { emitCreditsUpdated } from './credit-emit';
+import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
 import { loggers } from '../logging/logger-config';
 import { errorLogFields } from '../logging/error-cause';
 
@@ -151,10 +152,10 @@ async function applyCorrection(
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
-): Promise<boolean> {
+): Promise<{ applied: boolean; debtWalletId: string | null }> {
   const reconcileKey = [...generationIds].sort().join(',');
   // Signed nominal cents for the adjustment row: positive delta = more spend = negative
-  // amount; negative delta = refund = positive amount. `|| 0` avoids storing -0.
+  // amount; negative delta (refund) = positive amount. `|| 0` avoids storing -0.
   const amountCents = -Math.round(drift.deltaChargeMillicents / 1000) || 0;
   const { walletId, fallbackFromWalletId } = charge;
 
@@ -183,10 +184,11 @@ async function applyCorrection(
       })
       .returning({ id: creditLedger.id });
     // Already corrected by a prior/overlapping run — do NOT touch the balance again.
-    if (claimed.length === 0) return false;
+    if (claimed.length === 0) return { applied: false, debtWalletId: null };
     const ledgerId = claimed[0].id;
 
     let appliedCents = 0;
+    let debtWalletId: string | null = null;
     if (drift.deltaChargeMillicents > 0) {
       // Undercharge → charge the extra through the SAME path as the settle (credit-consume
       // chargeWallet): monthly-first with debt on shortfall on a root wallet; on a drive
@@ -198,12 +200,13 @@ async function applyCorrection(
       // correction row with no applied delta so a later run doesn't re-correct.
       if (!charged) {
         await tx.update(creditLedger).set({ appliedCents: 0 }).where(eq(creditLedger.id, ledgerId));
-        return false;
+        return { applied: false, debtWalletId: null };
       }
       appliedCents = -charged.appliedCents || 0; // negative: decremented
       // WAL-5: uncovered cost lands as debt (on this wallet or the one its funder chose); ledger it
       // there, as the settle does, so every wallet still reconciles against its own rows.
       if (charged.debt) {
+        debtWalletId = charged.debt.walletId;
         await tx.insert(creditLedger).values({
           userId, walletId: charged.debt.walletId, entryType: 'adjustment', bucket: 'monthly',
           amountCents: -charged.debt.cents, aiUsageLogId, consumeStatus: 'applied', spendKind: 'ai',
@@ -224,7 +227,7 @@ async function applyCorrection(
     }
 
     await tx.update(creditLedger).set({ appliedCents }).where(eq(creditLedger.id, ledgerId));
-    return true;
+    return { applied: true, debtWalletId };
   });
 }
 
@@ -284,7 +287,13 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
 
   const applied = await applyCorrection(row.userId, charge, drift, row.id, ids);
   await markStatus(row.id, 'reconciled', now);
-  if (applied) void emitCreditsUpdated(row.userId);
+  if (applied.applied) void emitCreditsUpdated(row.userId);
+  // HIST-01 (#2760), after the correction committed: a correction that left the wallet in
+  // debt tells its funder, through the same period-deduplicated seam the settle uses. It
+  // runs outside the transaction and never throws (the notifier owns both).
+  if (applied.debtWalletId) {
+    await notifyFunderOfWalletDebt({ debtWalletId: applied.debtWalletId, chargedWalletId: charge.walletId });
+  }
   return 'corrected';
 }
 
