@@ -14,7 +14,7 @@ import { User, Mail, Loader2, X, CheckCircle2, Download, Clock, Upload } from "l
 import { Badge } from "@/retained/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { useAuthStore } from "@/retained/stores/useAuthStore";
-import { DeleteAccountDialog } from "@/retained/components/dialogs/DeleteAccountDialog";
+import { DeleteAccountDialog, ownedOrganizationsFrom } from "@/retained/components/dialogs/DeleteAccountDialog";
 import type { AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
 import { postDeletionDestination } from "@/retained/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/retained/components/dialogs/DriveOwnershipDialog";
@@ -81,6 +81,8 @@ export default function AccountPage() {
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
   const [appleSignInRevocation, setAppleSignInRevocation] = useState<AppleSignInRevocation | undefined>(undefined);
+  // Organizations the server refused the deletion for (orgs-enabled API only).
+  const [ownedOrganizations, setOwnedOrganizations] = useState<readonly string[] | undefined>(undefined);
 
   // Data export state
   const [isExporting, setIsExporting] = useState(false);
@@ -310,6 +312,7 @@ export default function AccountPage() {
     // Best-effort: it must never stand in the way of deleting the account.
     // Cleared first so a reopened dialog never shows the previous answer.
     setAppleSignInRevocation(undefined);
+    setOwnedOrganizations(undefined);
     void fetchWithAuth("/api/account/apple-sign-in")
       .then(async (response) => {
         if (!response.ok) {
@@ -371,6 +374,13 @@ export default function AccountPage() {
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);
+      const refusedBy = ownedOrganizationsFrom(error);
+      if (refusedBy !== undefined) {
+        // Refused, not failed: keep the dialog open and name the organizations to hand over.
+        setOwnedOrganizations(refusedBy);
+        setIsDeletingAccount(false);
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : "Failed to delete account";
       toast.error(errorMessage);
       setIsDeletingAccount(false);
@@ -637,6 +647,7 @@ export default function AccountPage() {
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
         appleSignInRevocation={appleSignInRevocation}
+        ownedOrganizations={ownedOrganizations}
       />
 
       {/* Revoke All Devices Dialog */}

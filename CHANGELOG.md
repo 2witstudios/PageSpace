@@ -44,6 +44,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **Imago on tablets, phones and the desktop app (C · Blue Spine)** — between 1024 and 1279 pixels wide, Imago opens as a sheet over the page instead of a third column; below 1024 the sidebar slides in as a sheet too. On a phone Imago shows one screen at a time with a bottom bar (Chat, Files, Messages, Tasks, More), a full-screen Files screen, a page view with an "open pages" sheet, and Ask opening Imago full-screen with Back. In the desktop app on macOS the spine leaves room for the window buttons and the top of the window can be dragged.
 
+- **Imago's avatar crop, account deletion and drive actions (C · Blue Spine)** — uploading an avatar opens Crop Avatar with a circle or square crop; deleting your account first asks you to hand off or delete drives you co-own, then asks you to type your email; each drive in Account › Drives has an actions menu to open, rename, favorite or move it to trash.
+
 - **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
 
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
