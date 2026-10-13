@@ -344,8 +344,8 @@ New surface, not a port. Every org route the web exposes is an operation here un
 | `organizations.clearSuppression` | `orgId*`, `email*` | POST `orgs/[orgId]/suppressions/clear` (ADMIN) → `{cleared}` |
 | `drives.list` (§2.1) | — | now also carries `orgId` (nullable) and `orgVisibility` (tolerant: optional for older servers) |
 | `drives.create` (§2.1) | `name*`, `orgId?`, `orgVisibility?` | POST `drives/route.ts` — with `orgId`, `createOrgDrive` (DRV-3, POL-5) |
-| `drives.moveToOrg` | `driveId*`, `orgId*`, `orgVisibility?` | PUT `drives/[driveId]/org` (the drive's owner, an org member) → `{drive, storageReattribution}` |
-| `drives.moveOutOfOrg` (destructive) | `driveId*`, `implicitMembers* ∈ keep/remove` (JSON body on DELETE) | DELETE `drives/[driveId]/org` (org ADMIN) → `{drive, storageReattribution}` |
+| `drives.moveToOrg` | `driveId*`, `orgId*`, `orgVisibility?` | PUT `drives/[driveId]/org` (the drive's owner, an org member; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
+| `drives.moveOutOfOrg` (destructive) | `driveId*`, `implicitMembers* ∈ keep/remove` (JSON body on DELETE) | DELETE `drives/[driveId]/org` (org ADMIN; a wallet requires a session, otherwise an unscoped key is allowed) → `{drive, storageReattribution}` |
 | `drives.setOrgVisibility` | `driveId*`, `orgVisibility*` | PATCH `drives/[driveId]/org` (lead or org ADMIN) → `{drive}` |
 | `drives.setOrgLead` | `driveId*`, `userId*` | PUT `drives/[driveId]/org/lead` (lead or org ADMIN) → `{drive}` |
 | `drives.listJoinRequests` | `driveId*` | GET `drives/[driveId]/join-requests` (lead or org ADMIN) → `{requests: PendingJoinRequest[]}` |

@@ -1,6 +1,10 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, or, gte, lt, inArray, isNull } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
+import { filterDrivesForActor } from '@pagespace/lib/permissions/actor-authentication';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
+import { getDerivedPageOrgIds } from '@pagespace/lib/organizations/policy-reader';
 import { orgIdsOfSources } from '@pagespace/lib/permissions/org-derived-content';
 
 export interface PulseCalendarEvent {
@@ -12,7 +16,8 @@ export interface PulseCalendarEvent {
 }
 
 export async function fetchCalendarContext(params: {
-  userId: string;
+  actor: AccessActor;
+  model: Parameters<typeof scopeReadableByModel>[0];
   driveIds: string[];
   now: Date;
   endOfToday: Date;
@@ -29,7 +34,8 @@ export async function fetchCalendarContext(params: {
    */
   sourceDriveIds: string[];
 }> {
-  const { userId, driveIds, now, endOfToday, endOfTomorrow } = params;
+  const { actor, model, driveIds, now, endOfToday, endOfTomorrow } = params;
+  const { userId } = actor;
 
   // Visibility filter: personal events + drive events respecting visibility setting
   // PRIVATE and ATTENDEES_ONLY events from other users in shared drives are excluded
@@ -47,16 +53,8 @@ export async function fetchCalendarContext(params: {
       )
     : and(isNull(calendarEvents.driveId), eq(calendarEvents.createdById, userId));
 
-  const upcomingCalendarEvents = await db
-    .select({
-      id: calendarEvents.id,
-      title: calendarEvents.title,
-      location: calendarEvents.location,
-      startAt: calendarEvents.startAt,
-      endAt: calendarEvents.endAt,
-      allDay: calendarEvents.allDay,
-      driveId: calendarEvents.driveId,
-    })
+  const upcomingCandidates = await db
+    .select({ id: calendarEvents.id, driveId: calendarEvents.driveId })
     .from(calendarEvents)
     .where(
       and(
@@ -70,17 +68,8 @@ export async function fetchCalendarContext(params: {
     .limit(15);
 
   // Get events user is invited to via attendees table
-  const attendeeEventRows = await db
-    .select({
-      id: calendarEvents.id,
-      title: calendarEvents.title,
-      location: calendarEvents.location,
-      startAt: calendarEvents.startAt,
-      endAt: calendarEvents.endAt,
-      allDay: calendarEvents.allDay,
-      driveId: calendarEvents.driveId,
-      rsvpStatus: eventAttendees.status,
-    })
+  const attendeeCandidates = await db
+    .select({ id: calendarEvents.id, driveId: calendarEvents.driveId })
     .from(eventAttendees)
     .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
     .where(
@@ -95,13 +84,8 @@ export async function fetchCalendarContext(params: {
     .limit(15);
 
   // Pending RSVP invites (future events user hasn't responded to)
-  const pendingRsvps = await db
-    .select({
-      eventTitle: calendarEvents.title,
-      startAt: calendarEvents.startAt,
-      allDay: calendarEvents.allDay,
-      driveId: calendarEvents.driveId,
-    })
+  const pendingCandidates = await db
+    .select({ id: calendarEvents.id, driveId: calendarEvents.driveId })
     .from(eventAttendees)
     .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
     .where(
@@ -115,11 +99,32 @@ export async function fetchCalendarContext(params: {
     .orderBy(calendarEvents.startAt)
     .limit(5);
 
+  const candidateDriveIds = [...new Set([...upcomingCandidates, ...attendeeCandidates, ...pendingCandidates]
+    .flatMap((event) => event.driveId ? [event.driveId] : []))];
+  const actorDriveIds = await filterDrivesForActor(actor, candidateDriveIds);
+  const { driveIds: modelDriveIds } = await scopeReadableByModel(model, { driveIds: [...actorDriveIds] });
+  const admittedDrives = new Set(modelDriveIds);
+  const admitted = (event: { driveId: string | null }) => event.driveId === null
+    ? actor.via === 'credential' || actor.scope.kind === 'held-drives'
+    : admittedDrives.has(event.driveId);
+  const eventIds = [...new Set([...upcomingCandidates, ...attendeeCandidates].filter(admitted).map((event) => event.id))];
+  const pendingIds = pendingCandidates.filter(admitted).map((event) => event.id);
+  // Read content only after both the asking actor and model admit its governing source.
+  const upcomingCalendarEvents = eventIds.length > 0 ? await db.select({
+    id: calendarEvents.id, title: calendarEvents.title, location: calendarEvents.location,
+    startAt: calendarEvents.startAt, endAt: calendarEvents.endAt, allDay: calendarEvents.allDay,
+    driveId: calendarEvents.driveId,
+  }).from(calendarEvents).where(inArray(calendarEvents.id, eventIds)) : [];
+  const pendingRsvps = pendingIds.length > 0 ? await db.select({
+    eventTitle: calendarEvents.title, startAt: calendarEvents.startAt, allDay: calendarEvents.allDay,
+    driveId: calendarEvents.driveId,
+  }).from(calendarEvents).where(inArray(calendarEvents.id, pendingIds)).orderBy(calendarEvents.startAt) : [];
+
   // Merge and deduplicate events
   const seenEventIds = new Set<string>();
   const allCalendarEvents: PulseCalendarEvent[] = [];
 
-  for (const event of [...upcomingCalendarEvents, ...attendeeEventRows]) {
+  for (const event of upcomingCalendarEvents) {
     if (seenEventIds.has(event.id)) continue;
     seenEventIds.add(event.id);
     allCalendarEvents.push({
@@ -139,7 +144,7 @@ export async function fetchCalendarContext(params: {
   const tomorrow = allCalendarEvents.filter(e => e.startAt >= endOfToday && e.startAt < endOfTomorrow);
 
   const sourceDriveIds = [...new Set(
-    [...upcomingCalendarEvents, ...attendeeEventRows, ...pendingRsvps].flatMap((event) => (event.driveId ? [event.driveId] : [])),
+    [...upcomingCalendarEvents, ...pendingRsvps].flatMap((event) => (event.driveId ? [event.driveId] : [])),
   )].sort();
 
   return {
@@ -161,5 +166,9 @@ export async function pulseSourceOrgIds(sources: {
   pageIds: readonly string[];
   calendar: { sourceDriveIds: readonly string[] };
 }): Promise<string[]> {
-  return orgIdsOfSources({ driveIds: [...sources.driveIds, ...sources.calendar.sourceDriveIds], pageIds: sources.pageIds });
+  const [direct, derived] = await Promise.all([
+    orgIdsOfSources({ driveIds: [...sources.driveIds, ...sources.calendar.sourceDriveIds], pageIds: sources.pageIds }),
+    getDerivedPageOrgIds(sources.pageIds),
+  ]);
+  return [...new Set([...direct, ...[...derived.values()].flat()])].sort();
 }

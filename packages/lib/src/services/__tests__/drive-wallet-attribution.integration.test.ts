@@ -111,7 +111,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
     const w = await northwind();
     const result = await updateDriveWallet(credentialActor(w.jono.id, null), w.driveId, { paused: true }, 'session', {
       afterAccess: async () => {
-        expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps)).ok).toBe(true);
+        expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { credential: 'session', implicitMembers: 'keep' }, deps)).ok).toBe(true);
       },
     });
     expect(result).toMatchObject({ ok: false, status: 409, code: 'drive_moved' });
@@ -126,7 +126,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
     let movedWhileHeld = true;
     const result = await updateDriveWallet(credentialActor(w.jono.id, null), w.driveId, { paused: true }, 'session', {
       afterDriveLock: async () => {
-        move = moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps).finally(() => { moveSettled = true; });
+        move = moveDriveOutOfOrg(w.jono.id, w.driveId, { credential: 'session', implicitMembers: 'keep' }, deps).finally(() => { moveSettled = true; });
         await sleep(HOLD_MS);
         movedWhileHeld = moveSettled;
       },
@@ -143,7 +143,7 @@ describe('drive wallet events follow the drive\'s org at commit', () => {
     const before = await walletOf(w.driveId);
     const result = await donateToDrive(credentialActor(w.marcus.id, null), w.driveId, { amountCents: 100, idempotencyKey: createId() }, 'session', {
       afterAccess: async () => {
-        expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { implicitMembers: 'keep' }, deps)).ok).toBe(true);
+        expect((await moveDriveOutOfOrg(w.jono.id, w.driveId, { credential: 'session', implicitMembers: 'keep' }, deps)).ok).toBe(true);
       },
     });
     expect(result).toMatchObject({ ok: false, status: 409, code: 'drive_moved' });

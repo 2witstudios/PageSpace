@@ -60,7 +60,8 @@ vi.mock('@/lib/fetch-bridge', () => ({
 
 // POL-8: the factory asks the drive's org policies when a drive is named; the default here is "no org".
 const getDrivePolicies = vi.hoisted(() => vi.fn());
-vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
+const getOrgPolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies, getOrgPolicies }));
 
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER } from '@pagespace/lib/ai/model-defaults';
@@ -101,6 +102,7 @@ describe('provider-factory', () => {
     mockOpenRouterChat.mockImplementation((model: string) => ({ modelId: model }));
     vi.mocked(isOnPrem).mockReturnValue(false);
     getDrivePolicies.mockResolvedValue(null);
+    getOrgPolicies.mockResolvedValue(DEFAULT_ORG_POLICIES);
     mockDb.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
@@ -119,6 +121,22 @@ describe('provider-factory', () => {
   describe('createAIProvider', () => {
     describe('the org model and provider allowlists', () => {
       const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
+
+      it('Given retained org provenance with a forbidden model, should refuse before constructing any provider', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'fake-test-key';
+        getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES, providerAllowlist: [] });
+        const result = await createAIProvider('user-123', {}, { driveId: null, contentOrgIds: ['retained-org'] });
+        expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'providerAllowlist' });
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
+      it('Given retained org provenance with an allowed model, should construct the admitted provider', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'fake-test-key';
+        const result = await createAIProvider('user-123', {}, { driveId: null, contentOrgIds: ['retained-org'] });
+        expect(isProviderError(result)).toBe(false);
+        expect(getOrgPolicies).toHaveBeenCalledWith('retained-org');
+        expect(createOpenRouter).toHaveBeenCalledTimes(1);
+      });
 
       it('POL-8 (partial) a model the org does not allow is REFUSED 403 with the policy named, and no provider client is built', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';

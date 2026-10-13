@@ -27,6 +27,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 
@@ -165,6 +166,19 @@ afterAll(async () => {
   await cleanup();
   const { pool } = await import('@pagespace/db/db');
   await pool.end();
+});
+
+describe('transitive model source admission', () => {
+  it('Given a memory page whose retained org forbids the model, should omit it even from a personal drive', async () => {
+    const memoryPage = await factories.createPage(w.personalDrive);
+    await db.insert(userPersonalization).values({ userId: w.owner, bioPageId: memoryPage.id, memoryOrgIds: [w.orgId] });
+    await setPolicies({ providerAllowlist: [] });
+    expect(await scopeReadableByModel({ provider: ALLOWED.provider, modelId: ALLOWED.model }, { driveIds: [w.personalDrive], pageIds: [memoryPage.id] }))
+      .toEqual({ driveIds: [w.personalDrive], pageIds: [] });
+    await setPolicies({ providerAllowlist: [ALLOWED.provider] });
+    expect((await scopeReadableByModel({ provider: ALLOWED.provider, modelId: ALLOWED.model }, { driveIds: [w.personalDrive], pageIds: [memoryPage.id] })).pageIds)
+      .toEqual([memoryPage.id]);
+  });
 });
 
 describe('POL-8 the org model and provider allowlists govern every model use in its drives: running, saving, copying, moving in, offering and reading', () => {

@@ -29,7 +29,8 @@ import { actorFromAuth } from '@/lib/auth/request-actor';
  * A session or an unscoped MCP key (X-1: `drives.moveToOrg`, `drives.moveOutOfOrg`,
  * `drives.setOrgVisibility`); the org gate refuses a drive-scoped key and the org's sign-in policy
  * applies to the credential (the drive's org, and the target org on a move in). Authority is the
- * service's, through requireOrgRole (ORG-5).
+ * service's, through requireOrgRole (ORG-5). A move that rehomes a drive wallet
+ * needs a session (D-OW-26); keys may move only walletless drives.
  */
 
 const moveInSchema = z.object({
@@ -95,7 +96,7 @@ export async function PUT(request: Request, context: RouteContext) {
   if (refused) return refused;
 
   try {
-    const result = await moveDriveToOrg(auth.userId, driveId, parsed.data, orgDriveServiceDeps);
+    const result = await moveDriveToOrg(auth.userId, driveId, { ...parsed.data, credential: auth.credential }, orgDriveServiceDeps);
     return await respond(request, auth.userId, driveId, result, 'org_move_in');
   } catch (error) {
     loggers.api.error('Error moving drive into organization:', error as Error);
@@ -114,7 +115,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!parsed.success) return parsed.response;
 
   try {
-    const result = await moveDriveOutOfOrg(auth.userId, driveId, parsed.data, orgDriveServiceDeps);
+    const result = await moveDriveOutOfOrg(auth.userId, driveId, { ...parsed.data, credential: auth.credential }, orgDriveServiceDeps);
     return await respond(request, auth.userId, driveId, result, 'org_move_out');
   } catch (error) {
     loggers.api.error('Error moving drive out of organization:', error as Error);

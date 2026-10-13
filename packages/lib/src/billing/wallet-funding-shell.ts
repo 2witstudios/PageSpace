@@ -718,10 +718,16 @@ export async function donateToDriveWallet(input: DonateInput): Promise<DonationO
       .limit(1);
     if (prior) return { kind: 'duplicate', legId: prior.id };
 
+    // A child's covered call draws this root too. Count those reservations while the root
+    // is locked, just as admission and owner top-ups do, before moving any of its backing.
     const [held] = await tx
       .select({ cents: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)::int` })
       .from(creditHolds)
-      .where(and(eq(creditHolds.walletId, donor.id), gt(creditHolds.expiresAt, new Date())));
+      .innerJoin(wallets, eq(wallets.id, creditHolds.walletId))
+      .where(and(
+        or(eq(wallets.id, donor.id), eq(wallets.parentWalletId, donor.id)),
+        gt(creditHolds.expiresAt, new Date()),
+      ));
 
     const plan = planDonation({
       amountCents: input.amountCents,

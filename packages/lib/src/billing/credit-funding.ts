@@ -337,7 +337,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     // writes carried + allowance, the second overwriting the first and losing a grant.
     // The row lock serialises them so both increments apply.
     const [currentRow] = await tx
-      .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents })
+      .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents, monthlyPeriodStart: wallets.monthlyPeriodStart })
       .from(wallets)
       .where(personalRootWalletOf(user.id))
       .for('update')
@@ -347,6 +347,11 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
     const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: user.id, walletId, clearedCents: forgivenAtRefillCents(allowanceCents, carriedCents, currentRow?.debtCents ?? 0) });
     if (forgiven) await tx.insert(creditLedger).values(forgiven);
+
+    // A late invoice still funds once, but cannot rewind the root clock its drive allocations use.
+    const currentStart = currentRow?.monthlyPeriodStart ?? null;
+    const periodMovesForward = start !== null && end !== null && (currentStart === null || start > currentStart);
+    const setsAllowance = currentStart === null || (start !== null && start >= currentStart);
 
     await tx
       .insert(wallets)
@@ -364,10 +369,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
         ...PERSONAL_ROOT_WALLET_UPSERT_TARGET,
         set: {
           monthlyRemainingCents: refill.monthlyRemainingCents,
-          monthlyAllowanceCents: refill.monthlyAllowanceCents,
+          ...(setsAllowance ? { monthlyAllowanceCents: refill.monthlyAllowanceCents } : {}),
           debtCents: refill.debtCents,
-          monthlyPeriodStart: start,
-          monthlyPeriodEnd: end,
+          ...(periodMovesForward ? { monthlyPeriodStart: start, monthlyPeriodEnd: end } : {}),
         },
       });
   });

@@ -17,6 +17,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
+import { readReusablePulseSummaries } from '../source-admission';
 import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
@@ -561,15 +562,7 @@ export async function POST(req: Request) {
     // ========================================
     // 8. PREVIOUS PULSES (for deduplication)
     // ========================================
-    const recentPulses = await db
-      .select({
-        summary: pulseSummaries.summary,
-        generatedAt: pulseSummaries.generatedAt,
-      })
-      .from(pulseSummaries)
-      .where(eq(pulseSummaries.userId, userId))
-      .orderBy(desc(pulseSummaries.generatedAt))
-      .limit(5);
+    const recentPulses = await readReusablePulseSummaries(actorFromAuth(auth), { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL });
 
     // ========================================
     // 9. TASKS
@@ -612,14 +605,18 @@ export async function POST(req: Request) {
     const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
 
     const calendarContext = await fetchCalendarContext({
-      userId, driveIds, now, endOfToday, endOfTomorrow,
+      actor: actorFromAuth(auth), model: { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+      driveIds, now, endOfToday, endOfTomorrow,
     });
     const { happeningNow, upcomingToday } = calendarContext;
     const tomorrowEvents = calendarContext.tomorrow;
     const pendingRsvps = calendarContext.pendingInvites;
     const allCalendarEvents = calendarContext.allEvents;
     // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
-    const contributingOrgIds = await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext });
+    const contributingOrgIds = [...new Set([
+      ...await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext }),
+      ...recentPulses.flatMap((pulse) => pulse.orgIds),
+    ])].sort();
 
     // ========================================
     // BUILD THE RICH CONTEXT WITH DIFFS
@@ -739,7 +736,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     const providerResult = await createAIProvider(userId, {
       selectedProvider: BACKGROUND_LIGHT_PROVIDER,
       selectedModel: BACKGROUND_LIGHT_MODEL,
-    }, { driveId: null });
+    }, { driveId: null, contentDriveIds: [...driveIds, ...calendarContext.sourceDriveIds], contentOrgIds: contributingOrgIds });
 
     if (isProviderError(providerResult)) {
       loggers.api.error('Failed to create AI provider for pulse', { error: providerResult.error });

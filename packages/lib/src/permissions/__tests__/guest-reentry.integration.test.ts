@@ -151,7 +151,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     const { drive, page, tokenId } = await personalDriveWithOutsider();
     expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
 
-    expect(await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
+    expect(await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
 
     expect(await getUserAccessLevel(credentialActor(w.outsider, null), page)).toBeNull();
     expect(await db.select().from(mcpTokenDrives).where(eq(mcpTokenDrives.driveId, drive))).toEqual([]);
@@ -167,7 +167,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
   it('POL-2 (partial) guests APPROVE: the outsider is queued with exactly what they held and holds nothing until approved; approving gives it back', async () => {
     await setGuests('approve');
     const { drive, page } = await personalDriveWithOutsider();
-    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
 
     expect(await getUserAccessLevel(credentialActor(w.outsider, null), page)).toBeNull();
     const [pending] = await holds('pending_approval');
@@ -185,7 +185,7 @@ describe('a drive moved into an org brings its outsiders under the guests policy
     await setGuests('on');
     const { drive, page } = await personalDriveWithOutsider();
     await db.insert(driveMembers).values({ driveId: drive, userId: w.member, role: 'MEMBER', acceptedAt: new Date() });
-    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
     expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
     expect(await db.select().from(orgGuestHolds).where(eq(orgGuestHolds.orgId, w.orgId))).toEqual([]);
   });
@@ -299,7 +299,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
       { pageId: expiredPage, userId: w.outsider, ...EDIT, grantedBy: w.owner, expiresAt: new Date(Date.now() - 86_400_000) },
       { pageId: soonPage, userId: w.outsider, ...EDIT, grantedBy: w.owner, expiresAt: soon },
     ]);
-    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
 
     const [pending] = await holds('pending_approval');
     expect(pending.request.permissions).toEqual([{ pageId: soonPage, ...EDIT, expiresAt: soon.toISOString() }]);
@@ -372,7 +372,7 @@ describe('approve mode replays exactly what was held (independent re-verify of #
     await db.update(driveMembers).set({ role: 'ADMIN' }).where(and(eq(driveMembers.driveId, drive), eq(driveMembers.userId, w.outsider)));
     const soon = new Date(Date.now() + 3_600_000);
     await db.update(pagePermissions).set({ expiresAt: soon }).where(eq(pagePermissions.userId, w.outsider));
-    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
 
     const { items } = await listPendingGuestApprovalViews(w.orgId, 10);
     expect(items[0].request).toEqual({ role: 'ADMIN', customRoleId: null, pageGrants: 1, tokenScopes: 1, earliestExpiry: soon.toISOString(), viaLink: false });
@@ -518,7 +518,7 @@ describe('guest approval requests preserve recipient and grant boundaries', () =
   it('parking additional legacy access merges one hold and restores the original member, token and both page grants', async () => {
     await setGuests('off');
     const { drive, page, tokenId } = await personalDriveWithOutsider();
-    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(w.owner, drive, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
     const [first] = await holds('suspended');
     const extra = await factories.createPage(drive, { isPrivate: true });
     await db.insert(pagePermissions).values({ pageId: extra.id, userId: w.outsider, canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: w.owner });

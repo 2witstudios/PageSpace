@@ -202,6 +202,7 @@ export async function deleteOrganization(
       const rehomed = await rehomeDriveWalletInTx(tx, {
         driveId: step.driveId,
         actorId: input.actorId,
+        credential: 'session',
         to: { kind: 'personal', leadUserId: step.ownerId },
       });
       if (!rehomed.ok) throw new OrgDeletionWalletInUseError(step.driveId);

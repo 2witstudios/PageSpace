@@ -169,7 +169,7 @@ describe('moveDriveToOrg', () => {
     await db.insert(driveEnvs).values({ driveId, name: 'prod', createdBy: marcus, updatedAt: new Date() });
     const before = await readDrive(driveId);
 
-    const result = await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    const result = await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect(result).toMatchObject({
       ok: true,
@@ -197,12 +197,12 @@ describe('moveDriveToOrg', () => {
     const driveId = await seedPersonalDrive();
     const homeId = await seedPersonalDrive({ kind: 'HOME', name: 'Home' });
 
-    expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
+    expect(await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps)).toMatchObject({ ok: true, orgId: northwind });
     expect(await readDrive(driveId)).toMatchObject({ orgId: northwind, ownerId: marcus });
     expect(await getDriveAccess(driveId, credentialActor(marcus, null))).toEqual({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null });
 
     // A Home drive is refused by the service and, beneath it, by the drives_home_never_org_check CHECK.
-    expect(await moveDriveToOrg(marcus, homeId, { orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
+    expect(await moveDriveToOrg(marcus, homeId, { credential: 'session', orgId: northwind }, deps)).toMatchObject({ ok: false, code: 'HOME_DRIVE' });
     await expect(db.update(drives).set({ orgId: northwind }).where(eq(drives.id, homeId))).rejects.toThrow();
     expect((await readDrive(homeId)).orgId).toBeNull();
 
@@ -215,7 +215,7 @@ describe('moveDriveToOrg', () => {
   it('DRV-1 (partial) a Home drive is refused and nothing is written', async () => {
     const driveId = await seedPersonalDrive({ kind: 'HOME', name: 'Home' });
 
-    const result = await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    const result = await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect(result).toMatchObject({ ok: false, code: 'HOME_DRIVE', status: 403 });
     expect((await readDrive(driveId)).orgId).toBeNull();
@@ -225,7 +225,7 @@ describe('moveDriveToOrg', () => {
   it('DRV-2 (partial) an org Admin cannot move in a drive they do not own', async () => {
     const driveId = await seedPersonalDrive();
 
-    const result = await moveDriveToOrg(priya, driveId, { orgId: northwind }, deps);
+    const result = await moveDriveToOrg(priya, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_DRIVE_OWNER' });
     expect((await readDrive(driveId)).orgId).toBeNull();
@@ -234,14 +234,14 @@ describe('moveDriveToOrg', () => {
   it('D-OW-7 a drive owner outside the org cannot move their drive in', async () => {
     const driveId = await seedPersonalDrive({ ownerId: chris });
 
-    const result = await moveDriveToOrg(chris, driveId, { orgId: northwind }, deps);
+    const result = await moveDriveToOrg(chris, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
     expect((await readDrive(driveId)).orgId).toBeNull();
   });
 
   it('DRV-2 (partial) a missing drive answers not found', async () => {
-    expect(await moveDriveToOrg(marcus, createId(), { orgId: northwind }, deps)).toMatchObject({
+    expect(await moveDriveToOrg(marcus, createId(), { credential: 'session', orgId: northwind }, deps)).toMatchObject({
       ok: false,
       code: 'DRIVE_NOT_FOUND',
       status: 404,
@@ -252,7 +252,7 @@ describe('moveDriveToOrg', () => {
     const driveId = await seedPersonalDrive();
     await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, driveId));
 
-    await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect((await readDrive(driveId)).orgVisibility).toBe('OPEN');
   });
@@ -260,7 +260,7 @@ describe('moveDriveToOrg', () => {
   it('DRV-4 (partial) a drive moved in with a chosen visibility keeps the choice', async () => {
     const driveId = await seedPersonalDrive();
 
-    await moveDriveToOrg(marcus, driveId, { orgId: northwind, orgVisibility: 'RESTRICTED' }, deps);
+    await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind, orgVisibility: 'RESTRICTED' }, deps);
 
     expect((await readDrive(driveId)).orgVisibility).toBe('RESTRICTED');
   });
@@ -268,10 +268,10 @@ describe('moveDriveToOrg', () => {
   it('DRV-2 (partial) a slug already taken inside the org gets the next free suffix on move-in', async () => {
     const slug = `product-${run}`;
     const takenId = await seedPersonalDrive({ ownerId: lena, slug });
-    await moveDriveToOrg(lena, takenId, { orgId: northwind }, deps);
+    await moveDriveToOrg(lena, takenId, { credential: 'session', orgId: northwind }, deps);
     const driveId = await seedPersonalDrive({ slug });
 
-    const result = await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    const result = await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
 
     expect(result).toMatchObject({ ok: true });
     expect((await readDrive(driveId)).slug).toBe(`${slug}-2`);
@@ -281,7 +281,7 @@ describe('moveDriveToOrg', () => {
 describe('moveDriveOutOfOrg', () => {
   async function seedOrgDrive() {
     const driveId = await seedPersonalDrive();
-    await moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
     syncCalls.length = 0;
     published.length = 0;
     return driveId;
@@ -298,7 +298,7 @@ describe('moveDriveOutOfOrg', () => {
     await db.insert(driveEnvs).values({ driveId, name: 'prod', createdBy: marcus, updatedAt: new Date() });
     const before = await readDrive(driveId);
 
-    const result = await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
+    const result = await moveDriveOutOfOrg(priya, driveId, { credential: 'session', implicitMembers: 'keep' }, deps);
 
     expect(result).toMatchObject({
       ok: true,
@@ -351,7 +351,7 @@ describe('moveDriveOutOfOrg', () => {
     const driveId = await seedOrgDrive();
     const release = await holdOrgRow();
 
-    const moving = moveDriveToOrg(marcus, driveId, { orgId: northwind }, deps);
+    const moving = moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, deps);
     await new Promise((resolve) => setTimeout(resolve, 300));
     const free = await driveRowFree(driveId);
 
@@ -374,8 +374,8 @@ describe('moveDriveOutOfOrg', () => {
     };
 
     const result = direction === 'in'
-      ? await moveDriveToOrg(marcus, driveId, { orgId: northwind }, flaky)
-      : await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, flaky);
+      ? await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, flaky)
+      : await moveDriveOutOfOrg(priya, driveId, { credential: 'session', implicitMembers: 'keep' }, flaky);
 
     expect(result).toMatchObject({ ok: true });
     expect(calls).toBe(2);
@@ -386,7 +386,7 @@ describe('moveDriveOutOfOrg', () => {
     const driveId = await seedOrgDrive();
     const release = await holdOrgRow();
 
-    const moving = moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, deps);
+    const moving = moveDriveOutOfOrg(priya, driveId, { credential: 'session', implicitMembers: 'keep' }, deps);
     await new Promise((resolve) => setTimeout(resolve, 300));
     // The waiting move-out must not already hold the drive row: that would be a lock cycle.
     const free = await driveRowFree(driveId);
@@ -402,7 +402,7 @@ describe('moveDriveOutOfOrg', () => {
     async (implicitMembers) => {
       const driveId = await seedOrgDrive();
 
-      await moveDriveOutOfOrg(jono, driveId, { implicitMembers }, deps);
+      await moveDriveOutOfOrg(jono, driveId, { credential: 'session', implicitMembers }, deps);
 
       expect(syncCalls).toEqual([{ kind: 'move-out', driveId, orgId: northwind, implicitMembers }]);
       expect(published).toEqual([{ call: syncCalls[0], orgIdAtPublish: null }]);
@@ -412,7 +412,7 @@ describe('moveDriveOutOfOrg', () => {
   it('DRV-2 (partial) the lead who is only an org Member cannot move the drive out', async () => {
     const driveId = await seedOrgDrive();
 
-    const result = await moveDriveOutOfOrg(marcus, driveId, { implicitMembers: 'remove' }, deps);
+    const result = await moveDriveOutOfOrg(marcus, driveId, { credential: 'session', implicitMembers: 'remove' }, deps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_ADMIN' });
     expect((await readDrive(driveId)).orgId).toBe(northwind);
@@ -428,7 +428,7 @@ describe('moveDriveOutOfOrg', () => {
       },
     };
 
-    await expect(moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, failing)).rejects.toThrow('sync failed');
+    await expect(moveDriveOutOfOrg(priya, driveId, { credential: 'session', implicitMembers: 'keep' }, failing)).rejects.toThrow('sync failed');
     expect((await readDrive(driveId)).orgId).toBe(northwind);
     expect(published).toEqual([]);
   });
@@ -557,7 +557,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     const driveId = await seedPersonalDrive();
     // Chris Rowe is a guest: an invited member who is not in the org (DRV-8).
     await db.insert(driveMembers).values({ driveId, userId: chris, role: 'MEMBER', acceptedAt: new Date() });
-    const moved = await moveDriveToOrg(marcus, driveId, { orgId: northwind }, orgDriveServiceDeps);
+    const moved = await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, orgDriveServiceDeps);
     expect(moved).toMatchObject({ ok: true });
     return driveId;
   }
@@ -571,7 +571,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
     const driveId = await productInNorthwind();
     expect(await rowsOf(driveId)).toContainEqual([lena, 'org']);
 
-    const result = await moveDriveOutOfOrg(priya, driveId, { implicitMembers: 'keep' }, orgDriveServiceDeps);
+    const result = await moveDriveOutOfOrg(priya, driveId, { credential: 'session', implicitMembers: 'keep' }, orgDriveServiceDeps);
 
     expect(result).toMatchObject({ ok: true });
     const rows = await rowsOf(driveId);
@@ -583,7 +583,7 @@ describe('with the production wiring (requireOrgRole, syncDriveOrgMembership, de
   it('D-OW-10 moving out with "remove" revokes the org members and keeps the guest', async () => {
     const driveId = await productInNorthwind();
 
-    const result = await moveDriveOutOfOrg(jono, driveId, { implicitMembers: 'remove' }, orgDriveServiceDeps);
+    const result = await moveDriveOutOfOrg(jono, driveId, { credential: 'session', implicitMembers: 'remove' }, orgDriveServiceDeps);
 
     expect(result).toMatchObject({ ok: true });
     expect(await rowsOf(driveId)).toEqual([[chris, 'invite']]);
@@ -628,7 +628,7 @@ describe('with the production wiring: authorization', () => {
   it('D-OW-7 a drive owner outside the org cannot move their drive in (real requireOrgRole)', async () => {
     const driveId = await seedPersonalDrive({ ownerId: chris });
 
-    const result = await moveDriveToOrg(chris, driveId, { orgId: northwind }, orgDriveServiceDeps);
+    const result = await moveDriveToOrg(chris, driveId, { credential: 'session', orgId: northwind }, orgDriveServiceDeps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_MEMBER' });
     expect((await readDrive(driveId)).orgId).toBeNull();
@@ -643,9 +643,9 @@ describe('with the production wiring: authorization', () => {
 
   it('DRV-2 (partial) an org Member cannot move a drive out, even when they lead it (real requireOrgRole)', async () => {
     const driveId = await seedPersonalDrive();
-    expect(await moveDriveToOrg(marcus, driveId, { orgId: northwind }, orgDriveServiceDeps)).toMatchObject({ ok: true });
+    expect(await moveDriveToOrg(marcus, driveId, { credential: 'session', orgId: northwind }, orgDriveServiceDeps)).toMatchObject({ ok: true });
 
-    const result = await moveDriveOutOfOrg(marcus, driveId, { implicitMembers: 'remove' }, orgDriveServiceDeps);
+    const result = await moveDriveOutOfOrg(marcus, driveId, { credential: 'session', implicitMembers: 'remove' }, orgDriveServiceDeps);
 
     expect(result).toMatchObject({ ok: false, code: 'NOT_ORG_ADMIN' });
     expect((await readDrive(driveId)).orgId).toBe(northwind);
@@ -675,7 +675,7 @@ describe('with the production wiring: authorization', () => {
 
         const pending = (
           operation === 'move-in' && personalId
-            ? moveDriveToOrg(marcus, personalId, { orgId: northwind }, orgDriveServiceDeps)
+            ? moveDriveToOrg(marcus, personalId, { credential: 'session', orgId: northwind }, orgDriveServiceDeps)
             : createOrgDrive(marcus, { authentication: null, name: `Race ${run}`, orgId: northwind }, orgDriveServiceDeps)
         ).then(
           (result) => ({ result }),

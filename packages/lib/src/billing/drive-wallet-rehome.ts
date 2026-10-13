@@ -13,6 +13,7 @@ import type { db } from '@pagespace/db/db';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { planDriveWalletRehome, type RehomeParent } from './wallet-admin';
 import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
+import { credentialRefusalFor, type CredentialRefusal, type WalletCredential } from '../permissions/wallet-access';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -42,7 +43,7 @@ async function liveHoldsThrough(tx: Tx, walletId: string): Promise<number> {
   return Number(row?.count ?? 0);
 }
 
-export type DriveWalletRehomeOutcome = { ok: true } | { ok: false; reason: 'calls_in_flight' };
+export type DriveWalletRehomeOutcome = { ok: true } | { ok: false; reason: 'calls_in_flight' } | { ok: false; reason: 'credential_refused'; refusal: CredentialRefusal };
 
 /**
  * Re-home `driveId`'s wallet, if it has one, under its new owner. The row keeps its id, so its funding
@@ -54,13 +55,18 @@ export type DriveWalletRehomeOutcome = { ok: true } | { ok: false; reason: 'call
  * holds are counted under the wallet's row lock, which every new hold on it takes, so none can slip in
  * between the check and the move. The caller runs this BEFORE it rewrites the drive.
  */
-export async function rehomeDriveWalletInTx(tx: Tx, input: { driveId: string; actorId: string; to: DriveWalletHome }): Promise<DriveWalletRehomeOutcome> {
+export async function rehomeDriveWalletInTx(tx: Tx, input: { driveId: string; actorId: string; credential: WalletCredential; to: DriveWalletHome }): Promise<DriveWalletRehomeOutcome> {
   const [wallet] = await tx
     .select({ id: wallets.id, status: wallets.status, debtCents: wallets.debtCents, overshootChoice: wallets.overshootChoice })
     .from(wallets)
     .where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, input.driveId)))
     .for('update');
   if (!wallet) return { ok: true };
+  // Even an empty wallet transfers control and clears the old funder's allocation.
+  // The caller holds the drive lock, which also fences wallet creation, so a key
+  // can make a walletless metadata move without racing a new economic transition.
+  const refusal = credentialRefusalFor(input.credential, 'transfer');
+  if (refusal) return { ok: false, reason: 'credential_refused', refusal };
   const parent = await parentFor(tx, input.to);
   const plan = planDriveWalletRehome({
     status: wallet.status,

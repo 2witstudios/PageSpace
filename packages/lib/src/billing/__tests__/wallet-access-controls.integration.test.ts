@@ -456,7 +456,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       await db.update(wallets).set({ spentCents: 200, debtCents: 150, status: 'over', topupRemainingCents: 0 }).where(eq(wallets.id, w.sideWalletId));
       await db.insert(creditLedger).values({ userId: w.jonoId, walletId: w.sideWalletId, entryType: 'adjustment', bucket: 'monthly', amountCents: -150, consumeStatus: 'applied' });
       expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: [w.sideWalletId] })).toEqual([]);
-      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { credential: 'session', orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
 
       // Same row: the org's now, under its pool; the old funder's allocation and debt stayed behind (forgiven, ledgered).
       expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'org', orgId: w.orgId, userId: null, parentWalletId: w.poolId, monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'active' });
@@ -480,7 +480,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
     it('SPEND-6 (partial) WAL-2 (partial) a drive moved OUT of the org: its wallet is the lead\'s under their root, and its members are not guests', async () => {
       const w = world as World;
       await donateToDrive(credentialActor(w.marcusId, null), w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session');
-      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { credential: 'session', implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
       const lenaRoot = (await db.select().from(wallets).where(and(eq(wallets.userId, w.lenaId), sql`${wallets.subjectType} IS NULL`)))[0];
       // Same row, the lead's now under their root; the donation leg moved with it.
       expect(await walletRow(w.productWalletId)).toMatchObject({ ownerType: 'user', userId: w.lenaId, orgId: null, parentWalletId: lenaRoot.id, monthlyAllowanceCents: 0, topupRemainingCents: 300 });
@@ -499,7 +499,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       expect(hold).toMatchObject({ allowed: true, walletId: w.productWalletId });
       const before = await walletRow(w.productWalletId);
 
-      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps))
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { credential: 'session', implicitMembers: 'keep' }, moveDeps))
         .toMatchObject({ ok: false, code: 'drive_wallet_calls_in_flight', status: 409, message: expect.stringContaining('Try moving the drive again') });
       // Nothing moved: the drive is still the org's, its wallet untouched.
       expect((await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, w.productId)))[0].orgId).toBe(w.orgId);
@@ -508,7 +508,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       // The call settles on the org pool that authorized it; then the move goes through.
       const [log] = await db.insert(aiUsageLogs).values({ userId: w.marcusId, provider: 'openrouter', model: 'm', cost: 1 }).returning({ id: aiUsageLogs.id });
       expect(await consumeCredits({ aiUsageLogId: log.id, userId: w.marcusId, costDollars: 1, holdId: hold.allowed ? hold.holdId : undefined, walletId: w.productWalletId })).toBe('settled');
-      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
+      expect(await moveDriveOutOfOrg(w.jonoId, w.productId, { credential: 'session', implicitMembers: 'keep' }, moveDeps)).toMatchObject({ ok: true });
       const lenaRoot = (await db.select().from(wallets).where(and(eq(wallets.userId, w.lenaId), sql`${wallets.subjectType} IS NULL`)))[0];
       expect(lenaRoot.debtCents).toBe(0);
       expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 150);
@@ -518,12 +518,12 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       const w = world as World;
       const hold = await canConsumeAI(w.marcusId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 });
       expect(hold).toMatchObject({ allowed: true, walletId: w.sideWalletId });
-      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: false, code: 'drive_wallet_calls_in_flight' });
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { credential: 'session', orgId: w.orgId }, moveDeps)).toMatchObject({ ok: false, code: 'drive_wallet_calls_in_flight' });
       expect((await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, w.sideId)))[0].orgId).toBeNull();
       expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'user', parentWalletId: w.jonoRootId });
 
       await releaseHold(hold.allowed && hold.holdId ? hold.holdId : '');
-      expect(await moveDriveToOrg(w.jonoId, w.sideId, { orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
+      expect(await moveDriveToOrg(w.jonoId, w.sideId, { credential: 'session', orgId: w.orgId }, moveDeps)).toMatchObject({ ok: true });
       expect(await walletRow(w.sideWalletId)).toMatchObject({ ownerType: 'org', parentWalletId: w.poolId });
     });
 

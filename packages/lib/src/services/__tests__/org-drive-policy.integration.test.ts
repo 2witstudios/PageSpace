@@ -90,13 +90,13 @@ describe('moving a personal drive in', () => {
   it('POL-5 with admins only a Member cannot move their own drive in (same policy as creating); an Admin can; with members allowed the Member can', async () => {
     await setWho('admins');
     const memberDrive = await personalDrive(w.member);
-    expect(await moveDriveToOrg(w.member, memberDrive, { orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_FORBIDS_CREATE' });
+    expect(await moveDriveToOrg(w.member, memberDrive, { credential: 'session', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_FORBIDS_CREATE' });
     expect((await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, memberDrive)))[0].orgId).toBeNull();
 
     const adminDrive = await personalDrive(w.admin);
-    expect((await moveDriveToOrg(w.admin, adminDrive, { orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await moveDriveToOrg(w.admin, adminDrive, { credential: 'session', orgId: w.orgId }, deps)).ok).toBe(true);
 
     await setWho('members');
-    expect((await moveDriveToOrg(w.member, memberDrive, { orgId: w.orgId }, deps)).ok).toBe(true);
+    expect((await moveDriveToOrg(w.member, memberDrive, { credential: 'session', orgId: w.orgId }, deps)).ok).toBe(true);
   });
 });

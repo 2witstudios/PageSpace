@@ -246,8 +246,8 @@ describe('every org mutation writes its event', () => {
     expect((await answerDriveJoinRequest(credentialActor(lena.id, null), productId, ask3.request.id, 'approve')).ok).toBe(true);
     const notes = await factories.createDrive(lena.id, { name: 'Lena Notes', slug: `notes-${createId()}` });
     created.drives.push(notes.id);
-    expect((await moveDriveToOrg(lena.id, notes.id, { orgId }, deps)).ok).toBe(true);
-    expect((await moveDriveOutOfOrg(jono.id, notes.id, { implicitMembers: 'remove' }, deps)).ok).toBe(true);
+    expect((await moveDriveToOrg(lena.id, notes.id, { credential: 'session', orgId }, deps)).ok).toBe(true);
+    expect((await moveDriveOutOfOrg(jono.id, notes.id, { credential: 'session', implicitMembers: 'remove' }, deps)).ok).toBe(true);
     expect((await changeOrgDriveLead(lena.id, productId, { newLeadId: marcus.id }, deps)).ok).toBe(true);
 
     // ── admin access to a Private drive (ORG-4) ──────────────────────────────────

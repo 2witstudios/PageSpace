@@ -48,6 +48,7 @@ import { reattributeDriveStorageInTx, type StorageReattributionResult } from './
 import { transactionWithOrgAudit } from '../audit/org-audit';
 import { releaseDedicatedHostingInTx } from './app-hosting/dedicated-release';
 import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
+import type { CredentialRefusal, WalletCredential } from '../permissions/wallet-access';
 import type { VerifiedAuthentication } from '../auth/authentication-evidence';
 import { decideOrgAuthentication } from '../organizations/authentication-policy-core';
 
@@ -89,7 +90,8 @@ export type MoveDriveResult =
   | OrgDriveRefusal
   | OrgLapsedRefusal
   | PolicyRefusal
-  | DriveNotFound;
+  | DriveNotFound
+  | ({ ok: false; status: 403 } & CredentialRefusal);
 
 /** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
 /** SEC-2/SEC-3: the org's sign-in policy refuses the credential that asked. */
@@ -171,7 +173,7 @@ async function agentModelMoveInRefusal(tx: OrgDriveTx, driveId: string, policies
 export async function moveDriveToOrg(
   actorId: string,
   driveId: string,
-  input: { orgId: string; orgVisibility?: OrgDriveVisibility },
+  input: { orgId: string; orgVisibility?: OrgDriveVisibility; credential: WalletCredential },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
   // Org, then membership, then drive: departures hold membership before reassigning drives.
@@ -199,8 +201,8 @@ export async function moveDriveToOrg(
 
     // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction — refused,
     // before anything is written, while calls are in flight on it.
-    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'org', orgId: input.orgId } });
-    if (!rehomed.ok) return driveWalletInUse();
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, credential: input.credential, to: { kind: 'org', orgId: input.orgId } });
+    if (!rehomed.ok) return rehomed.reason === 'calls_in_flight' ? driveWalletInUse() : { ok: false as const, status: 403 as const, ...rehomed.refusal };
 
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx
@@ -241,7 +243,7 @@ export async function moveDriveToOrg(
 export async function moveDriveOutOfOrg(
   actorId: string,
   driveId: string,
-  input: { implicitMembers: ImplicitMembersChoice | null },
+  input: { implicitMembers: ImplicitMembersChoice | null; credential: WalletCredential },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
   const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
@@ -264,8 +266,8 @@ export async function moveDriveOutOfOrg(
 
     // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction —
     // refused, before anything is written, while calls are in flight on it.
-    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'personal', leadUserId: drive.ownerId } });
-    if (!rehomed.ok) return driveWalletInUse();
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, credential: input.credential, to: { kind: 'personal', leadUserId: drive.ownerId } });
+    if (!rehomed.ok) return rehomed.reason === 'calls_in_flight' ? driveWalletInUse() : { ok: false as const, status: 403 as const, ...rehomed.refusal };
 
     // The lead (ownerId) stays; the drive becomes their personal drive. Personal slugs are
     // not unique per owner, so the slug is kept as is.

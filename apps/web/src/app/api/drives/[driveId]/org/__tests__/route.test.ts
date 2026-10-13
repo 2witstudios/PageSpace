@@ -104,7 +104,7 @@ describe('/api/drives/[driveId]/org', () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ drive: { id: DRIVE, orgId: NORTHWIND }, storageReattribution: applied });
-      expect(moveDriveToOrg).toHaveBeenCalledWith(MARCUS, DRIVE, { orgId: NORTHWIND }, orgDriveServiceDeps);
+      expect(moveDriveToOrg).toHaveBeenCalledWith(MARCUS, DRIVE, { orgId: NORTHWIND, credential: 'session' }, orgDriveServiceDeps);
       expect(auditRequest).toHaveBeenCalledWith(
         expect.any(Request),
         expect.objectContaining({
@@ -164,7 +164,7 @@ describe('/api/drives/[driveId]/org', () => {
       });
 
       await PUT(request('PUT', { orgId: NORTHWIND, orgVisibility: 'RESTRICTED' }), context);
-      expect(moveDriveToOrg).toHaveBeenCalledWith(MARCUS, DRIVE, { orgId: NORTHWIND, orgVisibility: 'RESTRICTED' }, orgDriveServiceDeps);
+      expect(moveDriveToOrg).toHaveBeenCalledWith(MARCUS, DRIVE, { orgId: NORTHWIND, orgVisibility: 'RESTRICTED', credential: 'session' }, orgDriveServiceDeps);
 
       const bad = await PUT(request('PUT', { orgId: NORTHWIND, orgVisibility: 'PUBLIC' }), context);
       expect(bad.status).toBe(400);
@@ -207,7 +207,7 @@ describe('/api/drives/[driveId]/org', () => {
         const response = await DELETE(request('DELETE', { implicitMembers }), context);
 
         expect(response.status).toBe(200);
-        expect(moveDriveOutOfOrg).toHaveBeenCalledWith(PRIYA, DRIVE, { implicitMembers }, orgDriveServiceDeps);
+        expect(moveDriveOutOfOrg).toHaveBeenCalledWith(PRIYA, DRIVE, { implicitMembers, credential: 'session' }, orgDriveServiceDeps);
         expect(auditRequest).toHaveBeenCalledWith(
           expect.any(Request),
           expect.objectContaining({ details: { operation: 'org_move_out', orgId: NORTHWIND, storageReattribution: 'applied' } })

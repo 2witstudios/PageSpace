@@ -221,7 +221,7 @@ describe('moving a drive re-attributes its bytes', () => {
     await setCounter(marcus, 1750);
     await setCounter(lena, 0);
 
-    const movedIn = await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
+    const movedIn = await moveDriveToOrg(marcus, product, { credential: 'session', orgId: northwind }, deps);
 
     expect(movedIn).toMatchObject({ ok: true, storageReattribution: { status: 'applied', movedBytes: 1250 } });
     expect(await counter(marcus)).toBe(500);
@@ -230,7 +230,7 @@ describe('moving a drive re-attributes its bytes', () => {
     // Conservation: every byte is billed to exactly one party.
     expect((await counter(marcus)) + (await counter(lena)) + (await getOrgStorageQuota(northwind)).usedBytes).toBe(1750);
 
-    const movedOut = await moveDriveOutOfOrg(jono, product, { implicitMembers: 'keep' }, deps);
+    const movedOut = await moveDriveOutOfOrg(jono, product, { credential: 'session', implicitMembers: 'keep' }, deps);
 
     expect(movedOut).toMatchObject({ ok: true, storageReattribution: { status: 'applied', movedBytes: 1250 } });
     expect(await counter(marcus)).toBe(1750);
@@ -243,7 +243,7 @@ describe('moving a drive re-attributes its bytes', () => {
     await seedFile(product, lena, 250);
     await setCounter(marcus, 250);
 
-    await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
+    await moveDriveToOrg(marcus, product, { credential: 'session', orgId: northwind }, deps);
 
     expect(await db.select().from(storageEvents).where(eq(storageEvents.userId, lena))).toEqual([]);
     const events = await db.select().from(storageEvents).where(eq(storageEvents.userId, marcus));
@@ -271,7 +271,7 @@ describe('moving a drive re-attributes its bytes', () => {
       guestPreset: 'shared-cpu-1x-512', status: 'active', currentPeriodStart: new Date(), currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
     });
     try {
-      const moved = await moveDriveOutOfOrg(jono, product, { implicitMembers: 'keep' }, deps);
+      const moved = await moveDriveOutOfOrg(jono, product, { credential: 'session', implicitMembers: 'keep' }, deps);
 
       expect(moved.ok).toBe(true);
       const [reclaim] = await db.select().from(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
@@ -298,7 +298,7 @@ describe('moving a drive re-attributes its bytes', () => {
       guestPreset: 'shared-cpu-1x-512', status: 'active', currentPeriodStart: new Date(), currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
     });
     try {
-      const moved = await moveDriveToOrg(marcus, product, { orgId: northwind }, deps);
+      const moved = await moveDriveToOrg(marcus, product, { credential: 'session', orgId: northwind }, deps);
 
       expect(moved.ok).toBe(true);
       const [reclaim] = await db.select().from(appHostingStripeReclaims).where(eq(appHostingStripeReclaims.stripeSubscriptionId, subId));
@@ -316,7 +316,7 @@ describe('moving a drive re-attributes its bytes', () => {
     await setCounter(marcus, 1000);
 
     // Lena does not own the drive, so she cannot move it in.
-    const refused = await moveDriveToOrg(lena, product, { orgId: northwind }, deps);
+    const refused = await moveDriveToOrg(lena, product, { credential: 'session', orgId: northwind }, deps);
 
     expect(refused.ok).toBe(false);
     expect(await counter(marcus)).toBe(1000);

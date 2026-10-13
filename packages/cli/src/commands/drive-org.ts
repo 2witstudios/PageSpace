@@ -5,7 +5,8 @@
  * `verb.ts`. Moving a drive out (which can remove org members) needs `--yes` or a TTY "y".
  *
  * The services behind the routes authorize through the web's one org authorization function
- * (ORG-5); the key must be unscoped and satisfy the org's sign-in policy.
+ * (ORG-5); the key must be unscoped and satisfy the org's sign-in policy. Moves of
+ * a drive with a wallet require a session (D-OW-26); keys move only walletless drives.
  */
 import type { PageSpaceClient } from '@pagespace/sdk';
 import { IMPLICIT_MEMBERS_CHOICES, JOIN_REQUEST_DECISIONS } from '@pagespace/sdk';

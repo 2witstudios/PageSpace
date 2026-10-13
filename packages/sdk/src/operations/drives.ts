@@ -195,7 +195,7 @@ export const moveDriveToOrg = defineOperation({
   }),
   outputSchema: moveOutputSchema,
   requiredScope: 'account',
-  description: `Move a personal drive you own into an organization you belong to (DRV-2): it becomes org-owned, you stay its lead, and its stored files count against the org. Home drives never move; a lapsed org refuses. ${ORG_DRIVE_KEY_RULES}`,
+  description: `Move a personal drive you own into an organization you belong to (DRV-2): it becomes org-owned, you stay its lead, and its stored files count against the org. Home drives never move; a lapsed org refuses. If the drive has a wallet, moving its funds, control and allocation requires a signed-in session (403 mcp_token_cannot_move_money); an account key may move only a walletless drive. ${ORG_DRIVE_KEY_RULES}`,
 });
 
 export const moveDriveOutOfOrg = defineOperation({
@@ -210,7 +210,7 @@ export const moveDriveOutOfOrg = defineOperation({
   outputSchema: moveOutputSchema,
   requiredScope: 'account',
   destructive: true,
-  description: `Move a drive out of its organization back to its lead's personal ownership (DRV-2). Org Owner or Admin only. implicitMembers chooses whether org members keep access as invited members ("keep") or lose it ("remove"). ${ORG_DRIVE_KEY_RULES}`,
+  description: `Move a drive out of its organization back to its lead's personal ownership (DRV-2). Org Owner or Admin only. implicitMembers chooses whether org members keep access as invited members ("keep") or lose it ("remove"). If the drive has a wallet, moving its funds, control and allocation requires a signed-in session (403 mcp_token_cannot_move_money); an account key may move only a walletless drive. ${ORG_DRIVE_KEY_RULES}`,
 });
 
 export const setDriveOrgVisibility = defineOperation({

@@ -235,7 +235,7 @@ describe('a lapsed org, every capability at once (real Postgres)', () => {
     expect(deliver).not.toHaveBeenCalled();
     // Creating an org drive, or taking one in.
     expect(await createOrgDrive(ids.marcus, { authentication: null, name: 'Engineering', orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
-    expect(await moveDriveToOrg(ids.dana, personalDriveId, { orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
+    expect(await moveDriveToOrg(ids.dana, personalDriveId, { credential: 'session', orgId }, deps)).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
     // The pool and allocations.
     expect(await updateDriveWallet(credentialActor(ids.priya, null), productId, { allocationCents: 130_000 }, 'session')).toEqual(lapsedWallet);
     expect(await topUpDriveWallet(credentialActor(ids.priya, null), productId, { amountCents: 500, idempotencyKey: createId() }, 'session')).toEqual(lapsedWallet);

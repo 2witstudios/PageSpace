@@ -15,7 +15,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
-import { creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
 import { wallets, walletFundingLegs, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -27,6 +27,9 @@ import {
 } from '../wallet-funding-shell';
 import { isOrgActive } from '../../organizations/status';
 import { drawWalletFundingLegs } from '../wallet-legs';
+import { canConsumeAI } from '../credit-gate';
+import { consumeCredits } from '../credit-consume';
+import { providerDollarsCoveredByCents } from '../money-model';
 
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
@@ -505,5 +508,39 @@ describe('wallet funding against Postgres', () => {
     }
     expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual([]);
     expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toEqual([]);
+  });
+  it.each(['root', 'child'] as const)('keeps an admitted %s call backed when its owner tries to donate the reserved money', async (heldOn) => {
+    if (!dbAvailable) return;
+    const owner = await user();
+    await db.update(users).set({ subscriptionTier: 'pro' }).where(eq(users.id, owner));
+    const source = await factories.createDrive(owner);
+    const target = await factories.createDrive(owner);
+    created.drives.push(source.id, target.id);
+    const root = await personalRoot(owner, 0);
+    await db.update(wallets).set({ monthlyRemainingCents: 150, monthlyAllowanceCents: 150 }).where(eq(wallets.id, root));
+    const child = await childWallet({ userId: owner, subjectType: 'drive', subjectId: source.id, parentWalletId: root, monthlyAllowanceCents: 150 });
+    const targetWallet = await childWallet({ userId: owner, subjectType: 'drive', subjectId: target.id, parentWalletId: root, donationsEnabled: true });
+    const chargedWallet = heldOn === 'root' ? root : child;
+    const gate = await canConsumeAI(owner, 'pro', {
+      estCostCents: 80,
+      spend: heldOn === 'child' ? { kind: 'drive', driveId: source.id, chosen: 'drive_wallet' } : { kind: 'personal' },
+    });
+    expect(gate).toMatchObject({ allowed: true, walletId: chargedWallet });
+    expect(gate.holdId).toEqual(expect.any(String));
+    const [hold] = await db.select().from(creditHolds).where(eq(creditHolds.id, gate.holdId ?? ''));
+    expect(hold).toMatchObject({ walletId: chargedWallet, estCents: 80 });
+    expect(hold.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect((await walletRow(root)).monthlyRemainingCents).toBe(150);
+    expect(await donateToDriveWallet({ donorUserId: owner, targetWalletId: targetWallet, donationId: createId(), amountCents: 150 })).toEqual({ kind: 'refused', reason: 'insufficient_funds' });
+    expect((await walletRow(root)).monthlyRemainingCents).toBe(150);
+    expect((await walletRow(targetWallet)).topupRemainingCents).toBe(0);
+    expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, targetWallet))).toEqual([]);
+    expect(await consumeCredits({ userId: owner, walletId: chargedWallet, holdId: gate.holdId, aiUsageLogId: createId(), costDollars: providerDollarsCoveredByCents(80) })).toBe('settled');
+    expect(await walletRow(root)).toMatchObject({ monthlyRemainingCents: 70, debtCents: 0 });
+    expect((await walletRow(child)).spentCents).toBe(heldOn === 'child' ? 80 : 0);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, owner))).toEqual([]);
+    const ledger = await db.select().from(creditLedger).where(eq(creditLedger.userId, owner));
+    expect(ledger.filter(row => row.entryType === 'usage')).toEqual([expect.objectContaining({ walletId: chargedWallet, amountCents: -80 })]);
+    expect(ledger.filter(row => row.entryType === 'debt')).toEqual([]);
   });
 });

@@ -10,13 +10,14 @@
 import { db } from '@pagespace/db/db';
 import { inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { getDrivePolicies, getOrgPolicies, getDerivedPageOrgIds } from '@pagespace/lib/organizations/policy-reader';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import {
   agentModelSaveDecision,
   allowedModelCatalog,
   drivesAllowingModel,
+  modelDecision,
 } from '@pagespace/lib/organizations/org-action-decisions';
 import type { PolicyDecision } from '@pagespace/lib/organizations/sharing-decisions';
 
@@ -38,6 +39,17 @@ export async function offeredModels(driveId: string | null): Promise<Record<stri
   return allowedModelCatalog(await policiesOf(driveId), catalog);
 }
 
+/** The retained contributing orgs whose current policy allows this model. */
+export async function orgsReadableByModel(
+  use: { provider: string; modelId: string },
+  orgIds: readonly string[],
+): Promise<string[]> {
+  const decisions = await Promise.all([...new Set(orgIds)].map(async (orgId) => ({
+    orgId, allowed: modelDecision(await getOrgPolicies(orgId), use).ok,
+  })));
+  return decisions.filter(({ allowed }) => allowed).map(({ orgId }) => orgId);
+}
+
 /**
  * The part of a person's scope a background call on this model (memory discovery, pulse) may read: their drives
  * whose org allows the model, and their accessible pages that live in one. Such a call runs in no drive and spends
@@ -55,9 +67,11 @@ export async function scopeReadableByModel(
   const candidates = [...new Set([...scope.driveIds, ...pageDrives.map((p) => p.driveId)])];
   const drives = await Promise.all(candidates.map(async (driveId) => ({ driveId, policies: await policiesOf(driveId) })));
   const readable = new Set(drivesAllowingModel(drives, use));
+  const derived = await getDerivedPageOrgIds(pageIds);
+  const readableOrgs = new Set(await orgsReadableByModel(use, [...derived.values()].flat()));
   return {
     driveIds: scope.driveIds.filter((id) => readable.has(id)),
-    pageIds: pageDrives.filter((p) => readable.has(p.driveId)).map((p) => p.id),
+    pageIds: pageDrives.filter((p) => readable.has(p.driveId) && (derived.get(p.id) ?? []).every((id) => readableOrgs.has(id))).map((p) => p.id),
   };
 }
 

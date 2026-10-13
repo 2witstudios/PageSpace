@@ -376,7 +376,7 @@ describe('a pending request closes when what it asked for is gone', () => {
   it('DRV-6 (partial) the drive moving out of the org closes every request on it', async () => {
     const { request } = await requestAs(lena);
 
-    expect(await moveDriveOutOfOrg(priya, research, { implicitMembers: 'remove' }, orgDriveServiceDeps)).toMatchObject({ ok: true });
+    expect(await moveDriveOutOfOrg(priya, research, { credential: 'session', implicitMembers: 'remove' }, orgDriveServiceDeps)).toMatchObject({ ok: true });
 
     await expectClosed(request.id);
   });

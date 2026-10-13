@@ -157,8 +157,8 @@ describe('the org floor under an Open drive default role', () => {
     const mine = (await factories.createDrive(w.owner)).id;
     created.driveIds.push(mine);
     await role(mine, 'Viewer', true, VIEW);
-    expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'POLICY_OPEN_ROLE_FLOOR' });
-    expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
+    expect(await moveDriveToOrg(w.owner, mine, { credential: 'session', orgId: w.orgId }, deps)).toMatchObject({ ok: false, code: 'POLICY_OPEN_ROLE_FLOOR' });
+    expect(await moveDriveToOrg(w.owner, mine, { credential: 'session', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps)).toMatchObject({ ok: true });
   });
 
   it('POL-6 (partial) the UI path under an EDIT floor: create and move in with the UI default visibility (Restricted), give an Edit default role, then switch to Open', async () => {
@@ -172,7 +172,7 @@ describe('the org floor under an Open drive default role', () => {
     // Move a drive in: the dialog's default visibility is admitted too, whatever the drive's default role.
     const mine = (await factories.createDrive(w.owner)).id;
     created.driveIds.push(mine);
-    expect(await moveDriveToOrg(w.owner, mine, { orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps)).toMatchObject({ ok: true });
+    expect(await moveDriveToOrg(w.owner, mine, { credential: 'session', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps)).toMatchObject({ ok: true });
     // The drive row's visibility select: Open is refused until an Edit default exists, then accepted.
     expect(await changeDriveVisibility(w.owner, made.drive.id, { orgVisibility: 'OPEN' }, deps)).toMatchObject({ ok: false, code: 'POLICY_OPEN_ROLE_FLOOR' });
     await role(made.drive.id, 'Editor', true, EDIT);

@@ -89,6 +89,7 @@ export type WalletCredential = 'session' | 'mcp';
 /** Every write the wallet surfaces offer: each wallet action but `view`, and the source choices. */
 export type WalletWrite =
   | Exclude<WalletAction, 'view' | 'view_spend_by_member'>
+  | 'transfer'
   | 'set_conversation_source'
   | 'set_default_source'
   /** SPEND-5 "Always my own credits", globally or for one drive. */

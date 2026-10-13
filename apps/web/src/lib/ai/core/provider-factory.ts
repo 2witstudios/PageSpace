@@ -18,7 +18,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { getDrivePolicies, getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
 import { getManagedProviderKey } from './ai-utils';
 import { AI_PROVIDERS, ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
@@ -55,6 +55,8 @@ export interface ProviderFactoryOptions {
    * caller's, whoever calls.
    */
   contentDriveIds?: readonly string[];
+  /** Retained provenance of derived input, including sources no longer represented by a current drive. */
+  contentOrgIds?: readonly string[];
 }
 
 /**
@@ -65,9 +67,17 @@ export interface ProviderFactoryOptions {
 export async function orgModelRefusal(
   driveIds: ReadonlyArray<string | null | undefined>,
   uses: ReadonlyArray<{ modelId: string; provider: string }>,
+  contentOrgIds: readonly string[] = [],
 ): Promise<ProviderError | null> {
   for (const driveId of new Set(driveIds.filter((id): id is string => Boolean(id)))) {
     const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  for (const orgId of new Set(contentOrgIds)) {
+    const policies = await getOrgPolicies(orgId);
     for (const use of uses) {
       const decision = modelDecision(policies, use);
       if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
@@ -130,6 +140,7 @@ export async function createAIProvider(
   const refusal = await orgModelRefusal(
     [options.driveId, ...(options.contentDriveIds ?? [])],
     [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])],
+    options.contentOrgIds,
   );
   if (refusal) return refusal;
 
@@ -322,10 +333,10 @@ function providerOfModelId(modelId: string): string {
  */
 export async function createImageProvider(
   request: { model: string },
-  options: Pick<ProviderFactoryOptions, 'driveId' | 'contentDriveIds'>,
+  options: Pick<ProviderFactoryOptions, 'driveId' | 'contentDriveIds' | 'contentOrgIds'>,
 ): Promise<{ client: OpenRouterImageClient; provider: string; modelName: string } | ProviderError> {
   const provider = providerOfModelId(request.model);
-  const refusal = await orgModelRefusal([options.driveId, ...(options.contentDriveIds ?? [])], [{ modelId: request.model, provider }]);
+  const refusal = await orgModelRefusal([options.driveId, ...(options.contentDriveIds ?? [])], [{ modelId: request.model, provider }], options.contentOrgIds);
   if (refusal) return refusal;
   const managed = getManagedProviderKey('openrouter');
   if (!managed?.apiKey) return notConfigured('OpenRouter');

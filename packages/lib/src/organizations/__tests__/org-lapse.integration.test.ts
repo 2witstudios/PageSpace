@@ -248,12 +248,12 @@ describe('org lapse gates (real Postgres)', () => {
 
     const created = await createOrgDrive(w.ids.marcus, { authentication: null, name: 'Engineering', orgId: w.orgId }, deps);
     expect(created).toEqual({ ok: false, code: 'org_lapsed', status: 402, message: ORG_LAPSED_MESSAGE });
-    const movedIn = await moveDriveToOrg(w.ids.dana, w.personalDriveId, { orgId: w.orgId }, deps);
+    const movedIn = await moveDriveToOrg(w.ids.dana, w.personalDriveId, { credential: 'session', orgId: w.orgId }, deps);
     expect(movedIn).toMatchObject({ ok: false, code: 'org_lapsed', status: 402 });
     const [personal] = await db.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, w.personalDriveId));
     expect(personal.orgId).toBeNull();
 
-    const movedOut = await moveDriveOutOfOrg(w.ids.priya, w.productId, { implicitMembers: 'keep' }, deps);
+    const movedOut = await moveDriveOutOfOrg(w.ids.priya, w.productId, { credential: 'session', implicitMembers: 'keep' }, deps);
     expect(movedOut.ok).toBe(true);
 
     // Reactivated: creation works again.
