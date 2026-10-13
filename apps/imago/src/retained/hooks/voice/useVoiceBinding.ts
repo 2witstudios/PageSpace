@@ -5,7 +5,7 @@ import { useMemo } from 'react';
 import { useDashboardContext } from '@/retained/hooks/useDashboardContext';
 import { useSidebarAgentStore } from '@/retained/hooks/page-agents';
 import { usePageAgentDashboardStore } from '@/retained/stores/page-agents';
-import { useGlobalChatConversation } from '@/retained/contexts/GlobalChatContext';
+import { useOptionalGlobalChatConversation } from '@/retained/contexts/GlobalChatContext';
 import { resolveVoiceBinding, type VoiceBinding } from '@/retained/lib/ai/realtime/voice-binding';
 
 /**
@@ -30,7 +30,8 @@ export function useVoiceBinding(): VoiceBinding {
   const dashboardAgent = usePageAgentDashboardStore((state) => state.selectedAgent);
   const dashboardConversationId = usePageAgentDashboardStore((state) => state.conversationId);
 
-  const { currentConversationId: globalConversationId } = useGlobalChatConversation();
+  // Imago mounts no GlobalChatProvider; there the global thread is simply absent.
+  const globalConversationId = useOptionalGlobalChatConversation()?.currentConversationId ?? null;
 
   return useMemo(
     () =>

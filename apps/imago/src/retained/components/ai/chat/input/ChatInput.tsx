@@ -1,7 +1,7 @@
 'use client';
 
 import React, { forwardRef, useRef, useImperativeHandle, useEffect, useCallback } from 'react';
-import { Lock } from 'lucide-react';
+import { AtSign, Lock } from 'lucide-react';
 import type { UIMessage } from 'ai';
 import { cn } from '@/retained/lib/utils';
 import { ChatTextarea, type ChatTextareaRef } from './ChatTextarea';
@@ -57,6 +57,10 @@ export interface ChatInputProps {
   crossDrive?: boolean;
   /** Hide the model/provider selector in footer (for compact layouts) */
   hideModelSelector?: boolean;
+  /** Imago's composer (C-Chat-Home): a "Mention a page" button that starts an @-mention, as typing @ does. */
+  showMention?: boolean;
+  /** Imago's voice-call toggle, shown beside the Mention button when showMention is set. */
+  voiceCall?: React.ReactNode;
   /** Style variant: 'main' for InputCard context, 'sidebar' for sidebar contrast */
   variant?: 'main' | 'sidebar';
   /** Number of running MCP servers */
@@ -153,6 +157,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       commandDriveId,
       crossDrive = false,
       hideModelSelector = false,
+      showMention = false,
+      voiceCall = null,
       variant = 'main',
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -441,12 +447,34 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           disabled={isStreaming || effectiveDisabled}
           compact={compact}
           leading={
-            compact && hasVision && onAddFiles ? (
-              <AttachButton
-                onFiles={onAddFiles}
-                disabled={isStreaming || effectiveDisabled}
-                className="h-8 w-8 self-center"
-              />
+            compact && ((hasVision && onAddFiles) || showMention) ? (
+              <>
+                {hasVision && onAddFiles ? (
+                  <AttachButton
+                    onFiles={onAddFiles}
+                    disabled={isStreaming || effectiveDisabled}
+                    className="h-8 w-8 self-center"
+                  />
+                ) : null}
+                {showMention ? (
+                  <button
+                    type="button"
+                    aria-label="Mention a page"
+                    title="Mention a page"
+                    disabled={effectiveDisabled}
+                    className="flex h-8 w-8 items-center justify-center self-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                    onClick={() => {
+                      // Focus the field and type "@" there, so the mention picker opens exactly
+                      // as it does for a typed @ (the suggestion system listens to input).
+                      textareaRef.current?.focus();
+                      document.execCommand('insertText', false, '@');
+                    }}
+                  >
+                    <AtSign className="h-4 w-4" />
+                  </button>
+                ) : null}
+                {voiceCall}
+              </>
             ) : undefined
           }
           trailing={compact ? actions : undefined}

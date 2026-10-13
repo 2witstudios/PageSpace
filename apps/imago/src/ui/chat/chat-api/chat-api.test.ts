@@ -131,8 +131,30 @@ describe('fetchDriveAgents()', () => {
       should: 'give every well-formed one in the order given, an untitled one by a stand-in name, and drop the rest',
       actual: await fetchDriveAgents(web.client, 'd1'),
       expected: [
-        { id: 'a1', title: 'Support' },
-        { id: 'a2', title: 'Untitled agent' },
+        { id: 'a1', title: 'Support', parentId: 'root' },
+        { id: 'a2', title: 'Untitled agent', parentId: 'root' },
+      ],
+    });
+  });
+
+  test('an agent’s model and folder', async () => {
+    const web = fakeWeb({
+      [`GET ${chatPaths.driveAgents('d1')}`]: () =>
+        Response.json(
+          driveAgentsBody([
+            { id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5', parentId: 'f-launch' },
+            { id: 'a2', title: 'Inbox Triage', parentId: null },
+          ]),
+        ),
+    });
+
+    assert({
+      given: 'an agent with its own model in a folder, and one on the default model with no parent',
+      should: 'carry the model and the folder for the picker row, omitting the default model and a missing parent',
+      actual: await fetchDriveAgents(web.client, 'd1'),
+      expected: [
+        { id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5', parentId: 'f-launch' },
+        { id: 'a2', title: 'Inbox Triage' },
       ],
     });
   });
