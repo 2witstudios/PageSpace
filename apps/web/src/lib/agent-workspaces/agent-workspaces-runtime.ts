@@ -88,7 +88,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { countOpenConversations } from '@/lib/agent-workspaces/conversation-cap';
-import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
+import { ConversationUnavailableError, createConversationInSessionWith } from '@/lib/agent-workspaces/create-conversation-in-workspace';
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import { createId } from '@paralleldrive/cuid2';
 import { admit, expel } from '@pagespace/lib/agent-workspaces/workspace-membership';
@@ -475,6 +475,8 @@ export async function createConversationInSession(input: {
   workspaceId: string;
   /** Display label written at birth (a spawned worker's name). */
   title?: string | null;
+  /** Source validated by the session-only chooser; written atomically only on creation. */
+  initialChosenWalletId?: string | null;
   /**
    * The spawning conversation, when it shares this grid — never evicted by its
    * own spawn. Only `spawn_session` has one.
@@ -492,17 +494,20 @@ export async function createConversationInSession(input: {
   await createConversationInSessionWith<DbExecutor>(
     {
       ...buildClaimDeps(input.actor),
-      createPageConversation: ({ conversationId, userId, agentPageId, title }, tx) =>
+      createPageConversation: ({ conversationId, userId, agentPageId, title, initialChosenWalletId }, tx) =>
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
           afterCommit: queue,
+          ...(initialChosenWalletId !== undefined && { initialChosenWalletId }),
         }),
-      createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
-        await resolveOrCreateConversation(userId, conversationId, tx, {
+      createGlobalConversation: async ({ conversationId, userId, title, initialChosenWalletId }, tx) => {
+        const created = await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
           afterCommit: queue,
+          ...(initialChosenWalletId !== undefined && { initialChosenWalletId }),
         });
+        if (initialChosenWalletId !== undefined && !created.isNew) throw new ConversationUnavailableError();
       },
       findConversationIn: async (conversationId, tx) => {
         const [row] = await tx

@@ -22,6 +22,7 @@ vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
 // Mock the repository seam (boundary)
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   checkSessionAccess: vi.fn(async () => ({ allowed: true })),
+  findSessionRecord: vi.fn(async () => ({ driveId: 'workspace-drive' })),
   createConversationInSession: vi.fn(async () => undefined),
 }));
 
@@ -50,6 +51,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   generateTitle: vi.fn((preview: string) => preview.length > 50 ? preview.substring(0, 50) + '...' : preview),
 }));
 
+vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({ getDriveSpend: vi.fn() }));
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
@@ -743,3 +745,60 @@ describe('POST session binding (sessionId in body)', () => {
     expect(response.status).toBe(400);
   });
 });
+
+
+describe('SPEND-2 (partial) SPEND-3 (partial) initial page-agent source selection', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: true });
+    vi.mocked(runtime.createConversationInSession).mockResolvedValue(undefined);
+    vi.mocked(conversationRepository.createConversation).mockResolvedValue('created');
+    vi.mocked(getDriveSpend).mockResolvedValue({ ok: true, driveId: mockDriveId, options: [{ walletId: 'wallet-own' }] as never, resolved: { kind: 'spend', walletId: 'wallet-own' } as never });
+  });
+  const choose = (body: Record<string, unknown>) => POST(createRequest(mockAgentId, 'POST', body), createContext(mockAgentId));
+  it('Given an authorized source choice, should validate the actual agent drive and carry the wallet into the creation insert', async () => {
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(200);
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId, via: 'credential' }), mockDriveId);
+    expect(conversationRepository.createConversation).toHaveBeenCalledWith(expect.any(String), mockUserId, mockAgentId, { initialChosenWalletId: 'wallet-own' });
+  });
+  it('Given an unavailable wallet or inaccessible source drive, should create nothing', async () => {
+    expect((await choose({ walletId: 'wallet-other' })).status).toBe(400);
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+    vi.mocked(getDriveSpend).mockResolvedValueOnce({ ok: false, status: 403, code: 'org_reauthentication_required', message: 'Sign in again' });
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(403);
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+  });
+  it('Given an MCP source choice, should refuse money authority before creation while a plain MCP create still works', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId, tokenType: 'mcp', tokenId: 'token', allowedDriveIds: [], role: 'user', tokenVersion: 0, adminRoleVersion: 0 });
+    const response = await choose({ walletId: 'wallet-own' });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+    expect(getDriveSpend).not.toHaveBeenCalled();
+    expect((await choose({})).status).toBe(200);
+  });
+  it('Given a page the caller cannot view, should never validate a source or create a row', async () => {
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(403);
+    expect(getDriveSpend).not.toHaveBeenCalled();
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+  });
+  it('Given an id collision, should refuse an initial choice without pretending it was stored', async () => {
+    vi.mocked(conversationRepository.createConversation).mockResolvedValue('exists');
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(409);
+  });
+  it('Given a workspace-bound agent, should validate the workspace drive and pass the atomic choice to its transactional creator', async () => {
+    expect((await choose({ walletId: 'wallet-own', workspaceId: 'ws1' })).status).toBe(200);
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'workspace-drive');
+    expect(createConversationInSession).toHaveBeenCalledWith(expect.objectContaining({ initialChosenWalletId: 'wallet-own' }));
+  });
+});
+
+import { getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';

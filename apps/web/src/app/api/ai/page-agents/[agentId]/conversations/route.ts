@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
-import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { checkSessionAccess, createConversationInSession, findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { listSpendChoices } from '@pagespace/lib/billing/spend-resolution';
+import { credentialRefusalFor } from '@pagespace/lib/permissions/wallet-access';
+import { walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
 import {
   AgentNotInSessionDriveError,
   ConversationUnavailableError,
@@ -228,6 +232,27 @@ export async function POST(
       }
     }
 
+    const hasInitialChoice = Object.prototype.hasOwnProperty.call(body, 'walletId');
+    let initialChosenWalletId: string | null | undefined;
+    if (hasInitialChoice) {
+      const refusal = credentialRefusalFor(walletCredentialOf(auth), 'set_conversation_source');
+      if (refusal) return walletErrorResponse({ ok: false, status: 403, ...refusal });
+      if (body.walletId !== null && (typeof body.walletId !== 'string' || !body.walletId.trim() || body.walletId.length > 64)) {
+        return walletErrorResponse({ ok: false, status: 400, code: 'invalid_request', message: 'walletId must be a wallet id or null' });
+      }
+      // SPEND-7: a bound thread spends in its workspace, not the agent's home.
+      const workspace = sessionId === null ? null : await findSessionRecord(sessionId);
+      if (sessionId !== null && !workspace) return NextResponse.json({ error: 'Workspace not found or access denied' }, { status: 404 });
+      const spendDriveId = sessionId === null ? agent.driveId : workspace?.driveId ?? null;
+      const preview = spendDriveId ? await getDriveSpend(actorFromAuth(auth), spendDriveId) : null;
+      if (preview && !preview.ok) return walletErrorResponse(preview);
+      const choices = preview?.ok ? preview.options : await listSpendChoices(auth.userId, null);
+      if (body.walletId !== null && !choices.some((choice) => choice.walletId === body.walletId)) {
+        return walletErrorResponse({ ok: false, status: 400, code: 'wallet_not_available', message: 'That wallet is not available in this conversation' });
+      }
+      initialChosenWalletId = body.walletId;
+    }
+
     // Eagerly persist ownership so privacy filtering works immediately.
     // isShared defaults to false — conversation is private to this user.
     if (sessionId !== null) {
@@ -244,6 +269,7 @@ export async function POST(
           actor: actorFromAuth(auth),
           agentPageId: agentId,
           workspaceId: sessionId,
+          ...(hasInitialChoice && { initialChosenWalletId }),
           ...(activeNodeId === null ? {} : { activeNodeId }),
         });
       } catch (error) {
@@ -266,7 +292,12 @@ export async function POST(
         throw error;
       }
     } else {
-      await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+      const created = hasInitialChoice
+        ? await conversationRepository.createConversation(conversationId, auth.userId, agentId, { initialChosenWalletId })
+        : await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+      if (hasInitialChoice && created !== 'created') {
+        return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+      }
     }
 
     const response = {

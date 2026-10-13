@@ -245,6 +245,8 @@ export const conversationRepository = {
     pageId: string,
     opts?: {
       isShared?: boolean;
+      /** The session wallet chooser validated this source before creating the draft. */
+      initialChosenWalletId?: string | null;
       title?: string;
       triggeredBy?: ConversationEventTriggeredBy;
       /**
@@ -291,6 +293,7 @@ export const conversationRepository = {
         contextId: pageId,
         isShared: opts?.isShared ?? false,
         title: opts?.title ?? null,
+        ...(opts?.initialChosenWalletId !== undefined && { chosenWalletId: opts.initialChosenWalletId }),
         updatedAt: new Date(),
       })
       .onConflictDoNothing()
