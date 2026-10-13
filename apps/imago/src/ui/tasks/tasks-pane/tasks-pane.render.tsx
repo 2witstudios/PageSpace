@@ -2,10 +2,24 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Icon } from '../../components/icon/icon';
 import { ListGroup } from '../../components/list-group/list-group';
-import { ProgressMeter } from '../../components/progress-meter/progress-meter';
 import { renderEmptyState, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import type { Progress } from '../task-tree/task-tree';
-import { taskListEmptyClass, taskListRowClass, taskListRowTitleClass, tasksPaneMessageClass } from './tasks-pane-class';
+import type { TaskViewId } from '../task-views/task-views';
+import {
+  newListClass,
+  taskListBarClass,
+  taskListCountClass,
+  taskListEmptyClass,
+  taskListHeadClass,
+  taskListMetaClass,
+  taskListRowClass,
+  taskListRowTitleClass,
+  taskViewClass,
+  taskViewCountClass,
+  taskViewDotClass,
+  tasksPaneLabelClass,
+  tasksPaneMessageClass,
+} from './tasks-pane-class';
 
 export type TasksPaneRenderProps =
   | { readonly state: 'loading' }
@@ -26,26 +40,80 @@ export function renderTasksPane(props: TasksPaneRenderProps): ReactNode {
   return <ListGroup label="Task lists">{props.rows}</ListGroup>;
 }
 
+export type TaskViewRenderProps = {
+  readonly id: TaskViewId;
+  readonly label: string;
+  readonly dotClass: string;
+  readonly warn: boolean;
+  /** undefined while the counts load. */
+  readonly count: number | undefined;
+  readonly selected: boolean;
+  readonly onSelect: () => void;
+};
+
+/** The smart views, each with its count; picking one filters the ground. */
+export function renderTaskViews({ views, onNewList }: { readonly views: readonly TaskViewRenderProps[]; readonly onNewList: () => void }): ReactNode {
+  return (
+    <section aria-label="Views" className="flex flex-col gap-1">
+      <button type="button" className={newListClass} onClick={onNewList}>
+        <Icon name="plus" />
+        New list
+      </button>
+      <p className={`${tasksPaneLabelClass} mt-3`}>Views</p>
+      {views.map((view) => {
+        const warn = view.warn && view.count !== undefined && view.count > 0;
+        return (
+          <button
+            key={view.id}
+            type="button"
+            aria-pressed={view.selected}
+            className={taskViewClass(view.selected)}
+            onClick={view.onSelect}
+          >
+            <span aria-hidden="true" className={taskViewDotClass(view.dotClass)} />
+            <span className="min-w-0 flex-1 truncate">{view.label}</span>
+            <span className={taskViewCountClass(warn)}>{view.count ?? ''}</span>
+          </button>
+        );
+      })}
+    </section>
+  );
+}
+
 export type TaskListRowRenderProps = {
   readonly href: string;
   readonly title: string;
   readonly selected: boolean;
   /** Every loaded task in the list; absent until it loads. */
   readonly progress: Progress | undefined;
+  /** The list's meta line; empty when nothing counts. */
+  readonly meta: string;
 };
 
-/** One list: a link to open it, with how much of it is done. */
-export function renderTaskListRow({ href, title, selected, progress }: TaskListRowRenderProps): ReactNode {
+/** One list: a link to open it, with how much of it is done and what needs attention. */
+export function renderTaskListRow({ href, title, selected, progress, meta }: TaskListRowRenderProps): ReactNode {
   return (
     <li>
       <Link href={href} prefetch className={taskListRowClass(selected)} aria-current={selected ? 'page' : undefined}>
-        <Icon name="tasks" />
-        <span className={taskListRowTitleClass}>{title}</span>
-        {progress === undefined ? null : progress.total === 0 ? (
-          <span className={taskListEmptyClass}>No tasks</span>
-        ) : (
-          <ProgressMeter done={progress.done} total={progress.total} unit="tasks" />
+        <span className={taskListHeadClass}>
+          <Icon name="tasks" />
+          <span className={taskListRowTitleClass}>{title}</span>
+          {progress === undefined ? null : progress.total === 0 ? (
+            <span className={taskListEmptyClass}>No tasks</span>
+          ) : (
+            <span className={taskListCountClass}>{`${progress.done}/${progress.total}`}</span>
+          )}
+        </span>
+        {progress === undefined || progress.total === 0 ? null : (
+          <progress
+            role="progressbar"
+            className={taskListBarClass}
+            value={progress.done}
+            max={progress.total}
+            aria-label={`${title}: ${progress.done} of ${progress.total} tasks done`}
+          />
         )}
+        {meta === '' ? null : <span className={taskListMetaClass}>{meta}</span>}
       </Link>
     </li>
   );

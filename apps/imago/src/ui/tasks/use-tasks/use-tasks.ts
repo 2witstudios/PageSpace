@@ -15,7 +15,8 @@ import useSWR, { type KeyedMutator } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import type { ApiClient } from '@/api/client';
-import type { Assignee, TaskList } from '../task-model/task';
+import type { Assignee, DueDateFilter, StatusGroupFilter, TaskList } from '../task-model/task';
+import { taskViews, type TaskViewId } from '../task-views/task-views';
 import { locate, type TaskLocation } from '../task-tree/task-tree';
 import {
   addTask,
@@ -32,11 +33,15 @@ import {
   createTask,
   deleteTask,
   fetchAssignable,
+  fetchDriveTaskCount,
+  fetchDriveTasks,
   fetchDriveTaskLists,
   fetchPageContent,
   fetchPagePermissions,
   fetchPageTrail,
+  fetchPageActivity,
   fetchTaskStatuses,
+  fetchTaskTriggers,
   loadTaskTree,
   reorderTasks,
   setTaskAssignees,
@@ -109,6 +114,32 @@ export const useTaskStatuses = (pageId: string | null) => {
     ([, id]) => fetchTaskStatuses(client, id),
   );
   return { statuses: data, error: error as unknown, isLoading };
+};
+
+/**
+ * A task's agent triggers. `forbidden` is a viewer who cannot edit the list:
+ * the automations are hidden for them, not reported as an error.
+ */
+export const useTaskTriggers = (taskId: string | null) => {
+  const client = useApiClient();
+  const { data, error, isLoading, mutate } = useSWR(
+    taskId === null ? null : (['imago:task-triggers', taskId] as const),
+    ([, id]) => fetchTaskTriggers(client, id),
+  );
+  const forbidden = error instanceof ApiError && error.status === 403;
+  /** Void action: asks the server again, e.g. after the dialog saved a trigger. */
+  const reload = useCallback(() => void mutate(), [mutate]);
+  return { triggers: data, forbidden, error: error as unknown, isLoading, reload };
+};
+
+/** A page's newest activity, as the detail's Activity section lists it. */
+export const usePageActivity = (pageId: string | null) => {
+  const client = useApiClient();
+  const { data, error, isLoading } = useSWR(
+    pageId === null ? null : (['imago:page-activity', pageId] as const),
+    ([, id]) => fetchPageActivity(client, id),
+  );
+  return { activities: data, error: error as unknown, isLoading };
 };
 
 export type ActionResult = { readonly ok: true } | { readonly ok: false; readonly refusal: string };
@@ -242,3 +273,35 @@ export const useTaskList = (pageId: string | null, title: string) => {
   return { list, error: error as unknown, isLoading, actions, retry };
 };
 
+
+/**
+ * How many of the viewer's tasks each smart view holds, read from each view's
+ * pagination.total. Undefined until every count has loaded.
+ */
+export const useTaskViewCounts = (driveId: string | null) => {
+  const client = useApiClient();
+  const { data, error } = useSWR(driveId === null ? null : (['imago:task-view-counts', driveId] as const), ([, id]) =>
+    Promise.all(
+      taskViews.map(async (view) => [view.id, await fetchDriveTaskCount(client, id, view.dueDateFilter)] as const),
+    ).then((counts) => Object.fromEntries(counts) as Record<TaskViewId, number>),
+  );
+  return { counts: data, error: error as unknown };
+};
+
+/** The most rows the ground asks for in one request (the route's limit ceiling). */
+const GROUND_PAGE_SIZE = 100;
+
+/**
+ * The viewer's tasks in a drive for the ground: one status group, one due
+ * window (or none), the first page of the route's answer.
+ */
+export const useDriveTasks = (driveId: string, statusGroup: StatusGroupFilter, dueDateFilter: DueDateFilter | undefined) => {
+  const client = useApiClient();
+  const query = { driveId, statusGroup, dueDateFilter, limit: GROUND_PAGE_SIZE };
+  const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query] as const, ([, q]) =>
+    fetchDriveTasks(client, q),
+  );
+  /** Void action: asks the server again after a failure. */
+  const retry = useCallback(() => void mutate(), [mutate]);
+  return { response: data, error: error as unknown, isLoading, retry };
+};
