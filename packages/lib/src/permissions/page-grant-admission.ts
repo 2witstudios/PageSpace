@@ -11,13 +11,16 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { pagePermissions } from '@pagespace/db/schema/members';
+import { checkDriveMayLoosen } from './org-lapse-guard';
+import { lockApprovedGuestDriveScope } from './approved-guest-scope';
 import { getDrivePolicies } from '../organizations/policy-reader';
 import { grantStillLive, reinsertHeldAccess, type ClaimedGuestApproval } from './guest-holds';
 import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
 
 export type ApprovedPageGrant =
   | { ok: true; driveId: string; userId: string; pageIds: string[] }
-  | { ok: false; error: 'NOT_A_PAGE_GRANT' | 'POLICY_OFF' | 'PAGE_GONE' };
+  | { ok: false; error: 'NOT_A_PAGE_GRANT' | 'POLICY_OFF' | 'PAGE_GONE' | 'SCOPE_CHANGED' }
+  | { ok: false; error: 'ORG_LAPSED'; message: string };
 
 /**
  * The queue row is already claimed by the caller, so nothing here can grant the same request twice. The org's
@@ -38,6 +41,9 @@ export async function completeApprovedPageGrant(claim: ClaimedGuestApproval, app
   let staged: StagedOrgAuditEvent[] = [];
   const granted = await db.transaction(async (tx) => {
     staged = [];
+    if (!(await lockApprovedGuestDriveScope(tx, claim))) return { ok: false, error: 'SCOPE_CHANGED' } as const;
+    const lapsed = await checkDriveMayLoosen(tx, claim.driveId, true);
+    if (lapsed) return { ok: false, error: 'ORG_LAPSED', message: lapsed.message } as const;
     // Read under the org row's share lock: a concurrent switch to OFF either parks this grant or is seen here.
     const policies = (await getDrivePolicies(claim.driveId, tx, { forShare: true }))?.policies ?? null;
     if (policies?.guests === 'off') return { ok: false, error: 'POLICY_OFF' } as const;

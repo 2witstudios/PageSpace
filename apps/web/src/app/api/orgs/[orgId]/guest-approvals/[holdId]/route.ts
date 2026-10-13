@@ -28,6 +28,7 @@ const PAGE_GRANT_REFUSALS = {
   NOT_A_PAGE_GRANT: 'This request cannot be approved.',
   PAGE_GONE: 'The page this person was asked onto no longer exists, so there is nothing to approve.',
   POLICY_OFF: GUESTS_OFF_MESSAGE,
+  SCOPE_CHANGED: 'This request no longer belongs to this organization.',
 } as const;
 
 /** The machine codes of PAGE_GRANT_REFUSALS: the one {error, code} convention (UI-7), never `reason`. */
@@ -35,6 +36,7 @@ const PAGE_GRANT_REFUSAL_CODES = {
   NOT_A_PAGE_GRANT: 'not_a_page_grant',
   PAGE_GONE: 'page_gone',
   POLICY_OFF: 'org_policy',
+  SCOPE_CHANGED: 'not_found',
 } as const satisfies Record<keyof typeof PAGE_GRANT_REFUSALS, OrgApiErrorCode>;
 
 /** The flags of a queued page grant, back in the share-invite's terms. */
@@ -48,6 +50,7 @@ const LINK_REFUSALS = {
   NOT_A_LINK_REQUEST: 'This request cannot be approved.',
   LINK_GONE: 'The share link this person used no longer exists or has been turned off, so there is nothing to approve.',
   POLICY_OFF: GUESTS_OFF_MESSAGE,
+  SCOPE_CHANGED: 'This request no longer belongs to this organization.',
 } as const;
 
 /** The machine code of each refusal (api-error-codes): snake_case, the convention of every org route. */
@@ -55,6 +58,7 @@ const LINK_REFUSAL_CODES = {
   NOT_A_LINK_REQUEST: 'not_a_link_request',
   LINK_GONE: 'link_gone',
   POLICY_OFF: 'org_policy',
+  SCOPE_CHANGED: 'not_found',
 } as const satisfies Record<keyof typeof LINK_REFUSALS, OrgApiErrorCode>;
 
 /** Put a request back on the queue when approving it failed for a reason that is not the approver's. */
@@ -145,6 +149,10 @@ async function approve(request: Request, orgId: string, approverId: string, clai
   if (claim.origin === 'page_grant') {
     const granted = await completeApprovedPageGrant(claim, approval);
     if (!granted.ok) {
+      if (granted.error === 'ORG_LAPSED') {
+        await requeue(claim);
+        return orgLapsedResponse(granted.message);
+      }
       // Guests turned OFF between the check above and the grant's own locked re-check: the request is not the
       // approver's fault and must not vanish, so it goes back on the queue (it can be approved once allowed again).
       if (granted.error === 'POLICY_OFF') await requeue(claim);

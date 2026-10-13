@@ -17,6 +17,7 @@ import { decideOrgDriveAdmission } from './guest-admission';
 import { queueGuestForApproval, type ClaimedGuestApproval } from './guest-holds';
 import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '../audit/org-audit';
 import { shareLinkCreationDecision, shareLinkUsable } from '../organizations/sharing-decisions';
+import { lockApprovedGuestDriveScope } from './approved-guest-scope';
 import { checkDriveMayLoosen } from './org-lapse-guard';
 
 // ============================================================================
@@ -123,14 +124,25 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
  * the write in a transaction that first re-asks under the org row's share lock (guest-admission.ts), so the write
  * either commits before the policy change parks it, or sees "off" and writes nothing (null).
  */
-async function admittedWrite<T>(driveId: string, userId: string, write: (tx: Tx) => Promise<T>): Promise<T | null> {
+async function admittedWrite<T>(
+  driveId: string,
+  userId: string,
+  write: (tx: Tx) => Promise<T>,
+  approvedScope?: Pick<ClaimedGuestApproval, 'orgId' | 'driveId'>,
+): Promise<{ ok: true; value: T } | { ok: false; error: 'SCOPE_CHANGED' | 'POLICY_OFF' | 'LINK_GONE' }> {
   return db.transaction(async (tx) => {
+    if (approvedScope) {
+      if (!(await lockApprovedGuestDriveScope(tx, approvedScope))) return { ok: false, error: 'SCOPE_CHANGED' };
+      const policies = (await getDrivePolicies(driveId, tx, { forShare: true }))?.policies ?? null;
+      if (policies?.guests === 'off') return { ok: false, error: 'POLICY_OFF' };
+      if (!shareLinkCreationDecision(policies).ok) return { ok: false, error: 'LINK_GONE' };
+    }
     const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
-    if (admission.decision === 'refuse') return null;
+    if (admission.decision === 'refuse') return { ok: false, error: 'POLICY_OFF' };
     // [D-OW-33] a link redeemed while the org is lapsed admits nobody, an org member included (outsiders were already
     // refused above): it answers like a link that does not exist, so the holder learns nothing about the org.
-    if (await checkDriveMayLoosen(tx, driveId, true)) return null;
-    return write(tx);
+    if (await checkDriveMayLoosen(tx, driveId, true)) return { ok: false, error: 'POLICY_OFF' };
+    return { ok: true, value: await write(tx) };
   });
 }
 
@@ -385,8 +397,8 @@ export async function redeemDriveShareLink(
   }
 
   const inserted = await admittedWrite(link.driveId, ctx.userId, (tx) => insertDriveLinkMember(tx, ctx.userId, link));
-  if (!inserted) return { ok: false, error: 'NOT_FOUND' };
-  const { memberId, customRoleId } = inserted;
+  if (!inserted.ok) return { ok: false, error: 'NOT_FOUND' };
+  const { memberId, customRoleId } = inserted.value;
 
   await db
     .update(driveShareLinks)
@@ -566,7 +578,8 @@ export async function redeemPageShareLink(
   }
 
   // A page link makes the redeemer a GUEST: a row that carries the page grant and nothing drive-wide.
-  if (!(await admittedWrite(link.driveId, ctx.userId, (tx) => insertPageLinkGuest(tx, ctx.userId, link)))) return { ok: false, error: 'NOT_FOUND' };
+  const admitted = await admittedWrite(link.driveId, ctx.userId, (tx) => insertPageLinkGuest(tx, ctx.userId, link));
+  if (!admitted.ok || !admitted.value) return { ok: false, error: 'NOT_FOUND' };
 
   if (!alreadyHasAccess) {
     await db
@@ -584,7 +597,7 @@ export async function redeemPageShareLink(
 
 export type ApprovedLinkAdmission =
   | { ok: true; driveId: string; userId: string; memberId: string | null; role: DriveShareLink['role'] | 'GUEST'; customRoleId: string | null; driveName: string; createdBy: string | null }
-  | { ok: false; error: 'NOT_A_LINK_REQUEST' | 'LINK_GONE' | 'POLICY_OFF' };
+  | { ok: false; error: 'NOT_A_LINK_REQUEST' | 'LINK_GONE' | 'POLICY_OFF' | 'SCOPE_CHANGED' };
 
 /**
  * An Owner or Admin approved a queued link redeemer: admit them exactly as the redemption would have, provided the
@@ -604,9 +617,6 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval,
   const linkId = claim.request.linkId;
   if (!claim.userId || !linkId || (claim.origin !== 'drive_link' && claim.origin !== 'page_link')) return { ok: false, error: 'NOT_A_LINK_REQUEST' };
 
-  const policies = (await getDrivePolicies(claim.driveId))?.policies ?? null;
-  if (policies?.guests === 'off') return { ok: false, error: 'POLICY_OFF' };
-
   if (claim.origin === 'drive_link') {
     const [link] = await db
       .select({
@@ -618,16 +628,16 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval,
       .innerJoin(drives, eq(drives.id, driveShareLinks.driveId))
       .where(and(eq(driveShareLinks.id, linkId), eq(driveShareLinks.driveId, claim.driveId)))
       .limit(1);
-    if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
+    if (!link || !isValidShareLink(link) || !shareLinkUsable(null, link)) return { ok: false, error: 'LINK_GONE' };
     const userId = claim.userId;
     const inserted = await admittedWrite(link.driveId, userId, async (tx) => {
       const member = await insertDriveLinkMember(tx, userId, link);
       await stageApproval(tx);
       return member;
-    });
-    if (!inserted) return { ok: false, error: 'POLICY_OFF' };
+    }, claim);
+    if (!inserted.ok) return inserted;
     await publishOrgAuditEvents(staged);
-    const { memberId, customRoleId } = inserted;
+    const { memberId, customRoleId } = inserted.value;
     await db.update(driveShareLinks).set({ useCount: sql`${driveShareLinks.useCount} + 1` }).where(eq(driveShareLinks.id, link.id));
     return { ok: true, driveId: link.driveId, userId: claim.userId, memberId, role: link.role, customRoleId, driveName: link.driveName, createdBy: link.createdBy };
   }
@@ -643,14 +653,15 @@ export async function completeApprovedLinkAdmission(claim: ClaimedGuestApproval,
     .innerJoin(drives, eq(drives.id, pages.driveId))
     .where(and(eq(pageShareLinks.id, linkId), eq(pages.driveId, claim.driveId)))
     .limit(1);
-  if (!link || !isValidShareLink(link) || !shareLinkUsable(policies, link)) return { ok: false, error: 'LINK_GONE' };
+  if (!link || !isValidShareLink(link) || !shareLinkUsable(null, link)) return { ok: false, error: 'LINK_GONE' };
   const userId = claim.userId;
   const admitted = await admittedWrite(link.driveId, userId, async (tx) => {
     const guest = await insertPageLinkGuest(tx, userId, link);
     await stageApproval(tx);
     return guest;
-  });
-  if (!admitted) return { ok: false, error: 'POLICY_OFF' };
+  }, claim);
+  if (!admitted.ok) return admitted;
+  if (!admitted.value) return { ok: false, error: 'POLICY_OFF' };
   await publishOrgAuditEvents(staged);
   await db.update(pageShareLinks).set({ useCount: sql`${pageShareLinks.useCount} + 1` }).where(eq(pageShareLinks.id, link.id));
   return { ok: true, driveId: link.driveId, userId: claim.userId, memberId: null, role: 'GUEST', customRoleId: null, driveName: link.driveName, createdBy: null };

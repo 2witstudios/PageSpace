@@ -86,6 +86,31 @@ beforeEach(() => {
 });
 
 describe('the approval queue routes', () => {
+  it.each(['page_grant', 'drive_link'] as const)('a completed $0 whose drive left the original org refuses with no requeue or notification', async origin => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'SCOPE_CHANGED' });
+    vi.mocked(completeApprovedLinkAdmission).mockResolvedValue({ ok: false, error: 'SCOPE_CHANGED' });
+    const response = await decide({ decision: 'approve' });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'not_found' });
+    expect(requestGuestApproval).not.toHaveBeenCalled();
+    expect(createPermissionNotification).not.toHaveBeenCalled();
+    expect(broadcastPageEvent).not.toHaveBeenCalled();
+  });
+
+  it('a page-grant admission refused by current lapse retains its request for reactivation and returns the typed lapse response', async () => {
+    as('ADMIN');
+    vi.mocked(claimPendingGuestApproval).mockResolvedValue(claim({ origin: 'page_grant' }) as never);
+    vi.mocked(completeApprovedPageGrant).mockResolvedValue({ ok: false, error: 'ORG_LAPSED', message: 'Reactivate first' });
+    const response = await decide({ decision: 'approve' });
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ code: 'org_lapsed', error: 'Reactivate first' });
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID, driveId: 'drive_1', origin: 'page_grant' }));
+    expect(createPermissionNotification).not.toHaveBeenCalled();
+    expect(broadcastPageEvent).not.toHaveBeenCalled();
+  });
+
   it.each([
     { reason: 'insufficient_role' as const, status: 403 as const },
     { reason: 'not_member' as const, status: 404 as const },

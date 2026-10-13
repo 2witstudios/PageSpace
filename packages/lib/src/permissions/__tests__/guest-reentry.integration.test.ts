@@ -552,7 +552,7 @@ describe('guest approval requests preserve recipient and grant boundaries', () =
       await blocker.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [w.orgId]);
       approval = completeApprovedLinkAdmission(claim);
       // Observe the admission waiting on the actual policy writer, after its
-      // unlocked offer/policy read, rather than depending on a timed delay.
+      // unlocked offer read, rather than depending on a timed delay.
       await vi.waitFor(async () => expect((await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`)).rows.length).toBeGreaterThan(0), { timeout: 3000 });
       await blocker.query('UPDATE organizations SET policies = jsonb_set(policies, $1::text[], $2::jsonb) WHERE id = $3', [['guests'], JSON.stringify('off'), w.orgId]);
       await blocker.query('COMMIT');

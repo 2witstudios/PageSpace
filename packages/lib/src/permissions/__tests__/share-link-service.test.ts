@@ -143,6 +143,8 @@ function makeSelectChain(result: unknown[]) {
       Promise.resolve(result).then(resolve, reject),
     limit: vi.fn().mockResolvedValue(result),
     orderBy: vi.fn().mockReturnThis(),
+    // Claimed approvals name this valid org/drive pair; component tests exercise scope refusals.
+    for: vi.fn(async () => [{ id: 'org', orgId: 'org' }]),
   };
   const chain = {
     from: vi.fn().mockReturnThis(),
@@ -849,6 +851,7 @@ describe('share-link refusal boundaries', () => {
 });
 
 describe('approved share links retain the original admission boundaries', () => {
+  beforeEach(() => vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org', policies: { ...DEFAULT_ORG_POLICIES, guests: 'approve' } }));
   const claim = (origin: 'drive_link' | 'page_link'): ClaimedGuestApproval => ({ holdId: 'hold', driveId: DRIVE_ID, userId: ACTOR_ID, email: null, origin, createdAt: new Date(), orgId: 'org', request: { linkId: LINK_ID }, requestedBy: null });
 
   it.each(['no_account', 'no_offer', 'non_link_request'] as const)('refuses an approval with %s without granting access', invalid => {
@@ -860,6 +863,7 @@ describe('approved share links retain the original admission boundaries', () => 
   });
 
   it.each(['drive_link', 'page_link'] as const)('an approved %s cannot bypass a later guests-off policy', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: true, expiresAt: null, suspendedByPolicy: null }]);
     vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org', policies: { ...DEFAULT_ORG_POLICIES, guests: 'off' } });
     expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'POLICY_OFF' });
     expect(mockDb.insert).not.toHaveBeenCalled();
