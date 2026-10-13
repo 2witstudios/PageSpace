@@ -334,7 +334,7 @@ test('code, sheet and canvas edits persist through their original editors', asyn
   await input.focus(); await page.keyboard.press('Control+A'); await page.keyboard.type('const after = 42;');
   await expect.poll(async () => (await db.select({ content: pages.content }).from(pages).where(eq(pages.id, code.id)))[0]?.content).toBe('const after = 42;');
   await page.goto(imagoPath(user.homeDriveId, `files/${sheet.id}`));
-  const formula = page.getByRole('textbox', { name: 'Cell value or formula' });
+  const formula = page.getByRole('textbox', { name: 'Formula', exact: true });
   await expect(formula).toBeEditable();
   await formula.fill('123'); await formula.press('Enter'); await formula.blur();
   await expect.poll(async () => (JSON.parse((await browserGet(page, `/api/pages/${sheet.id}`)).body) as { content: string }).content, { timeout: 15_000 }).toContain('123');
@@ -424,7 +424,7 @@ test('sheet permissions also stay read-only while loading and after a view-only 
   const held = new Promise<void>(resolve => { release = resolve; });
   await page.route(`**/api/pages/${sheet.id}/permissions/check*`, async route => { await held; await route.continue(); });
   await signIn(page, reader, imagoPath(user.homeDriveId, `files/${sheet.id}`));
-  const formula = page.getByRole('textbox', { name: 'Cell value or formula' });
+  const formula = page.getByRole('textbox', { name: 'Formula', exact: true });
   await expect(formula).toBeDisabled();
   release!();
   await expect(page.getByText("You don't have permission to edit this sheet", { exact: true })).toBeVisible();
