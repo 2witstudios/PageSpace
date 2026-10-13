@@ -34,6 +34,8 @@ export async function POST(request: Request) {
       return auth.error;
     }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const body = await request.json();
     const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage, sandboxEnabled } = body;
@@ -89,7 +91,7 @@ export async function POST(request: Request) {
       // Creating at root level — owner-only. An explicit-role key needs the
       // OWNER role (its role replaces its owner's identity); an inherited key
       // falls through to the user ownership check (it IS the owner acting).
-      if (isScopedMCPAuth(auth)) {
+      if (mcpScoped) {
         const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
         if (!membership || (membership.role !== null && membership.role !== 'OWNER')) {
           auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'token_role_not_owner', driveId, method: 'POST' }, riskScore: 0.5 });
@@ -112,7 +114,7 @@ export async function POST(request: Request) {
     // account-level-only tool (e.g. create_drive) — mirrors the runtime
     // chat/consult tool-list filtering.
     if (enabledTools && enabledTools.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = enabledTools.filter((toolName: string) => !availableToolNames.includes(toolName));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -240,7 +242,7 @@ export async function POST(request: Request) {
       sandboxEnabled: Boolean(agentData.sandboxEnabled),
       // Creation does not set the exposure mode, so it is the column default.
       toolExposureMode: 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 

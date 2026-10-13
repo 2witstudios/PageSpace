@@ -69,6 +69,8 @@ export async function PUT(
       return auth.error;
     }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const { agentId } = await context.params;
     const body = await request.json();
@@ -137,7 +139,7 @@ export async function PUT(
     // newly enable an account-level-only tool (e.g. create_drive) — mirrors
     // the runtime chat/consult tool-list filtering.
     if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = requestedEnabledTools.sanitized.filter(
         (toolName: string) => !availableToolNames.includes(toolName)
       );
@@ -290,7 +292,7 @@ export async function PUT(
       enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
       sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 
