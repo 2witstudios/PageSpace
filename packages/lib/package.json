@@ -2744,6 +2744,11 @@
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
     },
+    "./compliance/export/export-sign-in-gate": {
+      "types": "./dist/compliance/export/export-sign-in-gate.d.ts",
+      "import": "./dist/compliance/export/export-sign-in-gate.js",
+      "require": "./dist/compliance/export/export-sign-in-gate.js"
+    },
     "./compliance/export/export-format": {
       "types": "./dist/compliance/export/export-format.d.ts",
       "import": "./dist/compliance/export/export-format.js",
@@ -3899,6 +3904,9 @@
       ],
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
+      ],
+      "compliance/export/export-sign-in-gate": [
+        "./dist/compliance/export/export-sign-in-gate.d.ts"
       ],
       "compliance/export/export-format": [
         "./dist/compliance/export/export-format.d.ts"

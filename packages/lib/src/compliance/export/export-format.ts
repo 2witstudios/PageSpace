@@ -11,7 +11,7 @@
  * the result into a ZIP via `archiver`.
  */
 
-import type { AllUserData } from './gdpr-export';
+import type { AllUserData, ExportWithheld, ExportWithheldCategory } from './gdpr-export';
 
 /**
  * Bump when the export bundle's structure/inventory changes.
@@ -26,8 +26,12 @@ import type { AllUserData } from './gdpr-export';
  * (and the matching portable properties). Spec X-2: orgs the subject owns,
  * their org membership/seat/departures/requests, and their own wallet — their
  * personal root balance and the funding legs they gave. Additive like 1.1.0.
+ *
+ * 1.3.0 adds `pulse-summaries.json` (and the matching portable property) and the manifest's `withheld` list: what the
+ * bundle left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3, D-OW-62), with
+ * the code that unlocks it. Additive like 1.1.0.
  */
-export const EXPORT_SCHEMA_VERSION = '1.2.0';
+export const EXPORT_SCHEMA_VERSION = '1.3.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -45,12 +49,40 @@ export interface ExportManifestFileEntry {
   recordCount: number;
 }
 
+/** One kind of content the bundle left out under an org sign-in policy, and how to get it (SEC-2/3). */
+export interface ExportManifestWithheldEntry extends ExportWithheld {
+  /** Plain-language account of what was left out and what to do. */
+  note: string;
+}
+
 export interface ExportManifest {
   schemaVersion: string;
   generator: string;
   exportedAt: string;
   format: ExportFormat;
   files: ExportManifestFileEntry[];
+  /** Empty when nothing was left out. */
+  withheld: ExportManifestWithheldEntry[];
+}
+
+const WITHHELD_WHAT: Record<ExportWithheldCategory, (count: number) => string> = {
+  orgDriveContent: (n) => `The pages, sheets and tags of ${n} organization drive${n === 1 ? '' : 's'}`,
+  orgDriveMessages: (n) => `${n} message${n === 1 ? '' : 's'} you wrote in organization drives`,
+  orgDriveFiles: (n) => `${n} file${n === 1 ? '' : 's'} you uploaded to organization drives`,
+  orgDriveTasks: (n) => `${n} task list${n === 1 ? '' : 's'} in organization drives`,
+  orgDriveActivity: (n) => `${n} activity entr${n === 1 ? 'y' : 'ies'} in organization drives`,
+  memoryPages: (n) => `${n} memory page${n === 1 ? '' : 's'} restating what the AI learned from organization content`,
+  pulseSummaries: (n) => `${n} Pulse summar${n === 1 ? 'y' : 'ies'} drawn from organization content`,
+  personalization: () => 'The AI memory in personalization.json (About You, Communication, Rules), drawn from organization content',
+  personalizationCandidates: (n) => `${n} AI inference${n === 1 ? '' : 's'} drawn from organization content`,
+};
+
+/** The note for one withheld entry: what was left out, why, and the sign-in that brings it back. */
+export function withheldNote(entry: ExportWithheld): string {
+  const action = entry.code === 'org_strong_sign_in_required'
+    ? 'Sign in with a passkey and export again to include it.'
+    : 'Sign in again and export again to include it.';
+  return `${WITHHELD_WHAT[entry.category](entry.count)} ${entry.count === 1 && entry.category !== 'orgDriveContent' ? 'was' : 'were'} left out because an organization's sign-in policy (${entry.code}) does not accept the sign-in this export was requested with. ${action}`;
 }
 
 /**
@@ -100,6 +132,8 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // (unlike personalization.json below) so an empty file reads as "nothing
     // was inferred about you" rather than leaving the subject unable to tell
     // the difference between that and the category not being carried.
+    // Digests the AI wrote for the subject from their workspace activity (Pulse).
+    { name: 'pulse-summaries.json', description: 'Pulse summaries the AI wrote for you from your workspace activity', recordCount: data.pulseSummaries.length, data: data.pulseSummaries },
     { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
     // The subject's own acts of classification. For an anchored tag the row
     // carries the quoted text they selected, which nothing else in the bundle
@@ -129,7 +163,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
  */
 export function buildExportManifest(
   files: ExportFile[],
-  opts: { exportedAt: Date; format: ExportFormat },
+  opts: { exportedAt: Date; format: ExportFormat; withheld: readonly ExportWithheld[] },
 ): ExportManifest {
   return {
     schemaVersion: EXPORT_SCHEMA_VERSION,
@@ -137,6 +171,7 @@ export function buildExportManifest(
     exportedAt: opts.exportedAt.toISOString(),
     format: opts.format,
     files: files.map((f) => ({ name: f.name, description: f.description, recordCount: f.recordCount })),
+    withheld: opts.withheld.map((entry) => ({ ...entry, note: withheldNote(entry) })),
   };
 }
 
@@ -225,6 +260,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'settings', value: data.settings },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
       { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
+      { '@type': 'PropertyValue', name: 'pulseSummaries', value: data.pulseSummaries },
       { '@type': 'PropertyValue', name: 'sheets', value: data.sheets },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'agentAccounts', value: data.agentAccounts },
