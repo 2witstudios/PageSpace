@@ -17,6 +17,7 @@ import { unattributedUsage, walletDriftAlerts, type DriftWalletKind, type Unattr
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
 import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
 import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
+import { fundingWalletTier } from '@pagespace/lib/billing/credit-liability';
 import { getTierFromPrice } from './stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
@@ -686,13 +687,20 @@ export interface MarginByTierRow {
   marginPct: number | null;
 }
 
+/**
+ * MON-7: margin per PAYING tier. Usage is grouped by the wallet it was charged to and that
+ * wallet's owner (its funder), never by the spender's personal tier: org-pool and org-drive
+ * spend is Business however the member who spent is subscribed (fundingWalletTier, lib
+ * credit-liability). Groups sharing a tier are folded into one row.
+ */
 export async function getMarginByTier(
   startDate?: Date,
   endDate?: Date,
 ): Promise<MarginByTierRow[]> {
-  const rows = await db
+  const groups = await db
     .select({
-      tier: users.subscriptionTier,
+      ownerType: wallets.ownerType,
+      ownerTier: users.subscriptionTier,
       realCostCents: realCostSum,
       chargedCents: chargedSum,
       appliedCents: appliedSum,
@@ -700,20 +708,30 @@ export async function getMarginByTier(
     })
     .from(creditLedger)
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
-    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .innerJoin(wallets, eq(creditLedger.walletId, wallets.id))
+    .leftJoin(users, eq(wallets.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(users.subscriptionTier)
-    .orderBy(desc(realCostSum));
+    .groupBy(wallets.ownerType, users.subscriptionTier);
 
-  return rows.map((r) => ({
-    tier: r.tier ?? 'free',
-    realCostCents: r.realCostCents,
-    chargedCents: r.chargedCents,
-    appliedCents: r.appliedCents,
-    requestCount: r.requestCount,
-    marginCents: r.chargedCents - r.realCostCents,
-    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
-  }));
+  const byTier = new Map<SubscriptionTier, { realCostCents: number; chargedCents: number; appliedCents: number; requestCount: number }>();
+  for (const g of groups) {
+    const tier = fundingWalletTier(g);
+    const acc = byTier.get(tier) ?? { realCostCents: 0, chargedCents: 0, appliedCents: 0, requestCount: 0 };
+    acc.realCostCents += g.realCostCents;
+    acc.chargedCents += g.chargedCents;
+    acc.appliedCents += g.appliedCents;
+    acc.requestCount += g.requestCount;
+    byTier.set(tier, acc);
+  }
+
+  return [...byTier.entries()]
+    .map(([tier, r]) => ({
+      tier,
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    }))
+    .sort((a, b) => b.realCostCents - a.realCostCents);
 }
 
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
@@ -1137,6 +1155,8 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
     )),
     db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
       inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+      // [D-OW-44]: send_invoice reads active before anything is collected; only automatic collection pays.
+      eq(orgSubscriptions.collectionMethod, 'charge_automatically'),
       sql`exists (select 1 from ${orgSubscriptionFunding} where ${orgSubscriptionFunding.orgId} = ${orgSubscriptions.orgId} and ${orgSubscriptionFunding.stripeSubscriptionId} = ${orgSubscriptions.stripeSubscriptionId})`,
     )),
   ]);

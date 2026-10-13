@@ -8,6 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -99,10 +100,10 @@ export async function GET(request: Request) {
 
           const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
           if (!canViewDrive) {
-            return NextResponse.json(
+            return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
               { error: 'Unauthorized - you do not have access to this drive' },
               { status: 403 }
-            );
+            ));
           }
           userConditions.push(eq(activityLogs.driveId, params.driveId));
         } else {
@@ -133,10 +134,10 @@ export async function GET(request: Request) {
         // Verify principal can view drive
         const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(
@@ -162,10 +163,10 @@ export async function GET(request: Request) {
         // Verify principal can view page
         const canViewPage = await canPrincipalViewPage(auth, params.pageId);
         if (!canViewPage) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.pageId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this page' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(

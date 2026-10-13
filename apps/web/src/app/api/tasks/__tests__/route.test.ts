@@ -81,6 +81,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
 }));
@@ -93,11 +94,11 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
-    return isUserDriveMember(auth.userId, driveId);
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
   }),
   getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
     const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
-    return getDriveIdsForUser(auth.userId);
+    return getDriveIdsForUser(credentialActor(auth.userId, null));
   }),
   getPrincipalBatchPagePermissions: vi.fn(),
 }));
@@ -110,6 +111,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { inArray, isNull, or, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems } from '@pagespace/db/schema/tasks';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -349,7 +351,7 @@ describe('GET /api/tasks', () => {
       const response = await GET(request);
 
       expect(response.status).toBe(200);
-      expect(getDriveIdsForUser).toHaveBeenCalledWith(mockUserId);
+      expect(getDriveIdsForUser).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }));
     });
   });
 

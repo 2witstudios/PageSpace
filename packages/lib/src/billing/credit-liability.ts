@@ -24,6 +24,8 @@
  *       · a child never holds a grant bucket; a monthlyRemainingCents on one is ignored.
  */
 
+import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
+
 export type LiabilityWalletKind = 'personal_root' | 'org_pool' | 'child';
 
 export interface WalletShape {
@@ -99,4 +101,15 @@ export function foldCreditLiability(groups: readonly LiabilityGroup[]): CreditLi
     userCount,
     orgPoolCount,
   };
+}
+
+/**
+ * MON-7 margin attribution: the tier that PAYS for spend on a wallet. Every wallet carries its
+ * funder as owner (a drive or agent wallet under an org pool is org-owned, one under a personal
+ * root is owned by that person), so an org-owned wallet is Business — the org plan — whoever
+ * spent, and a user-owned wallet is its owner's personal tier, never the spender's. Business is
+ * not a personal tier (A-9), so a stale `business` on a user row reads as free.
+ */
+export function fundingWalletTier(owner: { ownerType: 'user' | 'org'; ownerTier: string | null }): SubscriptionTier {
+  return owner.ownerType === 'org' ? 'business' : toPersonalSubscriptionTier(owner.ownerTier);
 }

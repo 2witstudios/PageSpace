@@ -38,6 +38,38 @@ before applying migrations 0338–0339 or starting the final application.
    Stripe inventory, future schedule, or manifest mismatch blocks **all** writes.
    Do not proceed unless the command exits successfully with `ready: true`.
 
+## Drain missed grants before the ratio flip deploys
+
+The final application sizes every included-credit grant at the A-11 ratio. The
+release before it granted 100% of what an invoice paid, and the ratio has no
+switch: there is no legacy-ratio code to repair an older invoice at its old
+terms (D-OW-17, D-OW-42, D-OW-54). So every grant owed under the old terms must
+be made BY THE OLD RELEASE, before the new images start:
+
+1. On the outgoing release, with webhook delivery still running, let Stripe's
+   pending `invoice.paid` retries land, then run the credit reconcile until it
+   reports no missed grants:
+
+   ```sh
+   # from the cron container (docker/cron/crontab runs the same call every 10 minutes)
+   cron-curl GET "$WEB_URL/api/cron/reconcile-credits"
+   ```
+
+2. Confirm in the target database that nothing is left for the new release to
+   repair:
+
+   ```sql
+   SELECT count(*) FROM credit_ledger WHERE "entryType" = 'missed_grant';
+   ```
+
+   The count must be 0. A row still waiting for a tier (indeterminate in the cron
+   output) needs a human before the window opens.
+
+3. Only then stop webhook deliveries and continue below. An invoice that was paid
+   before the window but whose webhook is first delivered after the new images
+   start, or a missed grant created after step 2, is granted at the new ratio;
+   record any such invoice id in the deployment evidence.
+
 ## Apply in the cutover maintenance window
 
 Stop application traffic, background billing jobs and webhook deliveries during
@@ -63,15 +95,15 @@ then removes the flag. The retained database constraint prevents a runtime write
 from putting Founder or Business back in a personal row. Both migrations are
 generated from the schema; never bypass their checks to complete deployment.
 
-The same offline window applies three wallet-ledger migrations (WAL-5, WAL-6b):
-0344 adds `credit_ledger.fallbackFromWalletId` with a foreign key to `wallets`,
-whose validation takes a lock on the ledger while it scans; 0345 writes one
+The same offline window applies two wallet-ledger migrations (WAL-5, WAL-6b):
+0347 adds `credit_ledger.fallbackFromWalletId` with a foreign key to `wallets`,
+whose validation takes a lock on the ledger while it scans, re-creates the
+`credit_ledger.userId` foreign key as ON DELETE SET NULL ([D-OW-58]: a deleted
+account's rows on wallets it did not own stay on those wallets' books, unnamed)
+and adds the partial index for unattributed usage; 0348 writes one
 `opening_balance` ledger row per wallet (its balance less what its earlier rows
 already account for), so balance-drift reconciliation is exact from the cutover
-forward. 0346 re-creates the `credit_ledger.userId` foreign key as ON DELETE SET
-NULL ([D-OW-58]: a deleted account's rows on wallets it did not own stay on those
-wallets' books, unnamed) and adds the partial index for unattributed usage. All
-three run with traffic and billing jobs stopped; 0345 is idempotent (keyed on
+forward. Both run with traffic and billing jobs stopped; 0348 is idempotent (keyed on
 `opening-balance:<walletId>`), so a repeated run writes nothing.
 
 Start only the final application images, resume webhook delivery and jobs, and

@@ -22,7 +22,7 @@ const answer = (headers: Record<string, string>) => {
 };
 
 describe('a side question that fell back to another source', () => {
-  it('SPEND-4 (partial) reads the X-Spend-Fallback-* headers and shows the notice on the card', async () => {
+  it('SPEND-4 (partial) UI-8 (partial) the /btw side question (a non-chat surface) reads the X-Spend-Fallback-* headers and shows the notice on the card', async () => {
     fetchMock.mockResolvedValue(answer({ 'X-Spend-Fallback-From': 'drive_wallet', 'X-Spend-Fallback-To': 'own_credits', 'X-Spend-Fallback-Wallet': 'w-me' }));
     const { result } = renderHook(() => useSideQuestion('conv-1'));
     await act(async () => {

@@ -499,7 +499,7 @@ describe('GET /api/user/integrations/callback', () => {
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
-      expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-456', 'user-123');
+      expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-456', expect.objectContaining({ userId: 'user-123' }));
     });
 
     it('rejects when user lacks admin access to drive', async () => {

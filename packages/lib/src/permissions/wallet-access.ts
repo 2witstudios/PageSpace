@@ -22,6 +22,7 @@
  * PERSONAL drive the lead's own wallet funds it, so the lead does everything. Anyone who can
  * see the drive may donate (WAL-4); the donation service re-checks visibility itself.
  */
+import { decideOrgRole, holdsOrgRole } from '../organizations/authorize-core';
 
 export type WalletViewer = 'org_admin' | 'lead' | 'member' | 'guest' | 'none';
 
@@ -54,7 +55,7 @@ export interface WalletStanding {
 }
 
 export function walletViewerRole(standing: WalletStanding): WalletViewer {
-  if (standing.orgId !== null && (standing.orgRole === 'OWNER' || standing.orgRole === 'ADMIN')) return 'org_admin';
+  if (standing.orgId !== null && holdsOrgRole(standing.orgRole, 'ADMIN')) return 'org_admin';
   if (standing.isLead) return 'lead';
   if (!standing.isDriveMember) return 'none';
   if (standing.orgId !== null && standing.orgRole === null) return 'guest';
@@ -141,8 +142,8 @@ export function decideSeatCapWrite(input: {
   actorRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
   consumerRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
 }): SeatCapWriteDecision {
-  if (input.actorRole === null) return { ok: false, status: 404, code: 'org_not_found' };
-  if (input.actorRole !== 'OWNER' && input.actorRole !== 'ADMIN') return { ok: false, status: 403, code: 'insufficient_role' };
+  const actor = decideOrgRole({ membershipRole: input.actorRole, minRole: 'ADMIN' });
+  if (!actor.ok) return actor.status === 404 ? { ok: false, status: 404, code: 'org_not_found' } : { ok: false, status: 403, code: 'insufficient_role' };
   if (input.consumerRole === null) return { ok: false, status: 404, code: 'not_org_member' };
   return { ok: true };
 }

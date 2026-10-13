@@ -41,6 +41,8 @@ import {
 export type ToolActivityRequest = {
   readonly callId: string;
   readonly userId: string;
+  /** The calling credential's ceremony evidence as the bridge carried it; re-parsed, never trusted as shaped (SEC-2/3). */
+  readonly authentication?: unknown;
   readonly conversationId: string;
   /** OpenAI's `function_call.call_id`, which both phases agree on. */
   readonly toolCallId: string;
@@ -144,6 +146,7 @@ export const persistVoiceToolActivity = async (
     {
       callId: request.callId,
       userId: request.userId,
+      authentication: request.authentication,
       conversationId: request.conversationId,
       role: 'assistant',
       text: payload.content,

@@ -5,6 +5,7 @@
  * providing a clean seam for testing route handlers.
  */
 
+import { checkActorDriveAuthentication } from '../permissions/actor-authentication';
 import { db } from '@pagespace/db/db';
 import { eq, and, sql, isNotNull } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -17,6 +18,7 @@ import { isDriveLead } from '../permissions/drive-relationship';
 import { listDriveAudience } from '../permissions/drive-audience';
 import { isGuestRole } from '../permissions/guest-role';
 import { guardDriveAccess } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -87,7 +89,7 @@ export interface MemberPermission {
  */
 export async function checkDriveAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessResult> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
@@ -96,6 +98,12 @@ export async function checkDriveAccess(
   if (!drive) {
     return { isOwner: false, isAdmin: false, isMember: false, drive: null };
   }
+
+  // SEC-2/3: a credential the drive's org refuses holds no role in it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { isOwner: false, isAdmin: false, isMember: false, drive };
+  }
+  const { userId } = actor;
 
   const isOwner = isDriveLead(userId, drive);
 

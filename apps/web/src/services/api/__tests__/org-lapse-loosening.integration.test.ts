@@ -75,6 +75,7 @@ import { GET as publishedApps } from '@/app/api/drives/[driveId]/published-apps/
 import { getPrincipalDriveAccess, getPrincipalDriveIds, isPrincipalDriveMember } from '@/lib/auth';
 import { mapAttendeesToUsers } from '@/lib/integrations/google-calendar/sync-service';
 import type { ActivityLogForRollback } from '../rollback/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -354,13 +355,13 @@ describe('page privacy (review P1-2, P2-2)', () => {
   it('SEAT-9 (partial) [D-OW-33] review P2-2: pageService.updatePage refuses isPrivate:false INSIDE its transaction while lapsed (the page stays private); making a page private still works; paid, it can be made public', async () => {
     await db.update(pages).set({ isPrivate: true }).where(eq(pages.id, w.orgPage));
     await lapse();
-    await expect(pageService.updatePage(w.orgPage, w.owner, { isPrivate: false }, { skipPermissionCheck: true })).rejects.toBeInstanceOf(OrgLapsedError);
+    await expect(pageService.updatePage(w.orgPage, credentialActor(w.owner, null), { isPrivate: false }, { skipPermissionCheck: true })).rejects.toBeInstanceOf(OrgLapsedError);
     expect(await isPrivateOf(w.orgPage)).toBe(true);
     const other = (await factories.createPage(w.orgDrive)).id;
-    expect(await pageService.updatePage(other, w.owner, { isPrivate: true }, { skipPermissionCheck: true })).toMatchObject({ success: true });
+    expect(await pageService.updatePage(other, credentialActor(w.owner, null), { isPrivate: true }, { skipPermissionCheck: true })).toMatchObject({ success: true });
     expect(await isPrivateOf(other)).toBe(true);
     await pay();
-    expect(await pageService.updatePage(w.orgPage, w.owner, { isPrivate: false }, { skipPermissionCheck: true })).toMatchObject({ success: true });
+    expect(await pageService.updatePage(w.orgPage, credentialActor(w.owner, null), { isPrivate: false }, { skipPermissionCheck: true })).toMatchObject({ success: true });
     expect(await isPrivateOf(w.orgPage)).toBe(false);
   });
 });
@@ -385,7 +386,7 @@ describe('pages leaving a lapsed org drive (review P2-4 ruling)', () => {
 describe('calendar events in a lapsed org drive (review #2849 r3: P1-A, P2 ruling)', () => {
   const makeEvent = async (visibility: 'PRIVATE' | 'ATTENDEES_ONLY' | 'DRIVE') =>
     (await db.insert(calendarEvents).values({ driveId: w.orgDrive, createdById: w.owner, title: 'Board', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility, updatedAt: new Date() }).returning())[0];
-  const ctx = () => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner } });
+  const ctx = () => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner, accessActor: credentialActor(w.owner, null) } });
   const visibilityOf = async (id: string) => (await db.select({ v: calendarEvents.visibility }).from(calendarEvents).where(eq(calendarEvents.id, id)))[0].v;
   const attendeesOf = async (id: string) => (await db.select({ userId: eventAttendees.userId }).from(eventAttendees).where(eq(eventAttendees.eventId, id))).map((a) => a.userId);
 

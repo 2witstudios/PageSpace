@@ -7,6 +7,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { createPageServiceToken } from '@pagespace/lib/services/validated-service-token'
 
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -26,7 +27,7 @@ export async function GET(
     // Verify user can view this page
     const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     // Get page status
@@ -66,7 +67,7 @@ export async function GET(
 
     // For pending/processing, check processor queue status
     const { token: serviceToken } = await createPageServiceToken(
-      userId,
+      actorFromAuth(auth),
       pageId,
       ['queue:read'],
       '2m'

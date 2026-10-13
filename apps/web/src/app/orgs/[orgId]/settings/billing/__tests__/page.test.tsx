@@ -102,11 +102,11 @@ describe('Plan & seats', () => {
     expect(mocks.openOrgBillingPortal).toHaveBeenCalledWith('org_nw');
   });
 
-  it('SEAT-9 (partial): a lapsed org shows Lapsed and the reactivate banner', () => {
+  it('SEAT-9 (partial): a lapsed org shows Lapsed and a way to reactivate (the banner itself is the app shell\'s, OrgSurfaceBanner)', () => {
     mocks.notice = { kind: 'reactivate', reason: 'canceled', canManageBilling: true };
     render(<OrgBillingPage />);
     expect(screen.getByText('Lapsed')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reactivate' })).toBeTruthy();
+    expect(screen.queryByText('Northwind Labs is unpaid and read-only')).toBeNull();
   });
 
   it('billing off on this deployment says so', () => {

@@ -16,14 +16,15 @@
  * charged mid-cycle upgrade proration, Codex P1 follow-up "Allow paid
  * subscription-update invoices to grant credits"). Once an invoice has a real
  * subscription parent, subscription_cycle and subscription_create follow the
- * gifted/trial rules below; subscription_update (and any other billing_reason
+ * gifted rule below; subscription_update (and any other billing_reason
  * Stripe assigns to a real subscription invoice) simply grants amount_paid ×
  * ratio — nothing special, nothing extra.
  *
  * Entitlement otherwise follows the amount ACTUALLY PAID, except for grants we
  * deliberately fund ourselves (D-OW-16):
- *   (a) a gifted subscription (subscriptions.gifted), or a subscription created
- *       with a trial, is us fronting the plan: grant list price × ratio;
+ *   (a) a gifted subscription (subscriptions.gifted) is us fronting the plan: grant
+ *       list price × ratio. Nothing creates trials ([D-OW-30]), so a $0 invoice that
+ *       is not a gift is sized from what it paid — nothing;
  *   (b) a proration-only or subscription_update invoice that paid nothing: nothing;
  *   (c) a partial discount: amount_paid × ratio, per MON-2;
  *   (d) a 100% coupon on a non-gifted subscription: nothing — admin gifting sets
@@ -36,13 +37,13 @@
  */
 
 import type { SubscriptionTier } from './subscription-tiers';
-import { allowanceCentsForPaidCents, tierListPriceCents, MONEY_MODEL_V2_ACTIVE } from './money-model';
+import { allowanceCentsForPaidCents, tierListPriceCents } from './money-model';
 
 /** What the grant was sized from. */
 export type GrantBasis =
   /** amount_paid × ratio (MON-2). */
   | 'paid'
-  /** list price × ratio — a gift or a trial we fund ourselves (D-OW-16a). */
+  /** list price × ratio — a gift we fund ourselves (D-OW-16a). */
   | 'list'
   /** nothing granted. */
   | 'none';
@@ -50,8 +51,7 @@ export type GrantBasis =
 export type GrantReason =
   | 'paid'
   | 'gifted'
-  | 'trial'
-  /** amount_paid is 0 and neither gifted nor a trial (D-OW-16 b, d). */
+  /** amount_paid is 0 and not gifted (D-OW-16 b, d). */
   | 'zero_amount'
   /** something was paid but the resolved tier has no ratio (free/unknown): a MISSED grant. */
   | 'no_ratio'
@@ -68,7 +68,13 @@ export type GrantReason =
    * subscription. The org reads lapsed on such a subscription and could never spend a grant, so
    * none is made (fail closed); the operator applies the gift to the org's own subscription.
    */
-  | 'gift_not_org_subscription';
+  | 'gift_not_org_subscription'
+  /**
+   * D-OW-54: an org gift invoice whose subscription carries no admin-pinned gifted seat
+   * quantity (a gift made outside the admin route). The gift is sized only from that pin —
+   * never the invoice's live seat count, which the recipient controls — so none is made.
+   */
+  | 'gift_quantity_unknown';
 
 export interface InvoiceGrant {
   /** What the invoice actually paid, in whole cents — recorded on the ledger row for audit. */
@@ -82,13 +88,6 @@ export interface InvoiceGrant {
 export interface InvoiceGrantInput {
   /** Stripe invoice.amount_paid (minor units). */
   amountPaidCents: number | null | undefined;
-  /**
-   * Stripe invoice.subtotal — the line items BEFORE discounts. Distinguishes a trial
-   * (the plan costs nothing this period: subtotal 0) from a 100% coupon (subtotal is
-   * the list price, total 0). Read off the invoice, so it is race-free against the
-   * subscription webhook.
-   */
-  subtotalCents?: number | null;
   /** Stripe invoice.billing_reason ('subscription_create' | 'subscription_cycle' | 'subscription_update' | …). */
   billingReason?: string | null;
   /**
@@ -132,46 +131,29 @@ function isGrantEligibleInvoice(input: InvoiceGrantInput): boolean {
   return input.hasSubscriptionParent === true;
 }
 
-/**
- * A subscription created with a trial: the first invoice charges nothing AND the
- * plan itself cost nothing this period (subtotal 0). A 100% coupon also pays 0 but
- * its subtotal is the list price, so it does not match — D-OW-16(d).
- */
-function isTrialCreate(input: InvoiceGrantInput, paidCents: number): boolean {
-  return input.billingReason === 'subscription_create'
-    && paidCents === 0
-    && toCents(input.subtotalCents) === 0;
-}
-
-/**
- * Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). `active`
- * (D-OW-17) defaults to the money-model constant, same as `allowanceCentsForPaidCents`
- * — production callers (credit-funding.ts) never pass it; tests pass `true`/`false`
- * directly instead of mutating `process.env.MONEY_MODEL_V2`.
- */
-export function grantForInvoice(input: InvoiceGrantInput, active: boolean = MONEY_MODEL_V2_ACTIVE): InvoiceGrant {
+/** Size the grant for a PERSONAL subscription invoice (D-OW-16 a–d). */
+export function grantForInvoice(input: InvoiceGrantInput): InvoiceGrant {
   const paidCents = Math.max(0, toCents(input.amountPaidCents));
 
-  // SECURITY gate FIRST, ahead of gifted/trial: an invoice with no subscription
+  // SECURITY gate FIRST, ahead of gifted: an invoice with no subscription
   // parent never grants, no matter what `gifted` says or how much it paid. This is
-  // what confines D-OW-16's gifted/trial carve-outs to invoices that are actually
+  // what confines D-OW-16's gifted carve-out to invoices that are actually
   // subscription invoices in the first place.
   if (!isGrantEligibleInvoice(input)) {
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
 
-  const funded: GrantReason | null = input.gifted === true ? 'gifted' : isTrialCreate(input, paidCents) ? 'trial' : null;
-  if (funded) {
+  if (input.gifted === true) {
     // We front the plan: the grant is what a full-price invoice would derive.
-    const allowanceCents = allowanceCentsForPaidCents(tierListPriceCents(input.tier), input.tier, active);
+    const allowanceCents = allowanceCentsForPaidCents(tierListPriceCents(input.tier), input.tier);
     return allowanceCents > 0
-      ? { paidCents, allowanceCents, basis: 'list', reason: funded }
+      ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
       : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
   }
 
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
 
-  const allowanceCents = allowanceCentsForPaidCents(paidCents, input.tier, active);
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, input.tier);
   return allowanceCents > 0
     ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
     : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
@@ -180,19 +162,17 @@ export function grantForInvoice(input: InvoiceGrantInput, active: boolean = MONE
 /**
  * Sum the line items an ORG subscription invoice paid for and size the pool refill
  * from that sum (MON-3): base + extra-seat items, with proration credits netted.
- * Seam for Phase 3 (org Stripe subscriptions); nothing calls it yet. `active`
- * (D-OW-17) defaults to the money-model constant, same as `grantForInvoice`.
+ * Seam for Phase 3 (org Stripe subscriptions); nothing calls it yet.
  */
 export function grantForInvoiceLines(
   lines: ReadonlyArray<InvoiceGrantLine | null | undefined>,
   tier: SubscriptionTier,
-  active: boolean = MONEY_MODEL_V2_ACTIVE,
 ): InvoiceGrant {
   let sum = 0;
   for (const line of lines) sum += toCents(line?.amount);
   const paidCents = Math.max(0, sum);
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
-  const allowanceCents = allowanceCentsForPaidCents(paidCents, tier, active);
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, tier);
   return allowanceCents > 0
     ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
     : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };

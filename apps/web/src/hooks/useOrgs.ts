@@ -16,6 +16,7 @@ import {
   orgKeys,
   type GuestApproval,
   type OrgDetail,
+  type OrgDriveDirectoryEntry,
   type OrgInvitation,
   type OrgMember,
   type OrgRole,
@@ -23,17 +24,15 @@ import {
   type OrgSummary,
 } from '@/lib/orgs/org-api';
 import { orgChangeRefreshes, walletChangeRefreshes } from '@/lib/orgs/org-realtime';
+import { useMyOrganizations } from './useMyOrganizations';
 import type { OrgHubCounts } from '@/lib/orgs/org-hub';
 
 const SWR_OPTIONS = { revalidateOnFocus: false, isPaused: () => useEditingStore.getState().isAnyEditing() };
 
-export function useMyOrgs() {
-  const { data, error, isLoading, mutate } = useSWR<{ organizations: OrgSummary[] }>(
-    ORGS_ENABLED ? orgKeys.mine() : null,
-    orgFetcher,
-    SWR_OPTIONS,
-  );
-  return { orgs: data?.organizations, error, isLoading: ORGS_ENABLED && isLoading, mutate };
+/** My organizations for the org surfaces: the same GET /api/orgs cache entry the picker reads (useMyOrganizations). */
+export function useMyOrgs(): { orgs: OrgSummary[] | undefined; error: unknown; isLoading: boolean; mutate: () => Promise<unknown> } {
+  const { loaded, error, isLoading, refresh } = useMyOrganizations();
+  return { orgs: loaded, error, isLoading: ORGS_ENABLED && isLoading, mutate: refresh };
 }
 
 export function useOrg(orgId: string | undefined) {
@@ -66,6 +65,14 @@ export function useOrgHubCounts(orgId: string, role: OrgRole | undefined): OrgHu
     guestApprovals: approvals.data?.total,
     ownerLeftAutomations: automations.data?.automations.length,
   };
+}
+
+/**
+ * The org Drives directory (DRV-6) for any member: what they can open or ask to join. The server
+ * lists to each member only what they may see there (decideDriveDirectoryEntry).
+ */
+export function useOrgDriveDirectory(orgId: string | undefined) {
+  return useSWR<{ drives: OrgDriveDirectoryEntry[] }>(ORGS_ENABLED && orgId ? orgKeys.drives(orgId) : null, orgFetcher, SWR_OPTIONS);
 }
 
 /** A read for Owner and Admins (the org settings pages); null key, no request, for anyone else. */

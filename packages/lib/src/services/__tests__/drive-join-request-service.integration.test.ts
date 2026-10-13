@@ -36,6 +36,7 @@ import { changeDriveVisibility, changeOrgDriveLead, moveDriveOutOfOrg } from '..
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { leaveOrganization } from '../../organizations/leave';
 import { deleteOrganization } from '../../organizations/deletion';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -110,8 +111,8 @@ async function requestAs(userId: string, message?: string) {
 async function membershipFootprint(userId: string) {
   return {
     rows: (await rowsOf(userId)).length,
-    resolves: await getUserDriveAccess(userId, research),
-    listed: (await listAccessibleDrives(userId)).some((d) => d.id === research),
+    resolves: await getUserDriveAccess(credentialActor(userId, null), research),
+    listed: (await listAccessibleDrives(credentialActor(userId, null))).some((d) => d.id === research),
     recipient: (await getDriveRecipientUserIds(research)).includes(userId),
     sharesDriveWithLead: await usersShareDrive(userId, marcus),
   };

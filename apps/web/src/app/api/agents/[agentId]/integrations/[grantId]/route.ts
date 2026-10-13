@@ -9,6 +9,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 import { getGrantById, updateGrant, deleteGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -37,7 +38,7 @@ export async function PUT(
   try {
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grant = await getGrantById(db, grantId);
@@ -81,7 +82,7 @@ export async function DELETE(
   try {
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grant = await getGrantById(db, grantId);

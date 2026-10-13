@@ -41,7 +41,7 @@ describe('createOrgSeatCount', () => {
 });
 
 describe('nextStepAfterCreate', () => {
-  const sub = { status: 'incomplete', trialEnd: null, currentPeriodEnd: null, extraSeatQuantity: 0 };
+  const sub = { status: 'incomplete', currentPeriodEnd: null, extraSeatQuantity: 0 };
 
   it('UI-6 (partial): payment_required goes to the Payment Element with the client secret (no trial, D-OW-30)', () => {
     expect(nextStepAfterCreate({ state: 'payment_required', subscription: sub, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' } }))
@@ -98,7 +98,7 @@ describe('planOrgSetup', () => {
 
 describe('createOrgPlanNote', () => {
   it('UI-6 (partial) UI-12 (partial): price in dollars, credits as a plain count, no trial', () => {
-    const note = createOrgPlanNote(orgPlanQuote(13, true));
+    const note = createOrgPlanNote(orgPlanQuote(13));
     expect(note.headline).toBe('Business · $50 a month with 5 seats, $10 per extra seat.');
     expect(note.body).toContain('You and 12 people make 13 seats: $130 a month with 7,800 credits a month.');
     expect(note.body).toContain('ready once that first payment goes through');
@@ -107,12 +107,12 @@ describe('createOrgPlanNote', () => {
   });
 
   it('explains that extra seats are billed as people are invited, since the first payment covers the included seats', () => {
-    expect(createOrgPlanNote(orgPlanQuote(13, true)).body).toContain('The first payment is $50. The 8 extra seats are added as you invite people, billed pro rata.');
-    expect(createOrgPlanNote(orgPlanQuote(3, true)).body).not.toContain('extra seats are added');
+    expect(createOrgPlanNote(orgPlanQuote(13)).body).toContain('The first payment is $50. The 8 extra seats are added as you invite people, billed pro rata.');
+    expect(createOrgPlanNote(orgPlanQuote(3)).body).not.toContain('extra seats are added');
   });
 
   it('speaks to one person alone', () => {
-    expect(createOrgPlanNote(orgPlanQuote(1, true)).body).toContain('Just you is 1 seat: $50 a month with 3,000 credits a month.');
+    expect(createOrgPlanNote(orgPlanQuote(1)).body).toContain('Just you is 1 seat: $50 a month with 3,000 credits a month.');
   });
 });
 

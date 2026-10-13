@@ -86,7 +86,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  getUserAccessLevel: vi.fn(),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  getGrantedAccessLevel: vi.fn(),
 }));
 // The org-aware relationship is the gate (its pure role decisions stay real).
 vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
@@ -98,7 +99,7 @@ vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
 import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 
@@ -164,8 +165,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
     // Default: no permissions
     mockPermResults.value = [];
 
-    // Default: getUserAccessLevel returns null (overridden in specific tests)
-    vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+    // Default: getGrantedAccessLevel returns null (overridden in specific tests)
+    vi.mocked(getGrantedAccessLevel).mockResolvedValue(null);
 
     // Default: the caller leads the drive
     vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
@@ -235,7 +236,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
     });
 
     it('ORG-4 (partial) an org Admin with no drive_members row sees the permission tree of an org drive', async () => {
@@ -245,7 +246,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
     });
 
     it('X-6 (partial) a stale source=org ADMIN row opens nothing: the relationship refuses and the row is never read', async () => {
@@ -456,7 +457,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
     });
 
     it('drive root node has currentPermissions when userId query param provided (owner case)', async () => {
-      vi.mocked(getUserAccessLevel).mockResolvedValue({
+      vi.mocked(getGrantedAccessLevel).mockResolvedValue({
         canView: true, canEdit: true, canShare: true, canDelete: true,
       });
 

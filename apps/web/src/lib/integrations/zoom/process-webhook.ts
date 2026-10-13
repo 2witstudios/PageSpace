@@ -17,6 +17,7 @@ import { parseVtt, vttToHtml } from './parse-vtt';
 import { buildDocumentHtml } from './build-document';
 import { generateTranscriptSummary } from './generate-summary';
 import { extractActionItems } from './extract-action-items';
+import { automationActor } from '@pagespace/lib/permissions/access-actor';
 
 interface ZoomTranscriptPayload {
   event: string;
@@ -144,7 +145,8 @@ export async function processZoomWebhook(
   const title = `${datePrefix} — ${topic}`;
 
   const result = await pageService.createPage(
-    connection.userId,
+    // A recording webhook files the page as the connection owner, an automation (D-OW-34).
+    automationActor(connection.userId, 'zoom-recording'),
     {
       title,
       type: 'DOCUMENT',

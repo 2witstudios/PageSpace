@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import { agentDispatchPayloadSchema } from '@pagespace/lib/auth/agent-dispatch-payload';
 import { dispatchThroughChatPipeline } from '../session-tools-runtime';
+import { automationActor, credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // The dispatch SIGNS an internal hop rather than replaying the caller's browser
 // credential — everything else the runtime module wires (db listings, sandbox
@@ -14,7 +15,8 @@ import { dispatchThroughChatPipeline } from '../session-tools-runtime';
 // The property it guarded (a dispatched turn is admitted as the calling user,
 // and only as them) is now guarded by the signature and by `actingUserId`.
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ canUserViewPage: vi.fn(), getDriveIdsForUser: vi.fn() }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), canUserViewPage: vi.fn(), getDriveIdsForUser: vi.fn() }));
 vi.mock('@pagespace/lib/services/agent-workspaces/workspace-status', () => ({ deriveSandboxStatus: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => {
   const silent = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() };
@@ -73,11 +75,14 @@ function sentPayload(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
   return agentDispatchPayloadSchema.parse(JSON.parse(sentCall(fetchMock, index).body));
 }
 
+// The dispatching credential's ceremony evidence (SEC-2/3).
+const EVIDENCE = { authenticatedAtMs: 1_760_000_000_000, assurance: 'user_verified_passkey' as const };
+
 const DISPATCH_INPUT = {
   conversationId: 'worker-conversation-1',
   agentPageId: 'agent-page-1',
   input: 'hello',
-  userId: 'user-1',
+  actor: credentialActor('user-1', EVIDENCE),
   depth: 1,
   wait: false,
   scope: { allowedDriveIds: [] as string[] },
@@ -102,6 +107,22 @@ describe('dispatchThroughChatPipeline', () => {
 
     expect(outcome).toEqual({ ok: true, waited: false });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('SEC-2 (partial) SEC-3 (partial) signs the dispatching credential\'s ceremony evidence into the hop, so the worker opens org drives exactly as far as its dispatcher could', async () => {
+    const fetchMock = fetchAdmitted();
+
+    await dispatchThroughChatPipeline(DISPATCH_INPUT);
+
+    expect(sentPayload(fetchMock).authentication).toEqual(EVIDENCE);
+  });
+
+  it('SEC-2 (partial) an automation signed nothing in, so its dispatch carries no evidence', async () => {
+    const fetchMock = fetchAdmitted();
+
+    await dispatchThroughChatPipeline({ ...DISPATCH_INPUT, actor: automationActor('user-1', 'workflow:cron') });
+
+    expect(sentPayload(fetchMock).authentication).toBeNull();
   });
 
   it('signs the body it actually sends, and names the acting user in it', async () => {

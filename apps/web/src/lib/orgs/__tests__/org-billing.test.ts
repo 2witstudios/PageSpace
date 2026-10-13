@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { orgPlanQuote } from '@pagespace/lib/billing/org-plan-quote';
 
-// Included credits follow the money-model switch (MONEY_MODEL_V2_ACTIVE), never a pinned ratio.
+// Included credits follow the money-model ratio, never a pinned figure.
 const included = (seats: number) => formatCreditCount(orgPlanQuote(seats).includedCreditCents);
 
 import { invoiceLine, planFigures, poolFigures, seatFigures } from '../org-billing';

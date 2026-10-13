@@ -1,6 +1,7 @@
 import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
 import type { EffectiveDriveMembership } from './org-drive-resolution';
 import type { DriveMemberRole } from './org-access';
+import { holdsOrgRole } from '../organizations/authorize-core';
 
 /**
  * A person's relationship to one drive, as every access gate outside this directory asks it: are
@@ -74,7 +75,7 @@ export interface DriveLeadAuthorityInput {
 export function decideDriveLeadAuthority({ orgsEnabled, userId, drive, orgRole }: DriveLeadAuthorityInput): DriveLeadAuthority {
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
   if (!orgsEnabled || drive.orgId === null) return { allowed: false };
-  if (orgRole === 'OWNER') return { allowed: true, via: 'org-owner', orgId: drive.orgId };
-  if (orgRole === 'ADMIN') return { allowed: true, via: 'org-admin', orgId: drive.orgId };
-  return { allowed: false };
+  // Org power through the one org authorization decision (ORG-5); `via` only names which seat it came from.
+  if (!holdsOrgRole(orgRole, 'ADMIN')) return { allowed: false };
+  return { allowed: true, via: holdsOrgRole(orgRole, 'OWNER') ? 'org-owner' : 'org-admin', orgId: drive.orgId };
 }

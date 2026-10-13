@@ -23,6 +23,7 @@ vi.mock('@/hooks/useDriveWallet', () => ({
   useDriveWallet: () => ({ wallet: { myCap: { dailyRemainingCents: 0, monthlyRemainingCents: 400 } } }),
 }));
 vi.mock('@/components/billing/CreditBalance', () => ({ CreditBalance: () => <div data-testid="personal-credit-chip" /> }));
+vi.mock('@/components/billing/BuyCreditsButton', () => ({ BuyCreditsButton: () => <button type="button">Buy credits</button> }));
 
 import { SpendSourcePopover } from '../SpendSourcePopover';
 import { SpendRefusalCardView, SpendRefusalCard } from '../SpendRefusalCard';
@@ -30,6 +31,9 @@ import { ComposerSpendStrip } from '../ComposerSpendStrip';
 import { SpendSurfaceProvider } from '../SpendSurface';
 import { AiBalanceWidget } from '@/components/billing/AiBalanceWidget';
 import { useSpendContextStore } from '@/stores/useSpendContextStore';
+import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
+import { AutomationSkippedBadge, AutomationSpendLine } from '../AutomationSpendState';
+import { TooltipProvider } from '@/components/ui/tooltip';
 
 const product: SurfaceChoice = { source: 'drive_wallet', walletId: 'w-product', label: 'Product wallet', driveName: 'Product', orgName: 'Northwind Labs', remainingCents: 192, remainingCredits: '192' };
 const seat: SurfaceChoice = { source: 'seat_allowance', walletId: 'w-pool', label: 'Northwind Labs seat', driveName: 'Product', orgName: 'Northwind Labs', remainingCents: 54, remainingCredits: '54' };
@@ -213,5 +217,53 @@ describe('ComposerSpendStrip: the strip before the first message', () => {
     spendState.spend = conversation([product, seat, own], spends(product));
     render(<ComposerSpendStrip conversationId="c1" driveId="d-product" isGlobal={false} hasMessages />);
     expect(screen.queryByTestId('composer-spend-strip')).toBeNull();
+  });
+});
+
+describe('UI-8: the refusal card and automation state', () => {
+  it('UI-8 (partial) a refused source in a chat renders the refusal card in the error banner, naming the source and offering the others', () => {
+    spendState.spend = conversation([product, seat, own], { kind: 'refuse', reason: 'source_empty', source: 'drive_wallet', options: ['seat_allowance', 'own_credits'] } as unknown as SurfaceDecision);
+    render(
+      <ChatErrorBanner
+        cause={{
+          code: 'spend_source_refused',
+          httpStatus: 402,
+          message: 'Product wallet is empty.',
+          retryable: false,
+          refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['seat_allowance', 'own_credits'] },
+        }}
+      />,
+    );
+    expect(screen.getByText(/Product wallet is empty for/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Northwind Labs seat · 54 credits' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Your credits' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Product wallet/ })).toBeNull();
+    // A refusal is not an out-of-credits error: no buy-credits call to action.
+    expect(screen.queryByRole('button', { name: 'Buy credits' })).toBeNull();
+  });
+
+  it('UI-8 (partial) an automation shows the wallet it spends and as whom, and a skipped run says why', async () => {
+    render(
+      <TooltipProvider>
+        <AutomationSpendLine creatorName="Dana Kim" walletLabel="Product wallet" ownerLeft={false} />
+        <AutomationSkippedBadge
+          state={{ kind: 'skipped', reason: 'source_empty' }}
+          creatorName="Dana Kim"
+          context={{ creatorNames: {}, walletLabel: 'Product wallet', orgName: 'Northwind Labs' }}
+        />
+      </TooltipProvider>,
+    );
+    const line = screen.getByTestId('automation-spends-as');
+    expect(line.textContent).toContain('Created by Dana Kim');
+    expect(line.textContent).toContain('As Dana');
+    const skipped = screen.getByTestId('automation-skipped');
+    expect(skipped.textContent).toBe('Skipped');
+    expect(skipped.getAttribute('aria-label')).toMatch(/^Skipped: .*Product wallet/);
+  });
+
+  it('UI-8 (partial) an automation whose creator left is flagged and disabled, not shown as spending', () => {
+    render(<AutomationSpendLine creatorName="Dana Kim" walletLabel="Product wallet" ownerLeft />);
+    expect(screen.getByTestId('automation-owner-left').textContent).toContain('Owner left');
+    expect(screen.queryByTestId('automation-spends-as')).toBeNull();
   });
 });

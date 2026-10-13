@@ -1,6 +1,6 @@
 {
-  "id": "9517bf88-a18c-4c16-9eda-94ac9be9d19d",
-  "prevId": "5ffdfff7-cbab-4724-ab4f-b67edbb2ae0f",
+  "id": "7df629a1-040b-4150-9dc0-2bc0cc76709a",
+  "prevId": "26dea859-358c-4efb-bf18-2f0dfbfb5cd2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -6380,12 +6380,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "unattributed_at": {
-          "name": "unattributed_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -6657,22 +6651,6 @@
           ],
           "isUnique": false,
           "where": "reconcile_status = 'pending'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_ai_usage_unattributed": {
-          "name": "idx_ai_usage_unattributed",
-          "columns": [
-            {
-              "expression": "unattributed_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "unattributed_at IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -18731,7 +18709,7 @@
           "name": "userId",
           "type": "text",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "walletId": {
           "name": "walletId",
@@ -18825,12 +18803,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'ai'"
-        },
-        "fallbackFromWalletId": {
-          "name": "fallbackFromWalletId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "createdAt": {
           "name": "createdAt",
@@ -18964,7 +18936,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "set null",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "credit_ledger_walletId_wallets_id_fk": {
@@ -18978,19 +18950,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "credit_ledger_fallbackFromWalletId_wallets_id_fk": {
-          "name": "credit_ledger_fallbackFromWalletId_wallets_id_fk",
-          "tableFrom": "credit_ledger",
-          "tableTo": "wallets",
-          "columnsFrom": [
-            "fallbackFromWalletId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },
@@ -26231,11 +26190,25 @@
           "primaryKey": false,
           "notNull": false
         },
-        "trialEnd": {
-          "name": "trialEnd",
-          "type": "timestamp",
+        "giftedExtraSeats": {
+          "name": "giftedExtraSeats",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
+        },
+        "giftRevision": {
+          "name": "giftRevision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "collectionMethod": {
+          "name": "collectionMethod",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'charge_automatically'"
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",
@@ -26439,7 +26412,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "organizations_avatar_url_chk": {
+          "name": "organizations_avatar_url_chk",
+          "value": "\"organizations\".\"avatarUrl\" IS NULL OR \"organizations\".\"avatarUrl\" ~ ('^/api/orgs/' || \"organizations\".\"id\" || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.org_guest_holds": {

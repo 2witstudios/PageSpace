@@ -80,6 +80,7 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
   getMemberDriveIds: vi.fn(async () => []),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
@@ -104,11 +105,12 @@ vi.mock('@/lib/logging/mask', () => ({
 import { commandTools } from '../command-tools';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsDriveOwnerOrAdmin = vi.mocked(isDriveOwnerOrAdmin);
 
-const ctx: Partial<ToolExecutionContext> = { userId: 'user-1' };
+const ctx: Partial<ToolExecutionContext> = { userId: 'user-1', accessActor: credentialActor('user-1', null) };
 
 const run = async <T>(
   toolName: keyof typeof commandTools,
@@ -380,7 +382,7 @@ describe('command-tools', () => {
       // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
       // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
       // (member-drives.integration.test.ts proves it on real Postgres).
-      expect(getMemberDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), { includeTrashed: false });
     });
 
     it('returns empty list when no commands exist', async () => {
@@ -429,7 +431,7 @@ describe('command-tools', () => {
 
       await run('list_commands', { driveId: 'drive-open-org' });
 
-      expect(getMemberDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), { includeTrashed: false });
       expect(mockSelect).not.toHaveBeenCalled();
     });
   });

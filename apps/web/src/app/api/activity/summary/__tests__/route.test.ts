@@ -105,7 +105,7 @@ describe('GET /api/activity/summary', () => {
     // The count is scoped to accessiblePageIds, never a drive_members read of this route's own;
     // its SQL function gives a GUEST row only its explicit grants (drizzle/0309), which
     // accessible-page-ids-agreement.integration.test.ts proves on real Postgres.
-    expect(accessiblePageIds).toHaveBeenCalledWith('user_1');
+    expect(accessiblePageIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
   });
 
   it('does not log audit event when query throws', async () => {
@@ -133,7 +133,7 @@ describe('GET /api/activity/summary', () => {
     const response = await GET(new Request('https://example.com/api/activity/summary'));
 
     expect(response.status).toBe(200);
-    expect(accessiblePageIds).toHaveBeenCalledWith('user_1');
+    expect(accessiblePageIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
     const { driveMembers } = await import('@pagespace/db/schema/members');
     const fromCalls = vi.mocked(db.select).mock.results.flatMap((r) => (r.value as { from: ReturnType<typeof vi.fn> }).from.mock.calls.map((c) => c[0]));
     expect(fromCalls).not.toContain(driveMembers);

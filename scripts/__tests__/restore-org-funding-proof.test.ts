@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type Stripe from 'stripe';
 import { createPaidInvoiceReader, parseProofOptions, planFundingProof, restoreFundingProof, type PaidInvoice } from '../restore-org-funding-proof';
 
-const org = { orgId: 'org_1', customerId: 'cus_1', subscriptionId: 'sub_1' };
+const org = { orgId: 'org_1', customerId: 'cus_1', subscriptionId: 'sub_1', giftedExtraSeats: null };
 const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
 function invoice(overrides: Partial<PaidInvoice> = {}): PaidInvoice {
   return {
@@ -26,10 +26,13 @@ describe('historical organization funding proof', () => {
   ] satisfies Partial<PaidInvoice>[])('SEAT-9 (partial) rejects unpaid, mismatched or incomplete evidence: %j', (overrides) => {
     expect(() => planFundingProof(org, invoice(overrides), prices)).toThrow();
   });
-  it('SEAT-9 (partial) accepts a supported gift on the current subscription', () => {
-    expect(planFundingProof(org, invoice({ amount_paid: 0, parent: { subscription_details: {
+  it('SEAT-9 (partial) accepts a supported gift on the current subscription, with its admin-pinned seats (D-OW-54)', () => {
+    const gift = invoice({ amount_paid: 0, parent: { subscription_details: {
       subscription: 'sub_1', metadata: { type: 'gift_subscription' },
-    } } }), prices)).toMatchObject({ basis: 'gift', paidCents: 0 });
+    } } });
+    expect(planFundingProof({ ...org, giftedExtraSeats: 0 }, gift, prices)).toMatchObject({ basis: 'gift', paidCents: 0 });
+    // A gift without a stored pin is not an admin gift: it is no funding evidence (fail closed).
+    expect(() => planFundingProof(org, gift, prices)).toThrow('Invoice has no verified organization funding');
   });
   it('dry-run writes nothing; apply hands verified evidence to the conditional store', async () => {
     const apply = vi.fn().mockResolvedValue(true);

@@ -20,7 +20,8 @@
 
 import type { WalletViewer } from '../permissions/wallet-access';
 import { formatCreditCount } from './money-model';
-import { walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import type { AIUsageSource } from '../monitoring/usage-source';
+import { FORMER_MEMBER_CONSUMER_KEY, userConsumerKey, walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
 
 export interface DriveWalletRowFacts {
   id: string;
@@ -65,12 +66,115 @@ export interface ConsumerSpend {
   userId: string | null;
   /** The person's name, so the UI never resolves an id (null when unknown). */
   displayName: string | null;
+  /** Spent this period. */
   spentCents: number;
+  /** Of that, spent since the start of today (UTC, the cap window, WAL-7). */
+  spentTodayCents: number;
+  /** Of that, spent by automations run on this person's behalf ([D-OW-34]: workflows and triggers). */
+  viaAutomationsCents: number;
 }
 
-/** A spend-by-member row as the lead and admins see it: the amount also as a credit count. */
+/** A spend-by-member row as the lead and admins see it: the amounts also as credit counts. */
 export interface ConsumerSpendView extends ConsumerSpend {
   spentCredits: string;
+  spentTodayCredits: string;
+  viaAutomationsCredits: string;
+}
+
+/**
+ * The usage source automations record (monitoring/usage-source): the workflow executor stamps every
+ * scheduled, triggered and manually run workflow call `workflow`. "Via automations" is spend whose
+ * usage log carries it; compute and other spend with no usage log is never counted as automation.
+ */
+export const AUTOMATION_USAGE_SOURCE: AIUsageSource = 'workflow';
+
+/**
+ * One aggregate of a wallet's usage rows this period: a person's spend in one bucket of (since the
+ * start of today?, by an automation?). The service groups the ledger this way; this folds it.
+ */
+export interface ConsumerSpendBucket {
+  /** null: a person who deleted their account ([D-OW-58]); their spend stays on this wallet, unnamed. */
+  userId: string | null;
+  cents: number;
+  today: boolean;
+  viaAutomation: boolean;
+}
+
+/**
+ * Who spends from a wallet (UI-9, SPEND-10): one row per person with this period's spend, the part
+ * spent today and the part spent via automations, by spend then person. Never negative (a refund
+ * bucket nets out, it does not show as income). Names come from `names`; unknown is null, never an id.
+ */
+export function consumerSpendFromBuckets(buckets: readonly ConsumerSpendBucket[], names: ReadonlyMap<string, string>): ConsumerSpend[] {
+  // [D-OW-58] every deleted account's spend is one "former member" row, never folded into anyone else's.
+  const byUser = new Map<string | null, { spent: number; today: number; automation: number }>();
+  for (const b of buckets) {
+    const acc = byUser.get(b.userId) ?? { spent: 0, today: 0, automation: 0 };
+    const cents = whole(b.cents);
+    acc.spent += cents;
+    if (b.today) acc.today += cents;
+    if (b.viaAutomation) acc.automation += cents;
+    byUser.set(b.userId, acc);
+  }
+  return [...byUser.entries()]
+    .map(([userId, acc]) => ({
+      consumerKey: userId === null ? FORMER_MEMBER_CONSUMER_KEY : userConsumerKey(userId),
+      userId,
+      displayName: userId === null ? null : names.get(userId) ?? null,
+      spentCents: Math.max(0, acc.spent),
+      spentTodayCents: Math.max(0, acc.today),
+      viaAutomationsCents: Math.max(0, acc.automation),
+    }))
+    .sort((a, b) => b.spentCents - a.spentCents || a.consumerKey.localeCompare(b.consumerKey));
+}
+
+/** The keys of a drive wallet in my list: a test pins the entry to exactly these, and the SDK's copy is drift-guarded. */
+export const DRIVE_WALLET_LIST_FIELDS = [
+  'driveId',
+  'driveName',
+  'walletId',
+  'status',
+  'remainingCents',
+  'remainingCredits',
+  'mySpentCents',
+  'mySpentCredits',
+] as const;
+
+/** A drive wallet I spend from, as Settings › Usage › Wallets lists it (UI-10). */
+export interface DriveWalletListEntry {
+  driveId: string;
+  driveName: string | null;
+  walletId: string;
+  status: WalletStatus;
+  remainingCents: number;
+  remainingCredits: string;
+  /** What I spent from it this period: my own spend only (SPEND-9). */
+  mySpentCents: number;
+  mySpentCredits: string;
+}
+
+/**
+ * One drive wallet in my list (UI-10): what is left (the consumer amount, SPEND-9) and what I spent
+ * from it this period. Picks fields explicitly, so the wallet's allocation, its total spend and
+ * other people's spend never reach the list.
+ */
+export function driveWalletListEntry(
+  row: { id: string; subjectId: string; status: WalletStatus; monthlyAllowanceCents: number; spentCents: number; topupRemainingCents: number; debtCents: number },
+  driveName: string | null,
+  mySpentCents: number,
+): DriveWalletListEntry {
+  const remaining = walletRemainingCents(row);
+  const mine = Math.max(0, whole(mySpentCents));
+  return {
+    driveId: row.subjectId,
+    driveName,
+    walletId: row.id,
+    status: displayedWalletStatus(row),
+    remainingCents: remaining,
+    remainingCredits: formatCreditCount(remaining),
+    mySpentCents: mine,
+    mySpentCredits: formatCreditCount(mine),
+  };
 }
 
 export interface PoolFacts {
@@ -214,7 +318,11 @@ function leadFields(facts: DriveWalletFacts): Omit<LeadWalletView, 'viewer'> {
       userId: s.userId,
       displayName: s.displayName,
       spentCents: whole(s.spentCents),
+      spentTodayCents: whole(s.spentTodayCents),
+      viaAutomationsCents: whole(s.viaAutomationsCents),
       spentCredits: formatCreditCount(whole(s.spentCents)),
+      spentTodayCredits: formatCreditCount(whole(s.spentTodayCents)),
+      viaAutomationsCredits: formatCreditCount(whole(s.viaAutomationsCents)),
     })),
   };
 }

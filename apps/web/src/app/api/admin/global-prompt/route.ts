@@ -29,6 +29,7 @@ import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { EXECUTE_TOOL_DESCRIPTION } from '@/lib/ai/tools/execute-tool';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 interface PromptSection {
   name: string;
@@ -229,14 +230,14 @@ async function handleGlobalPrompt(
     // receive, delegation line included or not. Both variants are built here,
     // and each mode in the loop below picks its own.
     const [agentAwarenessPromptFull, agentAwarenessPromptReadOnly] = await Promise.all([
-      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: true }),
-      buildAgentAwarenessPrompt(adminUser.id, { canDelegate: false }),
+      buildAgentAwarenessPrompt(actorFromVerifiedUser(adminUser), { canDelegate: true }),
+      buildAgentAwarenessPrompt(actorFromVerifiedUser(adminUser), { canDelegate: false }),
     ]);
 
     let pageTreePrompt = '';
     if (showPageTree) {
       if (selectedDriveId) {
-        const treeContext = await getPageTreeContext(adminUser.id, {
+        const treeContext = await getPageTreeContext(actorFromVerifiedUser(adminUser), {
           scope: 'drive',
           driveId: selectedDriveId,
         });
@@ -245,7 +246,7 @@ async function handleGlobalPrompt(
         }
       } else {
         // Dashboard context - show drive list summary
-        const driveSummary = await getDriveListSummary(adminUser.id);
+        const driveSummary = await getDriveListSummary(actorFromVerifiedUser(adminUser));
         if (driveSummary) {
           pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
         }

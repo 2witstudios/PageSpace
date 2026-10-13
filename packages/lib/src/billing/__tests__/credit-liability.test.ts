@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { liabilityWalletKind, foldCreditLiability, type LiabilityGroup } from '../credit-liability';
+import { liabilityWalletKind, foldCreditLiability, fundingWalletTier, type LiabilityGroup } from '../credit-liability';
 
 const group = (over: Partial<LiabilityGroup>): LiabilityGroup => ({
   ownerType: 'user',
@@ -100,5 +100,19 @@ describe('foldCreditLiability: grants outstanding are the root wallets\' grant b
       userCount: 0,
       orgPoolCount: 0,
     });
+  });
+});
+
+describe('fundingWalletTier: margin is attributed to the tier that pays for the wallet', () => {
+  it('MON-7 (partial) an org-owned wallet (the pool or any drive/agent wallet under it) is Business, whoever spent', () => {
+    expect(fundingWalletTier({ ownerType: 'org', ownerTier: null })).toBe('business');
+    expect(fundingWalletTier({ ownerType: 'org', ownerTier: 'free' })).toBe('business');
+  });
+
+  it('MON-7 (partial) a user-owned wallet is its owner\'s personal tier; a stale business or unknown value is free', () => {
+    expect(fundingWalletTier({ ownerType: 'user', ownerTier: 'pro' })).toBe('pro');
+    expect(fundingWalletTier({ ownerType: 'user', ownerTier: 'free' })).toBe('free');
+    expect(fundingWalletTier({ ownerType: 'user', ownerTier: 'business' })).toBe('free');
+    expect(fundingWalletTier({ ownerType: 'user', ownerTier: null })).toBe('free');
   });
 });

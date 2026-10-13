@@ -12,6 +12,7 @@ import {
 import { authenticateRequestWithOptions, checkMCPDriveScope, isAuthError } from '@/lib/auth';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { WALLET_READ_AUTH, WALLET_WRITE_AUTH, walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * A drive's wallet (Spec UI-9, SPEND-9, SPEND-10, WAL-3, WAL-7).
@@ -53,7 +54,7 @@ export async function GET(request: Request, context: RouteContext) {
   const scopeError = checkMCPDriveScope(auth, driveId);
   if (scopeError) return scopeError;
   try {
-    const result = await getDriveWallet(auth.userId, driveId, walletCredentialOf(auth));
+    const result = await getDriveWallet(actorFromAuth(auth), driveId, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.read',
@@ -76,7 +77,7 @@ export async function POST(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, createSchema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await createDriveWallet(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
+    const result = await createDriveWallet(actorFromAuth(auth), driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',
@@ -99,7 +100,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const parsed = await safeParseBody(request, patchSchema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await updateDriveWallet(auth.userId, driveId, parsed.data, walletCredentialOf(auth));
+    const result = await updateDriveWallet(actorFromAuth(auth), driveId, parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',
@@ -120,7 +121,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   const auth = await authenticateRequestWithOptions(request, WALLET_WRITE_AUTH);
   if (isAuthError(auth)) return auth.error;
   try {
-    const result = await deleteDriveWallet(auth.userId, driveId, walletCredentialOf(auth));
+    const result = await deleteDriveWallet(actorFromAuth(auth), driveId, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.delete',

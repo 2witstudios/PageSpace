@@ -1,5 +1,3 @@
-import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 /**
  * The GLOBAL-ASSISTANT chat turn — the second of the two strategies behind the
  * single chat pipeline (`handle-chat-turn.ts`).
@@ -35,7 +33,7 @@ import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { conversationSpend } from '@pagespace/lib/billing/spend-target';
-import { UNGATED_TURN_CREDIT, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
 import { writeTurnPreamble } from './turn-preamble';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
@@ -93,6 +91,7 @@ import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import {
   attachStreamFinisher,
   createStreamAbortController,
@@ -123,6 +122,7 @@ import {
 } from '@/lib/repositories/resolve-or-create-conversation';
 import { deriveConversationTitle } from '@/lib/repositories/derive-conversation-title';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 
 /**
@@ -278,6 +278,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const { request, auth } = ctx;
     browserSessionId = ctx.browserSessionId;
     const userId = auth.userId;
+    // Who drives this global turn (D-OW-45): the request's credential and its ceremony evidence, asked by every
+    // org sign-in policy (SEC-2/3) the turn's reads and tools meet.
+    const driver = actorFromAuth(auth);
     const urlConversationId = ctx.urlConversationId;
     loggers.api.debug('Global Assistant Chat API: Authentication successful', { userId });
 
@@ -435,7 +438,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         })
         .from(users)
         .where(eq(users.id, userId));
-      userSubscriptionTier = resolvePersonalCapabilityTier(gateUser?.subscriptionTier);
+      userSubscriptionTier = personalTurnTiers(gateUser?.subscriptionTier).capability;
       userImageGenerationModel = gateUser?.imageGenerationModel ?? null;
       // Metering-exempt providers (admin Z.ai Coder Plan) bill on a flat-rate external
       // subscription, so skip the credit gate entirely — no hold, no balance check —
@@ -455,7 +458,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       const locationSpend = conversationSpend(locationContext?.currentDrive?.id, conversationId);
       credit = { spend: locationSpend };
       if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-        const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(gateUser?.subscriptionTier), {
+        const creditGate = await canConsumeAI(userId, personalTurnTiers(gateUser?.subscriptionTier).gate, {
           spend: locationSpend,
           estCostCents: estimateChatHoldCentsForModel(selectedModel),
           maxInFlight: MAX_CHAT_INFLIGHT,
@@ -549,7 +552,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         // Skipped for a solo /help — see the equivalent comment in
         // apps/web/src/app/api/ai/chat/route.ts.
         if (!isSoloHelpRequest) {
-          commandPlans = await planCommandExecutions(messageContent, userId, {
+          commandPlans = await planCommandExecutions(messageContent, driver, {
             driveId: locationContext?.currentDrive?.id ?? null,
           });
           if (commandPlans.length > 0) {
@@ -685,7 +688,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       });
 
       return await respondWithHelpAnswer({
-        senderId: userId,
+        sender: driver, // the /help list is the driver's own, asked through their credential
         driveId: locationContext?.currentDrive?.id ?? null,
         originalMessages: requestMessages,
         persist: (payload, messageId) =>
@@ -885,7 +888,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
 
     // Fetch drive prompt if user is within a drive
     let drivePromptSection = '';
-    if (locationContext?.currentDrive?.id) {
+    // The drive id comes from the client: its prompt is drive content, so the turn's driver must reach the drive (org sign-in policy included).
+    if (locationContext?.currentDrive?.id && (await getUserDriveAccess(driver, locationContext.currentDrive.id))) {
       try {
         const [drive] = await db
           .select({ drivePrompt: drives.drivePrompt })
@@ -932,7 +936,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
       conversation.id,
       'global',
-      userId,
+      driver,
     );
     turnTimer.mark('sandbox_eligibility');
 
@@ -945,7 +949,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // that silently fails. The payer-tier filter does NOT remove the
     // chat-only session family (sessions are free on every plan), so tier is
     // deliberately not weighed here.
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
+    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(driver, {
       canDelegate: !readOnlyMode,
     });
     turnTimer.mark('agent_awareness_built');
@@ -955,7 +959,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     if (showPageTree) {
       if (locationContext?.currentDrive?.id) {
         // In drive context: show full drive tree
-        const treeContext = await getPageTreeContext(userId, {
+        const treeContext = await getPageTreeContext(driver, {
           scope: 'drive',
           driveId: locationContext.currentDrive.id,
         });
@@ -969,7 +973,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
         }
       } else {
         // Dashboard context: show drive list summary
-        const driveSummary = await getDriveListSummary(userId);
+        const driveSummary = await getDriveListSummary(driver);
         turnTimer.mark('drive_summary_loaded');
         if (driveSummary) {
           pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
@@ -1011,7 +1015,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     const availableToolNames = Object.keys(filteredAllTools);
     const eligibleSkills = listEligibleSkills(availableToolNames);
     const userCommandCatalog = await loadUserCommandCatalog(
-      userId,
+      driver,
       locationContext?.currentDrive?.id ?? null,
       availableToolNames
     );
@@ -1023,7 +1027,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // navigation, so it is cache-stable per conversation. It has to be here
     // rather than in the volatile block — the compaction summary is lossy, and
     // this pointer is precisely what the agent needs after a summary.
-    const activePlan = await getActivePlan(conversationId, userId);
+    const activePlan = await getActivePlan(conversationId, driver);
     turnTimer.mark('active_plan_loaded');
     const activePlanPrompt = buildActivePlanPrompt(activePlan);
 
@@ -1078,7 +1082,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       let currentDriveId = locationContext?.currentDrive?.id || null;
       let userDriveRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null = null;
       if (currentDriveId) {
-        const access = await getDriveAccess(currentDriveId, userId);
+        const access = await getDriveAccess(currentDriveId, driver);
         turnTimer.mark('drive_access_checked');
         if (!access.isMember) {
           // User is not a member of this drive — do not resolve drive-scoped integrations
@@ -1406,6 +1410,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               : undefined,
             experimental_context: {
               userId,
+              accessActor: driver, // tools ask org sign-in policy of the global turn's driver
               timezone: userTimezone,
               aiProvider: currentProvider,
               aiModel: currentModel,

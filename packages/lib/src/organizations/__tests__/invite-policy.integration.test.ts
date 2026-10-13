@@ -55,16 +55,17 @@ afterAll(async () => {
 });
 
 const setWho = (whoCanInvite: string | undefined) => db.update(organizations).set({ policies: whoCanInvite === undefined ? {} : { whoCanInvite } }).where(eq(organizations.id, w.orgId));
-const invite = (actorRole: 'OWNER' | 'ADMIN' | 'MEMBER', invitedBy: string, role: 'MEMBER' | 'ADMIN' = 'MEMBER') =>
-  createOrRotateInvitation({ orgId: w.orgId, email: `p-${createId()}@northwind.test`, role, invitedBy, actorRole, now: new Date(), deliver });
+/** The inviter's role is read from org_members inside the service; each id below holds the role named. */
+const invite = (invitedBy: string, role: 'MEMBER' | 'ADMIN' = 'MEMBER') =>
+  createOrRotateInvitation({ credential: 'session', orgId: w.orgId, email: `p-${createId()}@northwind.test`, role, invitedBy, now: new Date(), deliver });
 const invitations = () => db.select().from(orgInvitations).where(eq(orgInvitations.orgId, w.orgId));
 
 describe('who can invite', () => {
   it('POL-5 with no policy stored only Owners and Admins invite; a Member is refused, naming the policy, and nothing is stored', async () => {
-    expect((await invite('OWNER', w.owner)).ok).toBe(true);
-    expect((await invite('ADMIN', w.admin)).ok).toBe(true);
+    expect((await invite(w.owner)).ok).toBe(true);
+    expect((await invite(w.admin)).ok).toBe(true);
 
-    const refused = await invite('MEMBER', w.member);
+    const refused = await invite(w.member);
 
     expect(refused).toMatchObject({ ok: false, status: 403, code: 'org_policy', policy: 'whoCanInvite' });
     expect(await invitations()).toHaveLength(2);
@@ -72,37 +73,37 @@ describe('who can invite', () => {
 
   it('POL-5 with members allowed, a plain Member invites; turning it back to admins refuses them at the next call, no restart', async () => {
     await setWho('members');
-    expect((await invite('MEMBER', w.member)).ok).toBe(true);
+    expect((await invite(w.member)).ok).toBe(true);
     await setWho('admins');
-    expect(await invite('MEMBER', w.member)).toMatchObject({ ok: false, code: 'org_policy' });
+    expect(await invite(w.member)).toMatchObject({ ok: false, code: 'org_policy' });
   });
 
   it('POL-5 (partial) a Member may never invite someone as an Admin, even where members may invite', async () => {
     await setWho('members');
-    expect(await invite('MEMBER', w.member, 'ADMIN')).toMatchObject({ ok: false, status: 403, policy: 'whoCanInvite', message: expect.stringContaining('Admin') });
-    expect((await invite('ADMIN', w.admin, 'ADMIN')).ok).toBe(true);
+    expect(await invite(w.member, 'ADMIN')).toMatchObject({ ok: false, status: 403, policy: 'whoCanInvite', message: expect.stringContaining('Admin') });
+    expect((await invite(w.admin, 'ADMIN')).ok).toBe(true);
     expect(await invitations()).toHaveLength(1);
   });
 
   it('POL-5 (partial) a damaged stored value fails closed to admins only', async () => {
     await setWho('banana');
-    expect(await invite('MEMBER', w.member)).toMatchObject({ ok: false, code: 'org_policy' });
-    expect((await invite('OWNER', w.owner)).ok).toBe(true);
+    expect(await invite(w.member)).toMatchObject({ ok: false, code: 'org_policy' });
+    expect((await invite(w.owner)).ok).toBe(true);
   });
 
   it('POL-5 (partial) a RESEND is judged the same way, on the actor and the role the invitation carries', async () => {
-    const issued = await invite('ADMIN', w.admin, 'ADMIN');
+    const issued = await invite(w.admin, 'ADMIN');
     if (!issued.ok) throw new Error('setup');
     await setWho('members');
 
-    const asMember = await resendInvitation({ orgId: w.orgId, invitationId: issued.invitation.id, actorRole: 'MEMBER', now: new Date(), deliver });
+    const asMember = await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.member, now: new Date(), deliver });
     expect(asMember).toMatchObject({ ok: false, status: 403, code: 'org_policy' });
     await setWho('admins');
-    const asAdmin = await resendInvitation({ orgId: w.orgId, invitationId: issued.invitation.id, actorRole: 'ADMIN', now: new Date(), deliver });
+    const asAdmin = await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: issued.invitation.id, actorId: w.admin, now: new Date(), deliver });
     expect(asAdmin.ok).toBe(true);
-    const plain = await invite('OWNER', w.owner);
+    const plain = await invite(w.owner);
     if (!plain.ok) throw new Error('setup');
     await setWho('admins');
-    expect(await resendInvitation({ orgId: w.orgId, invitationId: plain.invitation.id, actorRole: 'MEMBER', now: new Date(), deliver })).toMatchObject({ ok: false, code: 'org_policy' });
+    expect(await resendInvitation({ credential: 'session', orgId: w.orgId, invitationId: plain.invitation.id, actorId: w.member, now: new Date(), deliver })).toMatchObject({ ok: false, code: 'org_policy' });
   });
 });

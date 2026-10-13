@@ -1,4 +1,4 @@
-import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
@@ -152,6 +152,12 @@ export async function loadServicePrincipal(input: {
   service: 'agent-dispatch';
   allowedDriveIds: string[];
   originatingMcpTokenId?: string;
+  /**
+   * The DISPATCHING credential's ceremony evidence, carried in the signed payload like every derived credential's
+   * (SEC-2/3): the worker opens org drives exactly as far as the person who dispatched it. Null when that credential
+   * carried none, which every org sign-in policy refuses.
+   */
+  authentication: VerifiedAuthentication | null;
 }): Promise<ServiceAuthResult | null> {
   if (!input.userId) return null;
 
@@ -180,6 +186,7 @@ export async function loadServicePrincipal(input: {
   return {
     tokenType: 'service',
     service: input.service,
+    authentication: input.authentication,
     userId: user.id,
     role: user.role as 'user' | 'admin',
     tokenVersion: user.tokenVersion,

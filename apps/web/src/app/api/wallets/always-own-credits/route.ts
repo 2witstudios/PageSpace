@@ -12,6 +12,7 @@ import {
   walletCredentialOf,
   walletErrorResponse,
 } from '@/lib/wallets/wallet-route';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 /**
  * /api/wallets/always-own-credits — the caller's "Always my own credits" switches (Spec SPEND-5,
@@ -43,7 +44,7 @@ export async function PUT(request: Request) {
   const parsed = await safeParseBody(request, schema);
   if (!parsed.success) return parsed.response;
   try {
-    const result = await setAlwaysOwnCredits(auth.userId, parsed.data, walletCredentialOf(auth));
+    const result = await setAlwaysOwnCredits(actorFromAuth(auth), parsed.data, walletCredentialOf(auth));
     if (!result.ok) return walletErrorResponse(result);
     auditRequest(request, {
       eventType: 'data.write',

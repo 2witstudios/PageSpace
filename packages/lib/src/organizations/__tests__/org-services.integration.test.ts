@@ -24,8 +24,11 @@ import { organizations, orgInvitations, orgMembers, orgSubscriptions } from '@pa
 import {
   countOrgSeats,
   createOrganization,
+  findOrganizationById,
   listOrganizationsForUser,
+  setOrganizationAvatar,
 } from '../repository';
+import { orgAvatarPath } from '../org-avatar-core';
 import { changeMemberRole, removeMember, transferOwnership } from '../membership';
 import {
   acceptInvitation,
@@ -34,6 +37,7 @@ import {
   resendInvitation,
   revokeInvitation,
   lockOrgInviteAddress,
+  findInvitationByToken,
 } from '../invitations';
 import { deleteOrganization } from '../deletion';
 import { requireOrgRole } from '../authorize';
@@ -46,6 +50,8 @@ import { createOrgDrive } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { getOrgPolicies } from '../policy-reader';
 import { decideOrgDriveAdmission } from '../../permissions/guest-admission';
+import { credentialActor } from '../../permissions/access-actor';
+import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owner-actor';
 
 // Org-derived access is dark by default; a test that proves an org-shaped negative turns it on,
 // or the negative would hold only because the whole org branch is off.
@@ -122,7 +128,6 @@ describe('org services (real Postgres)', () => {
     const result = await createOrganization({
       name: 'Northwind Labs',
       slug: `northwind-${createId()}`,
-      avatarUrl: 'https://example.test/northwind.png',
       ownerId: jono.id,
     });
     if (!result.ok) throw new Error('seed failed');
@@ -159,7 +164,7 @@ describe('org services (real Postgres)', () => {
     it('ORG-1 (partial) creating an org writes ownerId and the one OWNER row together', async () => {
       const { jono, org } = await seedNorthwind();
       expect(org.name).toBe('Northwind Labs');
-      expect(org.avatarUrl).toBe('https://example.test/northwind.png');
+      expect(org.avatarUrl).toBeNull();
       expect(org.ownerId).toBe(jono.id);
       expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
       expect(await requireOrgRole(jono.id, org.id, 'OWNER')).toEqual({ ok: true, role: 'OWNER' });
@@ -173,6 +178,54 @@ describe('org services (real Postgres)', () => {
       const outsider = await person('Otto Outsider');
       const drive = await seedDrive(org.ownerId, org.id, { orgVisibility: 'OPEN' });
       expect(await decideOrgDriveAdmission({ driveId: drive.id, userId: outsider.id })).toEqual({ decision: 'hold', orgId: org.id });
+    });
+
+    it('ORG-1 an org has a name, a unique slug, an avatar PageSpace stores and serves (never an outside URL, refused by the service and by the database) and exactly one human Owner matching ownerId; an agent can be neither; ownership transfers to a member, leaving the old Owner an Admin', async () => {
+      const { jono, org } = await seedNorthwind();
+      expect(org).toMatchObject({ name: 'Northwind Labs', slug: expect.stringMatching(/^northwind-/), avatarUrl: null, ownerId: jono.id });
+      expect(await ownerRows(org.id)).toEqual([{ userId: jono.id }]);
+      expect(await createOrganization({ name: 'Copycat', slug: org.slug, ownerId: (await person('Copy Cat')).id })).toEqual({ ok: false, reason: 'slug_taken' });
+
+      // Avatar: the uploaded file's PageSpace path is stored and read back; an outside URL never is.
+      const uploaded = orgAvatarPath(org.id, 'avatar-first1.png');
+      expect(await setOrganizationAvatar(org.id, uploaded, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: uploaded }, previousAvatarUrl: null });
+      expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
+      for (const outside of ['https://tracker.example.com/pixel.png', orgAvatarPath('org_someone_else', 'avatar-first1.png')]) {
+        expect(await setOrganizationAvatar(org.id, outside, jono.id)).toEqual({ ok: false, reason: 'invalid_avatar' });
+        await expect(db.update(organizations).set({ avatarUrl: outside }).where(eq(organizations.id, org.id))).rejects.toThrow();
+      }
+      expect((await findOrganizationById(org.id))?.avatarUrl).toBe(uploaded);
+      expect(await setOrganizationAvatar(org.id, null, jono.id)).toMatchObject({ ok: true, organization: { avatarUrl: null }, previousAvatarUrl: uploaded });
+
+      // One human Owner: an agent can neither own nor receive the org.
+      const product = await seedDrive(jono.id, org.id, { name: 'Product' });
+      const agent = await factories.createPage(product.id, { type: 'AI_CHAT', title: 'Planner' });
+      expect(await createOrganization({ name: 'Agent Org', slug: `agent-org-${createId()}`, ownerId: agent.id })).toEqual({ ok: false, reason: 'owner_not_human' });
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: agent.id })).toEqual({ ok: false, status: 400, reason: 'owner_not_human' });
+
+      // Transferable: to a member only; ownerId and the one OWNER row move together.
+      const priya = await person('Priya Nair');
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: priya.id })).toEqual({ ok: false, status: 400, reason: 'target_not_member' });
+      await addMember(org.id, priya.id, 'ADMIN');
+      expect(await transferOwnership({ orgId: org.id, actorId: jono.id, targetId: priya.id })).toEqual({ ok: true });
+      expect(await orgOwnerId(org.id)).toBe(priya.id);
+      expect(await ownerRows(org.id)).toEqual([{ userId: priya.id }]);
+      expect(await requireOrgRole(jono.id, org.id, 'MEMBER')).toEqual({ ok: true, role: 'ADMIN' });
+    });
+
+    it('ORG-1 (partial) switching the avatar returns the path it replaced, under the org row lock: concurrent switches each replace a distinct path, so every replaced file is deleted exactly once and the stored one is never deleted', async () => {
+      const { jono, org } = await seedNorthwind();
+      const initial = orgAvatarPath(org.id, 'avatar-initial.png');
+      await setOrganizationAvatar(org.id, initial, jono.id);
+      const uploads = ['a', 'b', 'c', 'd'].map((n) => orgAvatarPath(org.id, `avatar-${n}${createId().slice(0, 6)}.png`));
+
+      const results = await Promise.all(uploads.map((path) => setOrganizationAvatar(org.id, path, jono.id)));
+
+      const replaced = results.map((r) => (r.ok ? r.previousAvatarUrl : 'refused'));
+      const stored = (await findOrganizationById(org.id))?.avatarUrl;
+      // The replaced paths and the stored one are exactly the initial and every upload, each once.
+      expect([...replaced, stored].sort()).toEqual([initial, ...uploads].sort());
+      expect(replaced).not.toContain(stored);
     });
 
     it('ORG-1 (partial) a taken slug creates neither the org nor a membership row', async () => {
@@ -280,17 +333,17 @@ describe('org services (real Postgres)', () => {
     it('ORG-3 (partial) re-inviting after expiry rotates the open invite', async () => {
       const { jono, org } = await seedNorthwind();
       const email = `lena-${createId()}@northwind.test`;
-      const first = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const first = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!first.ok) throw new Error('invite failed');
       const [before] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, first.invitation.id));
 
       // A live invite blocks a duplicate (case-insensitively) …
-      const dup = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: email.toUpperCase(), role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const dup = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: email.toUpperCase(), role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       expect(dup).toEqual({ ok: false, status: 409, reason: 'already_invited' });
 
       // … an expired one is rotated in place: same row, new token hash, new expiry.
       await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, before.id));
-      const again = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
+      const again = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
       if (!again.ok) throw new Error(`re-invite refused: ${again.reason}`);
       expect(again.rotated).toBe(true);
       expect(again.invitation.id).toBe(before.id);
@@ -305,8 +358,8 @@ describe('org services (real Postgres)', () => {
       const { jono, org } = await seedNorthwind();
       const priya = await person('Priya Nair');
       await addMember(org.id, priya.id, 'ADMIN');
-      const live = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
-      const dead = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: `lena-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const live = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const dead = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `lena-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!live.ok || !dead.ok) throw new Error('invite failed');
       expect(await countOrgSeats(org.id)).toBe(4);
 
@@ -317,7 +370,7 @@ describe('org services (real Postgres)', () => {
     it('ORG-3 (partial) a brand-new account accepting its invite lands as a member and consumes the invite', async () => {
       const { jono, org } = await seedNorthwind();
       const email = `Tomas.Alvarez-${createId()}@Northwind.test`;
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       // The account is created only after the invite (sign up from the email link).
@@ -336,22 +389,22 @@ describe('org services (real Postgres)', () => {
       const { jono, org } = await seedNorthwind();
       const dana = await person('Dana Kim');
       const marcus = await person('Marcus Oyelaran');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: dana.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: dana.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       expect(await acceptInvitation({ token: invite.token, userId: marcus.id, now: new Date() })).toMatchObject({ ok: false, reason: 'email_mismatch' });
       expect(await requireOrgRole(marcus.id, org.id, 'MEMBER')).toMatchObject({ ok: false });
       expect(await acceptInvitation({ token: invite.token, userId: dana.id, now: new Date() })).toEqual({ ok: true, orgId: org.id, role: 'ADMIN', joined: true });
-      expect(await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: dana.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver })).toEqual({ ok: false, status: 409, reason: 'already_member' });
+      expect(await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: dana.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver })).toEqual({ ok: false, status: 409, reason: 'already_member' });
     });
 
     it('ORG-3 (partial) resend replaces the link and revoke removes the open invite', async () => {
       const { jono, org } = await seedNorthwind();
       const aisha = await person('Aisha Bello');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: aisha.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: aisha.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
-      const resent = await resendInvitation({ actorRole: 'OWNER', orgId: org.id, invitationId: invite.invitation.id, now: new Date(), deliver });
+      const resent = await resendInvitation({ credential: 'session', actorId: jono.id, orgId: org.id, invitationId: invite.invitation.id, now: new Date(), deliver });
       if (!resent.ok) throw new Error('resend failed');
       expect(resent.token).not.toBe(invite.token);
       expect(await acceptInvitation({ token: invite.token, userId: aisha.id, now: new Date() })).toMatchObject({ ok: false, reason: 'not_found' });
@@ -361,10 +414,100 @@ describe('org services (real Postgres)', () => {
       expect(await countOrgSeats(org.id)).toBe(1);
     });
 
+    it('ORG-3 an emailed invite holds a seat while pending, expires, is resent with a new link that kills the old one, is revoked freeing its seat, and is accepted once by a brand-new account and by an existing account (other accounts refused)', async () => {
+      const { jono, org } = await seedNorthwind();
+      const emailed: Array<{ email: string; token: string }> = [];
+      const capture = async (invitation: { email: string }, token: string) => { emailed.push({ email: invitation.email, token }); };
+      const linkFor = (email: string) => emailed.filter((e) => e.email === email).pop()?.token ?? '';
+      expect(await countOrgSeats(org.id)).toBe(1);
+
+      // Invited by email: one address with no account yet, one existing account. Each pending invite is a seat.
+      const tomasEmail = `tomas-${createId()}@northwind.test`;
+      const dana = await person('Dana Kim');
+      const tomasInvite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomasEmail, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: capture });
+      const danaInvite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: dana.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver: capture });
+      if (!tomasInvite.ok || !danaInvite.ok) throw new Error('invite failed');
+      expect(emailed.map((e) => e.email)).toEqual([tomasEmail, dana.email]);
+      expect(await countOrgSeats(org.id)).toBe(3);
+
+      // Expiry: an expired invite holds no seat and cannot be accepted.
+      const firstLink = linkFor(tomasEmail);
+      await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, tomasInvite.invitation.id));
+      expect(await countOrgSeats(org.id)).toBe(2);
+      const tomas = await factories.createUser({ name: 'Tomás Alvarez', email: tomasEmail });
+      createdUsers.push(tomas.id);
+      expect(await acceptInvitation({ token: firstLink, userId: tomas.id, now: new Date() })).toMatchObject({ ok: false, status: 410, reason: 'expired' });
+
+      // Resend: a new link is emailed, the seat is held again, and the old link no longer works.
+      const resent = await resendInvitation({ credential: 'session', orgId: org.id, invitationId: tomasInvite.invitation.id, actorId: jono.id, now: new Date(), deliver: capture });
+      if (!resent.ok) throw new Error(`resend refused: ${resent.reason}`);
+      expect(linkFor(tomasEmail)).not.toBe(firstLink);
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: firstLink, userId: tomas.id, now: new Date() })).toMatchObject({ ok: false, status: 404, reason: 'not_found' });
+
+      // Revoke: the seat is freed and the link is dead.
+      const chrisEmail = `chris-${createId()}@northwind.test`;
+      const chrisInvite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: chrisEmail, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: capture });
+      if (!chrisInvite.ok) throw new Error('invite failed');
+      expect(await countOrgSeats(org.id)).toBe(4);
+      expect(await revokeInvitation({ orgId: org.id, invitationId: chrisInvite.invitation.id, actorId: jono.id })).toBe(true);
+      expect(await countOrgSeats(org.id)).toBe(3);
+      const chris = await factories.createUser({ name: 'Chris Rowe', email: chrisEmail });
+      createdUsers.push(chris.id);
+      expect(await acceptInvitation({ token: linkFor(chrisEmail), userId: chris.id, now: new Date() })).toMatchObject({ ok: false, reason: 'not_found' });
+
+      // Acceptance: the brand-new account and the existing one each join with the invited role; the
+      // seat moves from the invite to the membership, so the count does not change. Another account
+      // cannot use a link, and a link works once.
+      const marcus = await person('Marcus Oyelaran');
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: marcus.id, now: new Date() })).toMatchObject({ ok: false, status: 403, reason: 'email_mismatch' });
+      expect(await acceptInvitation({ token: linkFor(tomasEmail), userId: tomas.id, now: new Date() })).toEqual({ ok: true, orgId: org.id, role: 'MEMBER', joined: true });
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: dana.id, now: new Date() })).toEqual({ ok: true, orgId: org.id, role: 'ADMIN', joined: true });
+      expect(await countOrgSeats(org.id)).toBe(3);
+      expect(await acceptInvitation({ token: linkFor(dana.email), userId: dana.id, now: new Date() })).toMatchObject({ ok: false, status: 410, reason: 'already_accepted' });
+      expect(await requireOrgRole(marcus.id, org.id, 'MEMBER')).toMatchObject({ ok: false, status: 404 });
+      expect(await listOpenInvitations(org.id)).toEqual([]);
+    });
+
+    it('ORG-3 (partial) findInvitationByToken finds the invitation and its org name by the raw link token, and nothing for any other token', async () => {
+      const { jono, org } = await seedNorthwind();
+      const tokens: string[] = [];
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `lena-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: async (_i, token) => { tokens.push(token); } });
+      if (!invite.ok) throw new Error('invite failed');
+      const found = await findInvitationByToken(tokens[0]);
+      expect(found).toMatchObject({ id: invite.invitation.id, orgId: org.id, orgName: 'Northwind Labs', role: 'MEMBER' });
+      expect(found).not.toHaveProperty('tokenHash');
+      expect(await findInvitationByToken(`ps_orginv_${createId()}`)).toBeNull();
+    });
+
+    it('ORG-3 (partial) the inviter role is read again inside the transaction: an Admin demoted or removed after the route gate cannot invite or resend as an Admin', async () => {
+      const { jono, org } = await seedNorthwind();
+      const priya = await person('Priya Nair');
+      await addMember(org.id, priya.id, 'ADMIN');
+      const issued = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `lena-${createId()}@northwind.test`, role: 'ADMIN', invitedBy: priya.id, now: new Date(), deliver });
+      if (!issued.ok) throw new Error('invite failed');
+
+      // The route authorized Priya as an Admin; she is demoted before the service runs.
+      await changeMemberRole({ orgId: org.id, actorId: jono.id, targetId: priya.id, newRole: 'MEMBER' });
+      expect(await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `tomas-${createId()}@northwind.test`, role: 'ADMIN', invitedBy: priya.id, now: new Date(), deliver }))
+        .toMatchObject({ ok: false, status: 403, code: 'org_policy' });
+      expect(await resendInvitation({ credential: 'session', orgId: org.id, invitationId: issued.invitation.id, actorId: priya.id, now: new Date(), deliver }))
+        .toMatchObject({ ok: false, status: 403, code: 'org_policy' });
+
+      // Removed altogether: refused as a non-member, and nothing new is stored.
+      await db.delete(orgMembers).where(and(eq(orgMembers.orgId, org.id), eq(orgMembers.userId, priya.id)));
+      expect(await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `chris-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: priya.id, now: new Date(), deliver }))
+        .toEqual({ ok: false, status: 404, reason: 'not_member' });
+      expect(await resendInvitation({ credential: 'session', orgId: org.id, invitationId: issued.invitation.id, actorId: priya.id, now: new Date(), deliver }))
+        .toEqual({ ok: false, status: 404, reason: 'not_member' });
+      expect(await listOpenInvitations(org.id)).toHaveLength(1);
+    });
+
     it('ORG-3 (partial) an expired invite cannot be accepted', async () => {
       const { jono, org } = await seedNorthwind();
       const chris = await person('Chris Rowe');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: chris.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: chris.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
       await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, invite.invitation.id));
       expect(await acceptInvitation({ token: invite.token, userId: chris.id, now: new Date() })).toMatchObject({ ok: false, reason: 'expired' });
@@ -376,11 +519,11 @@ describe('org services (real Postgres)', () => {
     it('ORG-3 (partial) a resend whose email fails keeps the previously delivered link working', async () => {
       const { jono, org } = await seedNorthwind();
       const lena = await person('Lena Schulz');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: lena.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: lena.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
       const [before] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, invite.invitation.id));
 
-      const resent = await resendInvitation({ actorRole: 'OWNER',
+      const resent = await resendInvitation({ credential: 'session', actorId: jono.id,
         orgId: org.id,
         invitationId: invite.invitation.id,
         now: new Date(Date.now() + HOUR),
@@ -396,16 +539,16 @@ describe('org services (real Postgres)', () => {
     it('ORG-3 (partial) an invite whose email fails holds no seat; a rotated one is left as it was', async () => {
       const { jono, org } = await seedNorthwind();
       const failing = async () => { throw new Error('smtp down'); };
-      const fresh = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: failing });
+      const fresh = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: `tomas-${createId()}@northwind.test`, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver: failing });
       expect(fresh).toMatchObject({ ok: false, status: 502, reason: 'delivery_failed' });
       expect(await listOpenInvitations(org.id)).toEqual([]);
 
       const email = `aisha-${createId()}@northwind.test`;
-      const first = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const first = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!first.ok) throw new Error('invite failed');
       await db.update(orgInvitations).set({ expiresAt: new Date(Date.now() - HOUR) }).where(eq(orgInvitations.id, first.invitation.id));
       const [expired] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, first.invitation.id));
-      const rotated = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver: failing });
+      const rotated = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver: failing });
       expect(rotated).toMatchObject({ ok: false, status: 502, reason: 'delivery_failed' });
       const [after] = await db.select().from(orgInvitations).where(eq(orgInvitations.id, first.invitation.id));
       expect(after).toEqual(expired);
@@ -438,7 +581,7 @@ describe('org services (real Postgres)', () => {
       const { jono, org } = await seedNorthwind();
       const email = `marcus-${createId()}@northwind.test`;
       const lock = await holdAddressLock(org.id, email.toUpperCase());
-      const creating = createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const creating = createOrRotateInvitation({ credential: 'session', orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       expect(await isBlocked(creating)).toBe(true);
       await lock.release();
       expect(await creating).toMatchObject({ ok: true });
@@ -447,7 +590,7 @@ describe('org services (real Postgres)', () => {
     it('ORG-3 (partial) accepting an invite waits while the same address is locked by an invite creation', async () => {
       const { jono, org } = await seedNorthwind();
       const marcus = await person('Marcus Oyelaran');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: marcus.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: marcus.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
       const lock = await holdAddressLock(org.id, marcus.email);
       const accepting = acceptInvitation({ token: invite.token, userId: marcus.id, now: new Date() });
@@ -567,7 +710,7 @@ describe('org services (real Postgres)', () => {
       const { product, roadmap, finance, legal } = await seedDrives(jono, priya, org.id);
       const allIds = [product.id, roadmap.id, finance.id, legal.id];
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       const published: OrgMembershipSyncResult[] = [];
@@ -607,7 +750,7 @@ describe('org services (real Postgres)', () => {
     it('DRV-5 (partial) a join that races an org drive being created waits for it, so the joiner is materialized on that drive too', async () => {
       const { jono, org } = await seedNorthwind();
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       // The real createOrgDrive, paused inside its transaction right after its own membership sync
@@ -616,7 +759,7 @@ describe('org services (real Postgres)', () => {
       const paused = new Promise<void>((resolve) => { resume = resolve; });
       let synced: () => void = () => {};
       const syncedInside = new Promise<void>((resolve) => { synced = resolve; });
-      const creating = createOrgDrive(jono.id, { name: 'Roadmap', orgId: org.id }, {
+      const creating = createOrgDrive(jono.id, { authentication: null, name: 'Roadmap', orgId: org.id }, {
         ...orgDriveServiceDeps,
         syncOrgMembership: async (tx, call) => {
           await orgDriveServiceDeps.syncOrgMembership(tx, call);
@@ -649,7 +792,7 @@ describe('org services (real Postgres)', () => {
     it('ORG-6 (partial) an acceptance racing an org deletion waits on the org row instead of deadlocking on the invite row', async () => {
       const { jono, org } = await seedNorthwind();
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       // Stands in for deleteOrganization: it locks the org row first, and deleting the org then
@@ -685,7 +828,7 @@ describe('org services (real Postgres)', () => {
       await addMember(org.id, priya.id, 'ADMIN');
       const { product, roadmap } = await seedDrives(jono, priya, org.id);
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       let calls = 0;
@@ -716,7 +859,7 @@ describe('org services (real Postgres)', () => {
       await addMember(org.id, priya.id, 'ADMIN');
       const { product, roadmap, finance, legal } = await seedDrives(jono, priya, org.id);
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
       const publishSyncEvents = vi.fn(async () => {});
       expect(
@@ -737,7 +880,7 @@ describe('org services (real Postgres)', () => {
       await addMember(org.id, priya.id, 'ADMIN');
       const { product, roadmap } = await seedDrives(jono, priya, org.id);
       const tomas = await person('Tomás Alvarez');
-      const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
+      const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'MEMBER', invitedBy: jono.id, now: new Date(), deliver });
       if (!invite.ok) throw new Error('invite failed');
 
       const publishSyncEvents = vi.fn(async () => {});
@@ -774,18 +917,18 @@ describe('org services (real Postgres)', () => {
     const legal = await seedDrive(jono.id, org.id, { name: 'Legal', orgVisibility: 'PRIVATE' });
     const productPage = await factories.createPage(product.id);
     const tomas = await person('Tomás Alvarez');
-    const invite = await createOrRotateInvitation({ actorRole: 'OWNER', orgId: org.id, email: tomas.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
+    const invite = await createOrRotateInvitation({ credential: 'session', orgId: org.id, email: tomas.email, role: 'ADMIN', invitedBy: jono.id, now: new Date(), deliver });
     if (!invite.ok) throw new Error('invite failed');
 
     // Control: the org branch is live, so an accepted member does open and list the Open drive.
-    expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isMember: true });
-    expect((await listAccessibleDrives(marcus.id)).map((d) => d.id)).toContain(product.id);
+    expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isMember: true });
+    expect((await listAccessibleDrives(credentialActor(marcus.id, null))).map((d) => d.id)).toContain(product.id);
 
     for (const drive of [product, finance, legal]) {
-      expect(await getDriveAccess(drive.id, tomas.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
+      expect(await getDriveAccess(drive.id, credentialActor(tomas.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
     }
-    expect(await getUserAccessLevel(tomas.id, productPage.id)).toBeNull();
-    const listed = (await listAccessibleDrives(tomas.id, { includeTrash: true })).map((d) => d.id);
+    expect(await getUserAccessLevel(credentialActor(tomas.id, null), productPage.id)).toBeNull();
+    const listed = (await listAccessibleDrives(credentialActor(tomas.id, null), { includeTrash: true })).map((d) => d.id);
     expect(listed).not.toContain(product.id);
     expect(listed).not.toContain(finance.id);
     expect(listed).not.toContain(legal.id);
@@ -836,14 +979,14 @@ describe('org services (real Postgres)', () => {
       for (const orgsEnabled of [false, true]) {
         flags.orgsEnabled = orgsEnabled;
         for (const drive of [product, finance]) {
-          expect(await getDriveAccess(drive.id, priya.id)).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
+          expect(await getDriveAccess(drive.id, credentialActor(priya.id, null))).toEqual({ isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null });
         }
-        expect(await getUserAccessLevel(priya.id, productPage.id)).toBeNull();
-        expect(await getUserAccessLevel(priya.id, financePage.id)).toBeNull();
-        const listed = (await listAccessibleDrives(priya.id, { includeTrash: true })).map((d) => d.id);
+        expect(await getUserAccessLevel(credentialActor(priya.id, null), productPage.id)).toBeNull();
+        expect(await getUserAccessLevel(credentialActor(priya.id, null), financePage.id)).toBeNull();
+        const listed = (await listAccessibleDrives(credentialActor(priya.id, null), { includeTrash: true })).map((d) => d.id);
         expect(listed).not.toContain(product.id);
         expect(listed).not.toContain(finance.id);
-        expect(await getDriveAccess(product.id, marcus.id)).toMatchObject({ isOwner: true });
+        expect(await getDriveAccess(product.id, credentialActor(marcus.id, null))).toMatchObject({ isOwner: true });
       }
     });
 
@@ -993,7 +1136,7 @@ describe('org services (real Postgres)', () => {
           db.select({ revokedAt: oauthAccessTokens.revokedAt }).from(oauthAccessTokens).where(eq(oauthAccessTokens.familyId, m.familyId)),
         ]);
         return {
-          key: await hasAppDriveMembership(m.tokenId, driveId),
+          key: await hasAppDriveMembership(await tokenOwnerActor(m.tokenId), m.tokenId, driveId),
           driveLink: driveLinks.length === 1,
           pageLink: pageLinks.length === 1,
           agent: agents.length === 1,

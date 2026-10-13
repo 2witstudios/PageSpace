@@ -5,6 +5,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import archiver from 'archiver';
 import { PassThrough } from 'node:stream';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export type ExportManifestPage = {
   pageId: string;
@@ -87,10 +88,10 @@ async function withConcurrencyLimit<T>(
 export async function streamBackupExport(
   backupId: string,
   driveId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<AsyncGenerator<Buffer>> {
   // Eagerly validate before any streaming begins so 403/400 can be returned as JSON
-  const isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
+  const isAdmin = await isDriveOwnerOrAdmin(actor, driveId);
   if (!isAdmin) {
     throw new HttpError(403, 'Access denied');
   }

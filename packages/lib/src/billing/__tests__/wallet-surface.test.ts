@@ -30,7 +30,7 @@ const facts: DriveWalletFacts = {
     overshootChoice: null,
   },
   myCap: { dailyCapCents: 2000, monthlyCapCents: null, spentTodayCents: 2000, spentThisMonthCents: 2000 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645 }],
+  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645, spentTodayCents: 0, viaAutomationsCents: 0 }],
   pool: { walletId: 'w-pool', availableCents: 9000, outstandingChildAllocationsCents: 1200 },
 };
 

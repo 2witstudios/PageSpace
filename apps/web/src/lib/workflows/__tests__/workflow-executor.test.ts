@@ -180,6 +180,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
 }));
 
@@ -525,7 +526,7 @@ describe('executeWorkflow', () => {
       const result = await executeWorkflow(createInputFixture());
 
       expect(result.success).toBe(true);
-      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', 'user_123');
+      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', expect.objectContaining({ via: 'automation', userId: 'user_123' }));
       const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
       const toolKeys = Object.keys(genCall.tools as object);
       expect(toolKeys).toContain('list_pages');

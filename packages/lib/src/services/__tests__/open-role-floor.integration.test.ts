@@ -75,7 +75,7 @@ afterAll(async () => {
 
 const VIEW = { canView: true, canEdit: false, canShare: false };
 const EDIT = { canView: true, canEdit: true, canShare: false };
-const setFloor = (openDriveRoleFloor: 'view' | 'edit') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { openDriveRoleFloor } });
+const setFloor = (openDriveRoleFloor: 'view' | 'edit') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { openDriveRoleFloor } });
 const role = (driveId: string, name: string, isDefault: boolean, driveWidePermissions: typeof VIEW | null) =>
   createDriveRole(driveId, { name, isDefault, permissions: {}, driveWidePermissions });
 const defaults = (driveId: string) => db.select().from(driveRoles).where(eq(driveRoles.driveId, driveId)).then((rs) => rs.filter((r) => r.isDefault).map((r) => r.name));
@@ -146,8 +146,8 @@ describe('the org floor under an Open drive default role', () => {
     await setFloorOk('edit');
 
     // Created: a new drive has no default role, so Open is refused and Restricted is not.
-    expect(await createOrgDrive(w.owner, { name: 'Product', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_OPEN_ROLE_FLOOR' });
-    const restricted = await createOrgDrive(w.owner, { name: 'Product', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    expect(await createOrgDrive(w.owner, { authentication: null, name: 'Product', orgId: w.orgId }, deps)).toMatchObject({ ok: false, status: 403, code: 'POLICY_OPEN_ROLE_FLOOR' });
+    const restricted = await createOrgDrive(w.owner, { authentication: null, name: 'Product', orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
     assert(restricted.ok, 'restricted create');
     created.driveIds.push(restricted.drive.id);
 
@@ -168,7 +168,7 @@ describe('the org floor under an Open drive default role', () => {
     await role(w.orgDrive, 'Editor', true, EDIT);
     await setFloorOk('edit');
     // New drive: the dialog sends defaultOrgDriveVisibility(floor), and the server admits it.
-    const made = await createOrgDrive(w.owner, { name: 'Roadmaps', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps);
+    const made = await createOrgDrive(w.owner, { authentication: null, name: 'Roadmaps', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('edit') }, deps);
     assert(made.ok, `create with the UI default refused: ${JSON.stringify(made)}`);
     created.driveIds.push(made.drive.id);
     expect(made.drive.orgVisibility).toBe('RESTRICTED');
@@ -183,7 +183,7 @@ describe('the org floor under an Open drive default role', () => {
   });
 
   it('DRV-4 (partial) under a VIEW floor the UI default is Open, and a new drive is created Open', async () => {
-    const made = await createOrgDrive(w.owner, { name: 'Wiki', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('view') }, deps);
+    const made = await createOrgDrive(w.owner, { authentication: null, name: 'Wiki', orgId: w.orgId, orgVisibility: defaultOrgDriveVisibility('view') }, deps);
     assert(made.ok, 'create refused');
     created.driveIds.push(made.drive.id);
     expect(made.drive.orgVisibility).toBe('OPEN');
@@ -193,7 +193,7 @@ describe('the org floor under an Open drive default role', () => {
     await db.update(organizations).set({ policies: { openDriveRoleFloor: 'EDIT!' } }).where(eq(organizations.id, w.orgId));
     await role(w.orgDrive, 'Viewer', true, VIEW);
     expect(await defaults(w.orgDrive)).toEqual(['Viewer']);
-    expect(await createOrgDrive(w.owner, { name: 'Open one', orgId: w.orgId }, deps)).toMatchObject({ ok: true });
+    expect(await createOrgDrive(w.owner, { authentication: null, name: 'Open one', orgId: w.orgId }, deps)).toMatchObject({ ok: true });
     const [made] = await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, w.orgId));
     if (made) created.driveIds.push(...(await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, w.orgId))).map((d) => d.id));
   });

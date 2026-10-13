@@ -18,6 +18,8 @@ import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesF
 import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
 import { driveMembershipRow } from '../permissions/drive-member-role';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import type { AccessActor } from '../permissions/access-actor';
+import { checkActorDriveAuthentication, filterDrivesForActor } from '../permissions/actor-authentication';
 import { isDriveLead } from '../permissions/drive-relationship';
 import { isGuestRole } from '../permissions/guest-role';
 import type { OpenRoleFloor } from '../organizations/policies-core';
@@ -62,6 +64,8 @@ export interface ListDrivesOptions {
 
 export interface CreateDriveInput {
   name: string;
+  /** Initial drive context (workspace memory), e.g. set by the AI create_drive tool. */
+  drivePrompt?: string | null;
 }
 
 export interface UpdateDriveInput {
@@ -94,11 +98,22 @@ export interface DriveAccessInfo {
  * rules (decideListedDriveRole); while dark it is exactly the pre-org listing.
  */
 export async function listAccessibleDrives(
-  userId: string,
+  actor: AccessActor,
   options: ListDrivesOptions = {}
 ): Promise<DriveWithAccess[]> {
-  if (ORGS_ENABLED) return listAccessibleDrivesWithOrgs(userId, options);
+  const listed = ORGS_ENABLED
+    ? await listAccessibleDrivesWithOrgs(actor.userId, options)
+    : await listUserDrives(actor.userId, options);
+  // SEC-2/3: an org drive whose sign-in policy the actor's credential fails is not listed (D-OW-45).
+  const allowed = await filterDrivesForActor(actor, listed.map((drive) => drive.id));
+  return listed.filter((drive) => allowed.has(drive.id));
+}
 
+/** listAccessibleDrives while ORGS_ENABLED is false: the pre-org listing. */
+async function listUserDrives(
+  userId: string,
+  options: ListDrivesOptions
+): Promise<DriveWithAccess[]> {
   const { includeTrash = false, tokenScopable = false } = options;
 
   // 1. Get owned drives
@@ -356,6 +371,7 @@ export async function createDrive(
         name,
         slug,
         ownerId: userId,
+        drivePrompt: input.drivePrompt ?? null,
         isTrashed: false,
         trashedAt: null,
         updatedAt: new Date(),
@@ -390,22 +406,23 @@ export async function getDriveById(driveId: string) {
  */
 export async function getDriveAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessInfo> {
-  const { isOwner, isAdmin, isMember, role, customRoleId } = await getDriveAccessWithFloor(driveId, userId);
+  const { isOwner, isAdmin, isMember, role, customRoleId } = await getDriveAccessWithFloor(driveId, actor);
   return { isOwner, isAdmin, isMember, role, customRoleId };
 }
+
+const NO_DRIVE_ACCESS = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null } as const;
 
 /** getDriveAccess plus the membership's POL-6 floor, for the drive-wide edit flag (getDriveWithAccess). */
 async function getDriveAccessWithFloor(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessInfo & { openDriveFloor: OpenRoleFloor | null }> {
   const drive = await getDriveById(driveId);
 
-  if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null };
-  }
+  if (!drive || !(await checkActorDriveAuthentication(actor, driveId)).allowed) return NO_DRIVE_ACCESS;
+  const { userId } = actor;
 
   const isOwner = isDriveLead(userId, drive);
 
@@ -429,7 +446,7 @@ async function getDriveAccessWithFloor(
     };
   }
 
-  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null };
+  return NO_DRIVE_ACCESS;
 }
 
 export interface DriveScopeToValidate {
@@ -473,8 +490,9 @@ async function scopeWidensCaller(driveId: string, callerRoleId: string, requeste
 
 export async function validateDriveScopeAccess(
   scopes: DriveScopeToValidate[],
-  userId: string
+  actor: AccessActor
 ): Promise<DriveScopeValidationResult> {
+  const { userId } = actor;
   const invalidDriveIds: string[] = [];
   const unauthorizedRoles: string[] = [];
   const invalidCustomRoles: string[] = [];
@@ -482,7 +500,7 @@ export async function validateDriveScopeAccess(
   const explicitRoleWithoutMembership: string[] = [];
 
   for (const scope of scopes) {
-    const access = await getDriveAccess(scope.id, userId);
+    const access = await getDriveAccess(scope.id, actor);
     if (!access.isOwner && !access.isMember) {
       invalidDriveIds.push(scope.id);
       continue;
@@ -550,13 +568,19 @@ export interface DriveAccessWithDrive {
  */
 export async function getDriveAccessWithDrive(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessWithDrive | null> {
   const drive = await getDriveById(driveId);
 
   if (!drive) {
     return null;
   }
+
+  // SEC-2/3: a credential the drive's org refuses reads as no access to it.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { drive, access: { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null } };
+  }
+  const { userId } = actor;
 
   const isOwner = isDriveLead(userId, drive);
 
@@ -596,7 +620,7 @@ export async function getDriveAccessWithDrive(
  */
 export async function getDriveWithAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<(DriveWithAccess & { isMember: boolean }) | null> {
   const drive = await getDriveById(driveId);
 
@@ -604,7 +628,7 @@ export async function getDriveWithAccess(
     return null;
   }
 
-  const access = await getDriveAccessWithFloor(driveId, userId);
+  const access = await getDriveAccessWithFloor(driveId, actor);
 
   if (!access.isOwner && !access.isMember) {
     return null;

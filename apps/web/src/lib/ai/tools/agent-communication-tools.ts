@@ -11,7 +11,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId } from '@pagespace/lib/billing/spend-target';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId, toolActor } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
@@ -311,7 +311,7 @@ export const agentCommunicationTools = {
         } else {
           // Full user-scoped reach: owned + member + page-permission drives
           // (matches list_drives' user path), not just owned drives.
-          const allUserDrives = await listAccessibleDrives(userId);
+          const allUserDrives = await listAccessibleDrives(toolActor(executionContext));
 
           // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
           const allowedIds = new Set(

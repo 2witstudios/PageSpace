@@ -12,6 +12,7 @@ import {
   unshareEventFromDrive,
   listEventDrives,
 } from '@pagespace/lib/services/calendar-event-drive-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -54,7 +55,7 @@ export async function GET(
       if (scopeError) return scopeError;
     }
 
-    const canAccess = event.createdById === auth.userId || await isUserMemberOfAnyEventDrive(auth.userId, event);
+    const canAccess = event.createdById === auth.userId || await isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
     if (!canAccess) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
@@ -112,7 +113,7 @@ export async function POST(
       if (scopeError) return scopeError;
     }
 
-    const result = await shareEventWithDrive({ actingUserId: auth.userId, eventId, driveId });
+    const result = await shareEventWithDrive({ actor: actorFromAuth(auth), eventId, driveId });
     if (!result.ok) {
       // `code` carries org_lapsed ([D-OW-33], 402) for the UI.
       return NextResponse.json({ error: result.error, ...(result.code ? { code: result.code } : {}) }, { status: result.status });
@@ -172,7 +173,7 @@ export async function DELETE(
       if (scopeError) return scopeError;
     }
 
-    const result = await unshareEventFromDrive({ actingUserId: auth.userId, eventId, driveId });
+    const result = await unshareEventFromDrive({ actor: actorFromAuth(auth), eventId, driveId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }

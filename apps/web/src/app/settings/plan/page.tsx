@@ -29,9 +29,8 @@ interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
   /**
    * MON-2 / D-OW-17: the server's included-credit figure, per tier, in whole
-   * cents. Since MONEY_MODEL_V2_ACTIVE is a compile-time constant embedded
-   * identically in every process (money-model.ts), this client bundle could
-   * now derive the same number itself — there is no longer a value only the
+   * cents. The ratio is a literal in money-model.ts, identical in every
+   * process, so this client bundle could derive the same number itself — there is no longer a value only the
    * server can see. Patching it from the server response anyway keeps this
    * page correct even if a FUTURE change ever makes the included-credit
    * figure depend on something genuinely server-only (a per-user grant, a

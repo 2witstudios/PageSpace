@@ -1,18 +1,22 @@
 /**
  * Wallet READ operations (Spec X-1, narrowed by [D-OW-26]): `wallets.getDriveWallet`,
- * `wallets.list`, `wallets.getConversationSource`.
+ * `wallets.list`, `wallets.getConversationSource`, `wallets.getAlwaysOwnCredits`.
  *
  * Route-verified against `apps/web/src/app/api/drives/[driveId]/wallet/route.ts` GET,
- * `apps/web/src/app/api/wallets/route.ts` GET and
- * `apps/web/src/app/api/wallets/conversations/[conversationId]/route.ts` GET (all three
+ * `apps/web/src/app/api/wallets/route.ts` GET,
+ * `apps/web/src/app/api/wallets/conversations/[conversationId]/route.ts` GET and
+ * `apps/web/src/app/api/wallets/always-own-credits/route.ts` GET (all four
  * `allow: session, mcp`; OAuth access tokens are not admitted).
  *
- * READS ONLY, deliberately. [D-OW-26]: an MCP/CLI token never moves money or changes a
- * spend source, so the wallet writes (create, change, delete, top-up, donate, the personal
- * default source, a conversation's source) are not operations here at all — the server
- * refuses a token on every one of them by name (`mcp_token_cannot_move_money`,
+ * READS ONLY, deliberately. [D-OW-26]: an MCP/CLI token may read wallet views but never moves
+ * money or changes a spend source, so the wallet writes (create, allocate, pause, delete,
+ * top-up, donate, caps, the personal default source, a conversation's source, the
+ * always-own-credits switches) are not operations here at all — the server refuses a token on
+ * every one of them by name (`mcp_token_cannot_move_money`,
  * `mcp_token_cannot_change_spend_source`), and an operation that can only ever fail has no
- * place in the registry or on the MCP tool surface.
+ * place in the registry or on the MCP tool surface. For the same reason the per-person caps
+ * list (GET /api/drives/[driveId]/wallet/caps) and the org pool and seat-cap views are not
+ * operations: they are admin money views, and a token only ever reads the consumer projection.
  *
  * What a token reads is always the CONSUMER projection, whatever the person's role
  * (`viewerForCredential` in `packages/lib/src/permissions/wallet-access.ts`): the wallet's
@@ -134,6 +138,26 @@ export const CONSUMER_WALLET_VIEW_KEYS = [
   'defaultSpendSource',
 ] as const;
 
+/**
+ * `DriveWalletListEntry` (`packages/lib/src/billing/wallet-views.ts`): a drive wallet the caller
+ * spends from — what is left, and what the caller spent from it this period (UI-10). Never the
+ * allocation or anyone else's spend (SPEND-9). `mySpent…` is optional so an older server parses.
+ */
+const driveWalletListEntrySchema = z.object({
+  driveId: z.string(),
+  driveName: z.string().nullable().optional(),
+  walletId: z.string(),
+  status: walletStatusSchema,
+  remainingCents: z.number(),
+  remainingCredits: z.string(),
+  mySpentCents: z.number().optional(),
+  /** `mySpentCents` as a credit count, rendered by the server's money model (MON-5). */
+  mySpentCredits: z.string().optional(),
+});
+
+/** The keys of a drive wallet list entry — the SDK's copy of lib's `DRIVE_WALLET_LIST_FIELDS` (drift-guarded). */
+export const DRIVE_WALLET_LIST_ENTRY_KEYS = Object.keys(driveWalletListEntrySchema.shape) as (keyof z.infer<typeof driveWalletListEntrySchema>)[];
+
 /** `MyWallets` (`packages/lib/src/services/drive-wallet-service.ts`), as a token reads it. */
 const myWalletsSchema = z.object({
   personal: z.object({
@@ -142,21 +166,12 @@ const myWalletsSchema = z.object({
     remainingCredits: z.string(),
     defaultSpendSource: spendSourceKindSchema.nullable(),
   }),
-  /** Drive wallets of drives the caller can open: the consumer amount only (SPEND-9). */
-  driveWallets: z.array(
-    z.object({ driveId: z.string(), driveName: z.string().nullable().optional(), walletId: z.string(), status: walletStatusSchema, remainingCents: z.number(), remainingCredits: z.string() }),
-  ),
+  /** Drive wallets of drives the caller can open: the consumer amount and their own spend only (SPEND-9, UI-10). */
+  driveWallets: z.array(driveWalletListEntrySchema),
   /** A seat on each org the caller belongs to (their own cap only, never the pool). */
   seats: z.array(z.object({ orgId: z.string(), orgName: z.string().nullable().optional(), walletId: z.string() })),
   funds: z.object({
-    driveWallets: z.array(z.object({
-      driveId: z.string(),
-      driveName: z.string().nullable().optional(),
-      walletId: z.string(),
-      status: walletStatusSchema.optional(),
-      remainingCents: z.number().optional(),
-      remainingCredits: z.string().optional(),
-    })),
+    driveWallets: z.array(driveWalletListEntrySchema.partial({ status: true, remainingCents: true, remainingCredits: true })),
     /** Always empty for a token ([D-OW-26]): a pool's balance is session-only (SPEND-10). */
     pools: z.array(z.never()).max(0),
     donations: z.array(
@@ -257,4 +272,28 @@ export const getConversationSpendSource = defineOperation({
   requiredScope: 'account',
   description:
     "Read which wallet one of your own conversations spends from: the stored choice, the wallets you may pick there, and what the next AI call would spend as decided now (kind 'spend' with the source and wallet, 'refuse' with the reason and the options that could cover it, or 'skip'). Pass driveId only for a global conversation, to list options for that drive. Read-only — changing the source needs a signed-in session. Requires a key with no drive restriction.",
+});
+
+/**
+ * GET /api/wallets/always-own-credits (SPEND-5) — the caller's "Always my own credits" switches.
+ * Reading them is not a spend-source change; SETTING them is, so the PUT stays session-only
+ * ([D-OW-26]) and is not an operation.
+ */
+export const getAlwaysOwnCredits = defineOperation({
+  name: 'wallets.getAlwaysOwnCredits',
+  method: 'GET',
+  path: '/api/wallets/always-own-credits',
+  inputSchema: z.strictObject({
+    /** Also read the switch for this drive. */
+    driveId: z.string().min(1).max(64).optional(),
+  }),
+  outputSchema: z.object({
+    /** The global switch: every AI call spends your own credits or is refused. */
+    alwaysOwnCredits: z.boolean(),
+    /** The switch for `driveId` (false when no driveId was given). */
+    alwaysOwnCreditsInDrive: z.boolean(),
+  }),
+  requiredScope: 'account',
+  description:
+    'Read your "Always my own credits" switches: the global one and, with driveId, the one for that drive. Either makes every AI call spend your own credits or be refused, never another wallet. Read-only — changing them needs a signed-in session. Requires a key with no drive restriction.',
 });

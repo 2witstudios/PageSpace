@@ -25,16 +25,19 @@ import type {
   OrgCustomerDetails,
   OrgLatestInvoice,
 } from '@pagespace/lib/billing/org-subscription-core';
+import type { OrgInvoice } from '@pagespace/lib/billing/wallet-funding';
 
-interface FakeInvoice {
+export interface FakeInvoice {
   id: string;
   customerId: string;
   subscriptionId: string;
-  status: 'open' | 'paid';
+  status: 'draft' | 'open' | 'paid' | 'uncollectible' | 'void';
   amountDueCents: number;
   amountPaidCents: number;
   clientSecret: string;
   created: number;
+  /** Unix seconds; null until paid. */
+  paidAt: number | null;
 }
 
 /** The fake's list prices, minor units: the test Business base and extra seat. */
@@ -45,10 +48,8 @@ type WriteOp =
   | 'createCustomer'
   | 'updateCustomer'
   | 'createSubscription'
-  | 'createSubscriptionItem'
   | 'updateSubscriptionItemQuantity'
-  | 'cancelSubscription'
-  | 'recoverSubscription';
+  | 'cancelSubscription';
 
 interface Customer {
   id: string;
@@ -64,10 +65,8 @@ export class FakeOrgStripe implements OrgBillingStripe {
     createCustomer: 0,
     updateCustomer: 0,
     createSubscription: 0,
-    createSubscriptionItem: 0,
     updateSubscriptionItemQuantity: 0,
     cancelSubscription: 0,
-    recoverSubscription: 0,
   };
   reads = { findCustomerByOrgId: 0, listCustomerSubscriptions: 0, retrieveSubscription: 0, latestInvoice: 0 };
   /** Each subscription's invoices, newest last. */
@@ -208,10 +207,10 @@ export class FakeOrgStripe implements OrgBillingStripe {
         id: this.nextId('sub'),
         customerId: params.customer,
         status: 'incomplete',
+        collectionMethod: 'charge_automatically',
         created,
         metadata: { ...params.metadata },
         items: params.items.map((item) => ({ id: this.nextId('si'), priceId: item.price, quantity: item.quantity })),
-        trialEnd: null,
         currentPeriodStart: created,
         currentPeriodEnd: created + 30 * 86_400,
         cancelAtPeriodEnd: false,
@@ -223,7 +222,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     });
   }
 
-  private addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
+  addInvoice(sub: OrgStripeSubscription, amountDueCents: number): FakeInvoice {
     const id = this.nextId('in');
     const invoice: FakeInvoice = {
       id,
@@ -234,6 +233,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
       amountPaidCents: 0,
       clientSecret: `pi_${id.slice(3)}_secret_fake`,
       created: (this.clock += 1),
+      paidAt: null,
     };
     this.invoices.set(sub.id, [...(this.invoices.get(sub.id) ?? []), invoice]);
     return invoice;
@@ -251,6 +251,7 @@ export class FakeOrgStripe implements OrgBillingStripe {
     if (!invoice || !sub) throw new Error(`No invoice to pay on '${subscriptionId}'`);
     invoice.status = 'paid';
     invoice.amountPaidCents = invoice.amountDueCents;
+    invoice.paidAt = this.clock += 1;
     sub.status = 'active';
   }
 
@@ -265,7 +266,41 @@ export class FakeOrgStripe implements OrgBillingStripe {
   async latestInvoice(subscriptionId: string): Promise<OrgLatestInvoice | null> {
     this.reads.latestInvoice += 1;
     const invoice = this.invoiceFor(subscriptionId);
-    return invoice ? { status: invoice.status, amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents, clientSecret: invoice.clientSecret } : null;
+    return invoice
+      ? {
+          status: invoice.status,
+          amountDueCents: invoice.status === 'paid' ? 0 : invoice.amountDueCents,
+          clientSecret: invoice.clientSecret,
+          paidAtSeconds: invoice.paidAt,
+          invoice: this.invoiceEvidence(subscriptionId),
+        }
+      : null;
+  }
+
+  /** Test helper: the latest invoice as Stripe hands it to the funding path (every line, the subscription snapshot). */
+  invoiceEvidence(subscriptionId: string): OrgInvoice {
+    const invoice = this.invoiceFor(subscriptionId);
+    const sub = this.subscriptions.get(subscriptionId);
+    if (!invoice || !sub) throw new Error(`No invoice on '${subscriptionId}'`);
+    const [base, seat] = sub.items;
+    const line = (item: { id: string; priceId: string }, amount: number) => ({
+      amount,
+      period: { start: sub.currentPeriodStart, end: sub.currentPeriodEnd },
+      pricing: { price_details: { price: item.priceId } },
+      parent: { subscription_item_details: { subscription_item: item.id } },
+    });
+    return {
+      id: invoice.id,
+      customer: invoice.customerId,
+      amount_paid: invoice.amountPaidCents,
+      subtotal: invoice.amountDueCents,
+      billing_reason: 'subscription_create',
+      parent: { subscription_details: { subscription: subscriptionId, metadata: { ...(sub.metadata ?? {}) } } },
+      lines: {
+        has_more: false,
+        data: [line(base, FAKE_BASE_CENTS), ...(seat ? [line(seat, invoice.amountDueCents - FAKE_BASE_CENTS)] : [])],
+      },
+    };
   }
 
   async createBillingPortalSession(customerId: string, returnUrl: string): Promise<{ url: string }> {
@@ -301,19 +336,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
     return [...this.subscriptions.values()].filter((s) => s.customerId === customerId).map((s) => structuredClone(s));
   }
 
-  async createSubscriptionItem(
-    params: { subscriptionId: string; priceId: string; quantity: number },
-    idempotencyKey: string,
-  ): Promise<{ id: string; quantity: number }> {
-    return this.write('createSubscriptionItem', idempotencyKey, params, () => {
-      const sub = this.subscriptions.get(params.subscriptionId);
-      if (!sub) throw new Error(`No such subscription: '${params.subscriptionId}'`);
-      const item = { id: this.nextId('si'), priceId: params.priceId, quantity: params.quantity };
-      sub.items = [...sub.items, item];
-      return { id: item.id, quantity: item.quantity };
-    });
-  }
-
   async updateSubscriptionItemQuantity(
     params: { itemId: string; quantity: number; prorationBehavior: 'create_prorations' | 'none' },
     idempotencyKey: string,
@@ -327,18 +349,6 @@ export class FakeOrgStripe implements OrgBillingStripe {
         }
       }
       throw new Error(`No such subscription item: '${params.itemId}'`);
-    });
-  }
-
-  async recoverSubscription(subscriptionId: string, _prices: import('@pagespace/lib/billing/org-subscription-core').OrgBusinessPrices, idempotencyKey: string): Promise<OrgStripeSubscription> {
-    const sub = this.subscriptions.get(subscriptionId);
-    if (!sub) throw new Error(`No such subscription: '${subscriptionId}'`);
-    if (sub.status !== 'trialing' && sub.status !== 'paused') return structuredClone(sub);
-    return this.write('recoverSubscription', idempotencyKey, { subscriptionId }, () => {
-      sub.status = 'past_due';
-      sub.trialEnd = this.clock;
-      this.addInvoice(sub, FAKE_BASE_CENTS + FAKE_SEAT_CENTS * (sub.items[1]?.quantity ?? 0));
-      return structuredClone(sub);
     });
   }
 

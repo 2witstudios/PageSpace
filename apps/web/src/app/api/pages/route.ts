@@ -11,6 +11,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCP
 import { pageService, type CreatePageParams } from '@/services/api';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 const creatablePageTypes = getCreatablePageTypes() as unknown as [string, ...string[]];
@@ -102,7 +103,7 @@ export async function POST(request: Request) {
       !looksLikeHtmlDocument(validatedData.content);
     const contentMode = validatedData.contentMode ?? (wantsMarkdownDefault ? 'markdown' : undefined);
 
-    const result = await pageService.createPage(userId, {
+    const result = await pageService.createPage(actorFromAuth(auth), {
       title: validatedData.title,
       type: validatedData.type as CreatePageParams['type'],
       driveId: validatedData.driveId,

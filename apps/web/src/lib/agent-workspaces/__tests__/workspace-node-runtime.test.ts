@@ -18,6 +18,7 @@ import {
   CHAT_TARGET_UNIQUE_INDEX,
   type ChatTargetHolder,
 } from '@pagespace/lib/agent-workspaces/workspace-node-chat-binding';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const WORKSPACE = 'ws-1';
 const VIEWER = 'user-1';
@@ -203,7 +204,8 @@ vi.mock('@pagespace/db/operators', () => ({
   and: () => ({}),
   sql: Object.assign(() => ({}), { raw: () => ({}) }),
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => 'VIEW' }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserAccessLevel: async () => 'VIEW' }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({ canAccessConversation: async () => true }));
 
 const {
@@ -248,7 +250,7 @@ function write(over: { baseRev?: number; put?: WorkspaceNode[]; drop?: string[] 
     baseRev: over.baseRev ?? store.rev,
     put: over.put ?? [],
     drop: over.drop ?? [],
-    viewerId: VIEWER,
+    viewer: credentialActor(VIEWER, null),
   });
 }
 
@@ -272,7 +274,7 @@ describe('a payload that names another workspace', () => {
       baseRev: 3,
       put: [{ ...pane('pane-a', 'root', 1), rootId: 'ws-somebody-else' }],
       drop: [],
-      viewerId: VIEWER,
+      viewer: credentialActor(VIEWER, null),
     });
     expect(result.status).toBe('refused');
     if (result.status !== 'refused') return;
@@ -301,7 +303,7 @@ describe('the binding gate', () => {
     await write({ put: [pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' })] });
     expect(authorize.seen).toEqual([
       expect.objectContaining({
-        viewerId: VIEWER,
+        viewer: expect.objectContaining({ userId: VIEWER }),
         workspaceId: WORKSPACE,
         targets: [{ kind: 'page', targetId: 'page-1' }],
       }),
@@ -366,7 +368,7 @@ describe('replay', () => {
       baseRev: 4,
       put,
       drop: [],
-      viewerId: VIEWER,
+      viewer: credentialActor(VIEWER, null),
     });
     expect(replay.status).toBe('ok');
     if (replay.status !== 'ok') return;
@@ -472,7 +474,7 @@ describe('the conversation:closed announcement', () => {
   it('announces for every thread an end-session destroyed', async () => {
     // The producer that never announced AT ALL under the old shape: ending a
     // session goes nowhere near the close route.
-    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
     expect(result.status).toBe('ok');
 
     expect(mockConversationClosed).toHaveBeenCalledTimes(2);
@@ -586,7 +588,7 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     labelRows.conversations = [
       { id: 'conv-1', title: 'Planning', type: 'page', contextId: 'page-9', userId: VIEWER, isShared: false, workspaceId: WORKSPACE, lastMessageAt: new Date('2026-01-02T03:04:05.000Z') },
     ];
-    const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
+    const snapshot = await readWorkspaceNodes(WORKSPACE, credentialActor(VIEWER, null));
     expect(snapshot.targets).toEqual([
       {
         id: 'conv-1',
@@ -607,7 +609,7 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     labelRows.conversations = [
       { id: 'conv-1', title: 'Q3 layoffs', type: 'page', contextId: null, userId: 'someone-else', isShared: false, workspaceId: WORKSPACE, lastMessageAt: null },
     ];
-    const snapshot = await readWorkspaceNodes(WORKSPACE, VIEWER);
+    const snapshot = await readWorkspaceNodes(WORKSPACE, credentialActor(VIEWER, null));
     expect(snapshot.targets).toEqual([
       { id: 'conv-1', kind: 'chat', title: '(private thread)', lastMessageAt: null, agentPageId: null },
     ]);
@@ -626,7 +628,7 @@ describe('targets ride BESIDE the tree, resolved once per viewer', () => {
     labelRows.shells = [{ id: 'shell-1', name: 'build', workspaceId: 'ws-somewhere-else' }];
     // No entry at all, so refusing to resolve is indistinguishable from "gone"
     // and the read is not an existence oracle. The NODE still renders.
-    expect((await readWorkspaceNodes(WORKSPACE, VIEWER)).targets).toEqual([]);
+    expect((await readWorkspaceNodes(WORKSPACE, credentialActor(VIEWER, null))).targets).toEqual([]);
   });
 });
 
@@ -671,7 +673,7 @@ describe('a chat target already bound in ANOTHER workspace', () => {
     const result = await write({
       put: [pane('pane-new', 'root', 1, { kind: 'chat', id: 'conv-1' })],
     });
-    const fresh = await readWorkspaceNodes(WORKSPACE, VIEWER);
+    const fresh = await readWorkspaceNodes(WORKSPACE, credentialActor(VIEWER, null));
 
     expect(result.status).toBe('conflict');
     if (result.status !== 'conflict') return;
@@ -869,7 +871,7 @@ describe('the 409 body', () => {
       { id: 'conv-1', title: 'Planning', type: 'page', contextId: null, userId: VIEWER, isShared: false, workspaceId: WORKSPACE, lastMessageAt: null },
     ];
     const stale = await write({ baseRev: 1, put: [pane('pane-a', 'root', 1)] });
-    const fresh = await readWorkspaceNodes(WORKSPACE, VIEWER);
+    const fresh = await readWorkspaceNodes(WORKSPACE, credentialActor(VIEWER, null));
     expect(stale.status).toBe('stale');
     if (stale.status !== 'stale') return;
     expect(stale.snapshot).toEqual(fresh);
@@ -898,7 +900,7 @@ describe('the membership write', () => {
 
     await applyWorkspaceMembershipWrite({
       workspaceId: WORKSPACE,
-      actingUserId: VIEWER,
+      actor: credentialActor(VIEWER, null),
       run: () => ({
         ok: true,
         write: { put: [pane('pane-new', 'root', 2, { kind: 'chat', id: 'conv-new' })], drop: [] },
@@ -926,7 +928,7 @@ describe('the membership write', () => {
 
     const result = await applyWorkspaceMembershipWrite({
       workspaceId: WORKSPACE,
-      actingUserId: VIEWER,
+      actor: credentialActor(VIEWER, null),
       run: () => ({
         ok: true,
         write: { put: [pane('pane-new', 'root', 2, { kind: 'chat', id: 'conv-new' })], drop: [] },
@@ -957,7 +959,7 @@ describe('the membership write', () => {
 
     const result = await applyWorkspaceMembershipWrite({
       workspaceId: WORKSPACE,
-      actingUserId: VIEWER,
+      actor: credentialActor(VIEWER, null),
       run: () => ({ ok: false, code: 'session_full', detail: 'full' }),
       within: async () => {
         ran = true;
@@ -976,7 +978,7 @@ describe('the membership write', () => {
     await expect(
       applyWorkspaceMembershipWrite({
         workspaceId: WORKSPACE,
-        actingUserId: VIEWER,
+        actor: credentialActor(VIEWER, null),
         run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
         within: async () => {
           store.rows.push('conv-new');
@@ -1002,7 +1004,7 @@ describe('the membership write', () => {
     let ran = false;
     const result = await applyWorkspaceMembershipWrite({
       workspaceId: WORKSPACE,
-      actingUserId: VIEWER,
+      actor: credentialActor(VIEWER, null),
       run: () => ({ ok: true, write: { put: [], drop: [] } }),
       within: async () => {
         ran = true;
@@ -1034,7 +1036,7 @@ describe('the membership write', () => {
 
     const result = await applyWorkspaceMembershipWrite({
       workspaceId: WORKSPACE,
-      actingUserId: VIEWER,
+      actor: credentialActor(VIEWER, null),
       run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
       within: async () => {
         throw conflict;
@@ -1057,7 +1059,7 @@ describe('the membership write', () => {
     await expect(
       applyWorkspaceMembershipWrite({
         workspaceId: WORKSPACE,
-        actingUserId: VIEWER,
+        actor: credentialActor(VIEWER, null),
         run: () => ({ ok: true, write: { put: [pane('pane-new', 'root', 2)], drop: [] } }),
         within: async () => {
           throw conflict;
@@ -1086,7 +1088,7 @@ describe('destroyWorkspaceTree', () => {
       pane('pane-b', 'col', 1),
     ];
 
-    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
 
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
@@ -1102,7 +1104,7 @@ describe('destroyWorkspaceTree', () => {
     // would CREATE one. The write must be empty instead.
     store.nodes = [];
 
-    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    const result = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
 
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
@@ -1112,10 +1114,10 @@ describe('destroyWorkspaceTree', () => {
   });
 
   it('is idempotent — a re-issued end writes nothing the second time', async () => {
-    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
     store.writes = [];
 
-    const again = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    const again = await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
 
     expect(again.status).toBe('ok');
     if (again.status !== 'ok') return;
@@ -1124,7 +1126,7 @@ describe('destroyWorkspaceTree', () => {
   });
 
   it('broadcasts the empty tree, so every client stops rendering the session', async () => {
-    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actingUserId: VIEWER });
+    await destroyWorkspaceTree({ workspaceId: WORKSPACE, actor: credentialActor(VIEWER, null) });
     expect(mockBroadcast).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: WORKSPACE, nodes: [] }));
   });
 });

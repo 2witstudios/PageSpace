@@ -11,10 +11,7 @@
  *     account-plan-classified invoice grants nothing regardless of amount_paid
  *     (invoice-grant.ts). The grant is sized from what the invoice PAID:
  *     invoice.amount_paid × the tier's included-credit ratio (Spec MON-2, via the
- *     pure invoice-grant module). The ratio itself is what MONEY_MODEL_V2_ACTIVE
- *     gates (money-model.ts, D-OW-17 — a code constant, not an env var); off, 100%
- *     of the paid amount is granted, which reproduces today's amounts for a
- *     full-price invoice. Gifts and trials are funded at
+ *     pure invoice-grant module). Gifts are funded at
  *     list price × ratio (D-OW-16a) — gifted status is read from the invoice's
  *     own subscription-metadata snapshot first, so it cannot race the
  *     subscription webhook, with the live subscriptions row as a fallback. Any
@@ -49,7 +46,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { classifyStripeEvent, computeMonthlyRefill, applyPaymentToDebt, forgivenAtRefillCents } from './credit-core';
 import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
 import { grantForInvoice } from './invoice-grant';
-import { MONEY_MODEL_V2_ACTIVE } from './money-model';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from './wallet-funding';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
@@ -65,7 +62,6 @@ interface FundingEventObject {
   customer?: string | { id?: string | null } | null;
   /** Stripe invoice.amount_paid — what the invoice actually collected, in minor units. */
   amount_paid?: number | null;
-  /** Stripe invoice.subtotal — line items before discounts; 0 on a trial-create invoice. */
   subtotal?: number | null;
   /** Stripe invoice.billing_reason. */
   billing_reason?: string | null;
@@ -203,10 +199,6 @@ async function isGiftedSubscriber(userId: string): Promise<boolean> {
   return rows.some((r) => r.gifted === true && (r.status === 'active' || r.status === 'trialing'));
 }
 
-/** Metadata the admin gift-subscription route stamps on the Stripe subscription
- * it creates (`apps/admin/.../gift-subscription/route.ts`). */
-const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
-
 /**
  * Whether THIS invoice is for a gifted subscription, read straight off the
  * invoice's own subscription-metadata snapshot — no DB lookup, no ordering
@@ -249,11 +241,7 @@ function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
-async function applyMonthlyRefill(
-  event: FundingEvent,
-  tierOverride?: SubscriptionTier,
-  active: boolean = MONEY_MODEL_V2_ACTIVE,
-): Promise<void> {
+async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier): Promise<void> {
   const obj = event.data.object;
   const stripeRef = obj.id ?? null;
   if (!stripeRef) {
@@ -276,7 +264,7 @@ async function applyMonthlyRefill(
   const tier = tierOverride === 'pro' ? 'pro' : 'free';
   // MON-2 / D-OW-16: the grant is sized from what THIS invoice paid, never from a
   // tier table — a promo, a proration, or a price change flows through with no table
-  // edit. A gift or a trial is us fronting the plan and derives from the list price.
+  // edit. A gift is us fronting the plan and derives from the list price.
   // Gifted status is read from the invoice's OWN metadata snapshot first — no DB
   // round trip, no race against the subscription webhook (Codex P1) — with the live
   // subscriptions row as a secondary OR (still correct when it resolves, and covers
@@ -284,15 +272,14 @@ async function applyMonthlyRefill(
   const gifted = isGiftInvoice(obj) || (await isGiftedSubscriber(user.id));
   const grant = grantForInvoice({
     amountPaidCents: obj.amount_paid,
-    subtotalCents: obj.subtotal,
     billingReason: obj.billing_reason,
     hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
     gifted,
     tier,
-  }, active);
+  });
   const allowanceCents = grant.allowanceCents;
   if (allowanceCents <= 0) {
-    // Nothing paid and not a gift or trial (proration-only, subscription_update at
+    // Nothing paid and not a gift (proration-only, subscription_update at
     // $0, a 100% coupon on a non-gifted subscription): nothing to grant, nothing to
     // record, nothing to dedupe — the next PAID invoice sizes its own grant.
     loggers.api.info('credit funding: invoice grants nothing', {
@@ -493,16 +480,6 @@ export interface FundingOptions {
    * Top-ups do not use this field.
    */
   tier?: SubscriptionTier;
-  /**
-   * D-OW-17 test seam ONLY: overrides the money-model ratio flag for this call.
-   * Defaults to {@link MONEY_MODEL_V2_ACTIVE} — no production caller (the Stripe
-   * webhook route) ever passes this; it exists so a shell-level test can prove
-   * `applyStripeFunding` actually applies the ratio (active=true → 60% of paid)
-   * rather than just passing amount_paid straight through, without mutating
-   * process.env.MONEY_MODEL_V2 (banned by the seam guard). Only used by the
-   * monthly_refill path.
-   */
-  active?: boolean;
 }
 
 export async function applyStripeFunding(event: FundingEvent, opts?: FundingOptions): Promise<void> {
@@ -512,7 +489,7 @@ export async function applyStripeFunding(event: FundingEvent, opts?: FundingOpti
   try {
     switch (action.kind) {
       case 'monthly_refill':
-        await applyMonthlyRefill(event, opts?.tier, opts?.active);
+        await applyMonthlyRefill(event, opts?.tier);
         break;
       case 'topup':
         await applyTopupFunding(event, action.packCents);

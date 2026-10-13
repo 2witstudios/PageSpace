@@ -36,8 +36,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getOrgStatus } from '@pagespace/lib/organizations/status';
 import { applyOrgPoolRefill, type OrgPoolRefillOutcome } from '@pagespace/lib/billing/wallet-funding-shell';
 import { orgBillingLockKey } from '@pagespace/lib/billing/org-subscription-core';
+import { parseOrgGiftMetadata } from '@pagespace/lib/billing/org-gift-core';
 import {
-  orgInvoiceExtraSeats,
   planOrgSubscriptionPriceMirror,
   planOrgSubscriptionMirror,
   routeBillingOwner,
@@ -57,7 +57,6 @@ export interface OrgWebhookDeps {
   seatPriceId: () => string;
   /** The configured Business base price id (stripe-config orgPriceIds.businessBase): finds the base item the mirror refreshes. */
   basePriceId: () => string;
-  now?: () => Date;
 }
 
 type MetadataBag = Record<string, string> | null | undefined;
@@ -98,6 +97,11 @@ function logUnapplied(route: Exclude<BillingOwnerRoute, { kind: 'org' } | { kind
   });
 }
 
+interface MirroredGift {
+  gifted: boolean;
+  giftedExtraSeats: number | null;
+}
+
 export type OrgMirrorOutcome =
   | {
       kind: 'applied';
@@ -106,6 +110,8 @@ export type OrgMirrorOutcome =
       cancelAtPeriodEnd: boolean;
       /** What org_subscriptions held before this mirror: a change is an AUD-1 billing event. */
       previous: { stripeStatus: string; cancelAtPeriodEnd: boolean };
+      /** D-OW-54: the gift as stored before and as mirrored from Stripe now; a change is audited. */
+      gift: { before: MirroredGift; after: MirroredGift };
       before: OrgStatus;
       after: OrgStatus;
       transition: OrgLapseTransition | null;
@@ -131,7 +137,6 @@ export async function mirrorOrgSubscription(
     if (plan !== 'apply' || !stored) return { kind: 'ignored', orgId, reason: plan === 'apply' ? 'no_row' : plan };
 
     const fetched = await deps.stripe.retrieveSubscription(subscriptionId);
-    const now = deps.now?.() ?? new Date();
     // Review 3+4 P2-8: the seat item and its quantity as Stripe has them NOW (a change made
     // outside the app is mirrored, never left stale), alongside the status.
     const mirrorPatch = planOrgSubscriptionPriceMirror({
@@ -139,23 +144,41 @@ export async function mirrorOrgSubscription(
       subscription: fetched,
       prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
     });
+    // D-OW-54: Stripe's gift metadata is the single source of a gift and its pinned seats. A
+    // gift-typed subscription without a valid pin is NOT a gift for capability (no pinned seats,
+    // no gift funding) and is reported, so an admin revokes and re-gifts it.
+    const gift = parseOrgGiftMetadata(fetched.metadata);
+    if (gift.typed && gift.giftedExtraSeats === null) {
+      loggers.api.error('org subscription is gift-typed in Stripe without a valid giftedExtraSeats; treated as not gifted — revoke and re-gift it from the admin console', undefined, {
+        orgId,
+        stripeSubscriptionId: subscriptionId,
+        eventId,
+      });
+    }
     const next = {
-      gifted: fetched.metadata?.type === 'gift_subscription',
-      trialEnd: fetched.trialEnd === null ? null : new Date(fetched.trialEnd * 1000),
+      gifted: gift.typed && gift.giftedExtraSeats !== null,
+      giftedExtraSeats: gift.typed ? gift.giftedExtraSeats : null,
+      // [D-OW-44] mirrored with the status: an invoice-billed subscription never grants capability.
+      collectionMethod: fetched.collectionMethod,
       currentPeriodStart: fetched.currentPeriodStart === null ? null : new Date(fetched.currentPeriodStart * 1000),
       currentPeriodEnd: fetched.currentPeriodEnd === null ? null : new Date(fetched.currentPeriodEnd * 1000),
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       ...mirrorPatch,
     };
-    const before = (await getOrgStatus(orgId, { executor: tx, now })).status;
+    // The status reads the mirrored row AND its funding proof (D-OW-30), so it is read, not derived from the row alone.
+    const before = (await getOrgStatus(orgId, { executor: tx })).status;
     await tx.update(orgSubscriptions).set(next).where(eq(orgSubscriptions.id, stored.id));
-    const after = (await getOrgStatus(orgId, { executor: tx, now })).status;
+    const after = (await getOrgStatus(orgId, { executor: tx })).status;
     return {
       kind: 'applied',
       orgId,
       stripeStatus: next.status,
       cancelAtPeriodEnd: fetched.cancelAtPeriodEnd,
       previous: { stripeStatus: stored.status, cancelAtPeriodEnd: stored.cancelAtPeriodEnd },
+      gift: {
+        before: { gifted: stored.gifted === true, giftedExtraSeats: stored.giftedExtraSeats },
+        after: { gifted: next.gifted, giftedExtraSeats: next.giftedExtraSeats },
+      },
       before,
       after,
       transition: orgLapseTransition(before, after),
@@ -178,6 +201,28 @@ export async function mirrorOrgSubscription(
         orgStatusBefore: outcome.before,
         orgStatusAfter: outcome.after,
         ...(outcome.transition ? { transition: outcome.transition } : {}),
+      },
+    });
+  }
+  if (
+    outcome.kind === 'applied' &&
+    (outcome.gift.before.gifted !== outcome.gift.after.gifted || outcome.gift.before.giftedExtraSeats !== outcome.gift.after.giftedExtraSeats)
+  ) {
+    // D-OW-54 zero trust on Stripe metadata: a gift or its pinned seats that changed in Stripe
+    // (the admin route, or anyone else with Stripe write access) is on the org's own record.
+    await recordOrgAuditEventAfterCommit({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        change: 'gift',
+        giftedBefore: outcome.gift.before.gifted,
+        giftedAfter: outcome.gift.after.gifted,
+        giftedExtraSeatsBefore: outcome.gift.before.giftedExtraSeats,
+        giftedExtraSeatsAfter: outcome.gift.after.giftedExtraSeats,
       },
     });
   }
@@ -234,11 +279,9 @@ export async function handleOrgInvoicePaid(
     logUnapplied(route, eventId, invoice.id ?? null);
     return null;
   }
-  const extraSeats = await invoiceExtraSeats(route.orgId, invoice, deps);
   // MON-3: the refill sums only the Business base and extra-seat lines, recognized by the
   // configured org price ids; stored subscription item ids cannot establish entitlement.
   const refill = await applyOrgPoolRefill(invoice, {
-    extraSeats,
     basePriceId: deps.basePriceId(),
     seatPriceId: deps.seatPriceId(),
   });
@@ -247,7 +290,7 @@ export async function handleOrgInvoicePaid(
   return { refill, mirror };
 }
 
-/** invoice.payment_failed for an org-routed event: mirror the subscription (it goes past_due). */
+/** invoice.payment_failed for an org-routed event: mirror the subscription (past_due lapses the org, SEAT-9). */
 export async function handleOrgInvoicePaymentFailed(
   route: Exclude<BillingOwnerRoute, { kind: 'person' }>,
   invoice: Stripe.Invoice,
@@ -260,21 +303,6 @@ export async function handleOrgInvoicePaymentFailed(
   }
   const subscriptionId = invoiceSubscriptionId(invoice);
   return subscriptionId ? mirrorOrgSubscription(route.orgId, subscriptionId, eventId, deps) : null;
-}
-
-/**
- * The extra seats the invoice billed, for sizing a gift at list price: the
- * invoice's own seat line (a count), else the stored subscription's quantity, else 0.
- */
-async function invoiceExtraSeats(orgId: string, invoice: Stripe.Invoice, deps: OrgWebhookDeps): Promise<number> {
-  const fromInvoice = orgInvoiceExtraSeats(invoice.lines?.data ?? [], deps.seatPriceId());
-  if (fromInvoice !== null) return fromInvoice;
-  const [stored] = await db
-    .select({ extraSeatQuantity: orgSubscriptions.extraSeatQuantity })
-    .from(orgSubscriptions)
-    .where(eq(orgSubscriptions.orgId, orgId))
-    .limit(1);
-  return stored?.extraSeatQuantity ?? 0;
 }
 
 /** Production wiring: the app's Stripe client (read only here) and the configured seat price. */

@@ -13,6 +13,7 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import TurndownService from 'turndown';
 import { marked } from 'marked';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -36,10 +37,10 @@ export async function POST(
     // Check permissions
     const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
         { error: 'You need edit permission to convert this page' },
         { status: 403 }
-      );
+      ));
     }
 
     // Fetch current page

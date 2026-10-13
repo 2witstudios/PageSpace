@@ -42,6 +42,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   isEmailVerified: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   usersShareDrive: vi.fn(),
 }));
 

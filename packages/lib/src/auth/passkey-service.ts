@@ -149,7 +149,7 @@ export type GenerateSignupRegOptionsResult =
   | { ok: false; error: PasskeyError };
 
 export type VerifySignupRegistrationResult =
-  | { ok: true; data: { userId: string; passkeyId: string } }
+  | { ok: true; data: { userId: string; passkeyId: string; userVerified: boolean } }
   | { ok: false; error: PasskeyError };
 
 export interface PasskeyInfo {
@@ -916,7 +916,7 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     return { ok: false, error: { code: 'VERIFICATION_FAILED', message: 'Verification failed' } };
   }
 
-  const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
+  const { credential, credentialDeviceType, credentialBackedUp, userVerified } = verification.registrationInfo;
 
   // Create user and passkey atomically
   const userId = createId();
@@ -972,5 +972,5 @@ export async function verifySignupRegistration(input: unknown): Promise<VerifySi
     throw error;
   }
 
-  return { ok: true, data: { userId, passkeyId } };
+  return { ok: true, data: { userId, passkeyId, userVerified: userVerified === true } };
 }

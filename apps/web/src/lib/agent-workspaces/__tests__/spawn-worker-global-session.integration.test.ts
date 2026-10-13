@@ -49,6 +49,7 @@ import {
   ensureGlobalSandboxSession,
 } from '../agent-workspaces-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 let dbAvailable = false;
 
@@ -95,7 +96,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     expect(resolved.isNew).toBe(true);
 
     // 2. The session a worker would join — auto-minted for a global caller.
-    const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
+    const ensured = await ensureGlobalSandboxSession(callerConversationId, credentialActor(owner.id, null));
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
 
     // BORN NAMED. This is the DEFAULT minting path — what a plain
@@ -114,7 +115,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const workerConversationId = createId();
     await createConversationInSession({
       conversationId: workerConversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       workspaceId: ensured.session.id,
       title: 'repro worker',
@@ -139,7 +140,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const owner = await factories.createUser();
     const callerConversationId = createId();
     await resolveOrCreateConversation(owner.id, callerConversationId);
-    const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
+    const ensured = await ensureGlobalSandboxSession(callerConversationId, credentialActor(owner.id, null));
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
 
     // The session ends (user action, reconciler, teardown…).
@@ -151,7 +152,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     // Resolution hands back the bound session — lifecycle state is not a
     // refusal (pre-fix, the create path's generic conversation_unavailable
     // blamed the conversation id here — the reported bug).
-    const resolved = await resolveCallerSessionForWorker(callerConversationId, owner.id);
+    const resolved = await resolveCallerSessionForWorker(callerConversationId, credentialActor(owner.id, null));
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
     expect(resolved.session.id).toBe(ensured.session.id);
@@ -160,7 +161,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const workerConversationId = createId();
     await createConversationInSession({
       conversationId: workerConversationId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       workspaceId: ensured.session.id,
       title: 'recovered worker',
@@ -187,7 +188,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const owner = await factories.createUser();
     const callerConversationId = createId();
     await resolveOrCreateConversation(owner.id, callerConversationId);
-    const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
+    const ensured = await ensureGlobalSandboxSession(callerConversationId, credentialActor(owner.id, null));
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
     const deps = buildSessionToolsDeps();
 
@@ -196,7 +197,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const isolated = await deps.createWorkerSession({
       conversationId: isolatedWorkerId,
       callerConversationId,
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       name: 'isolated worker',
       workspace: 'new',
@@ -216,7 +217,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const targeted = await deps.createWorkerSession({
       conversationId: targetedWorkerId,
       callerConversationId,
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       name: 'targeted worker',
       workspace: ensured.session.id,
@@ -229,12 +230,12 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     const stranger = await factories.createUser();
     const strangerConversationId = createId();
     await resolveOrCreateConversation(stranger.id, strangerConversationId);
-    const strangerSession = await ensureGlobalSandboxSession(strangerConversationId, stranger.id);
+    const strangerSession = await ensureGlobalSandboxSession(strangerConversationId, credentialActor(stranger.id, null));
     if (!strangerSession.ok) throw new Error('stranger session failed');
     const denied = await deps.createWorkerSession({
       conversationId: createId(),
       callerConversationId,
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       name: 'trespasser',
       workspace: strangerSession.session.id,
@@ -245,7 +246,7 @@ describe('spawn_session from the global assistant (issue #2335)', () => {
     // Discovery: the isolated workspace and its worker appear in the
     // caller's cross-workspace listing, excluded-current respected.
     const others = await deps.listOwnWorkspaces({
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       excludeWorkspaceId: ensured.session.id,
     });
     const isolatedListed = others.find((w) => w.workspaceId === isolated.workspaceId);

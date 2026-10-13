@@ -181,7 +181,7 @@ describe('GET /api/pulse — the drives it scopes to (B7c)', () => {
     const response = await GET(new Request('https://example.com/api/pulse'));
 
     expect(response.status).toBe(200);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(USER_ID, { includeTrashed: true });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: true });
   });
 });
 

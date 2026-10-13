@@ -13,6 +13,7 @@ import { PageType } from '../utils/enums';
 import { readSheetDocument } from '../sheets/store';
 import { pages, drives, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
+import type { AccessActor } from '../permissions/access-actor';
 
 // ============================================================================
 // Types
@@ -120,10 +121,10 @@ const REGEX_META_CHARS = /[\\^$.*+?()[\]{}|]/;
  */
 export async function checkDriveAccessForSearch(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveSearchInfo> {
   // Check drive access
-  const hasAccess = await getUserDriveAccess(userId, driveId);
+  const hasAccess = await getUserDriveAccess(actor, driveId);
 
   if (!hasAccess) {
     return { hasAccess: false, drive: null };
@@ -165,7 +166,7 @@ function globToRegex(glob: string): RegExp {
  */
 export async function globSearchPages(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   pattern: string,
   driveSlug: string | null,
   options: GlobSearchOptions = {}
@@ -173,7 +174,7 @@ export async function globSearchPages(
   const { includeTypes, maxResults = 100 } = options;
   const authorizeView =
     options.authorizeView ??
-    (async (pageId: string) => (await getUserAccessLevel(userId, pageId))?.canView ?? false);
+    (async (pageId: string) => (await getUserAccessLevel(actor, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, 200);
 
   // Build where conditions
@@ -353,7 +354,7 @@ function extractLiteralMatchingLines(
  */
 export async function regexSearchPages(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   pattern: string,
   driveSlug: string | null,
   options: RegexSearchOptions = {}
@@ -361,7 +362,7 @@ export async function regexSearchPages(
   const { searchIn = 'content', maxResults = 50 } = options;
   const authorizeView =
     options.authorizeView ??
-    (async (pageId: string) => (await getUserAccessLevel(userId, pageId))?.canView ?? false);
+    (async (pageId: string) => (await getUserAccessLevel(actor, pageId))?.canView ?? false);
   const effectiveMaxResults = Math.min(maxResults, MAX_REGEX_RESULTS);
 
   // Validate and limit pattern length to prevent ReDoS

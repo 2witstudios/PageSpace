@@ -39,7 +39,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -238,7 +238,7 @@ describe('POST /api/auth/google/native', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -334,11 +334,12 @@ describe('POST /api/auth/google/native', () => {
       expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should create session with correct parameters', async () => {
+    it('SEC-2 (partial) should create session with correct parameters, including Google single-factor evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockNewUser.id,
         type: 'user',
         scopes: ['*'],
@@ -348,11 +349,12 @@ describe('POST /api/auth/google/native', () => {
       });
     });
 
-    it('should create device token with platform info', async () => {
+    it('SEC-2 (partial) should create device token with platform info, carrying the same Google evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -375,6 +377,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -397,6 +400,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -853,7 +857,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
@@ -872,7 +876,7 @@ describe('POST /api/auth/google/native', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -898,7 +902,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'page',
         invitedDriveId: 'drv_1',
         invitedPageId: 'page_1',
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_p' });
@@ -916,7 +920,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_c' });

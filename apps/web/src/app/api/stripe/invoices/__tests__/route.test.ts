@@ -223,7 +223,7 @@ describe('Invoices API', () => {
       expect(body.hasMore).toBe(false);
     });
 
-    it('MON-5 (partial) a configured Pro line on a later page determines the invoice name', async () => {
+    it('price identity: a configured Pro line on a later page determines the invoice name', async () => {
       const first = { id: 'il_pending', description: 'Pending item', amount: 100 };
       const pro = { id: 'il_pro', amount: 1500,
         parent: { subscription_item_details: { subscription_item: 'si_pro' } },
@@ -266,7 +266,7 @@ describe('Invoices API', () => {
     it.each([
       ['5000', 'Legacy plan'],
       ['1500', 'Legacy plan'],
-    ])('MON-5 (partial) an unmapped price with amount %s retains its description %s', async (decimal, name) => {
+    ])('price identity: an unmapped price with amount %s retains its description %s', async (decimal, name) => {
       mockStripeInvoicesList.mockResolvedValue({
         data: [{
           ...mockInvoice(),

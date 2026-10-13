@@ -27,6 +27,7 @@
  * absorb a page navigation that resubscribes a moment later.
  */
 
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -45,7 +46,7 @@ export const IDLE_UNSUBSCRIBE_MS = 60_000;
 
 export type AppLogSocketLike = {
   id: string;
-  data: { user?: { id: string } };
+  data: { user?: { id: string }; actor?: AccessActor };
   emit(event: string, payload?: unknown): void;
 };
 
@@ -62,7 +63,7 @@ function isUnsubscribePayload(payload: unknown): payload is { flyAppName: string
 }
 
 /**
- * Resolve whether `userId` may watch this env's published app's logs — a
+ * Resolve whether the actor may watch this env's published app's logs — a
  * drive-membership check on the env, cross-checked against the published-app
  * row that env actually has.
  *
@@ -75,7 +76,7 @@ function isUnsubscribePayload(payload: unknown): payload is { flyAppName: string
  * function's return, not from trusting that check.
  */
 async function resolveAuthorizedFlyAppName(
-  userId: string,
+  actor: AccessActor,
   envId: string,
   claimedFlyAppName: string,
 ): Promise<string | null> {
@@ -86,7 +87,7 @@ async function resolveAuthorizedFlyAppName(
     .limit(1);
   if (!env) return null;
 
-  const hasAccess = await getUserDriveAccess(userId, env.driveId);
+  const hasAccess = await getUserDriveAccess(actor, env.driveId);
   if (!hasAccess) return null;
 
   const [app] = await db
@@ -147,13 +148,14 @@ export function buildAppLogHandlers(
   return {
     async onSubscribe(payload) {
       const userId = socket.data.user?.id;
-      if (!userId) return;
+      const actor = socket.data.actor;
+      if (!userId || !actor) return;
       if (!isSubscribePayload(payload)) return;
       const { envId, flyAppName: claimedFlyAppName } = payload;
 
       let flyAppName: string;
       try {
-        const authorized = await resolveAuthorizedFlyAppName(userId, envId, claimedFlyAppName);
+        const authorized = await resolveAuthorizedFlyAppName(actor, envId, claimedFlyAppName);
         if (!authorized) {
           loggers.realtime.warn('User denied access to app logs', { userId, envId, claimedFlyAppName });
           return;

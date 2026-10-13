@@ -70,36 +70,37 @@ function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
 }
 
 import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
+import { credentialActor } from '../../../permissions/access-actor';
 
 describe('the org cloud-sandbox switch', () => {
   const policies = (cloudSandbox: boolean) => async () => ({ ...DEFAULT_ORG_POLICIES, cloudSandbox });
 
   it('POL-10 refuses a drive member when the org has cloud sandboxes off', async () => {
-    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(false) }) });
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(false) }) });
     expect(result).toEqual({ ok: false, reason: 'org_policy' });
   });
 
   it('POL-10 refuses an agent-origin run the same way', async () => {
     const result = await canRunCode({
-      userId: 'u1', driveId: 'd1', requestOrigin: 'agent', agentPageId: 'a1',
+      actor: credentialActor('u1', null), driveId: 'd1', requestOrigin: 'agent', agentPageId: 'a1',
       deps: makeDeps({ getDriveOrgPolicies: policies(false) }),
     });
     expect(result).toEqual({ ok: false, reason: 'org_policy' });
   });
 
   it('POL-10 allows when the org leaves it on', async () => {
-    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(true) }) });
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(true) }) });
     expect(result.ok).toBe(true);
   });
 
   it('POL-10 a drive with no org is unrestricted', async () => {
-    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: async () => null }) });
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: async () => null }) });
     expect(result.ok).toBe(true);
   });
 
   it('POL-10 a caller with no access to the drive is told about access, never about the policy', async () => {
     const result = await canRunCode({
-      userId: 'u1', driveId: 'd1',
+      actor: credentialActor('u1', null), driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => null, getDriveOrgPolicies: policies(false) }),
     });
     expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
@@ -107,7 +108,7 @@ describe('the org cloud-sandbox switch', () => {
 
   it('POL-10 a policy read that throws fails closed', async () => {
     const result = await canRunCode({
-      userId: 'u1', driveId: 'd1',
+      actor: credentialActor('u1', null), driveId: 'd1',
       deps: makeDeps({ getDriveOrgPolicies: async () => { throw new Error('db down'); } }),
     });
     expect(result.ok).toBe(false);
@@ -116,13 +117,13 @@ describe('the org cloud-sandbox switch', () => {
 
 describe('canRunCode', () => {
   it('given an admin drive member in cloud with the kill-switch on, should allow', async () => {
-    const result = await canRunCode({ userId: 'u1', driveId: 'd1', deps: makeDeps() });
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps() });
     expect(result.ok).toBe(true);
   });
 
   it('given a drive owner, should allow', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => ownerPerms }),
     });
@@ -131,7 +132,7 @@ describe('canRunCode', () => {
 
   it('given the kill-switch off, should deny regardless of authorization', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ isCodeExecutionEnabled: () => false }),
     });
@@ -140,7 +141,7 @@ describe('canRunCode', () => {
 
   it('given a user with no drive membership, should deny', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => null }),
     });
@@ -149,7 +150,7 @@ describe('canRunCode', () => {
 
   it('given a plain MEMBER-role collaborator, should allow — the advertised entitlement is every member of a paid drive (review #2326)', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
     });
@@ -158,7 +159,7 @@ describe('canRunCode', () => {
 
   it('given a VIEWER-role member (no edit access), should deny', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
     });
@@ -172,7 +173,7 @@ describe('canRunCode', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
     try {
       const result = await canRunCode({
-        userId: 'u1',
+        actor: credentialActor('u1', null),
         driveId: 'd1',
         deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
       });
@@ -186,7 +187,7 @@ describe('canRunCode', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
     try {
       const run = (overrides: Partial<CanRunCodeDeps> = {}) => canRunCode({
-        userId: 'u1', driveId: 'd1',
+        actor: credentialActor('u1', null), driveId: 'd1',
         deps: makeDeps({ getUserSubscriptionTier: async () => 'free', ...overrides }),
       });
       expect(await run()).toEqual({ ok: true });
@@ -201,7 +202,7 @@ describe('canRunCode', () => {
 
   it('given a free-tier payer, should deny with tier_ineligible', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
     });
@@ -210,7 +211,7 @@ describe('canRunCode', () => {
 
   it('given a pro-tier payer, should allow', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
     });
@@ -219,7 +220,7 @@ describe('canRunCode', () => {
 
   it('given a free-tier ACTOR inside a drive owned by a pro-tier user, should allow — the PAYER (drive owner), not the actor, is checked', async () => {
     const result = await canRunCode({
-      userId: 'free-actor',
+      actor: credentialActor('free-actor', null),
       driveId: 'd1',
       deps: makeDeps({
         lookupDriveBillingFacts: async () => ({ ownerId: 'pro-owner', orgId: null }),
@@ -231,7 +232,7 @@ describe('canRunCode', () => {
 
   it('given a pro-tier ACTOR inside a drive owned by a free-tier user, should deny — the payer, not the actor, is checked', async () => {
     const result = await canRunCode({
-      userId: 'pro-actor',
+      actor: credentialActor('pro-actor', null),
       driveId: 'd1',
       deps: makeDeps({
         lookupDriveBillingFacts: async () => ({ ownerId: 'free-owner', orgId: null }),
@@ -244,7 +245,7 @@ describe('canRunCode', () => {
   it("WAL-9 (partial) given a drive that belongs to an ORG, should allow on the ORG's tier — even with a free-tier lead and actor, and without reading either's plan", async () => {
     const tierLookups: string[] = [];
     const result = await canRunCode({
-      userId: 'free-actor',
+      actor: credentialActor('free-actor', null),
       driveId: 'd1',
       deps: makeDeps({
         lookupDriveBillingFacts: async () => ({ ownerId: 'free-lead', orgId: 'org-northwind' }),
@@ -265,14 +266,14 @@ describe('canRunCode', () => {
       getUserSubscriptionTier: async () => 'pro',
       isOrgLapsed: async (orgId) => (orgId === 'org-northwind' ? lapsed.value : false),
     });
-    expect(await canRunCode({ userId: 'pro-actor', driveId: 'd1', deps })).toEqual({ ok: false, reason: 'org_lapsed' });
+    expect(await canRunCode({ actor: credentialActor('pro-actor', null), driveId: 'd1', deps })).toEqual({ ok: false, reason: 'org_lapsed' });
     lapsed.value = false;
-    expect(await canRunCode({ userId: 'pro-actor', driveId: 'd1', deps })).toEqual({ ok: true });
+    expect(await canRunCode({ actor: credentialActor('pro-actor', null), driveId: 'd1', deps })).toEqual({ ok: true });
   });
 
   it('WAL-9 (partial) an ORG drive still enforces drive edit access — the org tier grants the machine, not the membership', async () => {
     const result = await canRunCode({
-      userId: 'viewer',
+      actor: credentialActor('viewer', null),
       driveId: 'd1',
       deps: makeDeps({
         lookupDriveBillingFacts: async () => ({ ownerId: 'lead', orgId: 'org-northwind' }),
@@ -284,7 +285,7 @@ describe('canRunCode', () => {
 
   it('given no driveId (global assistant) and a free-tier session owner, should deny with tier_ineligible', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       ownerId: 'u1',
       deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
     });
@@ -293,7 +294,7 @@ describe('canRunCode', () => {
 
   it('given no driveId (global assistant) and a pro-tier session owner, should allow', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       ownerId: 'u1',
       deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
     });
@@ -302,7 +303,7 @@ describe('canRunCode', () => {
 
   it('given an agent actor with edit access, should allow', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       requestOrigin: 'agent',
       agentPageId: 'agent1',
@@ -315,7 +316,7 @@ describe('canRunCode', () => {
     // The rung that stops a view-only member escalating through an agent
     // that holds drive edit access.
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       requestOrigin: 'agent',
       agentPageId: 'agent1',
@@ -326,7 +327,7 @@ describe('canRunCode', () => {
 
   it('given an agent actor whose triggering user has no drive membership, should deny on the user gate', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       requestOrigin: 'agent',
       agentPageId: 'agent1',
@@ -337,7 +338,7 @@ describe('canRunCode', () => {
 
   it('given an agent actor without a page id, should deny', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       requestOrigin: 'agent',
       deps: makeDeps(),
@@ -347,7 +348,7 @@ describe('canRunCode', () => {
 
   it('given an agent actor with view-only access, should deny', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       requestOrigin: 'agent',
       agentPageId: 'agent1',
@@ -358,7 +359,7 @@ describe('canRunCode', () => {
 
   it('given no driveId and kill switch off, should deny with kill_switch_off', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       deps: makeDeps({ isCodeExecutionEnabled: () => false }),
     });
     expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
@@ -366,7 +367,7 @@ describe('canRunCode', () => {
 
   it('given no driveId and agent requestOrigin, should deny — agent-origin always requires a drive context', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       requestOrigin: 'agent',
       agentPageId: 'agent1',
       deps: makeDeps(),
@@ -376,7 +377,7 @@ describe('canRunCode', () => {
 
   it('given a permission lookup that throws, should fail closed without throwing', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({
         getUserDrivePermissions: async () => {
@@ -389,7 +390,7 @@ describe('canRunCode', () => {
 
   it('given a tier lookup that throws, should fail closed without throwing', async () => {
     const result = await canRunCode({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       driveId: 'd1',
       deps: makeDeps({
         getUserSubscriptionTier: async () => {

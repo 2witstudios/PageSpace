@@ -12,7 +12,13 @@
  * conversion of its own (MON-5 seam guard).
  */
 
-import { centsFromCredits } from './money-model';
+import {
+  DEFAULT_CONSUMER_CAP_CREDITS,
+  DEFAULT_SEAT_ALLOWANCE_CREDITS,
+  centsFromCredits,
+  centsFromMillicents,
+  millicentsFromCents,
+} from './money-model';
 import { allocateSpend, evaluateDailyCap, type Balance, type SpendResult } from './credit-core';
 
 // ---------------------------------------------------------------------------
@@ -588,14 +594,13 @@ export interface ConsumerCaps {
 }
 
 /**
- * Defaults when an admin enables per-consumer caps without naming values: 50 credits a day and
- * 1,000 a month ([D-OW-31], replacing D20.5's 10/100, which sat below one image or uncatalogued
- * model's hold and so refused every such call). Caps never set stay unlimited within the wallet.
+ * Defaults when an admin enables per-consumer caps without naming values (money-model's
+ * DEFAULT_CONSUMER_CAP_CREDITS, [D-OW-31]). Caps never set stay unlimited within the wallet.
  * NOT the seat allowance: that is its own constant below.
  */
 export const DEFAULT_CONSUMER_CAPS: ConsumerCaps = {
-  dailyCents: Math.round(centsFromCredits(50)),
-  monthlyCents: Math.round(centsFromCredits(1_000)),
+  dailyCents: Math.round(centsFromCredits(DEFAULT_CONSUMER_CAP_CREDITS.daily)),
+  monthlyCents: Math.round(centsFromCredits(DEFAULT_CONSUMER_CAP_CREDITS.monthly)),
 };
 
 export interface CapUsage {
@@ -664,7 +669,11 @@ export function evaluateCaps(input: { caps: ConsumerCaps; usage: CapUsage; reser
 /** Funder alert thresholds, percent of a cap (D20.6). */
 export const CAP_ALERT_THRESHOLDS = [80, 100] as const;
 export type CapAlertThreshold = (typeof CAP_ALERT_THRESHOLDS)[number];
-const PERCENT = 100;
+
+/** Has `part` reached `percent`% of `whole`? Cross-multiplied, so integers stay exact (a ratio, not money). */
+function reachesPercent(part: number, whole: number, percent: number): boolean {
+  return part * 100 >= whole * percent;
+}
 
 /**
  * The thresholds a consumer's spend in one cap window has reached (spent >= threshold% of the
@@ -676,7 +685,7 @@ export function capThresholdsReached(input: { capCents: number | null; spentCent
   if (input.capCents === null || !Number.isFinite(input.capCents)) return [];
   const cap = wholeNonNegative(input.capCents);
   const spent = wholeNonNegative(input.spentCents);
-  return CAP_ALERT_THRESHOLDS.filter((t) => spent * PERCENT >= cap * t);
+  return CAP_ALERT_THRESHOLDS.filter((t) => reachesPercent(spent, cap, t));
 }
 
 /** A cap window of WAL-7: the UTC day, and the month (the pool period for a seat, D-OW-12). */
@@ -721,13 +730,10 @@ export function planConsumerCapWrite(input: ConsumerCapWriteInput, existing: Con
 // ---------------------------------------------------------------------------
 
 /**
- * The org's default seat allowance (the POL-7 policy default and the fallback when an org sets
- * none): D20.5's 100 credits a month per member. Its own constant on purpose: [D-OW-31] moved the
- * per-consumer cap defaults and left the seat allowance where it was, so a cap edit must never
- * move what every member may draw from every pool. A seat is never unlimited — a seat with no
- * cap lets any one member spend the whole pool.
+ * The org's default seat allowance in cents (money-model's DEFAULT_SEAT_ALLOWANCE_CREDITS). A
+ * seat is never unlimited — a seat with no cap lets any one member spend the whole pool.
  */
-export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(100));
+export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(DEFAULT_SEAT_ALLOWANCE_CREDITS));
 
 /**
  * One consumer's seat allowance on the pool: their own monthly cap on the pool leg
@@ -741,8 +747,6 @@ export function seatAllowanceCents(input: {
   return wholeNonNegative(input.consumerMonthlyCapCents ?? input.policySeatAllowanceCents ?? DEFAULT_SEAT_ALLOWANCE_CENTS);
 }
 
-const MILLICENTS_PER_CENT = 1000;
-
 /**
  * A consumer's charged seat spend this period, from the ledger's summed millicents (usage
  * plus signed reconcile corrections). Rounded UP so the cap never under-counts; a net
@@ -750,7 +754,7 @@ const MILLICENTS_PER_CENT = 1000;
  */
 export function seatSpentCents(chargedMillicents: number): number {
   if (!Number.isFinite(chargedMillicents)) return Number.MAX_SAFE_INTEGER;
-  return Math.max(0, Math.ceil(chargedMillicents / MILLICENTS_PER_CENT));
+  return Math.max(0, Math.ceil(centsFromMillicents(chargedMillicents)));
 }
 
 /** One consumer's seat spend in the pool's current period. */
@@ -804,7 +808,7 @@ export interface SeatWindowCharge {
 export function seatCountedMillicents(input: { capCents: number | null; grossMillicents: number }): number {
   if (!Number.isFinite(input.grossMillicents)) return input.grossMillicents;
   const gross = Math.max(0, input.grossMillicents);
-  return input.capCents === null ? gross : Math.min(gross, input.capCents * MILLICENTS_PER_CENT);
+  return input.capCents === null ? gross : Math.min(gross, millicentsFromCents(input.capCents));
 }
 
 /**
@@ -823,7 +827,7 @@ export function seatCountedMillicents(input: { capCents: number | null; grossMil
  * nothing absorbed. A non-finite sum changes nothing here; the gate's read fails closed on it.
  */
 export function seatOvershootDeltaMillicents(input: { capCents: number | null; window: SeatWindowCharge }): number {
-  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - input.capCents * MILLICENTS_PER_CENT);
+  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - millicentsFromCents(input.capCents));
   const delta = target - input.window.absorbedMillicents;
   return Number.isFinite(delta) ? delta : 0;
 }

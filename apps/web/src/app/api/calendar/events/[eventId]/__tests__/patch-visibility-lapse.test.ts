@@ -60,6 +60,7 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn().mockResolvedValue(true),
   isDriveOwnerOrAdmin: vi.fn().mockResolvedValue(true),
 }));
