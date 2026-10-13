@@ -16,7 +16,7 @@ vi.mock('@/retained/hooks/usePermissions', () => ({ usePermissions: () => ({ per
 vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({ ChatMessagesArea: () => <div data-empty-messages="" /> }));
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('./chat-attachments', () => ({ useChatAttachments: () => ({ attachments: [], getFilesForSend: () => [], addFiles: vi.fn(), removeFile: vi.fn() }) }));
-vi.mock('@/retained/components/ai/chat/input', () => ({ ChatInput: (props: ChatInputProps) => <><textarea value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)} /><button disabled={props.disabled} onClick={props.onSend}>Send</button></> }));
+vi.mock('@/retained/components/ai/chat/input', () => ({ ChatInput: (props: ChatInputProps) => <><textarea aria-label={props.inputLabel} value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)} /><button disabled={props.disabled} onClick={props.onSend}>Send</button></> }));
 vi.mock('@/retained/components/agents/chat/SessionChat', () => ({ default: (props: SessionChatProps) => { boundary.session = props; return <div data-conversation={props.conversationId} />; } }));
 vi.mock('@/retained/components/agents/chat/AssistantSessionChat', () => ({ default: () => <div data-global-assistant="" /> }));
 const { RetainedChat } = await import('./retained-chat');
@@ -40,6 +40,11 @@ function send(container: HTMLElement, text: string) {
   act(() => { dispatch(transactions.setChatDraft, text); });
   act(() => { container.querySelector('button')!.click(); });
 }
+
+it('names the first-message composer after the agent, as the session composer is', async () => {
+  const { container } = show(); await settle();
+  expect(container.querySelector('textarea')?.getAttribute('aria-label')).toBe('Message Support');
+});
 
 it('opening, typing and reopening a new draft never creates a conversation', async () => {
   const { web } = show(); await settle();

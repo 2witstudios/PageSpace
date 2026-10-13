@@ -96,7 +96,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     <div className="p-2">{aboveComposer}<ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
       disabled={preparing || permissions?.canEdit !== true} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention
-      placeholder={placeholder ?? `Message ${name}...`} hasVision={hasVisionCapability(page.aiModel || '')}
+      placeholder={placeholder ?? `Message ${name}...`} inputLabel={`Message ${name}`} hasVision={hasVisionCapability(page.aiModel || '')}
       attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} driveId={page.driveId} crossDrive commandDriveId={page.driveId} /></div>
   </div></RetainedSurface>;
   return <RetainedSurface><SessionChat agent={{ ...page, id: selectedAgentId ?? page.id, title: selection ? page.title : name, driveName: '' }} conversationId={shownId} sessionId={selection?.sessionId}

@@ -384,8 +384,8 @@ test('agent sessions and drive configuration remain native and preserve one chat
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toBeEditable();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toHaveCount(1);
   const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
-  await expect(chat.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue(support.id);
-  const sessionInput = chat.getByPlaceholder('Message Support proof...');
+  await expect(chat.getByLabel('Choose agent: Support proof', { exact: true })).toBeVisible();
+  const sessionInput = chat.getByLabel('Message Support proof', { exact: true });
   await expect(sessionInput).toBeEditable();
   const sent = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
   await sessionInput.fill('A real workspace conversation turn');
@@ -397,8 +397,10 @@ test('agent sessions and drive configuration remain native and preserve one chat
   const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
   const imagoId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
   expect(imagoId).toBeTruthy();
-  await chat.getByRole('combobox', { name: 'Agent', exact: true }).selectOption(imagoId!);
-  await expect(chat.getByPlaceholder('Message Imago...')).toBeEditable();
+  await chat.getByLabel('Choose agent: Support proof', { exact: true }).click();
+  await chat.getByRole('radiogroup', { name: 'Agent', exact: true }).getByRole('radio', { name: /^Imago/ }).click();
+  await expect(chat.getByLabel('Choose agent: Imago', { exact: true })).toBeVisible();
+  await expect(chat.getByLabel('Message Imago', { exact: true })).toBeEditable();
   await expect(chat).toHaveCount(1);
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
   await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
