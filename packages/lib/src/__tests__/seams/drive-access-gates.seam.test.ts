@@ -67,6 +67,9 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'packages/lib/src/agents/provision-imago-agents.ts': {
     provisionImagoAgents: { ownerCompares: 1, reason: 'provisions built-in agents only in the caller-owned HOME drive; owner inventory, no team-drive authority' },
   },
+  'packages/lib/src/services/drive-transition-invalidation.ts': {
+    publishDriveTransitionInvalidation: { ownerCompares: 1, reason: 'invalidation inventory, not access: the drive owner is exempted from post-transition room kicks (their access is the resolver\u2019s, re-resolved per user right before)' },
+  },
   // ── apps/web: routes ────────────────────────────────────────────────────
   'apps/web/src/app/api/account/drives-status/route.ts': {
     GET: {

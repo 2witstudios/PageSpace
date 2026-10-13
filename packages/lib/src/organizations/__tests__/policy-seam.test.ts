@@ -64,6 +64,12 @@ const ORGANIZATIONS_IMPORTERS = [
   'packages/lib/src/organizations/repository.ts',
   'packages/lib/src/organizations/seat-service.ts',
   'packages/lib/src/organizations/status.ts',
+  // D-OW-62 guest admission: reads the org's identity and guest-policy columns to decide
+  // whether an approved guest's scope still satisfies the orgs over their granted pages.
+  'packages/lib/src/permissions/approved-guest-scope.ts',
+  // Guest suspension: reads org membership and guest policy columns to park a guest whose
+  // org policy newly refuses them; the decision is the sharing policy's, not the table's.
+  'packages/lib/src/permissions/guest-holds.ts',
   'packages/lib/src/repositories/account-repository.ts',
   'packages/lib/src/services/drive-join-request-service.ts',
   'packages/lib/src/services/org-drive-service.ts',

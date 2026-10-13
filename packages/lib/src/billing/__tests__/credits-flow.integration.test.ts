@@ -1421,10 +1421,16 @@ describe('credits flow — monthly reset', () => {
     await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', walletId: rootWalletId('u2'), costDollars: 1 }); // 150¢
     const carry = TIER_MONTHLY_ALLOWANCE_CENTS.pro - 150;
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(carry);
+    const lazyInitPeriodStart = balanceOf('u2')!.monthlyPeriodStart!.getTime();
+    const lazyInitPeriodEnd = balanceOf('u2')!.monthlyPeriodEnd!.getTime();
 
     await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    // MONEY-2: this invoice's period began at (or a hair before) the clock the lazy-init
+    // stamped, so it funds ONCE — the allowance adds to the carried balance (rollover) —
+    // but it must not rewind or restart the root clock that drive allocations draw on.
     expect(balanceOf('u2')!.monthlyRemainingCents).toBe(carry + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry + the new grant
-    expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(PERIOD_END * 1000);
+    expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(lazyInitPeriodEnd);
+    expect(balanceOf('u2')!.monthlyPeriodStart!.getTime()).toBe(lazyInitPeriodStart);
   });
 });
 
