@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { automationActor, credentialActor, decideActorAuthentication, HELD_DRIVES, inDrives, type AccessActor } from '../access-actor';
+import { automationActor, credentialActor, decideActorAuthentication, derivedCredentialEvidence, HELD_DRIVES, inDrives, type AccessActor } from '../access-actor';
 import type { OrgAuthenticationPolicy } from '../../organizations/authentication-policy-core';
 
 const nowMs = Date.parse('2026-10-12T12:00:00Z');
@@ -36,6 +36,13 @@ describe('access actor', () => {
   it('an actor without a user or an automation without a reason is refused at construction', () => {
     expect(() => credentialActor('', passkey)).toThrow();
     expect(() => automationActor('user-1', '', inDrives())).toThrow();
+    expect(() => automationActor('', 'workflow', inDrives('drive-1'))).toThrow('An access actor needs a user');
+  });
+
+  it('a credential derived from an actor carries the credential\'s evidence; an automation signed nothing in', () => {
+    expect(derivedCredentialEvidence(credentialActor('user-1', passkey))).toEqual(passkey);
+    expect(derivedCredentialEvidence(credentialActor('user-1', null))).toBeNull();
+    expect(derivedCredentialEvidence(automationActor('user-1', 'workflow', inDrives('drive-1')))).toBeNull();
   });
 });
 

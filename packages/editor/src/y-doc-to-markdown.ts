@@ -69,12 +69,28 @@ export function pmDocToMarkdown(doc: PmNode): string {
 function imageMarkdown(state: MarkdownSerializerState, node: PmNode): void {
   const fileId = stringAttr(node.attrs, 'fileId');
   state.write(
-    `![${state.esc(stringAttr(node.attrs, 'alt'))}](pagespace-file:${fileId.replace(/[()]/gu, '\\$&')})`,
+    `![${state.esc(stringAttr(node.attrs, 'alt'))}](pagespace-file:${fileId.replace(/[\\()]/gu, '\\$&')})`,
   );
   // `image` is a BLOCK node in this schema, so the block must be closed or the
   // next one runs straight into it — an image followed by a heading serialized
   // as `![...](...)## Heading`, and the heading stopped being a heading.
   state.closeBlock(node);
+}
+
+/**
+ * Escape every pipe that is not already escaped. A pipe stays escaped only behind an ODD run of
+ * backslashes: text arrives with its own backslashes doubled, but a code span's raw `\` right
+ * before a `|` would cancel a single added escape and let the pipe split the row.
+ */
+function escapeCellPipes(markdown: string): string {
+  let out = '';
+  let slashes = 0;
+  for (const ch of markdown) {
+    if (ch === '|' && slashes % 2 === 0) out += '\\';
+    out += ch;
+    slashes = ch === '\\' ? slashes + 1 : 0;
+  }
+  return out;
 }
 
 /**
@@ -84,9 +100,7 @@ function imageMarkdown(state: MarkdownSerializerState, node: PmNode): void {
  * corrupted rather than merely simplified.
  */
 function cellMarkdown(cell: PmNode): string {
-  return markdownSerializer()
-    .serialize(cell, { tightLists: true })
-    .replace(/\|/gu, '\\|')
+  return escapeCellPipes(markdownSerializer().serialize(cell, { tightLists: true }))
     .replace(/\s*\n\s*/gu, ' ')
     .trim();
 }
@@ -346,7 +360,7 @@ function markdownSerializer(): MarkdownSerializer {
       link: {
         open: '[',
         close(_state, mark) {
-          return `](${stringAttr(mark.attrs, 'href').replace(/[()"]/gu, '\\$&')})`;
+          return `](${stringAttr(mark.attrs, 'href').replace(/[\\()"]/gu, '\\$&')})`;
         },
       },
 
