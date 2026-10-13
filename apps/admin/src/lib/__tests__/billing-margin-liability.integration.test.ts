@@ -4,8 +4,10 @@
  * it), and included credit liability as grants outstanding on personal roots and org pools —
  * separate from top-up cash, never counting a pool's allocation to a drive wallet twice.
  *
- * Margin reads are scoped by a date window no other suite writes in; liability reads are
- * deltas over a baseline. Every row created is deleted.
+ * Margin reads are scoped by a date window no other suite writes in. Liability reads are
+ * scoped to THIS suite's wallet ids (`within`): parallel suites share the database and
+ * mutate other wallets between two reads, so an unscoped delta can observe their rows.
+ * Every row created is deleted.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
@@ -79,9 +81,6 @@ async function funding(userId: string, walletId: string, entryType: 'monthly_gra
 
 describe('MON-7 admin billing reports margin as charged value minus provider cost (personal and org-pool usage, attributed to the paying tier) and included credit liability as grants outstanding on personal roots and org pools, separate from top-up cash and never counting an allocation twice', () => {
   it('margin is charged minus cost per paying tier, and the liability counts each grant once and apart from cash', async () => {
-    const liabilityBefore = await getCreditLiability();
-    const revenueBefore = await getCreditRevenue();
-
     const pro = await user('pro');
     const free = await user('free');
     const proRoot = await wallet({ ownerType: 'user', userId: pro, monthlyRemainingCents: 900, topupRemainingCents: 250 });
@@ -121,17 +120,20 @@ describe('MON-7 admin billing reports margin as charged value minus provider cos
 
     // Liability: grants outstanding on personal roots (900 + the 500 starter) and the org pool
     // (4,800); the drive wallet's 3,000 allocation is not counted again; top-up cash is apart.
-    const liability = await getCreditLiability();
-    expect(liability.monthlyRemainingCents - liabilityBefore.monthlyRemainingCents).toBe(900 + 500 + 4800);
-    expect(liability.orgPoolMonthlyRemainingCents - liabilityBefore.orgPoolMonthlyRemainingCents).toBe(4800);
-    expect(liability.starterGrantRemainingCents - liabilityBefore.starterGrantRemainingCents).toBe(500);
-    expect(liability.topupRemainingCents - liabilityBefore.topupRemainingCents).toBe(250);
-    expect(liability.totalLiabilityCents - liabilityBefore.totalLiabilityCents).toBe(900 + 500 + 4800 + 250);
-    expect(liability.orgPoolCount - liabilityBefore.orgPoolCount).toBe(1);
+    // The read is scoped to this suite's wallets, so parallel suites sharing the database
+    // cannot move the numbers between seeding and assertion.
+    const ours = inArray(wallets.id, [...created.roots, ...created.children]);
+    const liability = await getCreditLiability(ours);
+    expect(liability.monthlyRemainingCents).toBe(900 + 500 + 4800);
+    expect(liability.orgPoolMonthlyRemainingCents).toBe(4800);
+    expect(liability.starterGrantRemainingCents).toBe(500);
+    expect(liability.topupRemainingCents).toBe(250);
+    expect(liability.totalLiabilityCents).toBe(900 + 500 + 4800 + 250);
+    expect(liability.orgPoolCount).toBe(1);
 
     // The revenue split keeps cash (top-ups) and grant flow apart, and carries the same liability.
-    const revenue = await getCreditRevenue(windowStart, windowEnd);
+    const revenue = await getCreditRevenue(windowStart, windowEnd, ours);
     expect(revenue).toMatchObject({ topupCents: 250, topupCount: 1, monthlyGrantCents: 900, monthlyGrantCount: 1 });
-    expect(revenue.includedCreditLiabilityCents - revenueBefore.includedCreditLiabilityCents).toBe(900 + 500 + 4800);
+    expect(revenue.includedCreditLiabilityCents).toBe(900 + 500 + 4800);
   });
 });

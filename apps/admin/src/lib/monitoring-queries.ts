@@ -3,7 +3,7 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, isNotNull, type SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
 import { sessions } from '@pagespace/db/schema/sessions';
@@ -1109,6 +1109,7 @@ export async function getProviderCostRollup(
 export async function getCreditRevenue(
   startDate?: Date,
   endDate?: Date,
+  liabilityWithin?: SQL,
 ): Promise<CreditRevenue> {
   const conditions: SQL[] = [inArray(creditLedger.entryType, ['topup_purchase', 'monthly_grant'])];
   if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
@@ -1141,7 +1142,7 @@ export async function getCreditRevenue(
   // MON-7: outstanding grants = unspent granted credit value on personal roots and org
   // pools. Read from the wallets (the ledger nets grants against usage there), not from
   // the range-scoped grant rows above, so it is a liability, not a flow.
-  const liability = await readCreditLiability();
+  const liability = await readCreditLiability(liabilityWithin);
 
   return {
     topupCents,
@@ -1173,9 +1174,9 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
   return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
 }
 
-/** Outstanding credit liability across every wallet kind, point-in-time (MON-7). */
-export async function getCreditLiability(): Promise<CreditLiability> {
-  const r = await readCreditLiability();
+/** Outstanding credit liability across every wallet kind, point-in-time (MON-7). `within` scopes the read to an allowlisted set of wallets (integration tests in a shared database); production passes nothing. */
+export async function getCreditLiability(within?: SQL): Promise<CreditLiability> {
+  const r = await readCreditLiability(within);
   return {
     monthlyRemainingCents: r.includedCreditLiabilityCents,
     orgPoolMonthlyRemainingCents: r.orgPoolIncludedCents,
