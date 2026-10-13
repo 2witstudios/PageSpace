@@ -155,6 +155,8 @@ export async function backfillCredits(): Promise<BackfillResult> {
         // never lands on the recorded person's own wallet, nor counts toward their seat.
         walletId: aiUsageLogs.walletId,
         metadata: aiUsageLogs.metadata,
+        // SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it.
+        automationRef: aiUsageLogs.automationRef,
       })
       .from(aiUsageLogs)
       .leftJoin(creditLedger, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
@@ -181,6 +183,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
         source: o.source,
         walletId: o.walletId,
         metadata: o.metadata,
+        automationRef: o.automationRef,
       })),
       MARKUP_BPS_OVERRIDES_BY_SOURCE,
     );
@@ -199,6 +202,7 @@ export async function backfillCredits(): Promise<BackfillResult> {
             walletId: action.walletId,
             spendKind: action.spendKind,
             ...(action.fallbackFromWalletId ? { fallbackFromWalletId: action.fallbackFromWalletId } : {}),
+            ...(action.automationRef ? { automationRef: action.automationRef } : {}),
           });
           orphanCount++;
         } else {

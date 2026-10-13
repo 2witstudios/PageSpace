@@ -22,6 +22,7 @@ import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/times
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -95,9 +96,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check view permission
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this task list',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Get or create task list (also ensures default status configs)
@@ -392,9 +393,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to add tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const body = await req.json();

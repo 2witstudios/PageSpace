@@ -29,6 +29,7 @@ import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/
 import { createId } from '@paralleldrive/cuid2';
 import { getAgentSessionStore, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
 import { applyWorkspaceMembershipWrite } from './workspace-node-runtime';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * The shell row could not be reserved — an invalid or duplicate name, or a lost
@@ -195,7 +196,8 @@ export function getSessionShellStore(): Promise<SessionShellStore> {
  */
 export async function spawnShell(input: {
   workspaceId: string;
-  ownerId: string;
+  /** The caller, who owns the shell: a NEW binding is gated on their credential. */
+  owner: AccessActor;
   name?: string;
   /**
    * The pane a human picked into — see `AdmitConversationInput.activeNodeId`.
@@ -216,7 +218,7 @@ export async function spawnShell(input: {
   try {
     const written = await applyWorkspaceMembershipWrite({
       workspaceId: input.workspaceId,
-      actingUserId: input.ownerId,
+      actor: input.owner,
       run: (nodes) =>
         admit(nodes, {
           target,
@@ -229,7 +231,7 @@ export async function spawnShell(input: {
         spawned = await spawnSessionShell({
           shellId,
           workspaceId: input.workspaceId,
-          ownerId: input.ownerId,
+          ownerId: input.owner.userId,
           name: input.name,
           deps: { store, now: () => new Date() },
         });
@@ -325,9 +327,9 @@ export async function resolveShellById(shellId: string): Promise<ResolveSessionS
 export async function killShellById(input: {
   shellId: string;
   /** The acting HUMAN, for the membership write's own funnel. Nothing new is bound by a removal, so the gate has nothing to judge — but the funnel takes one. */
-  actingUserId: string;
+  actor: AccessActor;
 }): Promise<KillShellResult> {
-  const { shellId, actingUserId } = input;
+  const { shellId, actor } = input;
   const [store, host, sessionStore] = await Promise.all([
     getSessionShellStore(),
     getSandboxHost(),
@@ -367,7 +369,7 @@ export async function killShellById(input: {
   try {
     const written = await applyWorkspaceMembershipWrite({
       workspaceId: row.workspaceId,
-      actingUserId,
+      actor,
       // A removal never needs a root minted for it — see the flag's own doc.
       seed: false,
       run: (nodes) => {

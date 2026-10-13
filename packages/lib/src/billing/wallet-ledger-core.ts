@@ -67,7 +67,7 @@ export function allocationTransferRows(input: {
  */
 export const DEBT_FORGIVEN_ENTRY = 'debt_forgiven' as const;
 /**
- * The cutover's one row per wallet (migration 0345_wallet_opening_balance): its net at cutover less
+ * The cutover's one row per wallet (migration 0350_wallet_opening_balance): its net at cutover less
  * what its earlier rows already account for, so reconciliation is exact from the cutover forward.
  * The migration's SQL mirrors {@link ledgerMovementCents} as of that cutover.
  */

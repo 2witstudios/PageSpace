@@ -34,6 +34,7 @@ import { mirrorPublishedPageToHosts, mirror404ToHosts, getActiveDomainRecords } 
 import { checkOrgActive } from '@pagespace/lib/organizations/status';
 import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
 import { publishingDecision } from '@pagespace/lib/organizations/sharing-decisions';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export const PUBLISH_HOST = 'pagespace.site';
 const FAVICON_BASE_URL = 'https://pagespace.ai';
@@ -90,8 +91,8 @@ export interface PublishCanvasPageInput {
   pageId: string;
   /** Drive that owns the page. Resolved by caller. */
   driveId: string;
-  /** User performing the publish (for published_pages.publishedBy + subdomain allocation). */
-  userId: string;
+  /** Who is publishing: the asset checks run as this credential; its user is published_pages.publishedBy. */
+  actor: AccessActor;
   /** Explicit path override. When omitted, derived from page title → pageId fallback. */
   path?: string;
  /**
@@ -196,18 +197,18 @@ async function preparePublishContent(params: {
   homePageId: string | null;
   currentPageId: string;
   currentPath: string;
-  actingUserId: string;
+  actor: AccessActor;
   /**
    * Mirrors `pages.siteMode`. CANVAS only — the DOCUMENT/CODE/SHEET pipelines
    * pass an explicit stricter `cspOverride`, which wins regardless.
    */
   siteMode?: boolean;
 }): Promise<PreparedPublishContent> {
-  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actingUserId, siteMode } = params;
+  const { type, content, contentMode, driveId, subdomain, homePageId, currentPageId, currentPath, actor, siteMode } = params;
 
   switch (type) {
     case PageType.CANVAS: {
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', userId: actingUserId, db });
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: content ?? '', actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
@@ -216,7 +217,7 @@ async function preparePublishContent(params: {
     }
     case PageType.DOCUMENT: {
       const rawHtml = contentMode === 'markdown' ? await marked.parse(content ?? '') : (content ?? '');
-      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, userId: actingUserId, db });
+      const { html: assetHtml } = await rewriteCanvasAssets({ html: rawHtml, actor, db });
       const { html: rewrittenHtml } = await rewriteInterPageLinksForDrive({
         html: assetHtml, driveId, subdomain, homePageId, currentPageId, currentPath, db,
       });
@@ -251,7 +252,8 @@ async function preparePublishContent(params: {
  * Auth and permission checks are the caller's responsibility.
  */
 export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<PublishCanvasPageResult> {
-  const { pageId, driveId, userId } = input;
+  const { pageId, driveId, actor } = input;
+  const userId = actor.userId;
 
   // ------------------------------------------------------------------
   // 1. Load page (must be a publishable type)
@@ -338,7 +340,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
     homePageId: drive.homePageId,
     currentPageId: pageId,
     currentPath: path,
-    actingUserId: userId,
+    actor,
     siteMode: page.siteMode,
   });
   const { meta, body: bodyHtml } = prepared;
@@ -562,7 +564,7 @@ export async function publishCanvasPage(input: PublishCanvasPageInput): Promise<
  * publishing is unconfigured. Returns the number of pages successfully
  * re-rendered (useful for callers/tests).
  */
-export async function republishDriveCanonical(driveId: string, userId: string): Promise<number> {
+export async function republishDriveCanonical(driveId: string, actor: AccessActor): Promise<number> {
   if (!isPublishConfigured()) return 0;
 
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -574,7 +576,7 @@ export async function republishDriveCanonical(driveId: string, userId: string): 
   let refreshed = 0;
   for (const row of published) {
     try {
-      await publishCanvasPage({ pageId: row.pageId, driveId, userId, path: row.path });
+      await publishCanvasPage({ pageId: row.pageId, driveId, actor, path: row.path });
       refreshed += 1;
     } catch (err) {
       loggers.api.warn('Failed to re-render published page for canonical refresh', {
@@ -613,7 +615,7 @@ export async function republishDriveCanonical(driveId: string, userId: string): 
 export async function changePublishSubdomain(
   driveId: string,
   candidate: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<{ oldSubdomain: string | null; newSubdomain: string }> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
@@ -659,7 +661,7 @@ export async function changePublishSubdomain(
       where: eq(publishedPages.driveId, driveId),
       columns: { pageId: true },
     });
-    const refreshedCount = await republishDriveCanonical(driveId, userId);
+    const refreshedCount = await republishDriveCanonical(driveId, actor);
     if (refreshedCount !== publishedRows.length) {
       throw new PublishError(
         `Subdomain migration incomplete: refreshed ${refreshedCount}/${publishedRows.length} published pages`,
@@ -742,7 +744,8 @@ async function renderNotFoundPageHtml(params: {
       homePageId,
       currentPageId: pageId,
       currentPath: '',
-      actingUserId: ownerId,
+      // No natural current user here (see above): the drive owner, as a system regeneration, not a sign-in.
+      actor: automationActor(ownerId, 'publish-regeneration', inDrives(driveId)),
       siteMode: page.siteMode,
     });
     const { meta } = prepared;
@@ -944,7 +947,7 @@ export async function regeneratePublishedSiteFiles(driveId: string): Promise<voi
  */
 export async function publishHomePageAtRoot(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
 ): Promise<PublishCanvasPageResult | null> {
   const drive = await db.query.drives.findFirst({
     where: eq(drives.id, driveId),
@@ -956,7 +959,7 @@ export async function publishHomePageAtRoot(
   return publishCanvasPage({
     pageId: drive.homePageId,
     driveId,
-    userId,
+    actor,
   });
 }
 

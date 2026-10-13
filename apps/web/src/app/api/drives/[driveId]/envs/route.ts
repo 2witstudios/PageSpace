@@ -34,6 +34,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { createDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
 import { createEnvInDrive, listEnvsInDrive, toDriveEnvDTO } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -58,7 +59,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'list' },
       });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     return NextResponse.json({ envs: await listEnvsInDrive(driveId) });
@@ -85,7 +86,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'create' },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can create environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can create environments' }, { status: 403 }));
     }
 
     const body = await request.json().catch(() => null);

@@ -7,6 +7,7 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn().mockResolvedValue(new Map()),
 }));
 vi.mock('@pagespace/lib/auth/user-repository', () => ({

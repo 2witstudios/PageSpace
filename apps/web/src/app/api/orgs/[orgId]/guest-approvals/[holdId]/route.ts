@@ -19,7 +19,7 @@ import { emitAcceptanceSideEffects, type AcceptedInviteData } from '@pagespace/l
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import { handleEmailPath, handleUserIdPath } from '@/lib/drive-invites/invite-handlers';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string; holdId: string }> };
 
@@ -89,7 +89,7 @@ const audit = (claim: ClaimedGuestApproval, eventType: 'org.guest.approved' | 'o
  */
 export async function POST(request: Request, context: Context) {
   const { orgId, holdId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = decisionSchema.safeParse(await request.json().catch(() => null));

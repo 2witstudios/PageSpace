@@ -20,7 +20,7 @@
 import { allocateSpend, applyPaymentToDebt, computeMonthlyRefill, type Balance } from './credit-core';
 import { allowanceRefills } from './credit-pricing';
 import type { InvoiceGrant } from './invoice-grant';
-import { MONEY_MODEL_V2_ACTIVE, allowanceCentsForPaidCents } from './money-model';
+import { allowanceCentsForPaidCents } from './money-model';
 import { orgListPriceCents } from './org-plan-quote';
 import { isSubscriptionTier } from './subscription-tiers';
 import {
@@ -42,26 +42,24 @@ import {
 export const ORG_POOL_TIER = 'business' as const;
 
 /**
- * [D-OW-23] as amended by [D-OW-30] (Jono): a GIFTED org subscription — the admin path —
- * pays nothing (a 100%-coupon subscription whose lines net to 0), and the literal MON-3
- * refill would leave it with an empty pool; with this on, a gift funds the pool at LIST
- * price × ratio, exactly as a personal gift is funded. There is no org TRIAL any more
- * ([D-OW-30]): a $0 trial invoice once granted $50 of pool credit and was farmable by
- * creating orgs, so a trial-shaped invoice is now sized from what it PAID — nothing —
- * like any other. Renamed from ORG_POOL_FUNDS_TRIALS_AND_GIFTS so the name says what it
- * still covers. This is the one line that reverses the gift policy: set it to false and
- * a gift grants nothing. Every gift amount comes from {@link orgPoolListPriceGrantCents}.
+ * The pool grant for an org subscription we fund ourselves (an admin gift, [D-OW-23] as
+ * amended by [D-OW-30]): a gift pays nothing (a 100%-coupon subscription whose lines net
+ * to 0), so it is funded at the Business list price for the base plus `extraSeats` extra
+ * seats at the list seat price, times the Business ratio — exactly as a personal gift is
+ * funded. Integer cents; multiply before any divide. There is no org trial ([D-OW-30]):
+ * a $0 invoice that is not a gift is sized from what it paid — nothing.
  */
-export const ORG_POOL_FUNDS_GIFTS = true;
+export function orgPoolListPriceGrantCents(extraSeats: number): number {
+  return allowanceCentsForPaidCents(orgListPriceCents(extraSeats), ORG_POOL_TIER);
+}
 
 /**
- * The pool grant for an org subscription we fund ourselves (an admin gift): the
- * Business list price for the base plus `extraSeats` extra seats at the list seat
- * price, times the Business ratio. Integer cents; multiply before any divide.
+ * `metadata.type` an admin gift stamps on the org's own Stripe subscription (lib billing/org-gift)
+ * and on a personal gift subscription (apps/admin .../gift-subscription/route.ts). The one place a
+ * gift is recognized: the invoice snapshot (personal and org funding), the subscription mirrors,
+ * the gift writer and the reactivation decision all read this constant.
  */
-export function orgPoolListPriceGrantCents(extraSeats: number, active: boolean = MONEY_MODEL_V2_ACTIVE): number {
-  return allowanceCentsForPaidCents(orgListPriceCents(extraSeats), ORG_POOL_TIER, active);
-}
+export const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
 
 /**
  * Structural subset of a Stripe invoice line the pool refill reads. `amount` is the
@@ -175,12 +173,88 @@ export interface OrgPoolRefillInput {
    * reads its status from). A gift elsewhere funds nothing; absent reads as false (fail closed).
    */
   onOrgSubscription?: boolean;
-  /** Extra seats on the subscription, for sizing a gift at list price. */
-  extraSeats?: number;
+  /**
+   * D-OW-54: the extra seats the admin pinned when gifting (org_subscriptions.giftedExtraSeats),
+   * the ONLY quantity a gift is sized from. null/absent: not an admin-pinned gift.
+   */
+  giftedExtraSeats?: number | null;
+}
+
+/**
+ * D-OW-54: only an invoice that paid NOTHING is funded as a gift. A paid invoice on a gift-typed
+ * subscription (a coupon removed, a tampered metadata) funds as an ordinary paid invoice — what
+ * it paid × ratio — never at the gift's list price.
+ */
+function isGiftFunded(input: Pick<OrgPoolRefillInput, 'gifted' | 'amountPaidCents'>): boolean {
+  return input.gifted === true && wholeCents(input.amountPaidCents) === 0;
+}
+
+/** The admin-pinned gifted extra seats, or null when there is no valid pin (fail closed). */
+function pinnedGiftSeats(input: Pick<OrgPoolRefillInput, 'giftedExtraSeats'>): number | null {
+  const n = input.giftedExtraSeats;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
 }
 
 function wholeCents(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
+}
+
+/** Structural subset of a Stripe invoice the org funding path reads (a Stripe.Invoice satisfies it). */
+export interface OrgInvoice {
+  id?: string | null;
+  customer?: string | { id?: string | null } | null;
+  amount_paid?: number | null;
+  subtotal?: number | null;
+  billing_reason?: string | null;
+  period_start?: number | null;
+  period_end?: number | null;
+  parent?: {
+    subscription_details?: {
+      metadata?: Record<string, string> | null;
+      subscription?: string | { id?: string | null } | null;
+    } | null;
+  } | null;
+  lines?: {
+    data?: Array<OrgInvoiceLine | null | undefined> | null;
+    /** Stripe's pagination flag: only `false` proves `data` is every line of the invoice. */
+    has_more?: boolean | null;
+  } | null;
+}
+
+/** The subscription an invoice was generated for (invoice.parent.subscription_details), or null. */
+export function orgInvoiceSubscriptionId(invoice: Pick<OrgInvoice, 'parent'>): string | null {
+  const s = invoice.parent?.subscription_details?.subscription;
+  if (typeof s === 'string') return s.length > 0 ? s : null;
+  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
+}
+
+/**
+ * The ONE reading of an org invoice as funding evidence: the recognized Business lines, what was
+ * paid for them, whether it is a subscription invoice, and whether it is a gift on the org's own
+ * (stored) subscription. invoice.paid (the pool refill and its proof), the proof recovery script
+ * and the reactivation decision all derive `orgSubscriptionFundingBasis` from this, so they can
+ * never disagree about what funds an org. The caller guarantees `lines` is COMPLETE.
+ */
+export function orgInvoiceFundingInput(
+  invoice: OrgInvoice,
+  ctx: { prices: OrgPoolPriceIds; storedSubscriptionId: string | null; giftedExtraSeats?: number | null },
+): { input: OrgPoolRefillInput; unrecognized: UnrecognizedOrgInvoiceLine[] } {
+  const subscriptionId = orgInvoiceSubscriptionId(invoice);
+  const selection = selectOrgPoolRefillLines(invoice.lines?.data ?? [], ctx.prices);
+  return {
+    input: {
+      lines: selection.refillLines,
+      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+      amountPaidCents: invoice.amount_paid,
+      hasSubscriptionParent: subscriptionId !== null,
+      billingReason: invoice.billing_reason,
+      subtotalCents: invoice.subtotal,
+      gifted: invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+      onOrgSubscription: subscriptionId !== null && subscriptionId === ctx.storedSubscriptionId,
+      giftedExtraSeats: ctx.giftedExtraSeats ?? null,
+    },
+    unrecognized: selection.unrecognized,
+  };
 }
 
 /**
@@ -201,7 +275,7 @@ export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'a
 /** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
 export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
   if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
-  if (input.gifted === true) return input.onOrgSubscription === true && ORG_POOL_FUNDS_GIFTS ? 'gift' : null;
+  if (isGiftFunded(input)) return input.onOrgSubscription === true && pinnedGiftSeats(input) !== null ? 'gift' : null;
   return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
 }
 
@@ -209,34 +283,32 @@ export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' |
  * MON-3: size the pool refill from what the org invoice PAID for its lines (the
  * Business base and the extra seats), net of discounts, times the Business ratio. More
  * seats paid means a bigger pool through the same derivation, with no second constant.
- * A gifted org subscription is funded at list price × ratio only while `fundGifts` is
- * on ([D-OW-23], D-OW-16 extended to orgs); with it off it grants nothing, because it
- * paid nothing. There is no org trial ([D-OW-30]): a $0 invoice that is not a gift —
- * a trial-shaped subscription_create, or a 100% coupon on a non-gifted subscription
+ * A gifted org subscription is funded at list price × ratio for the admin-pinned gifted
+ * seats ([D-OW-23], [D-OW-54], D-OW-16 extended to orgs). There is no org trial ([D-OW-30]): a $0 invoice that is not a gift — a
+ * trial-shaped subscription_create, or a 100% coupon on a non-gifted subscription
  * (D-OW-16d) — grants nothing, so creating orgs never mints credit.
- * `active` (D-OW-17) defaults to the money-model constant.
  */
-export function orgPoolRefillGrant(
-  input: OrgPoolRefillInput,
-  active: boolean = MONEY_MODEL_V2_ACTIVE,
-  fundGifts: boolean = ORG_POOL_FUNDS_GIFTS,
-): InvoiceGrant {
+export function orgPoolRefillGrant(input: OrgPoolRefillInput): InvoiceGrant {
   const paidCents = orgInvoicePaidCents(input);
   if (input.hasSubscriptionParent !== true) {
     return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
   }
-  if (fundGifts && input.gifted === true) {
+  if (isGiftFunded(input)) {
     // A gift on any subscription but the org's own funds a pool the org could never spend: the
     // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
     if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
     if (input.hasVerifiedGiftPrice !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
-    const allowanceCents = orgPoolListPriceGrantCents(input.extraSeats ?? 0, active);
+    // D-OW-54: sized for exactly the seats the admin pinned — never the invoice's seat line,
+    // which a gifted Owner could inflate for free with throwaway invites.
+    const seats = pinnedGiftSeats(input);
+    if (seats === null) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_quantity_unknown' };
+    const allowanceCents = orgPoolListPriceGrantCents(seats);
     return allowanceCents > 0
       ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
       : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
   }
   if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
-  const allowanceCents = allowanceCentsForPaidCents(paidCents, ORG_POOL_TIER, active);
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, ORG_POOL_TIER);
   return allowanceCents > 0
     ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
     : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
@@ -585,11 +657,10 @@ export interface DonorWallet {
 
 export interface DonationTarget {
   walletId: string;
-  subjectType: 'drive' | 'agent_page' | null;
+  subjectType: 'drive' | null;
   donationsEnabled: boolean;
   /** SUM of the wallet's funding legs' remaining (mirrored on wallets.topupRemainingCents). */
   legsRemainingCents: number;
-  debtCents: number;
 }
 
 export interface DonationInput {
@@ -614,9 +685,9 @@ export type DonationPlan =
       kind: 'donate';
       amountCents: number;
       donor: { monthlyRemainingCents: number; topupRemainingCents: number; spentMonthly: number; spentTopup: number };
-      /** The new donation leg: the whole gift, less whatever paid the wallet's debt. */
+      /** The new donation leg: the whole gift, never netted against the wallet's debt. */
       leg: { originalCents: number; remainingCents: number; nonRefundable: true };
-      target: { topupRemainingCents: number; debtCents: number; paidDebtCents: number };
+      target: { topupRemainingCents: number };
     }
   | { kind: 'refuse'; reason: DonationRefusal };
 
@@ -628,8 +699,11 @@ export type DonationPlan =
  * donor into debt and is never partial.
  *
  * The donor's balance is drawn monthly first, then top-up (the spend order). The drive
- * wallet receives it as its own non-refundable funding leg (D-OW-13) that lasts until
- * spent (WAL-3), paying the wallet's debt first exactly as a top-up does.
+ * wallet receives the WHOLE gift as its own non-refundable funding leg (D-OW-13) that lasts
+ * until spent (WAL-3). Unlike an owner's top-up, a donation never pays the wallet's debt:
+ * wallet debt is the funder's chosen landing for an overage (WAL-6c), netted from their next
+ * allocation (WAL-6d), and a donor's money funds spend made after it — attributable to them,
+ * never an overage that preceded it.
  */
 export function planDonation(input: DonationInput): DonationPlan {
   const amount = input.amountCents;
@@ -646,7 +720,6 @@ export function planDonation(input: DonationInput): DonationPlan {
   if (available < amount) return { kind: 'refuse', reason: 'insufficient_funds' };
 
   const draw = allocateSpend(b, amount);
-  const landed = applyPaymentToDebt(input.target.debtCents, input.target.legsRemainingCents, amount);
   return {
     kind: 'donate',
     amountCents: amount,
@@ -656,7 +729,7 @@ export function planDonation(input: DonationInput): DonationPlan {
       spentMonthly: draw.spentMonthly,
       spentTopup: draw.spentTopup,
     },
-    leg: { originalCents: amount, remainingCents: amount - landed.paidDebt, nonRefundable: true },
-    target: { topupRemainingCents: landed.topupCents, debtCents: landed.debtCents, paidDebtCents: landed.paidDebt },
+    leg: { originalCents: amount, remainingCents: amount, nonRefundable: true },
+    target: { topupRemainingCents: Math.max(0, input.target.legsRemainingCents) + amount },
   };
 }

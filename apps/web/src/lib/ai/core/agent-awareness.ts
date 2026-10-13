@@ -10,6 +10,7 @@ import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 interface DriveAgent {
   id: string;
@@ -55,7 +56,7 @@ async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
  * Returns a formatted markdown section listing all visible AI agents
  * that the user has access to across all their drives.
  *
- * @param userId - The authenticated user's ID
+ * @param actor - The authenticated caller (their credential decides org access)
  * @param options.canDelegate - Whether `spawn_session` is actually IN the caller's
  *   tool set. The chat-only session family registers regardless of the
  *   CODE_EXECUTION kill-switch, but read-only mode strips `spawn_session` as a
@@ -66,7 +67,7 @@ async function queryDriveAgents(driveId: string): Promise<DriveAgent[]> {
  * @returns A formatted string to append to the system prompt, or empty string if no agents
  */
 export async function buildAgentAwarenessPrompt(
-  userId: string,
+  actor: AccessActor,
   options: { canDelegate?: boolean } = {},
 ): Promise<string> {
   try {
@@ -77,7 +78,7 @@ export async function buildAgentAwarenessPrompt(
 
     const accessibleDrives: Array<{ id: string; name: string }> = [];
     for (const drive of allDrives) {
-      const hasAccess = await getUserDriveAccess(userId, drive.id);
+      const hasAccess = await getUserDriveAccess(actor, drive.id);
       if (hasAccess) {
         accessibleDrives.push(drive);
       }
@@ -93,7 +94,7 @@ export async function buildAgentAwarenessPrompt(
       const driveAgents = await queryDriveAgents(drive.id);
 
       for (const agent of driveAgents) {
-        const canView = await canUserViewPage(userId, agent.id);
+        const canView = await canUserViewPage(actor, agent.id);
         if (canView) {
           visibleAgents.push({
             id: agent.id,
@@ -123,7 +124,7 @@ export async function buildAgentAwarenessPrompt(
     }
 
     loggers.ai.debug('Built agent awareness prompt', {
-      userId,
+      userId: actor.userId,
       agentCount: visibleAgents.length,
       driveCount: accessibleDrives.length,
     });

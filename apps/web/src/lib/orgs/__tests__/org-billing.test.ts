@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { orgPlanQuote } from '@pagespace/lib/billing/org-plan-quote';
 
-// Included credits follow the money-model switch (MONEY_MODEL_V2_ACTIVE), never a pinned ratio.
+// Included credits follow the money-model ratio, never a pinned figure.
 const included = (seats: number) => formatCreditCount(orgPlanQuote(seats).includedCreditCents);
 
 import { invoiceLine, planFigures, poolFigures, seatFigures } from '../org-billing';
@@ -40,7 +40,7 @@ describe('seatFigures', () => {
 describe('poolFigures', () => {
   it('UI-7 (partial) UI-12 (partial): the pool split as credit counts, never dollars', () => {
     const figures = poolFigures({
-      walletId: 'w', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
+      walletId: 'w', status: 'active', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
       seats: { memberCount: 12, allowanceCents: 150, allocatedCents: 1_800, spentCents: 1_152 },
       driveWallets: [
         { driveId: 'a', driveName: 'Product', walletId: 'wa', allocationCents: 1_200, spentCents: 1_008, status: 'active' },

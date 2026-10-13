@@ -1,8 +1,11 @@
 import Link from 'next/link';
+import { cookies } from 'next/headers';
 import { MarketingLink } from '@/components/ui/MarketingLink';
 import { AuthShell } from '@/components/auth/AuthShell';
 import { Button } from '@/components/ui/button';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
+import { loadOrgInvitePage } from '@/lib/orgs/org-invite-page';
+import { OrgInviteCard } from '@/components/orgs/OrgInviteCard';
 
 interface InvitePageProps {
   params: Promise<{ token: string }>;
@@ -10,6 +13,16 @@ interface InvitePageProps {
 
 export default async function InvitePage({ params }: InvitePageProps) {
   const { token } = await params;
+  // ORG-3: an org invitation link opens here too; its screen depends on who is signed in.
+  const orgInvite = await loadOrgInvitePage({ token, cookieHeader: (await cookies()).toString(), now: new Date() });
+  if (orgInvite) {
+    return (
+      <AuthShell>
+        <OrgInviteCard token={token} model={orgInvite} />
+      </AuthShell>
+    );
+  }
+
   const resolution = await resolveInviteContext({ token, now: new Date() });
 
   if (!resolution.ok) {

@@ -1,4 +1,3 @@
-import { PERSONAL_SPEND, automationSpend, type SpendTarget } from './spend-target';
 import { driveAccrualChargeFor, type ComputeCharge } from './compute-charge';
 
 /**
@@ -17,29 +16,6 @@ export interface DriveBillingFacts {
 /** WAL-9: the org if drives.orgId is set, else the drive's owner. */
 export function payerForDrive(drive: DriveBillingFacts): BillingPayer {
   return drive.orgId !== null ? { kind: 'org', orgId: drive.orgId } : { kind: 'user', userId: drive.ownerId };
-}
-
-/**
- * Who pays for a person-less AI run whose output lands in a drive (SPEND-6; point-guard ruling on
- * #2731, first for a Zoom transcript's enrichment): the payer seam on that DESTINATION drive, never
- * the person who set the automation up as such.
- *
- * - An org drive: its drive wallet (automationSpend). Empty, paused or missing, the gate skips,
- *   logs and tells the lead once a period — no fallback to any person. The run is recorded
- *   against `recordedUserId` (who set it up), as every automation records its runs.
- * - A personal drive: its owner's own wallet (PERSONAL_SPEND, gated and recorded as the owner).
- *
- * Returns the person to gate and record the usage as, and the target to name to the gate.
- */
-export function destinationDriveSpend(
-  drive: DriveBillingFacts,
-  driveId: string,
-  recordedUserId: string,
-): { userId: string; spend: SpendTarget } {
-  const payer = payerForDrive(drive);
-  return payer.kind === 'org'
-    ? { userId: recordedUserId, spend: automationSpend(driveId) }
-    : { userId: payer.userId, spend: PERSONAL_SPEND };
 }
 
 /** Resolves a drive's billing facts; null when it can't be resolved (e.g. a stale read mid-delete). */

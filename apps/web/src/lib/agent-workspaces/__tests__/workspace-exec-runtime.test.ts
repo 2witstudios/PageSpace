@@ -24,6 +24,7 @@ vi.mock('@/lib/ai/tools/sandbox-tools-runtime', () => ({
 }));
 
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '../workspace-exec-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const DRIVE_SESSION = { id: 'ws-1', ownerId: 'session-owner', driveId: 'drive-1', endedAt: null } as never;
 const GLOBAL_SESSION = { id: 'ws-2', ownerId: 'session-owner', driveId: null, endedAt: null } as never;
@@ -74,18 +75,22 @@ describe('resolveWorkspaceExecActorContext', () => {
 
 describe('execInWorkspace', () => {
   const ctx = { userId: 'caller', tenantId: 'drive-owner', conversationId: 'workspace-exec:ws-1' } as never;
+  const CALLER = credentialActor('caller', null);
 
   it('given a gate denial, should answer it and NEVER reach the runner', async () => {
     mockGate.mockResolvedValue({ ok: false, reason: 'tier_ineligible', error: 'Pro plan', retryAfter: 5 });
-    const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, command: 'ls' });
+    const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, actor: CALLER, command: 'ls' });
     expect(result).toEqual({ success: false, error: 'Pro plan', reason: 'tier_ineligible', retryAfter: 5 });
     expect(mockRunBash).not.toHaveBeenCalled();
   });
 
   it('given an allowed call, should run through deps whose session resolver answers the ROUTE-AUTHORIZED row', async () => {
-    const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, command: 'ls', cwd: 'repo', timeoutMs: 9 });
+    const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, actor: CALLER, command: 'ls', cwd: 'repo', timeoutMs: 9 });
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
     expect(mockRunBash).toHaveBeenCalledWith({ command: 'ls', cwd: 'repo', timeoutMs: 9, ctx, deps: { deps: true } });
+    // The gate and the provisioning re-check are both asked of the requester's credential (SEC-2/3).
+    expect(mockGate).toHaveBeenCalledWith(ctx, CALLER);
+    expect(mockBuildRunDeps).toHaveBeenCalledWith(expect.objectContaining({ actor: CALLER }));
 
     const [{ resolveSession }] = mockBuildRunDeps.mock.calls[0];
     expect(await resolveSession('any-conversation', 'any-user')).toEqual({ ok: true, session: DRIVE_SESSION });

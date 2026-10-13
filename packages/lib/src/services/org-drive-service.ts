@@ -4,7 +4,7 @@
  *
  * The decisions are pure (organizations/org-drive-ownership.ts); this module is the IO edge.
  * Each operation runs in one transaction: lock the drive, lock the org, read the actor's org
- * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), and run the
+ * role, decide, write drives.orgId, re-attribute the drive's stored bytes (O-9), re-home its wallet ([D-OW-60]), and run the
  * org-membership sync, so a refused or failed move leaves the drive and every quota exactly as
  * they were.
  *
@@ -42,6 +42,10 @@ import { getActorInfo, logActivityWithTx } from '../monitoring/activity-logger';
 import { reattributeDriveStorageInTx, type StorageReattributionResult } from './storage-limits';
 import { releaseDedicatedHostingInTx } from './app-hosting/dedicated-release';
 import { recordOrgAuditEventAfterCommit } from '../audit/org-audit';
+import { rehomeDriveWalletInTx } from '../billing/drive-wallet-rehome';
+import type { VerifiedAuthentication } from '../auth/authentication-evidence';
+import { decideOrgAuthentication } from '../organizations/authentication-policy-core';
+import { getOrgPolicies } from '../organizations/policy-reader';
 
 export type OrgDriveTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -83,13 +87,29 @@ export type MoveDriveResult =
   | DriveNotFound;
 
 /** A lapsed org (SEAT-9) refuses a new drive and a move in; moving a drive OUT stays open. */
-export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal;
+/** SEC-2/SEC-3: the org's sign-in policy refuses the credential that asked. */
+export interface OrgCredentialRefusal {
+  ok: false;
+  code: 'org_strong_sign_in_required' | 'org_reauthentication_required';
+  status: 403;
+  message: string;
+}
+
+export type CreateOrgDriveResult = { ok: true; drive: DriveRow } | OrgDriveRefusal | OrgLapsedRefusal | OrgCredentialRefusal;
 
 const driveNotFound = (): DriveNotFound => ({
   ok: false,
   code: 'DRIVE_NOT_FOUND',
   status: 404,
   message: 'Drive not found',
+});
+
+/** [D-OW-60] the drive's wallet has AI calls in flight: the move waits for them to settle. */
+const driveWalletInUse = (): OrgDriveRefusal => ({
+  ok: false,
+  code: 'drive_wallet_calls_in_flight',
+  status: 409,
+  message: "This drive's wallet has AI calls in progress. Try moving the drive again in a minute, once they finish.",
 });
 
 async function lockDrive(tx: OrgDriveTx, driveId: string): Promise<DriveRow | null> {
@@ -156,6 +176,11 @@ export async function moveDriveToOrg(
     // An unchosen visibility is the column default, Open.
     const floor = await openFloorCheck(tx, { driveId, orgId: input.orgId, visibilityAfter: input.orgVisibility ?? 'OPEN' });
     if (floor) return floor;
+
+    // [D-OW-60] the drive's wallet becomes the org's, under its pool, in this same transaction — refused,
+    // before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'org', orgId: input.orgId } });
+    if (!rehomed.ok) return driveWalletInUse();
 
     const slug = await freeOrgSlug(tx, input.orgId, drive.slug);
     const [moved] = await tx
@@ -224,6 +249,11 @@ export async function moveDriveOutOfOrg(
     if (!verdict.ok) return verdict;
     if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');
 
+    // [D-OW-60] the drive's wallet becomes its lead's, under their personal root, in this same transaction —
+    // refused, before anything is written, while calls are in flight on it.
+    const rehomed = await rehomeDriveWalletInTx(tx, { driveId, actorId, to: { kind: 'personal', leadUserId: drive.ownerId } });
+    if (!rehomed.ok) return driveWalletInUse();
+
     // The lead (ownerId) stays; the drive becomes their personal drive. Personal slugs are
     // not unique per owner, so the slug is kept as is.
     const [moved] = await tx
@@ -262,7 +292,14 @@ export async function moveDriveOutOfOrg(
 
 export async function createOrgDrive(
   actorId: string,
-  input: { name: string; orgId: string; orgVisibility?: OrgDriveVisibility },
+  input: {
+    name: string;
+    orgId: string;
+    orgVisibility?: OrgDriveVisibility;
+    drivePrompt?: string | null;
+    /** The asking credential's verified sign-in, judged against the org's sign-in policy (null: none on record). */
+    authentication: VerifiedAuthentication | null;
+  },
   deps: OrgDriveServiceDeps
 ): Promise<CreateOrgDriveResult> {
   const outcome = await retryOnOrgSlugConflict(() => db.transaction(async (tx) => {
@@ -271,6 +308,12 @@ export async function createOrgDrive(
     const creationPolicy = orgExists ? await deps.getOrgDriveCreationPolicy(tx, input.orgId) : 'members';
     const verdict = decideCreateDriveInOrg({ actorOrgRole, creationPolicy });
     if (!verdict.ok) return verdict;
+    // SEC-2/SEC-3: the org's sign-in policy, judged only for a member (an outsider learns nothing about the org's
+    // policy, only that they are not a member) and under the same lock as the membership read.
+    const credential = decideOrgAuthentication({ policy: await getOrgPolicies(input.orgId, tx), authentication: input.authentication, nowMs: Date.now() });
+    if (!credential.allowed) {
+      return { ok: false, code: credential.code, status: 403, message: 'This organization requires a stronger or more recent sign-in.' } satisfies OrgCredentialRefusal;
+    }
     // SEAT-9: creating org drives is an org-only capability (after the permission verdict, as above).
     const active = await checkOrgActive(input.orgId, { executor: tx });
     if (!active.ok) return active;
@@ -286,6 +329,7 @@ export async function createOrgDrive(
         slug,
         ownerId: actorId,
         orgId: input.orgId,
+        drivePrompt: input.drivePrompt ?? null,
         ...orgDriveVisibilityForInsert(input.orgVisibility),
         updatedAt: new Date(),
       })

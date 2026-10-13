@@ -50,10 +50,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -109,6 +111,7 @@ vi.mock('@/lib/presigned-url', () => ({
 
 import { db } from '@pagespace/db/db';
 import { triggerMentionedAgentResponses, type TriggerMentionedAgentResponsesParams } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -125,7 +128,7 @@ const fileRow = {
 };
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',
@@ -175,7 +178,7 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     });
 
     // Access-checked against the file row's own drive, not the channel's.
-    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'file-drive-1');
+    expect(mockCanUserAccessFile).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'file-1', 'file-drive-1');
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toEqual([

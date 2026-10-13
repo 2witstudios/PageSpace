@@ -22,7 +22,7 @@ function primitives(charge: ComputeCharge | null, gateAnswer: GateAnswer = { all
   return { deps, resolveCharge, gate, releaseHold, trackUsage, settle };
 }
 
-const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', actorId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1' };
+const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', actorId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1', automationRef: null };
 const shape = { cpus: 2, memoryGB: 2 };
 const orgCharge: ComputeCharge = { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' };
 
@@ -72,6 +72,15 @@ describe('createBrowserMeter.open — no payer', () => {
 });
 
 describe('createBrowserMeter.close', () => {
+  it('SPEND-10 (partial) a browser an automation opened settles as that automation', async () => {
+    const p = primitives(orgCharge, undefined, 'pool-wallet-1');
+    const meter = createBrowserMeter(p.deps);
+
+    await meter.close({ billing: { ...billing, automationRef: 'wf-digest' }, hold: { holdId: 'hold-1', charge: orgCharge }, activeSeconds: 60, shape, substrate: 'sprites' });
+
+    expect(p.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ automationRef: 'wf-digest' }));
+  });
+
   it('WAL-9 (partial) settles an org-drive browser against the org pool wallet, recorded under the session owner', async () => {
     const p = primitives(orgCharge, undefined, 'pool-wallet-1');
     const meter = createBrowserMeter(p.deps);

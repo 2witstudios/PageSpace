@@ -8,6 +8,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -38,7 +39,7 @@ export async function POST(
     // Verify user has permission to view this page
     const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
     }
 
     // Upsert the page view record

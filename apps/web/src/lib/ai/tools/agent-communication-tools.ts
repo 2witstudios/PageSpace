@@ -12,7 +12,7 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId, toolActor } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
@@ -319,7 +319,7 @@ export const agentCommunicationTools = {
         } else {
           // Full user-scoped reach: owned + member + page-permission drives
           // (matches list_drives' user path), not just owned drives.
-          const allUserDrives = await listAccessibleDrives(userId);
+          const allUserDrives = await listAccessibleDrives(toolActor(executionContext));
 
           // Ceiling a scoped MCP token to its allowed drives (no-op otherwise).
           const allowedIds = new Set(
@@ -919,7 +919,7 @@ export async function executeAskAgent(
         // runCompaction gates and reserves on the caller's spend target before its own model
         // call, and skips (persisting nothing) when that source cannot cover it.
         if (prepared.pendingCompaction) {
-          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId });
+          void runCompaction({ ...prepared.pendingCompaction, billedUserId: executionContext?.creditSpend?.userId, automationRef: executionContext?.creditSpend?.automationRef });
         }
 
         // Settle the sub-agent run on its own hold. totalUsage meters every tool-loop round-trip
@@ -946,6 +946,8 @@ export async function executeAskAgent(
           walletId: settleWalletId,
           // WAL-6b: the hold records the turn's fallback origin; carried too for a hold-less settle.
           fallbackFromWalletId: spendFallbackFromWalletId(askSpend),
+          // SPEND-10: a consultation inside an automation run is that automation's spend.
+          automationRef: executionContext?.creditSpend?.automationRef,
           success: true,
           metadata: { feature: 'ask_agent', agentCallDepth: callDepth + 1 },
         });

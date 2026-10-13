@@ -154,6 +154,16 @@
       "import": "./dist/organizations/invitations.js",
       "require": "./dist/organizations/invitations.js"
     },
+    "./organizations/org-avatar-core": {
+      "types": "./dist/organizations/org-avatar-core.d.ts",
+      "import": "./dist/organizations/org-avatar-core.js",
+      "require": "./dist/organizations/org-avatar-core.js"
+    },
+    "./organizations/invite-view-core": {
+      "types": "./dist/organizations/invite-view-core.d.ts",
+      "import": "./dist/organizations/invite-view-core.js",
+      "require": "./dist/organizations/invite-view-core.js"
+    },
     "./organizations/domains": {
       "types": "./dist/organizations/domains.d.ts",
       "import": "./dist/organizations/domains.js",
@@ -183,6 +193,11 @@
       "types": "./dist/audit/audit-db-binding.d.ts",
       "import": "./dist/audit/audit-db-binding.js",
       "require": "./dist/audit/audit-db-binding.js"
+    },
+    "./organizations/seats": {
+      "types": "./dist/organizations/seats.d.ts",
+      "import": "./dist/organizations/seats.js",
+      "require": "./dist/organizations/seats.js"
     },
     "./organizations/seat-service": {
       "types": "./dist/organizations/seat-service.d.ts",
@@ -729,6 +744,11 @@
       "import": "./dist/billing/wallet-surface.js",
       "require": "./dist/billing/wallet-surface.js"
     },
+    "./billing/automation-attribution": {
+      "types": "./dist/billing/automation-attribution.d.ts",
+      "import": "./dist/billing/automation-attribution.js",
+      "require": "./dist/billing/automation-attribution.js"
+    },
     "./billing/spend-target": {
       "types": "./dist/billing/spend-target.d.ts",
       "import": "./dist/billing/spend-target.js",
@@ -843,6 +863,16 @@
       "types": "./dist/billing/org-subscription-core.d.ts",
       "import": "./dist/billing/org-subscription-core.js",
       "require": "./dist/billing/org-subscription-core.js"
+    },
+    "./billing/org-gift-core": {
+      "types": "./dist/billing/org-gift-core.d.ts",
+      "import": "./dist/billing/org-gift-core.js",
+      "require": "./dist/billing/org-gift-core.js"
+    },
+    "./billing/org-gift": {
+      "types": "./dist/billing/org-gift.d.ts",
+      "import": "./dist/billing/org-gift.js",
+      "require": "./dist/billing/org-gift.js"
     },
     "./billing/org-plan-quote": {
       "types": "./dist/billing/org-plan-quote.d.ts",
@@ -2489,6 +2519,11 @@
       "import": "./dist/auth/authentication-evidence.js",
       "require": "./dist/auth/authentication-evidence.js"
     },
+    "./auth/reauthentication": {
+      "types": "./dist/auth/reauthentication.d.ts",
+      "import": "./dist/auth/reauthentication.js",
+      "require": "./dist/auth/reauthentication.js"
+    },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
       "import": "./dist/auth/session-service.js",
@@ -2748,6 +2783,11 @@
       "types": "./dist/compliance/export/gdpr-export.d.ts",
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
+    },
+    "./compliance/export/export-sign-in-gate": {
+      "types": "./dist/compliance/export/export-sign-in-gate.d.ts",
+      "import": "./dist/compliance/export/export-sign-in-gate.js",
+      "require": "./dist/compliance/export/export-sign-in-gate.js"
     },
     "./compliance/export/export-format": {
       "types": "./dist/compliance/export/export-format.d.ts",
@@ -3024,10 +3064,30 @@
       "import": "./dist/organizations/sharing-decisions.js",
       "require": "./dist/organizations/sharing-decisions.js"
     },
-    "./organizations/authentication-policy": {
-      "types": "./dist/organizations/authentication-policy.d.ts",
-      "import": "./dist/organizations/authentication-policy.js",
-      "require": "./dist/organizations/authentication-policy.js"
+    "./permissions/access-actor": {
+      "types": "./dist/permissions/access-actor.d.ts",
+      "import": "./dist/permissions/access-actor.js",
+      "require": "./dist/permissions/access-actor.js"
+    },
+    "./permissions/actor-authentication": {
+      "types": "./dist/permissions/actor-authentication.d.ts",
+      "import": "./dist/permissions/actor-authentication.js",
+      "require": "./dist/permissions/actor-authentication.js"
+    },
+    "./permissions/org-derived-content": {
+      "types": "./dist/permissions/org-derived-content.d.ts",
+      "import": "./dist/permissions/org-derived-content.js",
+      "require": "./dist/permissions/org-derived-content.js"
+    },
+    "./organizations/authentication-policy-core": {
+      "types": "./dist/organizations/authentication-policy-core.d.ts",
+      "import": "./dist/organizations/authentication-policy-core.js",
+      "require": "./dist/organizations/authentication-policy-core.js"
+    },
+    "./organizations/sign-in-blocked": {
+      "types": "./dist/organizations/sign-in-blocked.d.ts",
+      "import": "./dist/organizations/sign-in-blocked.js",
+      "require": "./dist/organizations/sign-in-blocked.js"
     },
     "./organizations/policy-reader": {
       "types": "./dist/organizations/policy-reader.d.ts",
@@ -3170,6 +3230,12 @@
       ],
       "billing/org-subscription-core": [
         "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-gift-core": [
+        "./dist/billing/org-gift-core.d.ts"
+      ],
+      "billing/org-gift": [
+        "./dist/billing/org-gift.d.ts"
       ],
       "billing/org-plan-quote": [
         "./dist/billing/org-plan-quote.d.ts"
@@ -3786,6 +3852,9 @@
       "auth/authentication-evidence": [
         "./dist/auth/authentication-evidence.d.ts"
       ],
+      "auth/reauthentication": [
+        "./dist/auth/reauthentication.d.ts"
+      ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"
       ],
@@ -3882,6 +3951,9 @@
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
       ],
+      "compliance/export/export-sign-in-gate": [
+        "./dist/compliance/export/export-sign-in-gate.d.ts"
+      ],
       "compliance/export/export-format": [
         "./dist/compliance/export/export-format.d.ts"
       ],
@@ -3945,8 +4017,20 @@
       "organizations/sharing-decisions": [
         "./dist/organizations/sharing-decisions.d.ts"
       ],
-      "organizations/authentication-policy": [
-        "./dist/organizations/authentication-policy.d.ts"
+      "permissions/access-actor": [
+        "./dist/permissions/access-actor.d.ts"
+      ],
+      "permissions/actor-authentication": [
+        "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "permissions/org-derived-content": [
+        "./dist/permissions/org-derived-content.d.ts"
+      ],
+      "organizations/authentication-policy-core": [
+        "./dist/organizations/authentication-policy-core.d.ts"
+      ],
+      "organizations/sign-in-blocked": [
+        "./dist/organizations/sign-in-blocked.d.ts"
       ],
       "organizations/policy-reader": [
         "./dist/organizations/policy-reader.d.ts"

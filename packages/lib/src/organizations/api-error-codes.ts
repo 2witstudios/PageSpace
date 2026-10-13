@@ -26,7 +26,14 @@ export const GENERIC_API_ERROR_CODES = [
   'billing_unavailable',
   'no_billing_customer',
   'billing_provider_unreachable',
+  'billing_requires_support',
   'email_verification_required',
+  // D-OW-45: the credential does not satisfy an org's sign-in policy (strong sign-in; maximum age). Actionable:
+  // the client re-runs the ceremony (a passkey; or the person's usual sign-in) and retries.
+  'org_strong_sign_in_required',
+  'org_reauthentication_required',
+  // D-OW-47: tightening a sign-in policy the acting Admin's own credential would not meet (it would lock them out).
+  'org_policy_would_lock_out_actor',
 ] as const;
 
 /** Organization, membership, ownership, invitation, domain and guest-approval codes. */
@@ -89,6 +96,8 @@ export const WALLET_ERROR_CODES = [
   'no_wallet',
   'wallet_exists',
   'wallet_in_use',
+  // [D-OW-60] a drive move refused while AI calls are in flight on the drive's wallet.
+  'drive_wallet_calls_in_flight',
   'wallet_not_available',
   'invalid_amount',
   'nothing_to_change',

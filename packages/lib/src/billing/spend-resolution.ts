@@ -30,7 +30,7 @@ import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } 
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
 import { spendableCentsFor } from './credit-balance';
-import { effectiveSpendPolicy, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
+import { effectiveSpendPolicy, walletChainStatus, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   orgEntitlementTier,
   PERSONAL_ROOT_NOT_YET_CREATED,
@@ -52,6 +52,7 @@ import {
   type WalletBalanceFacts,
   type WalletHoldTotal,
   cappedConsumerLeg,
+  driveWalletConsumerRemainingCents,
   spendChoiceLabel,
 } from './spend-target';
 import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
@@ -74,6 +75,7 @@ const WALLET_FACTS = {
   fallbackRule: wallets.fallbackRule,
   defaultSpendSource: wallets.defaultSpendSource,
   alwaysOwnCredits: wallets.alwaysOwnCredits,
+  guestSpendEnabled: wallets.guestSpendEnabled,
 } as const;
 
 type WalletRow = WalletBalanceFacts & {
@@ -82,6 +84,8 @@ type WalletRow = WalletBalanceFacts & {
   fallbackRule: FallbackRule | null;
   defaultSpendSource: SpendSourceKind | null;
   alwaysOwnCredits: boolean;
+  /** D-OW-4: the drive opened its wallet to guests (a drive wallet's switch; false on any other row). */
+  guestSpendEnabled: boolean;
 };
 
 async function walletById(id: string): Promise<WalletRow | null> {
@@ -206,7 +210,11 @@ async function orgLapsedFor(orgId: string | null | undefined): Promise<boolean> 
   return typeof orgId === 'string' ? !(await isOrgActive(orgId)) : false;
 }
 
-/** The drive wallet as a leg, net of every hold against it and (through the parent) its siblings. */
+/**
+ * The drive wallet as a leg, net of every hold against it and (through the parent) its siblings.
+ * WAL-7: it spends as paused when its parent is paused — an org pool's kill switch stops every
+ * drive wallet it funds, not only its seats.
+ */
 async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHoldWalletIds: string[] = [], orgLapsed = false): Promise<{
   leg: SpendLeg | null;
   holds: WalletHoldTotal[];
@@ -217,7 +225,7 @@ async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHol
     now,
   );
   const leg: SpendLeg | null = driveWallet
-    ? walletLeg(driveWallet.id, statusOf(driveWallet, orgLapsed), walletSpendableCents({
+    ? walletLeg(driveWallet.id, walletChainStatus(statusOf(driveWallet, orgLapsed), parent ? statusOf(parent, orgLapsed) : null), walletSpendableCents({
         wallet: driveWallet,
         ownReservedCents: reservedAgainstCents(holds, driveWallet.id, { includeChildren: false }),
         parent: parent
@@ -232,9 +240,12 @@ async function driveWalletLeg(driveWallet: WalletRow | null, now: Date, extraHol
  * The wallet for a person-less run (SPEND-6): the drive's wallet or a skip. It reads the
  * drive and its wallet only — never a person's wallet, never the org pool as a seat — so
  * no automation can reach a person's credits or allowance. `userId` (the person the run is
- * recorded against: a workflow's creator, a trigger's scheduler, a mention's sender) is
- * used to read the drive's org and owner through the permissions layer, and — for a run no person
- * is present for — to require that its creator still stands behind it ([D-OW-34]).
+ * gated as: a workflow's creator, a trigger's scheduler, a mention's sender, a Run's presser)
+ * is used to read their standing through the permissions layer: for a run no person is present
+ * for, its creator must still stand behind it ([D-OW-34]); a person present must be able to draw
+ * the drive wallet at all (sharedSpendLegsFor), and a guest only where the drive opened it to
+ * guests (D-OW-4). Their caps bound the leg (WAL-7; a guest is always capped), so a spent cap
+ * skips by name and the lead hears of it like any other skip.
  */
 async function resolveAutomationSpend(input: {
   userId: string;
@@ -253,10 +264,22 @@ async function resolveAutomationSpend(input: {
     if (input.recordSkip) loggers.ai.info('automation run refused: creator departed', { driveId: input.driveId, userId: input.userId });
     return { kind: 'skip', reason: 'creator_departed', walletId: null, chargeCents: 0 };
   }
-  const driveWallet = standing ? await driveWalletOf(standing.driveId) : null;
+  // A person present spends only a drive wallet they may draw (the chat path's rule); an automation's creator
+  // was vetted above.
+  const mayDraw = input.personPresent ? sharedSpendLegsFor(standing).driveWallet : standing !== null;
+  const driveWallet = standing && mayDraw ? await driveWalletOf(standing.driveId) : null;
   // SEAT-9: a lapsed org's drive wallet reads as paused, so the run SKIPS — never a person.
   const orgLapsed = await orgLapsedFor(standing?.orgId);
-  const { leg } = await driveWalletLeg(driveWallet, input.now, [], orgLapsed);
+  const gatedAs = personActor(input.userId, {
+    orgId: standing?.orgId ?? null,
+    isDriveMember: standing?.isDriveMember ?? false,
+    isOrgMember: standing?.isOrgMember ?? false,
+  });
+  const gatedAsGuest = gatedAs.kind === 'person' && gatedAs.isGuest;
+  const { leg: uncappedLeg } = await driveWalletLeg(driveWallet, input.now, [], orgLapsed);
+  const leg = uncappedLeg && driveWallet
+    ? cappedConsumerLeg(uncappedLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId: input.userId, now: input.now, isGuest: gatedAsGuest }))?.remaining ?? null)
+    : uncappedLeg;
   // WAL-8: the drive wallet's root owner governs — the org inside org drives, the drive
   // owner (whose personal wallet funds the drive wallet) on a personal drive.
   const walletOwnerTier: SubscriptionTier = standing?.orgId
@@ -269,6 +292,8 @@ async function resolveAutomationSpend(input: {
     driveWallet: leg,
     walletOwnerTier,
     reservationCents: input.reservationCents,
+    gatedAsGuest,
+    guestsMaySpendDriveWallet: driveWallet?.guestSpendEnabled ?? false,
   }));
   if (decision.kind === 'skip' && input.recordSkip) {
     // SPEND-6: an empty wallet skips the run and logs it, and the lead hears of it once a period.
@@ -359,7 +384,7 @@ export async function resolveCallSpend(input: {
   // WAL-7: this person's own caps on the drive wallet bound their leg of it; a spent cap refuses
   // by name (source_cap_reached). The gate re-checks under the wallet's lock.
   const driveLeg = uncappedDriveLeg && driveWallet
-    ? cappedConsumerLeg(uncappedDriveLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null)
+    ? cappedConsumerLeg(uncappedDriveLeg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now, isGuest: actor.kind === 'person' && actor.isGuest }))?.remaining ?? null)
     : uncappedDriveLeg;
   // WAL-2: a seat is the pool capped per consumer — never more than what is left of this
   // person's monthly allowance this pool period (D-OW-12). The gate re-checks it under the lock.
@@ -412,9 +437,8 @@ export async function resolveCallSpend(input: {
     driveWallet: driveLeg,
     seatAllowance: seatLeg,
     personal: personalLeg,
-    // D-OW-4: guests cannot spend a drive wallet by default; the per-drive switch has no
-    // storage yet, so it is off everywhere.
-    driveRule: { fallback, guestsMaySpendDriveWallet: false },
+    // D-OW-4: guests cannot spend a drive wallet by default; the drive's switch opens it to them.
+    driveRule: { fallback, guestsMaySpendDriveWallet: driveWallet?.guestSpendEnabled ?? false },
     chosen: target.chosen,
     followOn: target.followOn === true,
     fallbackFromWalletId: target.fallbackFromWalletId ?? null,
@@ -533,17 +557,19 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
     driveWallet: driveWallet ? walletLeg(driveWallet.id, statusOf(driveWallet, orgLapsed), 0) : null,
     seatAllowance: pool ? walletLeg(pool.id, statusOf(pool, orgLapsed), 0) : null,
     personal: walletLeg(personalId, 'active', 0),
-    // D-OW-4: guests may not spend a drive wallet until the per-drive switch has storage.
-    driveRule: { fallback: 'refuse' as const, guestsMaySpendDriveWallet: false },
+    // D-OW-4: guests may spend a drive wallet only where the drive's switch is on.
+    driveRule: { fallback: 'refuse' as const, guestsMaySpendDriveWallet: driveWallet?.guestSpendEnabled ?? false },
   };
   const names = await spendPlaceNames(driveId, standing?.orgId ?? null);
   const out: SpendChoice[] = [];
   for (const source of availableSources(legs)) {
     if (source === 'own_credits') out.push(own);
     if (source === 'drive_wallet' && driveWallet) {
-      const { leg } = await driveWalletLeg(driveWallet, now, [], orgLapsed);
-      const capped = leg ? cappedConsumerLeg(leg, (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now }))?.remaining ?? null) : null;
-      out.push(choice('drive_wallet', driveWallet.id, names, capped?.spendableCents ?? 0));
+      // SPEND-9: the wallet's own remaining amount bounded by their own caps — never a figure bounded by the
+      // pool or the funder's personal wallet behind it. Whether that parent can cover a call is the gate's
+      // question; when it cannot, the call is refused by name (source_empty), and no balance is disclosed.
+      const caps = (await loadConsumerCapFacts(db, { walletId: driveWallet.id, userId, now, isGuest: actor.kind === 'person' && actor.isGuest }))?.remaining ?? null;
+      out.push(choice('drive_wallet', driveWallet.id, names, driveWalletConsumerRemainingCents(driveWallet, caps)));
     }
     if (source === 'seat_allowance' && pool && standing?.orgId) {
       // The seat's own remaining allowance (SPEND-9: their cap, never the pool's balance).

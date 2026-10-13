@@ -36,13 +36,15 @@ import { stripeConfig, stripeMode } from '@/lib/stripe-config';
 import {
   createOrgBillingPortalSession,
   endOrgSubscriptionPort,
-  ensureOrgBusinessSubscription,
   listOrgInvoices,
   provisionOrgSubscription,
   stripeOrgBilling,
   syncOrgSeatQuantity,
   type OrgBillingDeps,
 } from '../org-subscription';
+
+/** The provisioning result alone, for the tests that do not look at the payment step. */
+const ensureOrgBusinessSubscription = async (orgId: string, deps: OrgBillingDeps) => (await provisionOrgSubscription(orgId, deps)).result;
 
 const TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY;
 const RUN = `ow-d1 test ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -147,7 +149,7 @@ describe.skipIf(!TEST_KEY)('org Business subscription against the Stripe TEST AP
     expect(payment.kind).toBe('confirm_payment');
 
     const [row] = await db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
-    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'incomplete', extraSeatQuantity: 0, trialEnd: null });
+    expect(row).toMatchObject({ stripeSubscriptionId: sub.id, status: 'incomplete', extraSeatQuantity: 0, collectionMethod: 'charge_automatically' });
     expect(row.stripeBaseItemId).toBe(sub.items.data[0].id);
     expect(row.stripeSeatItemId).toBe(sub.items.data[1].id);
     const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));

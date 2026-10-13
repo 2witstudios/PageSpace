@@ -7,8 +7,9 @@ import type { SpendRefusal } from '@pagespace/lib/billing/credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { pageService } from '@/services/api';
 import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
-import { automationRunUnreserved } from '@pagespace/lib/billing/spend-target';
-import { destinationDriveSpend, lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
+import { automationRunUnreserved, automationSpend } from '@pagespace/lib/billing/spend-target';
+import { lookupDriveBillingFacts } from '@pagespace/lib/billing/sandbox-payer';
+import { encodeAutomationRef } from '@pagespace/lib/billing/automation-attribution';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { getRecordings, downloadTranscript } from './zoom-api-client';
@@ -17,6 +18,7 @@ import { parseVtt, vttToHtml } from './parse-vtt';
 import { buildDocumentHtml } from './build-document';
 import { generateTranscriptSummary } from './generate-summary';
 import { extractActionItems } from './extract-action-items';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 interface ZoomTranscriptPayload {
   event: string;
@@ -129,8 +131,8 @@ export async function processZoomWebhook(
   // AI enrichment (fail-safe — never blocks page creation). It passes the credit
   // gate first; a refusal still creates the page, just without the summary/action
   // items, and records why. A webhook trigger has no person present (SPEND-6), so
-  // the DESTINATION drive's payer pays, never the connecting user as such
-  // (destinationDriveSpend: an org drive's wallet, or a personal drive's owner).
+  // it spends the DESTINATION drive's wallet only, run as the connection's owner —
+  // never anyone's own credits, on an org drive or a personal one.
   const enrichment = await enrichTranscript(connection, connection.targetDriveId, plainText);
   const { summary, actionItems } = enrichment;
 
@@ -144,7 +146,8 @@ export async function processZoomWebhook(
   const title = `${datePrefix} — ${topic}`;
 
   const result = await pageService.createPage(
-    connection.userId,
+    // A recording webhook files the page as the connection owner, an automation confined to its target drive (D-OW-34, D-OW-62).
+    automationActor(connection.userId, 'zoom-recording', inDrives(connection.targetDriveId)),
     {
       title,
       type: 'DOCUMENT',
@@ -201,9 +204,11 @@ interface TranscriptEnrichment {
  * debits its own real usage on the wallet the hold reserved, so the hold is
  * released exactly once when they settle, whether they succeeded or not.
  *
- * SPEND-6: the enrichment is a trigger, so the destination drive's payer pays
- * (destinationDriveSpend): an org drive's wallet, never the connection owner's, and with no
- * drive wallet reserved while wallets are live it is skipped before any model call.
+ * SPEND-6: the enrichment is a trigger with no person present, so it spends the destination
+ * drive's wallet only (automationSpend), run on behalf of the connection's owner, whose caps
+ * bind it ([D-OW-34]) — on an org drive and on a personal drive alike, exactly as a workflow
+ * does. Empty, paused or missing, it is skipped (the lead is told) before any model call; it
+ * never falls to anyone's own credits.
  */
 async function enrichTranscript(
   connection: ZoomConnection,
@@ -215,12 +220,12 @@ async function enrichTranscript(
 
   // A gate that cannot be checked (DB outage, lock timeout) must not block the
   // page either: skip the enrichment — no model call, no charge — and say why.
-  let billing: ReturnType<typeof destinationDriveSpend>;
+  const billing = { userId: connection.userId, spend: automationSpend(targetDriveId) };
   let hold: Awaited<ReturnType<typeof acquireUserCreditHold>>;
   try {
-    const drive = await lookupDriveBillingFacts(targetDriveId);
-    if (!drive) throw new Error(`destination drive ${targetDriveId} not found`);
-    billing = destinationDriveSpend(drive, targetDriveId, connection.userId);
+    // A destination that vanished since the connection was set up is a gate that cannot be checked
+    // (while orgs are dark an automation bills as before wallets, so it must not reach the gate).
+    if (!(await lookupDriveBillingFacts(targetDriveId))) throw new Error(`destination drive ${targetDriveId} not found`);
     hold = await acquireUserCreditHold(billing.userId, {
       spend: billing.spend,
       estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * aiCalls,
@@ -255,7 +260,8 @@ async function enrichTranscript(
       });
       return { summary: '', actionItems: [], skippedReason: 'no_drive_wallet' };
     }
-    const settleOn = { userId: billing.userId, walletId: hold.walletId };
+    // SPEND-10: listed on the drive's spend as this connection's "Zoom transcripts", not its owner's own.
+    const settleOn = { userId: billing.userId, walletId: hold.walletId, automationRef: encodeAutomationRef({ kind: 'zoom', connectionId: connection.id }) };
     const [summary, actionItems] = await Promise.all([
       connection.includeAiSummary ? generateTranscriptSummary(connection.userId, plainText, settleOn) : Promise.resolve(''),
       connection.includeActionItems ? extractActionItems(connection.userId, plainText, settleOn) : Promise.resolve([]),

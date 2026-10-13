@@ -44,12 +44,13 @@ export async function createDeviceTokenRecord(
   platform: 'web' | 'desktop' | 'ios' | 'android',
   tokenVersion: number,
   metadata: {
-    authentication?: VerifiedAuthentication | null;
+    /** Required (D-OW-45): the evidence of the ceremony this device token stands for; see CreateSessionOptions. */
+    authentication: VerifiedAuthentication | null;
     deviceName?: string;
     userAgent?: string;
     ipAddress?: string;
     location?: string;
-  } = {}
+  }
 ): Promise<{ id: string; token: string }> {
   const authentication = parseVerifiedAuthentication(metadata.authentication, Date.now());
   if (metadata.authentication != null && !authentication) throw new Error('Invalid authentication evidence');
@@ -419,7 +420,8 @@ export async function cleanupExpiredDeviceTokens(): Promise<number> {
  * race conditions in concurrent login/signup/OAuth flows.
  */
 export async function validateOrCreateDeviceToken(params: {
-  authentication?: VerifiedAuthentication | null;
+  /** Required (D-OW-45): the evidence of the sign-in ceremony minting this device token; see CreateSessionOptions. */
+  authentication: VerifiedAuthentication | null;
   providedDeviceToken: string | null | undefined;
   userId: string;
   deviceId: string;

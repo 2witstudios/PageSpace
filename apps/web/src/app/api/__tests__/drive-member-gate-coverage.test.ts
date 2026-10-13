@@ -145,8 +145,8 @@ const EXEMPT = new Map<string, Exemption>([
     reason: 'The org Guests list (listOrgGuests, DRV-8) is the org admin\'s one view of every outsider with access, so it shows pending invitations on purpose, each drive marked pending. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',
   }],
   ['packages/lib/src/permissions/org-guest-footprint.ts', {
-    ormReads: 1,
-    reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives (pending included, on purpose: an invited outsider is a guest too) so verified-domain auto-join (SEC-1) can REFUSE to make them a member. It only ever withholds; it grants nothing.',
+    ormReads: 2,
+    reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives, and listOrgPeople lists those people for countOrgSignInBlocked (POL-1, D-OW-45); pending included on purpose in both: an invited outsider is a guest and meets the sign-in policy when they accept. isOrgGuest only withholds auto-join (SEC-1); the count is counts only, no identities. Neither grants anything.',
   }],
   ['packages/lib/src/permissions/org-drive-directory.ts', {
     ormReads: 1,

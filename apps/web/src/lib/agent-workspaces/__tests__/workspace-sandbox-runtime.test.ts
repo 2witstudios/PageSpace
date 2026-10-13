@@ -18,6 +18,7 @@
  * keeps the denial from being an oracle.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockFindSessionRecord = vi.fn();
 const mockCanRunCodeForSession = vi.fn();
@@ -70,7 +71,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     // drive-wide disk on behalf of someone with a view-only role.
     mockCanRunCodeForSession.mockResolvedValue(false);
 
-    expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({
+    expect(await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null))).toEqual({
       ok: false,
       reason: 'not_authorized',
     });
@@ -80,12 +81,12 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
   it('should ask the gate with the SESSION\'s drive and owner, as the provisioner does', async () => {
     // Browsing a sandbox and provisioning one must not disagree about who is
     // allowed to — so the arguments match `provisionSessionSandbox`'s exactly.
-    await resolveSessionSandboxHandle(WORKSPACE, REQUESTER);
+    await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null));
 
     // Same shape `sandboxEligible` is computed from, so a requester the UI shows
     // disabled controls to is exactly the requester this refuses.
     expect(mockCanRunCodeForSession).toHaveBeenCalledWith({
-      userId: REQUESTER,
+      actor: expect.objectContaining({ userId: REQUESTER }),
       driveId: 'drive-1',
       ownerId: 'user-owner',
     });
@@ -96,7 +97,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     // not be able to tell a session with a live environment from one without.
     mockCanRunCodeForSession.mockResolvedValue(false);
 
-    await resolveSessionSandboxHandle(WORKSPACE, REQUESTER);
+    await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null));
 
     expect(mockResolveLiveSandboxId).not.toHaveBeenCalled();
   });
@@ -104,7 +105,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
   it('given a vanished session, should answer not_found without consulting the gate', async () => {
     mockFindSessionRecord.mockResolvedValue(null);
 
-    expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({ ok: false, reason: 'not_found' });
+    expect(await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null))).toEqual({ ok: false, reason: 'not_found' });
     expect(mockCanRunCodeForSession).not.toHaveBeenCalled();
   });
 
@@ -114,12 +115,12 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     // mutating a shared disk under a session the API reports as finished.
     mockFindSessionRecord.mockResolvedValue({ ...envSession, endedAt: new Date() });
 
-    expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({ ok: false, reason: 'not_started' });
+    expect(await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null))).toEqual({ ok: false, reason: 'not_started' });
     expect(mockAttach).not.toHaveBeenCalled();
   });
 
   it('given a permitted requester and a live environment, should hand back the handle', async () => {
-    const result = await resolveSessionSandboxHandle(WORKSPACE, REQUESTER);
+    const result = await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null));
 
     expect(result.ok).toBe(true);
     expect(mockAttach).toHaveBeenCalledWith({ sandboxId: 'pgs-env-abc' });
@@ -128,7 +129,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
   it('given no machine yet, should answer not_started rather than attaching to nothing', async () => {
     mockResolveLiveSandboxId.mockResolvedValue(null);
 
-    expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({ ok: false, reason: 'not_started' });
+    expect(await resolveSessionSandboxHandle(WORKSPACE, credentialActor(REQUESTER, null))).toEqual({ ok: false, reason: 'not_started' });
     expect(mockAttach).not.toHaveBeenCalled();
   });
 });

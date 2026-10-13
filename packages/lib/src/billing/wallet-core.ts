@@ -12,7 +12,13 @@
  * conversion of its own (MON-5 seam guard).
  */
 
-import { centsFromCredits } from './money-model';
+import {
+  DEFAULT_CONSUMER_CAP_CREDITS,
+  DEFAULT_SEAT_ALLOWANCE_CREDITS,
+  centsFromCredits,
+  centsFromMillicents,
+  millicentsFromCents,
+} from './money-model';
 import { allocateSpend, evaluateDailyCap, type Balance, type SpendResult } from './credit-core';
 
 // ---------------------------------------------------------------------------
@@ -46,8 +52,12 @@ export interface SpendLeg {
 
 export type SpendActor =
   | { kind: 'person'; userId: string; isGuest: boolean }
-  /** Automations, triggers, scheduled workflows, channel mentions: the consumer is the drive (SPEND-6). */
-  | { kind: 'automation'; driveId: string };
+  /**
+   * Automations, triggers, scheduled workflows, channel mentions, manual Runs: the consumer is the
+   * drive (SPEND-6). `gatedAsGuest`: the person the run is gated as (the sender of a mention, the
+   * presser of a Run, an automation's creator) is a guest of the drive (D-OW-4).
+   */
+  | { kind: 'automation'; driveId: string; gatedAsGuest: boolean };
 
 export interface DriveSpendRule {
   /** The effective fallback for this drive (see {@link effectiveSpendPolicy}). */
@@ -105,7 +115,11 @@ export type SkipReason =
    * (or of the drive, on a personal drive). Their caps left with them, so the run is refused rather than run
    * uncapped ([D-OW-34], review #2817 P2-2). Re-pointing an automation to a new owner is a separate decision.
    */
-  | 'creator_departed';
+  | 'creator_departed'
+  /** D-OW-4: the run is gated as a guest and the drive keeps its wallet closed to guests. */
+  | 'guest_drive_wallet_off'
+  /** WAL-7: the person the run is gated as reached their cap on the drive wallet (SPEND-6 "a reached cap skips"). */
+  | 'source_cap_reached';
 
 export interface SpendOption {
   source: SpendSourceKind;
@@ -140,6 +154,22 @@ export type SpendResolution =
 
 const SOURCE_ORDER: readonly SpendSourceKind[] = ['drive_wallet', 'seat_allowance', 'own_credits'];
 
+/**
+ * D-OW-4: whether a person may spend a drive wallet at all — anyone but a guest, and a guest only
+ * where the drive turned its guest switch on. One rule for chat, mentions, Runs and the gate's lock.
+ */
+export function driveWalletOpenTo(input: { isGuest: boolean; guestSpendEnabled: boolean }): boolean {
+  return !input.isGuest || input.guestSpendEnabled;
+}
+
+/**
+ * WAL-7: the kill switch reaches down the chain — a wallet spends as paused when it or its parent
+ * is paused (a paused org pool stops every drive wallet it funds). Otherwise its own status.
+ */
+export function walletChainStatus(own: WalletStatus, parent: WalletStatus | null): WalletStatus {
+  return own === 'paused' || parent === 'paused' ? 'paused' : own;
+}
+
 /** Whether this leg can pay this call now: not paused, and spendable (cap included) to the reservation. */
 export function legCovers(leg: SpendLeg, reservationCents: number): boolean {
   return covers(leg, reservationCents);
@@ -157,7 +187,7 @@ function legFor(
 ): { leg: SpendLeg } | { unavailable: 'source_unavailable' | 'guest_drive_wallet_off' } {
   const isGuest = input.actor.kind === 'person' && input.actor.isGuest;
   if (source === 'drive_wallet') {
-    if (isGuest && !input.driveRule.guestsMaySpendDriveWallet) return { unavailable: 'guest_drive_wallet_off' };
+    if (!driveWalletOpenTo({ isGuest, guestSpendEnabled: input.driveRule.guestsMaySpendDriveWallet })) return { unavailable: 'guest_drive_wallet_off' };
     return input.driveWallet ? { leg: input.driveWallet } : { unavailable: 'source_unavailable' };
   }
   if (source === 'seat_allowance') {
@@ -203,7 +233,8 @@ function refuse(source: SpendSourceKind | null, reason: RefusalReason, options: 
  *
  * - Automations spend the drive wallet only; an uncovered drive wallet SKIPS the run.
  *   Chosen source, override, and fallback rule are ignored: an automation never spends a
- *   person's credits or allowance (SPEND-6).
+ *   person's credits or allowance (SPEND-6). A run gated as a guest skips unless the drive
+ *   opened its wallet to guests (D-OW-4); a run whose person's cap is spent skips by name.
  * - "Always my own credits" (either switch) is absolute: own credits or refuse, never a
  *   fallback, and no other source is offered (SPEND-5).
  * - Otherwise the chosen source spends if it covers the reservation. If it is EMPTY
@@ -218,12 +249,12 @@ export function resolveSpendSource(input: ResolveSpendSourceInput): SpendResolut
   if (input.actor.kind === 'automation') {
     const wallet = input.driveWallet;
     if (!wallet) return { kind: 'skip', reason: 'no_drive_wallet', walletId: null, chargeCents: 0 };
-    if (wallet.status === 'paused') {
-      return { kind: 'skip', reason: 'drive_wallet_paused', walletId: wallet.walletId, chargeCents: 0 };
+    const skip = (reason: SkipReason): SpendResolution => ({ kind: 'skip', reason, walletId: wallet.walletId, chargeCents: 0 });
+    if (!driveWalletOpenTo({ isGuest: input.actor.gatedAsGuest, guestSpendEnabled: input.driveRule.guestsMaySpendDriveWallet })) {
+      return skip('guest_drive_wallet_off');
     }
-    if (!covers(wallet, input.reservationCents)) {
-      return { kind: 'skip', reason: 'drive_wallet_empty', walletId: wallet.walletId, chargeCents: 0 };
-    }
+    if (wallet.status === 'paused') return skip('drive_wallet_paused');
+    if (!covers(wallet, input.reservationCents)) return skip(wallet.capReached === true ? 'source_cap_reached' : 'drive_wallet_empty');
     return { kind: 'spend', source: 'drive_wallet', walletId: wallet.walletId, fallbackApplied: false, fallbackFrom: null, fallbackFromWalletId: null };
   }
 
@@ -324,18 +355,39 @@ function allocationRemainingCents(wallet: WalletFunds): number {
   return Math.max(0, wholeNonNegative(wallet.allocationCents) - wholeNonNegative(wallet.allocationSpentCents));
 }
 
+/**
+ * [D-OW-60] What of this period's allocation the wallet can still draw: its allocation left, less its
+ * debt. Debt nets against the allocation only — the funder's money — never against top-ups or
+ * donations, which stay spendable at once even on an `over` wallet. Never negative.
+ */
+function allocationNetOfDebtCents(wallet: WalletFunds): number {
+  return Math.max(0, allocationRemainingCents(wallet) - wholeNonNegative(wallet.debtCents));
+}
+
+function legsRemainingCents(wallet: WalletFunds): number {
+  return wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
+}
+
 function balanceAvailableCents(balance: Balance): number {
   return balance.monthlyCents + balance.topupCents - Math.max(0, balance.debtCents ?? 0);
 }
 
 /**
- * What a child wallet can spend now: its remaining allocation (no more than the parent
- * can cover), plus its funding legs, less its debt. Never negative.
+ * What a child wallet can spend now: its funding legs, plus its allocation left net of its debt
+ * (no more than the parent can cover) — [D-OW-60]: debt never nets against top-ups or donations.
  */
 export function childSpendableCents(wallet: WalletFunds, parentAvailableCents: number): number {
-  const fromAllocation = Math.min(allocationRemainingCents(wallet), wholeNonNegative(parentAvailableCents));
-  const fromLegs = wallet.topupLegs.reduce((sum, leg) => sum + wholeNonNegative(leg.remainingCents), 0);
-  return Math.max(0, fromAllocation + fromLegs - wholeNonNegative(wallet.debtCents));
+  return Math.min(allocationNetOfDebtCents(wallet), wholeNonNegative(parentAvailableCents)) + legsRemainingCents(wallet);
+}
+
+/**
+ * A child wallet's OWN remaining budget: its funding legs plus its allocation left net of its debt
+ * ([D-OW-60]), never negative — what the wallet holds for its consumers, NOT bounded by what its parent can
+ * cover (SPEND-9: the parent's balance is never disclosed through it). The gate decides on
+ * {@link childSpendableCents}; every surface shows this.
+ */
+export function walletOwnRemainingCents(wallet: WalletFunds): number {
+  return allocationNetOfDebtCents(wallet) + legsRemainingCents(wallet);
 }
 
 export interface CapRemaining {
@@ -378,7 +430,8 @@ export interface WalletSpendResult {
  */
 export function allocateWalletSpend(input: WalletSpendInput): WalletSpendResult {
   const amount = wholeNonNegative(input.amountCents);
-  const allocationDraw = Math.min(amount, allocationRemainingCents(input.wallet), wholeNonNegative(balanceAvailableCents(input.parent)));
+  // [D-OW-60] the allocation is drawable only as far as the wallet's debt leaves it; the legs carry the rest.
+  const allocationDraw = Math.min(amount, allocationNetOfDebtCents(input.wallet), wholeNonNegative(balanceAvailableCents(input.parent)));
   const parentDraw = allocateSpend(input.parent, allocationDraw);
 
   let remaining = amount - parentDraw.appliedCents;
@@ -525,7 +578,7 @@ export interface DebtNoticeWallet {
 /**
  * WAL-6e: whose debt notice a settle that left `debtWallet` in debt raises, if any. The FUNDER
  * is told — never the consumer who spent:
- *   - a child (drive or agent) wallet carrying its own debt (the funder chose wallet_debt): the
+ *   - a child (drive) wallet carrying its own debt (the funder chose wallet_debt): the
  *     funder is whoever owns its PARENT, the wallet that funds its allocation;
  *   - an org POOL in debt (it absorbed a drive's overshoot, a seat's, or org compute's): the org;
  *   - a PERSONAL root in debt is a funder's notice only when it absorbed a CHILD wallet's
@@ -535,7 +588,7 @@ export interface DebtNoticeWallet {
  */
 export function debtNoticeFunder(input: {
   debtWallet: DebtNoticeWallet;
-  /** The wallet the call charged: a child when the debt came from a drive or agent wallet. */
+  /** The wallet the call charged: a child when the debt came from a drive wallet. */
   chargedWalletIsChild: boolean;
 }): 'parent' | 'self' | null {
   const wallet = input.debtWallet;
@@ -588,15 +641,27 @@ export interface ConsumerCaps {
 }
 
 /**
- * Defaults when an admin enables per-consumer caps without naming values: 50 credits a day and
- * 1,000 a month ([D-OW-31], replacing D20.5's 10/100, which sat below one image or uncatalogued
- * model's hold and so refused every such call). Caps never set stay unlimited within the wallet.
+ * Defaults when an admin enables per-consumer caps without naming values (money-model's
+ * DEFAULT_CONSUMER_CAP_CREDITS, [D-OW-31]). Caps never set stay unlimited within the wallet.
  * NOT the seat allowance: that is its own constant below.
  */
 export const DEFAULT_CONSUMER_CAPS: ConsumerCaps = {
-  dailyCents: Math.round(centsFromCredits(50)),
-  monthlyCents: Math.round(centsFromCredits(1_000)),
+  dailyCents: Math.round(centsFromCredits(DEFAULT_CONSUMER_CAP_CREDITS.daily)),
+  monthlyCents: Math.round(centsFromCredits(DEFAULT_CONSUMER_CAP_CREDITS.monthly)),
 };
+
+/**
+ * The caps that bind one consumer on a drive-wallet leg. A member's are what is stored (none:
+ * unlimited within the wallet). A GUEST is always capped (D-OW-4): each window they have no cap
+ * in takes its D-OW-31 default, so opening a wallet to guests never opens it without limit.
+ */
+export function consumerCapsInForce(stored: ConsumerCaps | null, consumer: { isGuest: boolean }): ConsumerCaps | null {
+  if (!consumer.isGuest) return stored;
+  return {
+    dailyCents: stored?.dailyCents ?? DEFAULT_CONSUMER_CAPS.dailyCents,
+    monthlyCents: stored?.monthlyCents ?? DEFAULT_CONSUMER_CAPS.monthlyCents,
+  };
+}
 
 export interface CapUsage {
   /** Charged spend since {@link utcDayStartMs}. */
@@ -664,7 +729,11 @@ export function evaluateCaps(input: { caps: ConsumerCaps; usage: CapUsage; reser
 /** Funder alert thresholds, percent of a cap (D20.6). */
 export const CAP_ALERT_THRESHOLDS = [80, 100] as const;
 export type CapAlertThreshold = (typeof CAP_ALERT_THRESHOLDS)[number];
-const PERCENT = 100;
+
+/** Has `part` reached `percent`% of `whole`? Cross-multiplied, so integers stay exact (a ratio, not money). */
+function reachesPercent(part: number, whole: number, percent: number): boolean {
+  return part * 100 >= whole * percent;
+}
 
 /**
  * The thresholds a consumer's spend in one cap window has reached (spent >= threshold% of the
@@ -676,7 +745,7 @@ export function capThresholdsReached(input: { capCents: number | null; spentCent
   if (input.capCents === null || !Number.isFinite(input.capCents)) return [];
   const cap = wholeNonNegative(input.capCents);
   const spent = wholeNonNegative(input.spentCents);
-  return CAP_ALERT_THRESHOLDS.filter((t) => spent * PERCENT >= cap * t);
+  return CAP_ALERT_THRESHOLDS.filter((t) => reachesPercent(spent, cap, t));
 }
 
 /** A cap window of WAL-7: the UTC day, and the month (the pool period for a seat, D-OW-12). */
@@ -721,13 +790,10 @@ export function planConsumerCapWrite(input: ConsumerCapWriteInput, existing: Con
 // ---------------------------------------------------------------------------
 
 /**
- * The org's default seat allowance (the POL-7 policy default and the fallback when an org sets
- * none): D20.5's 100 credits a month per member. Its own constant on purpose: [D-OW-31] moved the
- * per-consumer cap defaults and left the seat allowance where it was, so a cap edit must never
- * move what every member may draw from every pool. A seat is never unlimited — a seat with no
- * cap lets any one member spend the whole pool.
+ * The org's default seat allowance in cents (money-model's DEFAULT_SEAT_ALLOWANCE_CREDITS). A
+ * seat is never unlimited — a seat with no cap lets any one member spend the whole pool.
  */
-export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(100));
+export const DEFAULT_SEAT_ALLOWANCE_CENTS: number = Math.round(centsFromCredits(DEFAULT_SEAT_ALLOWANCE_CREDITS));
 
 /**
  * One consumer's seat allowance on the pool: their own monthly cap on the pool leg
@@ -741,8 +807,6 @@ export function seatAllowanceCents(input: {
   return wholeNonNegative(input.consumerMonthlyCapCents ?? input.policySeatAllowanceCents ?? DEFAULT_SEAT_ALLOWANCE_CENTS);
 }
 
-const MILLICENTS_PER_CENT = 1000;
-
 /**
  * A consumer's charged seat spend this period, from the ledger's summed millicents (usage
  * plus signed reconcile corrections). Rounded UP so the cap never under-counts; a net
@@ -750,7 +814,7 @@ const MILLICENTS_PER_CENT = 1000;
  */
 export function seatSpentCents(chargedMillicents: number): number {
   if (!Number.isFinite(chargedMillicents)) return Number.MAX_SAFE_INTEGER;
-  return Math.max(0, Math.ceil(chargedMillicents / MILLICENTS_PER_CENT));
+  return Math.max(0, Math.ceil(centsFromMillicents(chargedMillicents)));
 }
 
 /** One consumer's seat spend in the pool's current period. */
@@ -804,7 +868,7 @@ export interface SeatWindowCharge {
 export function seatCountedMillicents(input: { capCents: number | null; grossMillicents: number }): number {
   if (!Number.isFinite(input.grossMillicents)) return input.grossMillicents;
   const gross = Math.max(0, input.grossMillicents);
-  return input.capCents === null ? gross : Math.min(gross, input.capCents * MILLICENTS_PER_CENT);
+  return input.capCents === null ? gross : Math.min(gross, millicentsFromCents(input.capCents));
 }
 
 /**
@@ -823,7 +887,7 @@ export function seatCountedMillicents(input: { capCents: number | null; grossMil
  * nothing absorbed. A non-finite sum changes nothing here; the gate's read fails closed on it.
  */
 export function seatOvershootDeltaMillicents(input: { capCents: number | null; window: SeatWindowCharge }): number {
-  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - input.capCents * MILLICENTS_PER_CENT);
+  const target = input.capCents === null ? 0 : Math.max(0, input.window.grossMillicents - millicentsFromCents(input.capCents));
   const delta = target - input.window.absorbedMillicents;
   return Number.isFinite(delta) ? delta : 0;
 }

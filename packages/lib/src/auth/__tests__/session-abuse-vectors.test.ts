@@ -382,7 +382,7 @@ describe('Session Abuse Vectors', () => {
       mockFindFirst.mockResolvedValue(null);
 
       await expect(
-        service.createSession({
+        service.createSession({ authentication: null,
           userId: 'user-nonexistent',
           type: 'user',
           scopes: ['*'],

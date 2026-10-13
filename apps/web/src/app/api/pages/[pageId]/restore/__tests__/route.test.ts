@@ -70,6 +70,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserDeletePage: (...args: unknown[]) => mockCanUserDeletePage(...args),
 }));
 

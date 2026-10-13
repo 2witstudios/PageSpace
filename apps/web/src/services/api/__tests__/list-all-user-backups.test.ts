@@ -17,6 +17,7 @@ vi.mock('@pagespace/lib/permissions/member-drives', () => ({
 
 import { listAllUserBackups } from '../drive-backup-service';
 import { getAdministeredDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 function stubBackupQueries() {
   const rowsChain = { from: () => rowsChain, innerJoin: () => rowsChain, where: () => rowsChain, orderBy: () => rowsChain, limit: () => rowsChain, offset: async () => [] };
@@ -33,17 +34,17 @@ describe('listAllUserBackups', () => {
     vi.mocked(getAdministeredDriveIds).mockResolvedValueOnce(['led', 'org-private-unjoined']);
     stubBackupQueries();
 
-    const result = await listAllUserBackups('user-1');
+    const result = await listAllUserBackups(credentialActor('user-1', null));
 
     expect(result).toEqual({ success: true, backups: [], total: 0 });
-    expect(getAdministeredDriveIds).toHaveBeenCalledWith('user-1', { includeTrashed: false });
+    expect(getAdministeredDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), { includeTrashed: false });
     expect(mockInArray.mock.calls.map(([, values]) => values)).toEqual([['led', 'org-private-unjoined'], ['led', 'org-private-unjoined']]);
   });
 
   it('returns nothing, and runs no backup query, when the user leads and administers no drive', async () => {
     vi.mocked(getAdministeredDriveIds).mockResolvedValueOnce([]);
 
-    expect(await listAllUserBackups('user-1')).toEqual({ success: true, backups: [], total: 0 });
+    expect(await listAllUserBackups(credentialActor('user-1', null))).toEqual({ success: true, backups: [], total: 0 });
     expect(mockSelect).not.toHaveBeenCalled();
   });
 });

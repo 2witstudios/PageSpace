@@ -27,6 +27,7 @@
  * chain (replaced wholesale by the session access decision).
  */
 
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-workspaces/shell-types';
 import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
@@ -58,7 +59,7 @@ export interface ShellCheckAuthDeps {
     | { ok: false; reason: 'not_found' }
   >;
   /** The ONE session access decision — `checkAgentSessionAccess` wired with real IO. DB-only, never wakes a Sprite. */
-  checkSessionAccess: (input: { requesterId: string; workspaceId: string }) => Promise<ShellSessionAccessResult>;
+  checkSessionAccess: (input: { requester: AccessActor; workspaceId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
    * under. Payer = the session's own DRIVE's payer (`resolveSessionPayer`),
@@ -82,7 +83,7 @@ export interface ShellCheckAuthDeps {
    * with real deps by the caller. One code path with the web tier, so the CAS
    * inside it actually serializes concurrent provisioners.
    */
-  ensureSessionSandbox: (input: { workspaceId: string; userId: string }) => Promise<
+  ensureSessionSandbox: (input: { workspaceId: string; actor: AccessActor }) => Promise<
     | { ok: true; sandboxId: string }
     | { ok: false; reason: string }
   >;
@@ -108,7 +109,8 @@ export interface ShellCheckAuthDeps {
  * it.
  */
 export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn {
-  return async ({ userId, shellId }) => {
+  return async ({ actor, shellId }) => {
+    const { userId } = actor;
     // The row IS the address: an unresolvable shellId has nothing to authorize
     // against, so the lookup comes first. It leaks nothing a denial would not —
     // the id is an unguessable cuid, and the session decision downstream keeps
@@ -123,7 +125,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // THE access decision — the same pure `decideAgentSessionAccess` verdict
     // the web API routes enforce, reached through the same IO wrapper. Nothing
     // here weighs the facts; it only carries the verdict.
-    const access = await deps.checkSessionAccess({ requesterId: userId, workspaceId: shell.workspaceId });
+    const access = await deps.checkSessionAccess({ requester: actor, workspaceId: shell.workspaceId });
     if (!access.allowed) {
       deps.logDenied(access.reason, { userId, shellId, workspaceId: shell.workspaceId });
       return { ok: false, reason: access.reason };
@@ -193,7 +195,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
         // that verdict lives in `plan-workspace-lifecycle.ts`, not here.
         let ensured: Awaited<ReturnType<ShellCheckAuthDeps['ensureSessionSandbox']>>;
         try {
-          ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, userId });
+          ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, actor });
         } catch (error) {
           releaseSlot();
           throw error;

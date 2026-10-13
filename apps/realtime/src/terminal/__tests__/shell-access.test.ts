@@ -1,4 +1,5 @@
 import { describe, it } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { assert } from './riteway';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
@@ -82,7 +83,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'ghost' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'ghost' });
 
     assert({
       given: 'a shellId whose row no longer exists',
@@ -102,7 +103,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'a session access denial from the shared decider',
@@ -127,7 +128,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'a connect addressed by shellId alone',
@@ -148,7 +149,7 @@ describe('buildShellCheckAuth — access half', () => {
 
     // Exactly what onConnect does when it finds a live in-memory session: it
     // authorizes, takes the sessionKey, and never calls resolveSandbox.
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'an authorized connect whose caller reattaches instead of creating',
@@ -168,7 +169,7 @@ describe('buildShellCheckAuth — access half', () => {
     const { deps } = buildDeps();
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'a fully-authorized connect',
@@ -220,7 +221,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'free-requester', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('free-requester', null), shellId: 'shl-1' });
     if (!result.ok) throw new Error(`expected allow, got ${result.reason}`);
     await result.resolveSandbox();
 
@@ -242,7 +243,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'ben-drive-mate', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('ben-drive-mate', null), shellId: 'shl-1' });
     if (!result.ok) throw new Error(`expected allow, got ${result.reason}`);
 
     assert({
@@ -267,7 +268,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'owner-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('owner-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'a global-assistant session (no agent page)',
@@ -293,7 +294,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     // The tier is only consulted where the slot is actually reserved — the
     // create path — so drive the thunk to observe it.
     if (result.ok) await result.resolveSandbox();
@@ -324,7 +325,7 @@ describe('buildShellCheckAuth — access half', () => {
     const checkAuth = buildShellCheckAuth(deps);
     for (const value of [false, true]) {
       lapsed.value = value;
-      const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+      const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
       if (result.ok) await result.resolveSandbox();
     }
     assert({
@@ -354,7 +355,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     if (result.ok) await result.resolveSandbox();
 
     assert({
@@ -378,7 +379,7 @@ describe('buildShellCheckAuth — access half', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const result = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const result = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     if (result.ok) await result.resolveSandbox();
 
     assert({
@@ -407,7 +408,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
 
     assert({
       given: 'a reattach/re-auth check by a user with no free concurrency slot',
@@ -421,7 +422,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     const { deps, calls } = buildDeps({ acquireSlot: () => false });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
@@ -436,7 +437,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     const { deps } = buildDeps();
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const sandbox = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
@@ -475,7 +476,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     const { deps, calls } = buildDeps();
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     if (auth.ok) await auth.resolveSandbox();
 
     assert({
@@ -497,7 +498,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const sandbox = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
@@ -524,7 +525,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
@@ -560,7 +561,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const result = auth.ok ? await auth.resolveSandbox() : auth;
 
     assert({
@@ -591,7 +592,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
 
     let thrown: unknown;
     try {
-      const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+      const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
       if (auth.ok) await auth.resolveSandbox();
     } catch (error) {
       thrown = error;
@@ -614,7 +615,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     const sandbox = auth.ok ? await auth.resolveSandbox() : auth;
     if (sandbox.ok) sandbox.releaseSlot();
 
@@ -641,7 +642,7 @@ describe('buildShellCheckAuth — resolveSandbox thunk', () => {
     });
     const checkAuth = buildShellCheckAuth(deps);
 
-    const auth = await checkAuth({ userId: 'u-1', shellId: 'shl-1' });
+    const auth = await checkAuth({ actor: credentialActor('u-1', null), shellId: 'shl-1' });
     if (auth.ok) await auth.resolveSandbox();
 
     assert({

@@ -7,13 +7,16 @@ export const ORG_ROLE_RANK: Readonly<Record<OrgRole, number>> = {
   OWNER: 3,
 };
 
+/** An own key of the rank table: never a prototype key such as `constructor` (which `in` would admit). */
+const isOrgRoleKey = (role: string): role is OrgRole => Object.prototype.hasOwnProperty.call(ORG_ROLE_RANK, role);
+
 /**
  * Whether `role` ranks at or above `min`. Missing or unknown roles fail closed. The UI renders org
  * controls from this (UI-11: a plain Member sees no org settings); the routes still authorize each
  * request through requireOrgRole.
  */
 export function orgRoleAtLeast(role: OrgRole | null | undefined, min: OrgRole): boolean {
-  if (!role || !(role in ORG_ROLE_RANK)) return false;
+  if (!role || !isOrgRoleKey(role) || !isOrgRoleKey(min)) return false;
   return ORG_ROLE_RANK[role] >= ORG_ROLE_RANK[min];
 }
 

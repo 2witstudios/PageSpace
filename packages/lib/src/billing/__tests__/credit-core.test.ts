@@ -609,6 +609,17 @@ describe('computeBackfillActions — orphan wallet and spend kind', () => {
     expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', metadata: { fallbackFromWalletId: 7 } }], {})[0])
       .not.toHaveProperty('fallbackFromWalletId');
   });
+
+  it('SPEND-10 (partial) an orphan an automation ran keeps its workflow on the re-settle, so the lead still sees it as the automation', () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: 'workflow:wf-1' }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', spendKind: 'ai', automationRef: 'workflow:wf-1' });
+    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: null }], {})[0])
+      .not.toHaveProperty('automationRef');
+  });
 });
 
 describe('decideSettleTarget — the wallet a settle charges (WAL-5, WAL-6b)', () => {

@@ -39,7 +39,8 @@ vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id' } }));
 vi.mock('@/lib/workflows/workflow-executor', () => ({ executeWorkflow: mockExecuteWorkflow }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ isUserDriveMember: mockIsUserDriveMember }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), isUserDriveMember: mockIsUserDriveMember }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: { child: vi.fn(() => makeChildLogger()), info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -47,6 +48,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { executeWebhookTrigger } from '../webhook-trigger-executor';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 // Northwind: a Zoom meeting-ended trigger on Product's weekly-digest agent; Marcus owns the Zoom connection.
 const TRIGGER = { id: 'trg-1', workflowId: 'wf-1' } as WebhookTrigger;
@@ -105,7 +107,7 @@ describe('executeWebhookTrigger (Zoom)', () => {
 
     await executeWebhookTrigger(TRIGGER, EVENT, CONNECTION);
 
-    expect(mockIsUserDriveMember).toHaveBeenCalledWith('user-marcus', 'drive-product');
+    expect(mockIsUserDriveMember).toHaveBeenCalledWith(automationActor('user-marcus', 'zoom-webhook-trigger', inDrives('drive-product')), 'drive-product');
     expect(mockCanConsumeAI).toHaveBeenCalledWith('user-lena', 'free', { spend: PRODUCT_AUTOMATION, skipDailyCap: true });
     expect(mockExecuteWorkflow.mock.calls[0][0]).toMatchObject({ createdBy: 'user-lena' });
   });

@@ -17,7 +17,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
-import { fetchCalendarContext } from '../calendar-context';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -43,6 +43,7 @@ import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -137,8 +138,8 @@ export async function POST(req: Request) {
     // membership at all, and excludes trashed pages and pages in trashed drives.
     const [userDrives, accessiblePagesList] = await Promise.all([
       // Owned or joined (org-aware; page-level access does not count)
-      getMemberDriveIds(userId, { includeTrashed: true }),
-      accessiblePageIds(userId),
+      getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true }),
+      accessiblePageIds(actorFromAuth(auth)),
     ]);
     const driveIds = userDrives;
     const accessiblePages = new Set(accessiblePagesList);
@@ -612,6 +613,8 @@ export async function POST(req: Request) {
     const tomorrowEvents = calendarContext.tomorrow;
     const pendingRsvps = calendarContext.pendingInvites;
     const allCalendarEvents = calendarContext.allEvents;
+    // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+    const contributingOrgIds = await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext });
 
     // ========================================
     // BUILD THE RICH CONTEXT WITH DIFFS
@@ -786,6 +789,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       summary,
       greeting,
       type: 'on_demand',
+      orgIds: contributingOrgIds,
       contextData: {
         workspace: contextData.workspace,
         workingOn: contextData.activitySummary.slice(0, 5).map(a => ({

@@ -9,6 +9,15 @@
  * one rule everywhere.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -61,6 +70,7 @@ vi.mock('../../validators/id-validators', () => ({
 import { getUserAccessLevel } from '../permissions';
 import { db } from '@pagespace/db/db';
 import { parseUserId, parsePageId } from '../../validators/id-validators';
+import { credentialActor } from '../access-actor';
 
 const VALID_USER = 'clxxxxxxxxxxxxxxxxxxxxxxx';
 const VALID_DRIVE = 'clzzzzzzzzzzzzzzzzzzzzzzz';
@@ -115,7 +125,7 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
 
   it('given a plain MEMBER with no custom role, should grant drive-wide edit', async () => {
     driveAsRoot({ role: 'MEMBER', customRoleId: null });
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
@@ -124,7 +134,7 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
       { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
       [{ id: CUSTOM_ROLE_ID, driveId: VALID_DRIVE, permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }],
     );
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -133,7 +143,7 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
       { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
       [{ id: CUSTOM_ROLE_ID, driveId: VALID_DRIVE, permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }],
     );
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
@@ -142,25 +152,25 @@ describe('getUserAccessLevel — drive-as-root custom-role bounding (#2627)', ()
       { role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID },
       [{ id: CUSTOM_ROLE_ID, driveId: 'clotherdrivexxxxxxxxxxxxx', permissions: {}, driveWidePermissions: { canView: true, canEdit: true, canShare: false } }],
     );
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
   it('given a MEMBER with an unresolvable custom role, should fail closed (deny edit)', async () => {
     driveAsRoot({ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }, []);
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
   it('given an ADMIN, should grant full access regardless of a custom role', async () => {
     driveAsRoot({ role: 'ADMIN', customRoleId: CUSTOM_ROLE_ID });
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
   it('given no membership at all, should return null', async () => {
     driveAsRoot([]);
-    const result = await getUserAccessLevel(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toBeNull();
   });
 });

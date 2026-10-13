@@ -45,6 +45,7 @@ import { pinConversationSource } from '../spend-resolution';
 import { gateComputeCharge } from '../compute-gate';
 import { computeChargeFor, driveAccrualChargeFor } from '../compute-charge';
 import { expectWalletLegInvariant } from '../../test/wallet-leg-invariant';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -1274,8 +1275,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
     expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
     expect((await walletRow(w.poolId)).monthlyPeriodStart?.getTime()).toBe(startS * 1000);
     // Wait out the one second to the new period's start, so the refill is in force.
@@ -1781,7 +1782,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.poolId)).debtCents).toBe(180);
     expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
     // (e) a wallet carrying debt shows "over" to whoever can see it.
-    expect(await getDriveWallet(w.marcusId, w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'over' } });
+    expect(await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'over' } });
 
     // (d) the org's next invoice refills the pool: its debt is netted and forgiven, exactly as personal debt.
     const poolBefore = await walletRow(w.poolId);
@@ -1794,8 +1795,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
     const poolAfter = await walletRow(w.poolId);
     expect(poolAfter.debtCents).toBe(0);
     expect(poolAfter.monthlyRemainingCents).toBe(Math.max(0, poolBefore.monthlyRemainingCents - 180) + (poolAfter.monthlyAllowanceCents ?? 0));
@@ -1803,7 +1804,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     // (d) Product's allocation resets on the pool's new period: its own debt is netted from the new allocation.
     await resetDueAllocations({ now: new Date(startS * 1000 + 1_000) });
     expect(await walletRow(w.productWalletId)).toMatchObject({ spentCents: 60, debtCents: 0 });
-    expect(await getDriveWallet(w.marcusId, w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'active' } });
+    expect(await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session')).toMatchObject({ ok: true, wallet: { status: 'active' } });
     expect((await walletRow(w.marcusWalletId)).debtCents).toBe(0);
   });
 
@@ -1824,8 +1825,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
 
       // A donor (Marcus, from his own credits) and the leads' top-ups (the org's pool; Jono's own credits).
       expect(await donateToDriveWallet({ donorUserId: w.marcusId, targetWalletId: w.productWalletId, amountCents: 40, donationId: createId() })).toMatchObject({ kind: 'donated' });
-      expect(await topUpDriveWallet(w.jonoId, w.productId, { amountCents: 30, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
-      expect(await topUpDriveWallet(w.jonoId, side.driveId, { amountCents: 50, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+      expect(await topUpDriveWallet(credentialActor(w.jonoId, null), w.productId, { amountCents: 30, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+      expect(await topUpDriveWallet(credentialActor(w.jonoId, null), side.driveId, { amountCents: 50, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
 
       // A drive-wallet call: held on Product, settled there, the usage row naming it; 150¢ = the
       // 60¢ allocation (drawn from the pool), the 70¢ of legs, then 20¢ overshoot onto the pool's debt.
@@ -1865,8 +1866,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
         amount_paid: 5000,
         subtotal: 5000,
         parent: { subscription_details: { subscription: `sub_${createId()}` } },
-        lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-      }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
+        lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted', walletId: w.poolId });
       const marcusBefore = await walletRow(w.marcusWalletId);
       await resetDueAllocations({ now: new Date(startS * 1000 + 1_000) });
       expect((await walletRow(w.productWalletId)).spentCents).toBe(0);
@@ -1902,7 +1903,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect((await walletRow(w.productWalletId)).spentCents).toBe(15);
 
     // A 300¢ top-up leaves the pool at once, into a leg on Product; then a 50¢ donation leg.
-    expect(await topUpDriveWallet(w.jonoId, w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+    expect(await topUpDriveWallet(credentialActor(w.jonoId, null), w.productId, { amountCents: 300, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
     expect((await walletRow(w.poolId)).monthlyRemainingCents).toBe(4_685);
     expect(await donateToDriveWallet({ donorUserId: w.marcusId, targetWalletId: w.productWalletId, amountCents: 50, donationId: createId() })).toMatchObject({ kind: 'donated' });
     expect(await legsOf()).toEqual([['owner', 300], ['donation', 50]]);
@@ -1918,8 +1919,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID });
     expect(refill).toMatchObject({ kind: 'granted', walletId: w.poolId });
     const pool = await walletRow(w.poolId);
     expect(pool.monthlyRemainingCents).toBe(4_685 + pool.monthlyAllowanceCents);
@@ -1963,10 +1964,10 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, w.marcusWalletId))).toEqual([]);
 
     expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: shared })).toEqual([]);
-    const view = await getDriveWallet(w.jonoId, w.productId, 'session');
+    const view = await getDriveWallet(credentialActor(w.jonoId, null), w.productId, 'session');
     if (!view.ok || !view.wallet || !('spendByConsumer' in view.wallet)) throw new Error('expected the lead\'s view with spend by member');
     expect(view.wallet.spendByConsumer).toEqual([expect.objectContaining({ consumerKey: 'former-member', userId: null, displayName: null, spentCents: 15 })]);
-    expect(spendRowLabel(view.wallet.spendByConsumer[0])).toBe('Former member');
+    expect(spendRowLabel({ kind: 'member', displayName: view.wallet.spendByConsumer[0].displayName })).toBe('Former member');
     w.userIds = w.userIds.filter((id) => id !== w.marcusId);
   });
 
@@ -1980,7 +1981,7 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
     const ids = [w.poolId, w.productWalletId, w.marcusWalletId];
     expect((await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: ids })).map((a) => a.walletId).sort()).toEqual([...ids].sort());
 
-    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0345_wallet_opening_balance.sql', import.meta.url)), 'utf8');
+    const migration = readFileSync(fileURLToPath(new URL('../../../../db/drizzle/0350_wallet_opening_balance.sql', import.meta.url)), 'utf8');
     await db.execute(sql.raw(migration));
     await db.execute(sql.raw(migration));
 
@@ -2027,8 +2028,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       amount_paid: 5000,
       subtotal: 5000,
       parent: { subscription_details: { subscription: `sub_${createId()}` } },
-      lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-    }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
+      lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+    }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
     // Product's allocation resets on the pool's new period (its 300¢ netted); Marcus's comped period rolls.
     await resetDuePeriods({ now: new Date(startS * 1000 + 1_000) });
 
@@ -2222,8 +2223,8 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       expect(await applyOrgPoolRefill({
         id: `in_${createId()}`, customer: acme.stripeCustomerId, billing_reason: 'subscription_cycle', amount_paid: 5000, subtotal: 5000,
         parent: { subscription_details: { subscription: `sub_${createId()}` } },
-        lines: { data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
-      }, { active: true, basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
+        lines: { has_more: false, data: [{ amount: 5000, parent: { subscription_item_details: { subscription_item: 'si_org' } }, period: { start: startS, end: startS + 30 * 86_400 }, pricing: { price_details: { price: REFILL_PRICE_ID } } }] },
+      }, { basePriceId: REFILL_PRICE_ID, seatPriceId: REFILL_SEAT_PRICE_ID })).toMatchObject({ kind: 'granted' });
 
       // The org pool: owned by the org, no subject, no parent — one row.
       const acmeWallets = () => db.select().from(wallets).where(eq(wallets.orgId, acme.id));
@@ -2235,14 +2236,14 @@ describe('the wallet-aware credit gate (orgs on, real Postgres)', () => {
       drivesMade.push(orgDrive.id);
       await factories.createDriveMember(orgDrive.id, w.marcusId, { source: 'org' });
       await factories.createDriveMember(orgDrive.id, w.chrisId, { source: 'org' });
-      expect(await createDriveWallet(w.jonoId, orgDrive.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      expect(await createDriveWallet(credentialActor(w.jonoId, null), orgDrive.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
       const [orgDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, orgDrive.id)));
       expect(orgDriveWallet).toMatchObject({ ownerType: 'org', orgId: acme.id, parentWalletId: pool.id });
 
       // A drive wallet on a personal drive: its drive as subject, the owner's personal wallet as parent.
       const personal = await factories.createDrive(w.jonoId, { name: 'Jono Notes', slug: `jono-notes-${createId()}` });
       drivesMade.push(personal.id);
-      expect(await createDriveWallet(w.jonoId, personal.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
+      expect(await createDriveWallet(credentialActor(w.jonoId, null), personal.id, { allocationCents: 1_000 }, 'session')).toMatchObject({ ok: true });
       const [personalDriveWallet] = await db.select().from(wallets).where(and(eq(wallets.subjectType, 'drive'), eq(wallets.subjectId, personal.id)));
       const [jonoRoot] = await db.select().from(wallets).where(personalRootWalletOf(w.jonoId));
       expect(personalDriveWallet).toMatchObject({ ownerType: 'user', userId: w.jonoId, parentWalletId: jonoRoot.id });

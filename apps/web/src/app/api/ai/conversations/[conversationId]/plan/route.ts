@@ -21,6 +21,8 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { resolveBoundPlan } from '@/lib/ai/core/plan-binding';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -61,7 +63,7 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  * render "no plan" for a conversation that HAS one — the endpoint keeps its
  * 500 so the chip can show that it does not know.
  */
-async function loadPlan(conversationId: string, userId: string) {
+async function loadPlan(conversationId: string, actor: AccessActor) {
   const [row] = await db
     .select({
       userId: conversations.userId,
@@ -76,18 +78,17 @@ async function loadPlan(conversationId: string, userId: string) {
   // No row is not shared, so this denies non-owners — the module's own
   // fail-closed rule, restated here only because there is nothing to pass it.
   if (!row) return undefined;
-  if (!(await canAccessConversation(userId, row))) return undefined;
-  return await resolveBoundPlan(conversationId, userId);
+  if (!(await canAccessConversation(actor, row))) return undefined;
+  return await resolveBoundPlan(conversationId, actor);
 }
 
 export async function GET(request: Request, context: { params: Promise<{ conversationId: string }> }) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
-  const userId = auth.userId;
   const { conversationId } = await context.params;
 
   try {
-    const plan = await loadPlan(conversationId, userId);
+    const plan = await loadPlan(conversationId, actorFromAuth(auth));
     if (plan === undefined) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
     }

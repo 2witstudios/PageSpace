@@ -243,11 +243,12 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should create session and set session cookie for web platform', async () => {
+    it('SEC-2 (partial) should create session (Google single-factor evidence, D-OW-45) and set session cookie for web platform', async () => {
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockNewUser.id,
         type: 'user',
         scopes: ['*'],

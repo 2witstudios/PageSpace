@@ -558,3 +558,41 @@ describe('assertFileAccess', () => {
     }
   });
 });
+
+describe('SEC-2 (partial) a service token minted from a refused credential cannot read org content', () => {
+  const evidence = { authenticatedAtMs: Date.parse('2026-10-12T00:00:00Z'), assurance: 'single_factor' as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetLinksForFile.mockResolvedValue([{ fileId: VALID_HASH, pageId: 'org-page', driveId: 'org-drive' }]);
+    mockGetConversationLinksForFile.mockResolvedValue([]);
+    mockGetFileDriveId.mockResolvedValue('org-drive');
+    mockGetUserDrivePermissions.mockResolvedValue(null);
+  });
+
+  it('asks the permission layer with the token credential (its user and the minting evidence), never a bare user id', async () => {
+    const { EnforcedAuthContext } = await import('@pagespace/lib/permissions/enforced-context');
+    const auth = EnforcedAuthContext.fromSession({
+      sessionId: 's', userId: 'user-1', userRole: 'user', tokenVersion: 0, adminRoleVersion: 0,
+      type: 'service', scopes: ['files:read'], expiresAt: new Date(Date.now() + 60_000), authentication: evidence,
+    } as unknown as Parameters<typeof EnforcedAuthContext.fromSession>[0]) as unknown as EnforcedAuthContext;
+    mockGetUserAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+    await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+    expect(mockGetUserAccessLevel).toHaveBeenCalledWith(
+      { via: 'credential', userId: 'user-1', authentication: evidence },
+      'org-page',
+    );
+  });
+
+  it('denies the read when the permission layer refuses that credential (the org sign-in policy reads as no access)', async () => {
+    mockGetUserAccessLevel.mockResolvedValue(null);
+    const auth = createAuth({ actor: { via: 'credential', userId: 'user-1', authentication: evidence } } as Partial<EnforcedAuthContext>);
+
+    const decision = await authorizeFileAccess(auth, VALID_HASH, 'view');
+
+    expect(decision.allowed).toBe(false);
+    expect(mockGetUserAccessLevel.mock.calls[0][0]).toMatchObject({ via: 'credential', authentication: evidence });
+  });
+});

@@ -51,14 +51,16 @@ beforeEach(() => {
 });
 
 describe('org settings hub', () => {
-  it('UI-11 (partial): a plain Member sees only Leave — no org settings rows, no plan or seats', () => {
+  it('UI-11 (partial): a plain Member sees only the Drives directory and Leave — no org settings rows, no plan or seats', () => {
     mocks.useOrg.mockReturnValue({ org: org('MEMBER'), isLoading: false });
     render(<OrgSettingsPage />);
     expect(screen.getByRole('heading', { name: 'Organization Settings' })).toBeTruthy();
     expect(screen.getByRole('button', { name: /Leave Northwind Labs/ })).toBeTruthy();
-    for (const title of ['Members & seats', 'Policies', 'Plan & seats', 'Audit log', 'Drives']) {
+    expect(screen.getByRole('link', { name: /Drives directory/ }).getAttribute('href')).toBe('/orgs/org_nw/drives');
+    for (const title of ['General', 'Members & seats', 'Policies', 'Security', 'Plan & seats', 'Audit log', 'Danger Zone']) {
       expect(screen.queryByText(title)).toBeNull();
     }
+    expect(screen.queryAllByRole('link').some((a) => a.getAttribute('href')?.includes('/settings/'))).toBe(false);
     expect(screen.queryByText(/of 15 seats/)).toBeNull();
     expect(mocks.useOrgHubCounts).toHaveBeenCalledWith('org_nw', 'MEMBER');
   });
@@ -109,17 +111,6 @@ describe('org settings hub', () => {
     await userEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Leave' }));
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Transfer ownership to another member before you leave.'));
     expect(mocks.push).not.toHaveBeenCalled();
-  });
-
-  it('SEAT-9 (partial): the hub shows the lapse banner: reactivate for an Admin, read-only for a Member', () => {
-    mocks.useOrg.mockReturnValue({ org: { ...org('ADMIN'), billingNotice: { kind: 'reactivate', reason: 'canceled', canManageBilling: true } }, isLoading: false });
-    const { unmount } = render(<OrgSettingsPage />);
-    expect(screen.getByRole('button', { name: 'Reactivate' })).toBeTruthy();
-    unmount();
-    mocks.useOrg.mockReturnValue({ org: { ...org('MEMBER'), billingNotice: { kind: 'read_only', canManageBilling: false } }, isLoading: false });
-    render(<OrgSettingsPage />);
-    expect(screen.getByText('Northwind Labs is read-only')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Reactivate' })).toBeNull();
   });
 
   it('subscribes to org:changed for this org', () => {

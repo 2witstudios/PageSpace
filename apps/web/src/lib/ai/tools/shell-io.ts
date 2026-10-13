@@ -33,6 +33,7 @@ import { annotateToolOutput } from '@pagespace/lib/services/sandbox/injection-se
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { scrollbackLines, tailOfLines } from '@pagespace/lib/services/agent-workspaces/shell-scrollback';
 import type { ShellReadOutcome, ShellSendOutcome } from './session-tools';
+import { derivedCredentialEvidence, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** How long the realtime service gets to answer — a map lookup, not a Sprite call. */
 const REALTIME_TIMEOUT_MS = 5000;
@@ -158,13 +159,14 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
   read: (input: {
     shellId: string;
     lines: number;
-    userId: string;
+    /** Who reads: a cold start runs as them, and realtime asks the drive's sign-in policy of their evidence. */
+    actor: AccessActor;
     cold?: { tail: string; at: Date; hasOutput: boolean };
   }) => Promise<ShellReadOutcome>;
-  send: (input: { shellId: string; keystrokes: string; userId: string }) => Promise<ShellSendOutcome>;
+  send: (input: { shellId: string; keystrokes: string; actor: AccessActor }) => Promise<ShellSendOutcome>;
 } {
   return {
-    read: async ({ shellId, lines, userId, cold }) => {
+    read: async ({ shellId, lines, actor, cold }) => {
       const response = await transport.read({
         shellIds: [shellId],
         limit: lines,
@@ -172,7 +174,9 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
         // when there is no cold tail to serve instead (issue #2205): a cold
         // record means this shell already ran and ended, and a fresh empty PTY
         // would bury the final scrollback this read exists to return.
-        ...(cold === undefined ? { start: true as const, userId } : {}),
+        ...(cold === undefined
+          ? { start: true as const, userId: actor.userId, authentication: derivedCredentialEvidence(actor) }
+          : {}),
       });
 
       if (!response?.success) return { ok: false, error: UNREACHABLE_READ };
@@ -206,7 +210,7 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
       };
     },
 
-    send: async ({ shellId, keystrokes, userId }) => {
+    send: async ({ shellId, keystrokes, actor }) => {
       const answer = await transport.send({
         shellId,
         // Control characters are NOT stripped: to a PTY they are keys, and
@@ -215,7 +219,9 @@ export function createShellIo(transport: RealtimeShellIoTransport): {
         // Typing into a never-run shell STARTS it — otherwise the very first
         // thing an agent does with a shell it just spawned would be refused.
         start: true,
-        userId,
+        userId: actor.userId,
+        // The sender's ceremony evidence: realtime asks the drive's org sign-in policy of it (SEC-2/3).
+        authentication: derivedCredentialEvidence(actor),
       });
 
       if (!answer?.success) return { ok: false, error: UNREACHABLE_SEND };

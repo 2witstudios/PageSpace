@@ -19,7 +19,8 @@ interface SpendSourcePopoverProps {
   driveName: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onChoose: (walletId: string) => Promise<void>;
+  /** Absent where there is no conversation to switch (inside a drive with none in view): the list is read only. */
+  onChoose?: (walletId: string) => Promise<void>;
 }
 
 /**
@@ -68,7 +69,8 @@ export interface SpendSourceOptionsPanelProps {
   options: SurfaceChoice[];
   selectedWalletId: string | null;
   driveName: string | null;
-  onChoose: (walletId: string) => Promise<void>;
+  /** Absent: read only — no conversation is in view, and a source is chosen per conversation (SPEND-3). */
+  onChoose?: (walletId: string) => Promise<void>;
   /** Called after a successful switch, or when the person follows the wallets link. */
   onDone: () => void;
 }
@@ -78,7 +80,7 @@ export function SpendSourceOptionsPanel({ options, selectedWalletId, driveName, 
   const [pending, setPending] = useState<string | null>(null);
 
   const choose = async (walletId: string) => {
-    if (walletId === selectedWalletId || pending) return;
+    if (!onChoose || walletId === selectedWalletId || pending) return;
     setPending(walletId);
     try {
       await onChoose(walletId);
@@ -95,7 +97,9 @@ export function SpendSourceOptionsPanel({ options, selectedWalletId, driveName, 
       <div className="border-b px-4 pb-2.5 pt-3.5">
         <p className="text-sm font-semibold">Spending from</p>
         <p className="text-xs text-muted-foreground">
-          Your AI usage{driveName ? ` in ${driveName}` : ''} for this conversation. Applies to chat, agents you talk to here, and pages you ask AI to edit.
+          {onChoose
+            ? <>Your AI usage{driveName ? ` in ${driveName}` : ''} for this conversation. Applies to chat, agents you talk to here, and pages you ask AI to edit.</>
+            : <>What a new conversation{driveName ? ` in ${driveName}` : ''} spends from. Open a conversation to switch its source.</>}
         </p>
       </div>
       <div role="radiogroup" aria-label="Spending source" className="flex flex-col gap-2 p-3">
@@ -107,7 +111,7 @@ export function SpendSourceOptionsPanel({ options, selectedWalletId, driveName, 
               type="button"
               role="radio"
               aria-checked={selected}
-              disabled={pending !== null}
+              disabled={!onChoose || pending !== null}
               onClick={() => void choose(option.walletId)}
               className={cn(
                 'flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors',

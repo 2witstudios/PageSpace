@@ -14,6 +14,7 @@ import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { validateTimezone } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -89,7 +90,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ dr
   try {
     const canManage = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 }));
     }
 
     // Organization drives follow their org; personal drives follow their owner.

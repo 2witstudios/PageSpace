@@ -2,14 +2,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
 import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
-import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { loadUserDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
 
 const NONE: DriveRelationship = { isOwner: false, membership: null };
 const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
   isOwner: false,
   membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
 });
-/** What loadDriveRelationship answers for the transfer target (the lead is always the lead). */
+/** What loadUserDriveRelationships answers for the transfer target (the lead is always the lead). */
 let targetRelationship: DriveRelationship = NONE;
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -70,7 +70,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 // The org-aware relationship answers who is an ADMIN (its pure role decisions stay real).
 vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
-  loadDriveRelationship: vi.fn(),
+  loadUserDriveRelationships: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -171,8 +171,8 @@ describe('POST /api/account/handle-drive', () => {
 
     // Setup default: the transfer target is an accepted ADMIN
     targetRelationship = asMember('ADMIN');
-    vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
-      drive.ownerId === userId ? { isOwner: true, membership: null } : targetRelationship);
+    vi.mocked(loadUserDriveRelationships).mockImplementation(async (userId, drives) => new Map(drives.map((drive) => [drive.id,
+      drive.ownerId === userId ? { isOwner: true, membership: null } : targetRelationship])));
 
     // Setup default database operations
     setupUpdateMock();
@@ -517,7 +517,7 @@ describe('POST /api/account/handle-drive', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockNewOwnerId, expect.objectContaining({ id: mockDriveId, ownerId: mockUserId }));
+      expect(loadUserDriveRelationships).toHaveBeenCalledWith(mockNewOwnerId, [expect.objectContaining({ id: mockDriveId, ownerId: mockUserId })]);
       expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });

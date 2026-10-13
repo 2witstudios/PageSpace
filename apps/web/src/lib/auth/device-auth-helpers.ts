@@ -1,4 +1,5 @@
-import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -29,7 +30,8 @@ export async function revokeSessionsForLogin(
  * Works for all platforms — web, desktop, ios, android.
  */
 export async function createDeviceToken(params: {
-  authentication?: SessionClaims['authentication'];
+  /** Required (D-OW-45): the evidence of the sign-in ceremony (or session) this device token stands for. */
+  authentication: VerifiedAuthentication | null;
   userId: string;
   deviceId: string;
   tokenVersion: number;

@@ -6,6 +6,7 @@ import {
   type RealtimeShellIoTransport,
 } from '../shell-io';
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn() } },
@@ -13,6 +14,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const SHELL_ID = 'shell-row-1';
 const USER_ID = 'user-1';
+// The caller's credential: realtime asks the drive's sign-in policy of its evidence (SEC-2/3).
+const EVIDENCE = { authenticatedAtMs: 1_700_000_000_000, assurance: 'user_verified_passkey' as const };
+const ACTOR = credentialActor(USER_ID, EVIDENCE);
 
 function makeTransport(over: Partial<RealtimeShellIoTransport> = {}): RealtimeShellIoTransport {
   return {
@@ -30,11 +34,11 @@ describe('read', () => {
   it('should read a live shell\'s scrollback with the untrusted framing applied', async () => {
     const transport = makeTransport();
     const io = createShellIo(transport);
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR });
     if (!result.ok) throw new Error('expected ok');
     expect(result.live).toBe(true);
     expect(result.output).toContain('out');
-    expect(transport.read).toHaveBeenCalledWith({ shellIds: [SHELL_ID], limit: 100, start: true, userId: USER_ID });
+    expect(transport.read).toHaveBeenCalledWith({ shellIds: [SHELL_ID], limit: 100, start: true, userId: USER_ID, authentication: EVIDENCE });
   });
 
   it('given a COLD-TAIL record, should NOT ask for a start — the dead shell\'s final scrollback is the answer', async () => {
@@ -43,7 +47,7 @@ describe('read', () => {
     });
     const io = createShellIo(transport);
     const cold = { tail: 'final output', at: new Date('2026-07-28T00:00:00Z'), hasOutput: true };
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID, cold });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR, cold });
     if (!result.ok) throw new Error('expected ok');
     expect(transport.read).toHaveBeenCalledWith({ shellIds: [SHELL_ID], limit: 100 });
     expect(result.live).toBe(false);
@@ -53,7 +57,7 @@ describe('read', () => {
 
   it('given a transport non-answer, should refuse rather than degrade into "cold"', async () => {
     const io = createShellIo(makeTransport({ read: vi.fn(async () => null) }));
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR });
     expect(result.ok).toBe(false);
   });
 
@@ -63,7 +67,7 @@ describe('read', () => {
         read: vi.fn(async () => ({ success: true, shells: [{ shellId: SHELL_ID, live: true, hasOutput: false, viewers: 0, output: '', started: true as const }] })),
       }),
     );
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR });
     if (!result.ok) throw new Error('expected ok');
     expect(result.started).toBe(true);
     expect(result.note).toContain('started');
@@ -125,7 +129,7 @@ describe('read — the endpoint answers per shell', () => {
     // anything about this shell. Reading that as "not live" would report a
     // running build as finished — the one wrong answer this tool must never give.
     const io = createShellIo(makeTransport({ read: vi.fn(async () => ({ success: true, shells: [] })) }));
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR });
     expect(result.ok).toBe(false);
   });
 
@@ -141,7 +145,7 @@ describe('read — the endpoint answers per shell', () => {
         })),
       }),
     );
-    const result = await io.read({ shellId: SHELL_ID, lines: 100, userId: USER_ID });
+    const result = await io.read({ shellId: SHELL_ID, lines: 100, actor: ACTOR });
     if (!result.ok) throw new Error('expected ok');
     expect(result.output).toContain('mine');
     expect(result.output).not.toContain('WRONG');
@@ -152,16 +156,16 @@ describe('send', () => {
   it('should type keystrokes with start semantics and the acting user attached', async () => {
     const transport = makeTransport();
     const io = createShellIo(transport);
-    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'ls\n', userId: USER_ID });
+    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'ls\n', actor: ACTOR });
     expect(result.ok).toBe(true);
-    expect(transport.send).toHaveBeenCalledWith({ shellId: SHELL_ID, input: 'ls\n', start: true, userId: USER_ID });
+    expect(transport.send).toHaveBeenCalledWith({ shellId: SHELL_ID, input: 'ls\n', start: true, userId: USER_ID, authentication: EVIDENCE });
   });
 
   it('given a shell that could not be started, should report NOTHING was typed', async () => {
     const io = createShellIo(
       makeTransport({ send: vi.fn(async () => ({ success: true, live: false, delivered: false })) }),
     );
-    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', userId: USER_ID });
+    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', actor: ACTOR });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.error).toContain('Nothing was delivered');
@@ -178,7 +182,7 @@ describe('send', () => {
         })),
       }),
     );
-    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', userId: USER_ID });
+    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', actor: ACTOR });
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.error).toContain('Live agent-session limit reached for your plan.');
@@ -189,7 +193,7 @@ describe('send', () => {
 
   it('given a transport non-answer, should report the input was NOT delivered', async () => {
     const io = createShellIo(makeTransport({ send: vi.fn(async () => null) }));
-    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', userId: USER_ID });
+    const result = await io.send({ shellId: SHELL_ID, keystrokes: 'x', actor: ACTOR });
     expect(result.ok).toBe(false);
   });
 });

@@ -14,6 +14,7 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
 import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
 import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
@@ -279,8 +280,8 @@ export async function POST(request: NextRequest) {
             });
             break;
           }
-          // An org's failed payment mirrors its subscription (past_due keeps the org
-          // working and tells Owner and Admins; Stripe's dunning decides the lapse).
+          // An org's failed payment mirrors its subscription: past_due lapses the org at
+          // once (SEAT-9) and Owner and Admins see the reactivate banner.
           if (await withFundingRetry(event.id, () => routeOrgInvoicePaymentFailed(invoice, event.id))) break;
           await handlePaymentFailed(invoice);
           break;
@@ -314,8 +315,7 @@ export async function POST(request: NextRequest) {
             await handleInvoicePaid(invoice);
             // Grant the monthly credit on each renewal. The grant is sized from what
             // this invoice actually PAID (invoice.amount_paid × the tier's included-
-            // credit ratio, Spec MON-2, behind MONEY_MODEL_V2_ACTIVE — a code
-            // constant, D-OW-17, not an env var) — a promo, a proration,
+            // credit ratio, Spec MON-2) — a promo, a proration,
             // or a price change flows through with no table edit, and a $0 invoice
             // grants nothing. The funding shell reads amount_paid off the event; the
             // ledger row records it as paidCents. Derive the tier from the PAID invoice
@@ -523,7 +523,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     // Shared order with reconciliation, deletion and cutover: user, then mirror.
     await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     // Upsert subscription record
-    const isGifted = subscription.metadata?.type === 'gift_subscription';
+    const isGifted = subscription.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,

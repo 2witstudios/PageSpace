@@ -194,8 +194,8 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
     recordOrgAuditEvent.mockResolvedValue(undefined);
 
     vi.mocked(driveInviteRepository.findDriveById).mockResolvedValue(mockDrive as never);
-    vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
-      drive.ownerId === userId ? { isOwner: true, membership: null } : NONE);
+    vi.mocked(loadDriveRelationship).mockImplementation(async (actor, drive) =>
+      drive.ownerId === actor.userId ? { isOwner: true, membership: null } : NONE);
     vi.mocked(driveInviteRepository.findExistingMember).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findUserIdByEmail).mockResolvedValue(null as never);
     vi.mocked(driveInviteRepository.findActivePendingInviteByDriveAndEmail).mockResolvedValue(null as never);
@@ -336,7 +336,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).not.toBe(403);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'someone_else' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'someone_else' }));
     });
 
     it('ORG-4 (partial) an org Admin with no drive_members row invites to an org drive', async () => {
@@ -345,7 +345,7 @@ describe('POST /api/drives/[driveId]/members/invite', () => {
 
       const response = await POST(buildPost(mockDriveId, userIdBody), createContext(mockDriveId));
       expect(response.status).not.toBe(403);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
     });
 
     it('X-6 (partial) a stale source=org ADMIN row invites nobody: the relationship refuses', async () => {

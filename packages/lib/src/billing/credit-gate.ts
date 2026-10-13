@@ -24,7 +24,7 @@ import { isOrgActive } from '../organizations/status';
 import { orgLegStatus } from '../organizations/status-core';
 import { isBillingEnabled } from '../deployment-mode';
 import type { SpendFallback } from './spend-fallback';
-import { loadConsumerCapFacts } from './consumer-caps';
+import { isGuestOnDriveWallet, loadConsumerCapFacts, loadGuestStandingModules } from './consumer-caps';
 import { loggers } from '../logging/logger-config';
 import {
   evaluateGate,
@@ -57,7 +57,7 @@ import {
   type SpendTarget,
   type WalletBalanceFacts,
 } from './spend-target';
-import { evaluateCaps, seatCapCheck, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
+import { driveWalletOpenTo, evaluateCaps, seatCapCheck, walletChainStatus, type RefusalReason, type SkipReason, type SpendSourceKind } from './wallet-core';
 import { loadSeatCapFacts } from './seat-allowance';
 import { holdsInScope, isComputeSpendKind, ledgerRowsInScope, personBoundScopeFor, type PersonBoundScope } from './person-bound-scope';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
@@ -699,6 +699,7 @@ const SHARED_WALLET_FACTS = {
   debtCents: wallets.debtCents,
   monthlyPeriodStart: wallets.monthlyPeriodStart,
   orgId: wallets.orgId,
+  guestSpendEnabled: wallets.guestSpendEnabled,
 } as const;
 
 /**
@@ -728,18 +729,29 @@ async function gateSharedWallet(
     refusal: { source: chosen.source, reason, options: [] },
   });
 
+  // Loaded before any row lock: guest standing is derived under the lock, and a cold load must not run there.
+  if (chosen.source === 'drive_wallet') await loadGuestStandingModules();
   return db.transaction(async (tx): Promise<CreditGateResult> => {
     // Lock order is CHILD, then parent — the order settlement uses — so a gate and a
     // settle on the same drive wallet can never wait on each other in a cycle. A root
     // wallet's own paths lock only the root.
-    const lock = async (id: string): Promise<(WalletBalanceFacts & { monthlyPeriodStart: Date | null; orgId: string | null }) | null> => {
+    const lock = async (id: string): Promise<(WalletBalanceFacts & { monthlyPeriodStart: Date | null; orgId: string | null; guestSpendEnabled: boolean }) | null> => {
       const rows = await tx.select(SHARED_WALLET_FACTS).from(wallets).where(eq(wallets.id, id)).for('update');
       return rows[0] ?? null;
     };
     const wallet = await lock(chosen.walletId);
     if (!wallet) return refused('source_unavailable');
     const parent = wallet.parentWalletId ? await lock(wallet.parentWalletId) : null;
-    if (wallet.status === 'paused') return refused('source_paused');
+    // WAL-7: the kill switch on this wallet or on its parent (a paused org pool stops every drive
+    // wallet it funds) refuses, decided on the locked rows, whatever resolution read before.
+    if (walletChainStatus(wallet.status, parent?.status ?? null) === 'paused') return refused('source_paused');
+    // D-OW-4: re-derived here, under the lock — a guest spends a drive wallet only while the drive's
+    // switch is on, so a switch turned off between resolution and this hold still refuses.
+    // Derived ONCE per hold [D-OW-60], from the drive's current org, and used for both checks below.
+    const consumerIsGuest = chosen.source === 'drive_wallet' && await isGuestOnDriveWallet(tx, wallet.id, userId);
+    if (chosen.source === 'drive_wallet' && !driveWalletOpenTo({ isGuest: consumerIsGuest, guestSpendEnabled: wallet.guestSpendEnabled })) {
+      return refused('guest_drive_wallet_off');
+    }
 
     // WAL-2: a seat never takes more than this consumer's monthly allowance of the pool.
     // Read and decided HERE, inside the transaction that inserts the hold and under the
@@ -772,10 +784,10 @@ async function gateSharedWallet(
     // Run), or an automation — a trigger or a scheduled workflow — which runs on behalf of its
     // CREATOR, the person it is gated and recorded as ([D-OW-34], amends SPEND-6). Their caps bind
     // all of them, so a capped member cannot drain the wallet through a trigger they built. A
-    // person with no cap row (a lead, an admin) is unaffected.
+    // member with no cap row (a lead, an admin) is unaffected; a guest is always capped (D-OW-4).
     let consumerRemainingCents: number | null = null;
     if (chosen.source === 'drive_wallet') {
-      const capFacts = await loadConsumerCapFacts(tx, { walletId: wallet.id, userId, now });
+      const capFacts = await loadConsumerCapFacts(tx, { walletId: wallet.id, userId, now, isGuest: consumerIsGuest });
       if (capFacts) {
         const cap = evaluateCaps({ caps: capFacts.caps, usage: capFacts.usage, reservationCents: estCost });
         if (!cap.allowed) return refused('source_cap_reached');

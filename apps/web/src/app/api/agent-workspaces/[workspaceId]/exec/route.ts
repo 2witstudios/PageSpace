@@ -24,6 +24,7 @@ import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unava
 import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
 import { canPrincipalRunCodeInDrive } from '@/lib/agent-workspaces/principal-code-exec-access';
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '@/lib/agent-workspaces/workspace-exec-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -98,7 +99,7 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     auditSessionAccessDenial(request, auth.userId, workspaceId, access.reason, ROUTE);
     return notFound();
@@ -126,7 +127,7 @@ export async function POST(request: Request, context: RouteContext) {
     const ctx = await resolveWorkspaceExecActorContext(session, auth.userId);
     if ('error' in ctx) return NextResponse.json({ error: ctx.error, reason: 'no_drive_access' }, { status: 403 });
 
-    const result = await execInWorkspace({ session, ctx, ...parsed.data });
+    const result = await execInWorkspace({ session, ctx, actor: actorFromAuth(auth), ...parsed.data });
     if (!result.success) {
       const { error, reason } = result;
       const retryAfter = 'retryAfter' in result ? result.retryAfter : undefined;

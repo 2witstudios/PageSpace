@@ -110,6 +110,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: mockIsUserDriveMember,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

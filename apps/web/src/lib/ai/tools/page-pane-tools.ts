@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export const OPEN_PAGE_PANE_TOOL_NAME = 'open_page_pane';
 
@@ -40,9 +41,9 @@ export interface PagePaneToolDeps {
      * The ACTING USER. `pageId` is model-supplied, so the placement gates it
      * on this user's own page access — otherwise a prompt-injected agent
      * turns the pane header into a title-exfiltration channel (security
-     * review, MEDIUM on the HIGH 1 surface).
+     * review, MEDIUM on the HIGH 1 surface). Its credential decides, org sign-in policy included.
      */
-    viewerId: string;
+    viewer: AccessActor;
   }): Promise<void>;
 }
 
@@ -79,10 +80,11 @@ export function createPagePaneTools(deps: PagePaneToolDeps) {
       inputSchema: openPagePaneInputSchema,
       execute: async ({ pageId, title }, options): Promise<OpenPagePaneOutput> => {
         const context = (
-          options as { experimental_context?: { conversationId?: string; userId?: string } } | undefined
+          options as { experimental_context?: { conversationId?: string; userId?: string; accessActor?: AccessActor } } | undefined
         )?.experimental_context;
         const conversationId = context?.conversationId;
-        const viewerId = context?.userId;
+        // The context's actor, only when it names the context's own user (a context that disagrees with itself places nothing).
+        const viewer = context?.accessActor && context.accessActor.userId === context.userId ? context.accessActor : undefined;
         // No acting user means no authority to place under — the ack below is
         // still honest (the client fast path is a no-op without a grid too).
         //
@@ -92,8 +94,8 @@ export function createPagePaneTools(deps: PagePaneToolDeps) {
         // by POLICY rather than by a `(workspaceId, opId)` memory row — the
         // second call does nothing because there is nothing left to do, not
         // because a table remembered the first.
-        if (conversationId && viewerId) {
-          await deps.placePagePane({ conversationId, pageId, viewerId });
+        if (conversationId && viewer) {
+          await deps.placePagePane({ conversationId, pageId, viewer });
         }
         return { opened: true, pageId, title };
       },

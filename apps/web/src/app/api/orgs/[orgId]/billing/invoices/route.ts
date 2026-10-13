@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
-import { authorizeOrgRequest, billingUnavailableResponse, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgBillingRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
 import { listOrgInvoices, OrgBillingError } from '@/lib/org-billing/org-subscription';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 
@@ -19,9 +18,8 @@ const INVOICE_ID = /^in_[A-Za-z0-9]{1,250}$/;
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgBillingRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
   if (!gate.ok) return gate.response;
-  if (!isBillingEnabled()) return billingUnavailableResponse();
   const { searchParams } = new URL(request.url);
   const limit = parseBoundedIntParam(searchParams.get('limit'), { defaultValue: 10, min: 1, max: 100 });
   const startingAfter = searchParams.get('starting_after') || undefined;

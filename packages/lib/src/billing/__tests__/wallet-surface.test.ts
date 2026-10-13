@@ -7,6 +7,7 @@ import {
   fundedByCopy,
   spendMeterPercent,
   spendRowLabel,
+  spendRowDetail,
   spendFromRowCopy,
   orgDriveSummaryCopy,
 } from '../wallet-surface';
@@ -28,9 +29,11 @@ const facts: DriveWalletFacts = {
     donationsEnabled: true,
     defaultSpendSource: 'drive_wallet',
     overshootChoice: null,
+    guestSpendEnabled: false,
+    parentStatus: 'active',
   },
   myCap: { dailyCapCents: 2000, monthlyCapCents: null, spentTodayCents: 2000, spentThisMonthCents: 2000 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645 }],
+  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645, spentTodayCents: 0, viaAutomationsCents: 0, automations: [] }],
   pool: { walletId: 'w-pool', availableCents: 9000, outstandingChildAllocationsCents: 1200 },
 };
 
@@ -121,8 +124,16 @@ describe('walletPeriodCopy, fundedByCopy, spendMeterPercent, spendRowLabel', () 
   });
 
   it('SPEND-10 (partial) a spend row is the person by name, or a former member', () => {
-    expect(spendRowLabel({ displayName: 'Priya Nair' })).toBe('Priya Nair');
-    expect(spendRowLabel({ displayName: null })).toBe('Former member');
+    expect(spendRowLabel({ kind: 'member', displayName: 'Priya Nair' })).toBe('Priya Nair');
+    expect(spendRowLabel({ kind: 'member', displayName: null })).toBe('Former member');
+  });
+
+  it('SPEND-10 (partial) an automation row is the workflow by name (or a deleted automation) and says who it runs as', () => {
+    expect(spendRowLabel({ kind: 'automation', displayName: 'Weekly digest' })).toBe('Weekly digest');
+    expect(spendRowLabel({ kind: 'automation', displayName: null })).toBe('Deleted automation');
+    expect(spendRowDetail({ kind: 'automation', creatorName: 'Priya Nair' })).toBe('Automation · runs as Priya Nair');
+    expect(spendRowDetail({ kind: 'automation', creatorName: null })).toBe('Automation');
+    expect(spendRowDetail({ kind: 'member' })).toBeNull();
   });
 });
 

@@ -21,6 +21,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   wallets you may pick there, and what the next AI call would spend (`resolved`, discriminated on
   `kind`: `spend`, `refuse` or `skip`). `list` and `getConversationSource` need a key with no drive
   restriction. Amounts are cents of credit value — render them as credits, not money.
+- **`wallets.getDriveSource({ driveId })`** returns what a new conversation in a drive would spend
+  from: the wallets you may pick there and the gate's decision now (`resolved`), nothing reserved.
 - **Reads only, by design.** An access key never moves money or changes a spend source: creating,
   allocating, pausing, topping up or donating to a wallet, and setting a default or a
   conversation's source, need a signed-in session, and the server refuses a key on each by name

@@ -20,6 +20,7 @@ import {
   resolveSpendSource,
   seatLegSpendableCents,
   legSpendableCents,
+  walletOwnRemainingCents,
   type CapRemaining,
   type DriveSpendRule,
   type RefusalReason,
@@ -336,6 +337,17 @@ export function reservedAgainstCents(
   }, 0);
 }
 
+/**
+ * SPEND-9: what a consumer is shown as a drive wallet's remaining amount — the wallet's OWN budget
+ * (allocation left + top-up legs − debt), bounded by their own remaining caps. Never bounded by
+ * what its parent holds: a figure derived from the org pool or the funder's personal wallet would
+ * disclose it. When the parent cannot cover a call the gate refuses it (source_empty) instead.
+ */
+export function driveWalletConsumerRemainingCents(wallet: WalletBalanceFacts, caps: CapRemaining | null): number {
+  const own = walletOwnRemainingCents(childWalletFunds(wallet));
+  return caps === null ? own : legSpendableCents(own, caps);
+}
+
 /** One wallet as a SpendLeg for wallet-core. */
 export function walletLeg(walletId: string, status: WalletStatus, spendableCents: number): SpendLeg {
   return { walletId, status, spendableCents: Math.max(0, whole(spendableCents)) };
@@ -510,10 +522,10 @@ export const OUT_OF_BOX_SOURCES: readonly SpendSourceKind[] = Object.freeze(['dr
 export const ORG_ENTITLEMENT_TIER: SubscriptionTier = 'business';
 
 /**
- * WAL-8 / SEAT-9: the tier an org confers follows its billing status. A paid (active,
- * past_due) org carries Business; a LAPSED org carries no paid entitlement — its
- * compute gets no Business ceilings and no sandbox — until it reactivates. Lapse is a
- * read, never a write, so reactivating restores Business at once.
+ * WAL-8 / SEAT-9: the tier an org confers follows its billing status. An active,
+ * automatically collected org carries Business; a LAPSED org (past_due included) carries
+ * no paid entitlement — its compute gets no Business ceilings and no sandbox — until it
+ * reactivates. Lapse is a read, never a write, so reactivating restores Business at once.
  */
 export function orgEntitlementTier(orgLapsed: boolean): SubscriptionTier {
   return orgLapsed ? 'free' : ORG_ENTITLEMENT_TIER;
@@ -559,17 +571,22 @@ export type CallSpendDecision =
  */
 export function automationSpendInput(input: {
   driveId: string;
+  /** The drive wallet as the person the run is gated as may draw it (their caps bound it, WAL-7). */
   driveWallet: SpendLeg | null;
   /** The tier of the drive wallet's ROOT owner: the org for org drives, the drive owner otherwise (WAL-8). */
   walletOwnerTier: SubscriptionTier;
   reservationCents: number;
+  /** The person the run is gated as is a guest of the drive (D-OW-4). */
+  gatedAsGuest: boolean;
+  /** The drive's guest switch (wallets.guestSpendEnabled, D-OW-4). */
+  guestsMaySpendDriveWallet: boolean;
 }): CallSpendInput {
   return {
-    actor: { kind: 'automation', driveId: input.driveId },
+    actor: { kind: 'automation', driveId: input.driveId, gatedAsGuest: input.gatedAsGuest },
     driveWallet: input.driveWallet,
     seatAllowance: null,
     personal: null,
-    driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: false },
+    driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: input.guestsMaySpendDriveWallet },
     chosen: null,
     userOverride: { alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false },
     reservationCents: input.reservationCents,

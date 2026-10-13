@@ -11,8 +11,8 @@ import { giftSubscription, revokeSubscription } from './actions';
 import { tierLabel } from './user-format';
 import type { AdminUser, SubscriptionTier } from './types';
 
-// SEAT-2 P2: Business is the organization plan; the gift route rejects it
-// (no org gifting exists yet), so it must not appear as an option here either.
+// SEAT-2 P2: Business is the organization plan; the user gift route rejects it
+// (an org is gifted through OrgGiftCard, SEAT-8), so it must not appear here either.
 const GIFTABLE_TIERS: Array<Exclude<SubscriptionTier, 'free'>> = ['pro'];
 
 // Env-aware Stripe dashboard link — never hardcode test mode.

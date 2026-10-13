@@ -36,6 +36,8 @@ export type BrowserBilling = {
   readonly actorId: string;
   readonly agentPageId: string | null;
   readonly conversationId: string;
+  /** SPEND-10: the automation a run with no person present opened this browser for; null otherwise. */
+  readonly automationRef: string | null;
 };
 
 type BillingPrimitives = Pick<typeof defaultSandboxBillingDeps, 'resolveCharge' | 'gate' | 'releaseHold'> & {
@@ -101,6 +103,7 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
         duration: Math.round(activeSeconds * 1000),
         success: true,
         holdId: hold.holdId ?? undefined,
+        automationRef: billing.automationRef ?? undefined,
         markupBpsOverride: MACHINE_MARKUP_BPS,
         costSource: 'list_price',
         metadata: { type: 'browser_machine', activeSeconds, cpus: shape.cpus, memoryGB: shape.memoryGB, conversationId: billing.conversationId },

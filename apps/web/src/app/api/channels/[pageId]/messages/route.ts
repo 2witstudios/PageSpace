@@ -4,10 +4,9 @@ import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
-// canUserViewPage below is only used for mention RECIPIENTS (other users), not
-// the requesting principal — those checks are keyed to arbitrary user ids and
-// must stay user-level.
-import { canUserViewPage, getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
+// getUsersWhoCanViewPage answers for mention RECIPIENTS (other users), not the
+// requesting principal — a third-party audience question keyed to user ids.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -20,6 +19,7 @@ import { createMentionNotification } from '@pagespace/lib/notifications/notifica
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 interface ChannelInboxFanoutInput {
   pageId: string;
@@ -99,10 +99,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check if the principal has view permission for this channel
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this channel',
       details: 'Contact the channel owner to request access'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Pagination params
@@ -208,10 +208,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Check if the principal has edit permission to post messages in this channel
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
       details: 'Only channel members with edit access can send messages'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const body = await req.json() as {
@@ -455,15 +455,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         // before we broadcast a channel_updated payload (which leaks the channel
         // id, drive id, preview, and sender name), every non-follower candidate
         // must pass the channel's view-permission check.
-        const viewabilityChecks = await Promise.all(
-          nonFollowerMentioned.map(async (id: string) => ({
-            id,
-            canView: await canUserViewPage(id, pageId),
-          }))
-        );
-        const mentionTargets = viewabilityChecks
-          .filter((entry) => entry.canView)
-          .map((entry) => entry.id);
+        // A third-party audience question: who else can view the channel, not what this credential may open.
+        const mentionViewers = await getUsersWhoCanViewPage(pageId, nonFollowerMentioned);
+        const mentionTargets = nonFollowerMentioned.filter((id: string) => mentionViewers.has(id));
 
         await Promise.all(
           mentionTargets.map((memberId: string) =>
@@ -512,7 +506,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         void import('@/lib/channels/agent-mention-responder')
           .then(({ triggerMentionedAgentResponses }) =>
             triggerMentionedAgentResponses({
-              userId,
+              // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+              sender: actorFromAuth(auth),
               channelId: pageId,
               channelTitle: channel?.title || 'Channel',
               channelType: 'CHANNEL',
@@ -625,7 +620,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       void import('@/lib/channels/agent-mention-responder')
         .then(({ triggerMentionedAgentResponses }) =>
           triggerMentionedAgentResponses({
-            userId,
+            // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+            sender: actorFromAuth(auth),
             channelId: pageId,
             channelTitle: channel?.title || 'Channel',
             channelType: 'CHANNEL',

@@ -26,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -47,6 +47,7 @@ vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
   canAccessConversation: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -86,6 +87,7 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = vi.mocked(authenticateRequestWithOptions);
 const mockCheckMCPPageScope = vi.mocked(checkMCPPageScope);
@@ -287,7 +289,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
       // the owner could not express "shared AND page access" at all, which is
       // how this came to answer differently from every other conversation gate.
       expect(mockCanAccessConversation).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ userId: mockUserId, isShared: false, type: 'page', contextId: mockPageId }),
       );
     });
@@ -311,7 +313,7 @@ describe('GET /api/ai/chat/messages/[messageId]/undo', () => {
 
       expect(response.status).toBe(403);
       expect(mockCanAccessConversation).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ userId: '', isShared: false }),
       );
     });
@@ -430,7 +432,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       // Route passes preview to avoid redundant computation
       expect(executeAiUndo).toHaveBeenCalledWith(
         mockMessageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'messages_only',
         expect.objectContaining({
           source: 'page_chat',
@@ -456,7 +458,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       // Route passes preview to avoid redundant computation
       expect(executeAiUndo).toHaveBeenCalledWith(
         mockMessageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'messages_and_changes',
         expect.objectContaining({
           source: 'page_chat',
@@ -490,7 +492,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       expect(response.status).toBe(200);
       expect(executeAiUndo).toHaveBeenCalledWith(
         mockMessageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'messages_and_changes',
         expect.objectContaining({
           source: 'page_chat',
@@ -537,7 +539,7 @@ describe('POST /api/ai/chat/messages/[messageId]/undo', () => {
       expect(response.status).toBe(200);
       expect(executeAiUndo).toHaveBeenCalledWith(
         mockMessageId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'messages_and_changes',
         expect.objectContaining({
           activitiesAffected: expect.arrayContaining([

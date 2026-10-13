@@ -44,6 +44,7 @@ vi.mock('../../permissions/permissions', () => ({
 }));
 
 import { regexSearchPages } from '../drive-search-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 type SearchRow = {
   id: string;
@@ -86,7 +87,7 @@ describe('regexSearchPages security behavior', () => {
     ];
 
     const { execute } = setupTransactionResult(rows);
-    const response = await regexSearchPages('drive-1', 'user-1', 'hello', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), 'hello', null, {
       searchIn: 'content',
       maxResults: 50,
     });
@@ -112,7 +113,7 @@ describe('regexSearchPages security behavior', () => {
     ];
 
     setupTransactionResult(rows);
-    const response = await regexSearchPages('drive-1', 'user-1', '(A+)+$', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), '(A+)+$', null, {
       searchIn: 'content',
       maxResults: 50,
     });
@@ -128,7 +129,7 @@ describe('regexSearchPages security behavior', () => {
       message: 'canceling statement due to statement timeout',
     });
 
-    const response = await regexSearchPages('drive-1', 'user-1', '(A+)+$', null, {
+    const response = await regexSearchPages('drive-1', credentialActor('user-1', null), '(A+)+$', null, {
       searchIn: 'content',
       maxResults: 50,
     });

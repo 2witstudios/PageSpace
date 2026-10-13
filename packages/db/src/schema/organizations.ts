@@ -41,6 +41,8 @@ export const organizations = pgTable('organizations', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   name: text('name').notNull(),
   slug: text('slug').unique().notNull(),
+  // ORG-1: an image PageSpace stores and serves, never an outside URL (organizations_avatar_url_chk
+  // below; the pure rule is lib organizations/org-avatar-core.ts).
   avatarUrl: text('avatarUrl'),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'restrict' }),
   // Org-wide policies (Spec POL). Shape is owned by the policy reader in lib;
@@ -56,6 +58,11 @@ export const organizations = pgTable('organizations', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   ownerIdx: index('organizations_owner_id_idx').on(table.ownerId),
+  // Only this org's own avatar route, exactly as orgAvatarPath builds it: no other host, no other org.
+  avatarUrlCheck: check(
+    'organizations_avatar_url_chk',
+    sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/orgs/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
+  ),
 }));
 
 export const orgMembers = pgTable('org_members', {
@@ -124,7 +131,19 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   status: text('status').notNull(),
   // null = not yet verified from Stripe; reporting must not assume it is paid.
   gifted: boolean('gifted'),
-  trialEnd: timestamp('trialEnd', { mode: 'date' }),
+  // SEAT-8 / D-OW-54: the extra seats an admin gift pins (base seats implied), set by the admin
+  // gift and cleared by its revoke; null when not gifted that way. While set, the seat item is
+  // held at this quantity, auto-add is refused past it, and a gift invoice funds the pool for
+  // exactly this many seats — never the invoice's live seat count.
+  giftedExtraSeats: integer('giftedExtraSeats'),
+  // D-OW-54: bumped by every admin gift and revoke, under the org billing lock, and part of
+  // each one's Stripe idempotency key: one key per gift state transition, so a later gift or
+  // revoke is never answered with an earlier one's cached response.
+  giftRevision: integer('giftRevision').default(0).notNull(),
+  // [D-OW-44] Stripe collection_method, mirrored with the status: only charge_automatically can
+  // grant capability (status-core). Every writer sets it from Stripe; the default only backfills
+  // rows that existed before the column, all of which PageSpace created automatically collected.
+  collectionMethod: text('collectionMethod').default('charge_automatically').notNull(),
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),

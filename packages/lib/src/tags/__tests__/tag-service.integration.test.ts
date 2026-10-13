@@ -35,6 +35,7 @@ import {
   getBatchPageTags,
   reanchorPageTags,
 } from '../tag-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 /** Unwrap an ok result, failing loudly with the error code when it is not. */
 function expectOk<T>(result: { ok: true; data: T } | { ok: false; error: string; message?: string }): T {
@@ -75,8 +76,8 @@ describe('tag-service (integration)', () => {
       await factories.createDriveMember(driveA.id, owner.id, { role: 'OWNER' });
       await factories.createDriveMember(driveB.id, owner.id, { role: 'OWNER' });
 
-      const a = expectOk(await upsertTag(driveA.id, owner.id, { name: 'Urgent' }));
-      const b = expectOk(await upsertTag(driveB.id, owner.id, { name: 'Urgent' }));
+      const a = expectOk(await upsertTag(driveA.id, credentialActor(owner.id, null), { name: 'Urgent' }));
+      const b = expectOk(await upsertTag(driveB.id, credentialActor(owner.id, null), { name: 'Urgent' }));
 
       expect(a.id).not.toBe(b.id);
       expect(a.normalizedKey).toBe(b.normalizedKey);
@@ -87,9 +88,9 @@ describe('tag-service (integration)', () => {
     it('collapses case and accent variants onto one row within a drive', async () => {
       const { owner, drive } = await seed();
 
-      const first = expectOk(await upsertTag(drive.id, owner.id, { name: 'Café' }));
-      const second = expectOk(await upsertTag(drive.id, owner.id, { name: 'CAFÉ' }));
-      const third = expectOk(await upsertTag(drive.id, owner.id, { name: 'café' }));
+      const first = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'Café' }));
+      const second = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'CAFÉ' }));
+      const third = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'café' }));
 
       expect(second.id).toBe(first.id);
       expect(third.id).toBe(first.id);
@@ -101,8 +102,8 @@ describe('tag-service (integration)', () => {
       // colour must not repaint a vocabulary entry the whole drive shares.
       const { owner, drive } = await seed();
 
-      const created = expectOk(await upsertTag(drive.id, owner.id, { name: 'Urgent', color: '#ff0000', description: 'first' }));
-      const again = expectOk(await upsertTag(drive.id, owner.id, { name: 'urgent', color: '#00ff00', description: 'second' }));
+      const created = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'Urgent', color: '#ff0000', description: 'first' }));
+      const again = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'urgent', color: '#00ff00', description: 'second' }));
 
       expect(again.id).toBe(created.id);
       expect(again.color).toBe('#ff0000');
@@ -112,7 +113,7 @@ describe('tag-service (integration)', () => {
     it('rejects a name the pure core rejects, without touching the database', async () => {
       const { owner, drive } = await seed();
 
-      const result = await upsertTag(drive.id, owner.id, { name: '   ' });
+      const result = await upsertTag(drive.id, credentialActor(owner.id, null), { name: '   ' });
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('invalid_name');
@@ -123,16 +124,16 @@ describe('tag-service (integration)', () => {
   describe('the partial unique indexes', () => {
     it('rejects a SECOND page-level assignment of the same tag', async () => {
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'urgent' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'urgent' }));
 
-      const first = await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
+      const first = await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
       expect(first.ok).toBe(true);
 
       // `content_tags_page_target_unique` is partial: UNIQUE (pageId, tagId)
       // WHERE targetKind = 'page'. Re-tagging is a normal user action, so the
       // service reports it as a CONFLICT — a caller that mapped it to
       // internal_error would show a server failure for a double click.
-      const second = await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
+      const second = await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
       expect(second.ok).toBe(false);
       if (!second.ok) expect(second.error).toBe('assignment_exists');
 
@@ -153,7 +154,7 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: CONTENT, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'todo' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'todo' }));
 
       const projected = projectContent(CONTENT, 'markdown');
       const anchorAt = (start: number) => ({
@@ -167,8 +168,8 @@ describe('tag-service (integration)', () => {
         textHash: hashText(projected),
       });
 
-      const a = await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'text', anchor: anchorAt(projected.indexOf('some quoted words')) }, source: 'user' });
-      const b = await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'text', anchor: anchorAt(projected.lastIndexOf('some quoted words')) }, source: 'user' });
+      const a = await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'text', anchor: anchorAt(projected.indexOf('some quoted words')) }, source: 'user' });
+      const b = await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'text', anchor: anchorAt(projected.lastIndexOf('some quoted words')) }, source: 'user' });
 
       expect(a.ok).toBe(true);
       expect(b.ok).toBe(true);
@@ -179,9 +180,9 @@ describe('tag-service (integration)', () => {
   describe('target kinds and the CHECK constraint', () => {
     it('inserts a page-level tag with every discriminated column null', async () => {
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'a' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'a' }));
 
-      expectOk(await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
+      expectOk(await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
 
       const [row] = await db.select().from(contentTags);
       expect(row.targetKind).toBe('page');
@@ -199,10 +200,10 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: CONTENT, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'b' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'b' }));
       const projected = projectContent(CONTENT, 'markdown');
 
-      expectOk(await applyTag(owner.id, {
+      expectOk(await applyTag(credentialActor(owner.id, null), {
         pageId: page.id,
         tagId: tag.id,
         target: { kind: 'text', anchor: { v: 1, exact: 'q', prefix: '', suffix: projected.slice(1, 33), start: 0, end: 1, revision: 1, textHash: hashText(projected) } },
@@ -223,9 +224,9 @@ describe('tag-service (integration)', () => {
       // refuses before the database is asked, so the error is actionable
       // rather than a constraint violation.
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'c' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'c' }));
 
-      const result = await applyTag(owner.id, {
+      const result = await applyTag(credentialActor(owner.id, null), {
         pageId: page.id,
         tagId: tag.id,
         target: { kind: 'sheet_cell', anchor: { v: 1, sheet: 'Sheet1', address: 'A1' } },
@@ -241,9 +242,9 @@ describe('tag-service (integration)', () => {
       const { owner, page } = await seed();
       const otherDrive = await factories.createDrive(owner.id);
       await factories.createDriveMember(otherDrive.id, owner.id, { role: 'OWNER' });
-      const foreign = expectOk(await upsertTag(otherDrive.id, owner.id, { name: 'foreign' }));
+      const foreign = expectOk(await upsertTag(otherDrive.id, credentialActor(owner.id, null), { name: 'foreign' }));
 
-      const result = await applyTag(owner.id, { pageId: page.id, tagId: foreign.id, target: { kind: 'page' }, source: 'user' });
+      const result = await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: foreign.id, target: { kind: 'page' }, source: 'user' });
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('tag_not_found');
@@ -260,7 +261,7 @@ describe('tag-service (integration)', () => {
       const { drive } = await seed();
       const stranger = await outsider();
 
-      const result = await listDriveTags(drive.id, stranger.id);
+      const result = await listDriveTags(drive.id, credentialActor(stranger.id, null));
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('forbidden');
@@ -270,7 +271,7 @@ describe('tag-service (integration)', () => {
       const { drive } = await seed();
       const stranger = await outsider();
 
-      const result = await upsertTag(drive.id, stranger.id, { name: 'sneaky' });
+      const result = await upsertTag(drive.id, credentialActor(stranger.id, null), { name: 'sneaky' });
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('forbidden');
@@ -279,10 +280,10 @@ describe('tag-service (integration)', () => {
 
     it('refuses to tag a page the caller cannot edit', async () => {
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'x' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'x' }));
       const stranger = await outsider();
 
-      const result = await applyTag(stranger.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
+      const result = await applyTag(credentialActor(stranger.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' });
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('forbidden');
@@ -294,7 +295,7 @@ describe('tag-service (integration)', () => {
       // inside drives they cannot see.
       const { owner } = await seed();
 
-      const result = await applyTag(owner.id, {
+      const result = await applyTag(credentialActor(owner.id, null), {
         pageId: 'does-not-exist',
         name: 'y',
         target: { kind: 'page' },
@@ -307,11 +308,11 @@ describe('tag-service (integration)', () => {
 
     it('checks removeTag against the row OWN page, not against caller input', async () => {
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'z' }));
-      const assignment = expectOk(await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'z' }));
+      const assignment = expectOk(await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
       const stranger = await outsider();
 
-      const result = await removeTag(stranger.id, assignment.id);
+      const result = await removeTag(credentialActor(stranger.id, null), assignment.id);
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('forbidden');
@@ -321,7 +322,7 @@ describe('tag-service (integration)', () => {
     it('reports an unknown assignment id distinctly from a forbidden one', async () => {
       const { owner } = await seed();
 
-      const result = await removeTag(owner.id, 'no-such-assignment');
+      const result = await removeTag(credentialActor(owner.id, null), 'no-such-assignment');
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('assignment_not_found');
@@ -331,7 +332,7 @@ describe('tag-service (integration)', () => {
       const { page } = await seed();
       const stranger = await outsider();
 
-      const result = await getPageTags(stranger.id, page.id);
+      const result = await getPageTags(credentialActor(stranger.id, null), page.id);
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toBe('forbidden');
@@ -343,15 +344,15 @@ describe('tag-service (integration)', () => {
       // "no tags" and "not allowed to know" are different answers. A caller
       // that renders them the same way should have to choose that.
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'shared' }));
-      expectOk(await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'shared' }));
+      expectOk(await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
 
       const stranger = await factories.createUser();
       const strangerDrive = await factories.createDrive(stranger.id);
       await factories.createDriveMember(strangerDrive.id, stranger.id, { role: 'OWNER' });
       const strangerPage = await factories.createPage(strangerDrive.id, { type: 'DOCUMENT', title: 'Theirs', position: 0 });
 
-      const map = expectOk(await getBatchPageTags(stranger.id, [page.id, strangerPage.id]));
+      const map = expectOk(await getBatchPageTags(credentialActor(stranger.id, null), [page.id, strangerPage.id]));
 
       expect(map.has(page.id)).toBe(false);
       expect(map.get(strangerPage.id)).toEqual([]);
@@ -360,10 +361,10 @@ describe('tag-service (integration)', () => {
     it('buckets assignments by page and seeds viewable pages with an empty array', async () => {
       const { owner, drive, page } = await seed();
       const second = await factories.createPage(drive.id, { type: 'DOCUMENT', title: 'Second', position: 1 });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'bucket' }));
-      expectOk(await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'bucket' }));
+      expectOk(await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
 
-      const map = expectOk(await getBatchPageTags(owner.id, [page.id, second.id]));
+      const map = expectOk(await getBatchPageTags(credentialActor(owner.id, null), [page.id, second.id]));
 
       expect(map.get(page.id)).toHaveLength(1);
       expect(map.get(second.id)).toEqual([]);
@@ -371,16 +372,16 @@ describe('tag-service (integration)', () => {
 
     it('returns an empty map for an empty request without querying', async () => {
       const { owner } = await seed();
-      const map = expectOk(await getBatchPageTags(owner.id, []));
+      const map = expectOk(await getBatchPageTags(credentialActor(owner.id, null), []));
       expect(map.size).toBe(0);
     });
 
     it('joins the vocabulary so a caller gets the name, not just an id', async () => {
       const { owner, drive, page } = await seed();
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'Named', color: '#abcdef' }));
-      expectOk(await applyTag(owner.id, { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'Named', color: '#abcdef' }));
+      expectOk(await applyTag(credentialActor(owner.id, null), { pageId: page.id, tagId: tag.id, target: { kind: 'page' }, source: 'user' }));
 
-      const [assignment] = expectOk(await getPageTags(owner.id, page.id));
+      const [assignment] = expectOk(await getPageTags(credentialActor(owner.id, null), page.id));
 
       expect(assignment.name).toBe('Named');
       expect(assignment.color).toBe('#abcdef');
@@ -404,11 +405,11 @@ describe('tag-service (integration)', () => {
         content: BODY,
         contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'anchored' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'anchored' }));
 
       const start = BODY.indexOf(QUOTE);
       const projected = projectContent(BODY, 'markdown');
-      expectOk(await applyTag(owner.id, {
+      expectOk(await applyTag(credentialActor(owner.id, null), {
         pageId: page.id,
         tagId: tag.id,
         source: 'user',
@@ -474,9 +475,9 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: BODY2, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'tx' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'tx' }));
       const start = BODY2.indexOf(QUOTE2);
-      expectOk(await applyTag(owner.id, {
+      expectOk(await applyTag(credentialActor(owner.id, null), {
         pageId: page.id, tagId: tag.id, source: 'user',
         target: { kind: 'text', anchor: {
           v: 1, exact: QUOTE2, prefix: '', suffix: '',
@@ -540,7 +541,7 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: NEW_MD, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'converted' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'converted' }));
 
       const oldProjection = projectContent(OLD_HTML, 'html');
       const start = oldProjection.indexOf(QUOTE3);
@@ -589,7 +590,7 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: CONTENT, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'client' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'client' }));
       return { owner, page, tag, CONTENT, projected: projectContent(CONTENT, 'markdown') };
     }
 
@@ -600,7 +601,7 @@ describe('tag-service (integration)', () => {
       // casts it back to TextAnchor.
       const { owner, page, tag } = await anchoredPage();
 
-      const result = await applyTag(owner.id, {
+      const result = await applyTag(credentialActor(owner.id, null), {
         pageId: page.id, tagId: tag.id, source: 'user',
         target: { kind: 'text', anchor: { v: 1, exact: 1, prefix: '', suffix: '', start: 0, end: 1, revision: 1, textHash: 'x' } as never },
       });
@@ -619,7 +620,7 @@ describe('tag-service (integration)', () => {
       const QUOTE = 'The anchored quote sits here.';
       const trueStart = projected.indexOf(QUOTE);
 
-      const result = expectOk(await applyTag(owner.id, {
+      const result = expectOk(await applyTag(credentialActor(owner.id, null), {
         pageId: page.id, tagId: tag.id, source: 'user',
         target: { kind: 'text', anchor: {
           v: 1, exact: QUOTE, prefix: '', suffix: '',
@@ -638,7 +639,7 @@ describe('tag-service (integration)', () => {
     it('refuses an anchor whose quote is absent from the current revision', async () => {
       const { owner, page, tag } = await anchoredPage();
 
-      const result = await applyTag(owner.id, {
+      const result = await applyTag(credentialActor(owner.id, null), {
         pageId: page.id, tagId: tag.id, source: 'user',
         target: { kind: 'text', anchor: {
           v: 1, exact: 'text that was never in this document', prefix: '', suffix: '',
@@ -662,7 +663,7 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: DOC, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'stale' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'stale' }));
       const projected = projectContent(DOC, 'markdown');
       const start = projected.indexOf(QUOTE);
 
@@ -762,7 +763,7 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: DUP_FIRST, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'dup' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'dup' }));
 
       const projected = projectContent(DUP_FIRST, 'markdown');
       const secondStart = projected.lastIndexOf(QUOTE);
@@ -813,10 +814,10 @@ describe('tag-service (integration)', () => {
       const page = await factories.createPage(drive.id, {
         type: 'DOCUMENT', title: 'Doc', position: 0, content: DOC2, contentMode: 'markdown',
       });
-      const tag = expectOk(await upsertTag(drive.id, owner.id, { name: 'orph' }));
+      const tag = expectOk(await upsertTag(drive.id, credentialActor(owner.id, null), { name: 'orph' }));
       const projected = projectContent(DOC2, 'markdown');
       const start = projected.indexOf(QUOTE2);
-      expectOk(await applyTag(owner.id, {
+      expectOk(await applyTag(credentialActor(owner.id, null), {
         pageId: page.id, tagId: tag.id, source: 'user',
         target: { kind: 'text', anchor: {
           v: 1, exact: QUOTE2, prefix: '', suffix: '',

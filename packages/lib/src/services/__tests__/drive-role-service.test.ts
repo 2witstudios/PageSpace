@@ -4,6 +4,15 @@
  * with a mockable repository interface.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // [D-OW-33] guardDriveAccess opens the role write's transaction (tested against real Postgres in
 // org-lapse-loosening.integration.test.ts); here it is the transaction mock each test sets up.
@@ -87,6 +96,7 @@ import {
   isSystemRoleName,
   roleNotFoundMessage,
 } from '../drive-role-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -172,7 +182,7 @@ describe('drive-role-service', () => {
         }),
       });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.drive).toBeNull();
       expect(result.isOwner).toBe(false);
     });
@@ -187,7 +197,7 @@ describe('drive-role-service', () => {
         }),
       });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isOwner).toBe(true);
       expect(result.isAdmin).toBe(true);
       expect(result.drive!.name).toBe('My Drive');
@@ -204,7 +214,7 @@ describe('drive-role-service', () => {
       });
       mockLoadMembership.mockResolvedValueOnce({ role: 'ADMIN', customRoleId: null, source: 'invite' });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(true);
       expect(result.isMember).toBe(true);
     });
@@ -220,7 +230,7 @@ describe('drive-role-service', () => {
       });
       mockLoadMembership.mockResolvedValueOnce({ role: 'MEMBER', customRoleId: null, source: 'invite' });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(false);
       expect(result.isMember).toBe(true);
     });
@@ -270,7 +280,7 @@ describe('drive-role-service', () => {
       it.each(['ADMIN', 'MEMBER'])('refuses a user whose %s invite is still pending', async (role) => {
         seedMembers([{ driveId: 'drive-1', userId: 'user-1', role, acceptedAt: null }]);
 
-        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
 
         expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
       });
@@ -278,7 +288,7 @@ describe('drive-role-service', () => {
       it('grants ADMIN once the same invite is accepted', async () => {
         seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }]);
 
-        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
 
         expect(result).toMatchObject({ isOwner: false, isAdmin: true, isMember: true });
       });
@@ -286,7 +296,7 @@ describe('drive-role-service', () => {
       it('grants MEMBER (not admin) once the same invite is accepted', async () => {
         seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }]);
 
-        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
 
         expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: true });
       });
@@ -297,7 +307,7 @@ describe('drive-role-service', () => {
           { driveId: 'drive-1', userId: 'user-2', role: 'ADMIN', acceptedAt: new Date('2026-09-01') },
         ]);
 
-        const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
 
         expect(result.isMember).toBe(false);
       });
@@ -315,7 +325,7 @@ describe('drive-role-service', () => {
       // The shared loader reads accepted rows only, so a pending ADMIN invitation lands here too.
       mockLoadMembership.mockResolvedValueOnce(null);
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(mockLoadMembership).toHaveBeenCalledWith('user-1', drive);
       expect(result.isMember).toBe(false);
       expect(result.drive).not.toBeNull();

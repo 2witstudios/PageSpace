@@ -59,7 +59,7 @@ describe('personal invoice identity across subscription lines', () => {
     expect(tierFromInvoiceLines([oldPro])).toBe('free');
   });
 
-  it('MON-5 (partial) unrecognized or missing prices have no entitlement', () => {
+  it('price identity: unrecognized or missing prices have no entitlement', () => {
     expect(tierFromInvoiceLines([subscriptionLine('price_unknown')])).toBe('free');
     expect(tierFromInvoiceLines([subscriptionLine(null)])).toBe('free');
     expect(tierFromInvoiceLines([])).toBe('free');

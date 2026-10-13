@@ -8,13 +8,16 @@
  * and that is the creator's, the lead's or the org's money authority, not a drive role's.
  */
 
+import { checkActorDriveAuthentication } from './actor-authentication';
 import { db } from '@pagespace/db/db';
-import { and, eq } from '@pagespace/db/operators';
-import { orgMembers } from '@pagespace/db/schema/organizations';
+import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { holdsOrgRole } from '../organizations/authorize-core';
+import { findMembershipRole } from '../organizations/repository';
 import { isDriveLead, type RelationshipDrive } from './drive-relationship';
 import { loadEffectiveDriveMembership } from './org-drive-membership';
+import type { AccessActor } from './access-actor';
 
 export type AppUnparkVia = 'lead' | 'org-owner' | 'org-admin' | 'creator';
 
@@ -34,9 +37,9 @@ export interface AppUnparkAuthorityInput {
 
 export function decideAppUnparkAuthority({ orgsEnabled, userId, drive, orgRole, costOwnerId, isDriveMember }: AppUnparkAuthorityInput): AppUnparkAuthority {
   if (isDriveLead(userId, drive)) return { allowed: true, via: 'lead' };
-  if (orgsEnabled && drive.orgId !== null) {
-    if (orgRole === 'OWNER') return { allowed: true, via: 'org-owner' };
-    if (orgRole === 'ADMIN') return { allowed: true, via: 'org-admin' };
+  // Org power through the one org authorization decision (ORG-5); `via` only names which seat it came from.
+  if (orgsEnabled && drive.orgId !== null && holdsOrgRole(orgRole, 'ADMIN')) {
+    return { allowed: true, via: holdsOrgRole(orgRole, 'OWNER') ? 'org-owner' : 'org-admin' };
   }
   // The creator, only while they can still reach the drive: one removed from it keeps nothing here.
   if (costOwnerId !== null && costOwnerId === userId && isDriveMember) return { allowed: true, via: 'creator' };
@@ -45,18 +48,16 @@ export function decideAppUnparkAuthority({ orgsEnabled, userId, drive, orgRole, 
 
 /** decideAppUnparkAuthority with its IO: the org role (org drives only) and the creator's membership. */
 export async function loadAppUnparkAuthority(
-  userId: string,
+  actor: AccessActor,
   drive: RelationshipDrive,
   costOwnerId: string | null,
 ): Promise<AppUnparkAuthority> {
+  // SEC-2/3: a credential the drive's org refuses has no authority in it.
+  if (!(await checkActorDriveAuthentication(actor, drive.id)).allowed) return { allowed: false };
+  const { userId } = actor;
   let orgRole: AppUnparkAuthorityInput['orgRole'] = null;
   if (ORGS_ENABLED && drive.orgId !== null && !isDriveLead(userId, drive)) {
-    const [membership] = await db
-      .select({ role: orgMembers.role })
-      .from(orgMembers)
-      .where(and(eq(orgMembers.orgId, drive.orgId), eq(orgMembers.userId, userId)))
-      .limit(1);
-    orgRole = membership?.role ?? null;
+    orgRole = await findMembershipRole(drive.orgId, userId);
   }
   const isDriveMember = costOwnerId === userId && (isDriveLead(userId, drive) || (await loadEffectiveDriveMembership(userId, drive)) !== null);
   return decideAppUnparkAuthority({ orgsEnabled: ORGS_ENABLED, userId, drive, orgRole, costOwnerId, isDriveMember });
@@ -66,12 +67,12 @@ export async function loadAppUnparkAuthority(
  * Whether `userId` may un-park this app — what the app pane asks to offer its Resume button to a
  * creator who does not manage the drive. False for a vanished drive.
  */
-export async function canUnparkPublishedApp(userId: string, app: { driveId: string; costOwnerId: string | null }): Promise<boolean> {
+export async function canUnparkPublishedApp(actor: AccessActor, app: { driveId: string; costOwnerId: string | null }): Promise<boolean> {
   const [drive] = await db
     .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
     .from(drives)
     .where(eq(drives.id, app.driveId))
     .limit(1);
   if (!drive) return false;
-  return (await loadAppUnparkAuthority(userId, drive, app.costOwnerId)).allowed;
+  return (await loadAppUnparkAuthority(actor, drive, app.costOwnerId)).allowed;
 }

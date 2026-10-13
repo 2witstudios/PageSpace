@@ -41,6 +41,7 @@ import { revokeDriveShareLink } from '../../permissions/share-link-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import { getUserAccessLevel } from '../../permissions/permissions';
 import { setDriveWalletCap, setSeatCap, updateDriveWallet } from '../../services/drive-wallet-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 interface World {
   orgId: string;
@@ -162,24 +163,24 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
   it('SEAT-9 (partial) POL-2 (partial) while lapsed an Admin turns guests off: it is stored and the outsider is PARKED; turning them back on is refused and stores nothing; paid again, on goes through and the guest returns', async () => {
     if (!world) return;
     const w = world;
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
     await setSubscription(w.orgId, 'canceled');
     expect(await isOrgActive(w.orgId)).toBe(false);
 
-    const off = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off' } });
+    const off = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'off' } });
     expect(off).toMatchObject({ ok: true, policies: { guests: 'off' } });
     expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
-    expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId)).toBeNull();
 
     for (const guests of ['approve', 'on'] as const) {
-      expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests } })).toEqual(lapsedPolicyRefusal);
+      expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests } })).toEqual(lapsedPolicyRefusal);
       expect((await getOrgPolicies(w.orgId)).guests).toBe('off');
-      expect(await getUserAccessLevel(w.ids.gita, w.pageId)).toBeNull();
+      expect(await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId)).toBeNull();
     }
 
     await setSubscription(w.orgId, 'active');
-    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'on' } })).toMatchObject({ ok: true, policies: { guests: 'on' } });
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'on' } })).toMatchObject({ ok: true, policies: { guests: 'on' } });
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
   });
 
   it('SEAT-9 (partial) POL-1 (partial) while lapsed a batch of restrictions applies (share links suspended); a MIXED change is refused whole and stores nothing', async () => {
@@ -187,21 +188,22 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const w = world;
     await setSubscription(w.orgId, 'unpaid');
 
-    const mixed = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { guests: 'off', seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } });
+    const mixed = await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { guests: 'off', seatAllowanceCents: DEFAULT_ORG_POLICIES.seatAllowanceCents + 1 } });
     expect(mixed).toEqual(lapsedPolicyRefusal);
     expect(await getOrgPolicies(w.orgId)).toEqual(DEFAULT_ORG_POLICIES);
-    expect((await getUserAccessLevel(w.ids.gita, w.pageId))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(w.ids.gita, null), w.pageId))?.canView).toBe(true);
 
     const tightened = await updateOrgPolicies({
       orgId: w.orgId,
       actorId: w.ids.priya,
+      actorAuthentication: null,
       patch: { publicShareLinks: false, publishWeb: false, seatAllowanceCents: 0, modelAllowlist: ['anthropic/claude'], cloudSandbox: false, whoCanCreateDrives: 'admins' },
     });
     expect(tightened).toMatchObject({ ok: true });
     const [link] = await db.select({ suspended: driveShareLinks.suspendedByPolicy }).from(driveShareLinks).where(eq(driveShareLinks.id, w.linkId));
     expect(link.suspended).not.toBeNull();
     // Loosening any one of them back is refused while lapsed.
-    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, patch: { publicShareLinks: true } })).toEqual(lapsedPolicyRefusal);
+    expect(await updateOrgPolicies({ orgId: w.orgId, actorId: w.ids.priya, actorAuthentication: null, patch: { publicShareLinks: true } })).toEqual(lapsedPolicyRefusal);
     expect((await getOrgPolicies(w.orgId)).publicShareLinks).toBe(false);
   });
 
@@ -251,16 +253,16 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
     const w = world;
     await setSubscription(w.orgId, 'unpaid');
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: true, allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: true, allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
     expect((await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId)))[0].status).toBe('active');
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: true }, 'session')).toMatchObject({ ok: true });
     expect((await db.select({ status: wallets.status }).from(wallets).where(eq(wallets.id, w.productWalletId)))[0].status).toBe('paused');
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { fallbackRule: 'refuse', donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { fallbackRule: 'refuse', donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
 
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { paused: false }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { fallbackRule: 'own_credits' }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: false }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 1 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { fallbackRule: 'own_credits' }, 'session')).toEqual(lapsedWalletRefusal);
     const [row] = await db.select().from(wallets).where(eq(wallets.id, w.productWalletId));
     expect([row.status, row.monthlyAllowanceCents, row.fallbackRule, row.donationsEnabled]).toEqual(['paused', 120_000, 'refuse', false]);
   });
@@ -302,17 +304,17 @@ describe('a lapsed org may still restrict (orgs on, real Postgres)', () => {
   it('SEAT-9 (partial) WAL-7 (partial) while lapsed a cap can be LOWERED or set where there was none; raising or clearing one is refused and writes nothing', async () => {
     if (!world) return;
     const w = world;
-    await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
+    await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 300, monthlyCents: 3_000 }, 'session');
     await setSubscription(w.orgId, 'canceled');
 
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 100 }, 'session')).toMatchObject({ ok: true });
     expect(await capOf(w.productWalletId, w.ids.marcus)).toEqual({ daily: 100, monthly: 3_000 });
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { dailyCents: 50, monthlyCents: 4_000 }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, { monthlyCents: null }, 'session')).toEqual(lapsedWalletRefusal);
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.marcus, null, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { dailyCents: 50, monthlyCents: 4_000 }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, { monthlyCents: null }, 'session')).toEqual(lapsedWalletRefusal);
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.marcus, null, 'session')).toEqual(lapsedWalletRefusal);
     expect(await capOf(w.productWalletId, w.ids.marcus)).toEqual({ daily: 100, monthly: 3_000 });
     // Dana had no cap (unlimited within the wallet): any cap restricts her.
-    expect(await setDriveWalletCap(w.ids.priya, w.productId, w.ids.dana, { dailyCents: 10, monthlyCents: 100 }, 'session')).toMatchObject({ ok: true });
+    expect(await setDriveWalletCap(credentialActor(w.ids.priya, null), w.productId, w.ids.dana, { dailyCents: 10, monthlyCents: 100 }, 'session')).toMatchObject({ ok: true });
 
     // A seat with no row of its own draws the org's allowance: below it restricts, above it loosens.
     const allowance = DEFAULT_ORG_POLICIES.seatAllowanceCents;

@@ -68,25 +68,19 @@ describe('seam: a credit is converted in one module (the Spec second-conversion 
 });
 
 /**
- * Seam guard 3 — D-OW-17: the money-model ratio switch is a CODE CONSTANT
- * (`MONEY_MODEL_V2_ACTIVE` in money-model.ts), never a runtime env var. A prior
- * revision of this fix used `process.env.MONEY_MODEL_V2` on the server, then a
- * `NEXT_PUBLIC_MONEY_MODEL_V2` client mirror — both rejected as a "two flags must
- * agree" footgun (the mirror can drift from the server value; a cross-app env
- * pair can drift the same way). A compile-time constant is the only value
- * guaranteed identical across every process (web, marketing, and every client
- * bundle) without runtime coordination — so the env var must never come back,
- * anywhere, including inside money-model.ts itself.
+ * Seam guard 3 — D-OW-17 / D-OW-42: the included-credit ratio is in force
+ * unconditionally. It was staged behind a runtime env var (`MONEY_MODEL_V2`, then a
+ * `NEXT_PUBLIC_` client mirror), then behind a code constant (`MONEY_MODEL_V2_ACTIVE`
+ * with `isMoneyModelV2Enabled()` and a legacy 100% ratio); the migration commit
+ * flipped the constant and the full cutover removed it. No switch of any of those
+ * shapes may come back, anywhere, including inside money-model.ts itself.
  *
- * The pattern matches the NAME itself, as an identifier or inside any string,
- * wherever it appears outside a comment — not any particular accessor shape. The
- * name has no legitimate non-comment use, so there is nothing to tell apart. Earlier
- * versions matched accessor shapes and each was beaten by one it did not list:
- * `envBool('MONEY_MODEL_V2', false)` (no `process.env` at all), then a backtick
+ * The pattern matches the NAMES themselves, as an identifier or inside any string,
+ * wherever they appear outside a comment — not any particular accessor shape.
+ * Earlier versions matched accessor shapes and each was beaten by one it did not
+ * list: `envBool('MONEY_MODEL_V2', false)` (no `process.env` at all), then a backtick
  * string, then (independent review on #2649) `const { MONEY_MODEL_V2 } = process.env`,
- * an injected `env.MONEY_MODEL_V2`, and `process.env?.MONEY_MODEL_V2`. The
- * lookarounds only exclude a longer identifier: `MONEY_MODEL_V2_ACTIVE` (the constant)
- * never matches, while `NEXT_PUBLIC_MONEY_MODEL_V2` (the rejected client mirror) does.
+ * an injected `env.MONEY_MODEL_V2`, and `process.env?.MONEY_MODEL_V2`.
  *
  * Scope (stated in the test names): TS/JS source of every flavour
  * (.ts/.tsx/.js/.mjs/.cjs), Dockerfiles, compose/workflow YAML and env files, under
@@ -94,15 +88,14 @@ describe('seam: a credit is converted in one module (the Spec second-conversion 
  * Non-JS files have no comment stripping, so even a `#` comment naming the variable
  * fails — rename the prose rather than allowlisting it.
  *
- * The allowlist is intentionally EMPTY: after this refactor no production file
- * reads this var. (money-model.test.ts itself briefly SETS `process.env.MONEY_MODEL_V2`,
- * in one test, to prove that doing so has no effect — that file lives in a
- * __tests__ directory, which the walker always excludes, so it never
- * reaches this seam. money-model.ts's own doc comment mentions the string in
- * prose, but only inside its top block comment, which findViolations strips
- * before matching — no allowlist entry is needed for it either.)
+ * The allowlist is intentionally EMPTY. (money-model.test.ts SETS
+ * `process.env.MONEY_MODEL_V2` in one test to prove it has no effect, and asserts the
+ * removed exports are undefined; it lives in a __tests__ directory, which the walker
+ * always excludes. money-model.ts's doc comment names the removed constant in prose,
+ * inside a block comment findViolations strips.)
  */
-export const MONEY_MODEL_ENV_READ = /(?<![A-Za-z0-9_$])(?:NEXT_PUBLIC_)?MONEY_MODEL_V2(?![A-Za-z0-9_$])/;
+export const MONEY_MODEL_ENV_READ =
+  /(?<![A-Za-z0-9_$])(?:(?:NEXT_PUBLIC_)?MONEY_MODEL_V2(?:_ACTIVE)?|isMoneyModelV2Enabled\w*|LEGACY_INCLUDED_CREDIT_RATIO_BPS)(?![A-Za-z0-9_$])/;
 
 /** The roots and file kinds the D-OW-17 guard scans (see the scope note above). */
 export const MONEY_MODEL_ENV_SCAN_ROOTS = ['apps', 'packages', 'scripts', 'infrastructure', '.github'] as const;
@@ -111,7 +104,7 @@ export const MONEY_MODEL_ENV_SCAN_FILES =
 
 export const MONEY_MODEL_ENV_ALLOWLIST: Readonly<Record<string, string>> = {};
 
-describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a runtime env var', () => {
+describe('D-OW-17 / D-OW-42 seam: no money-model ratio switch — neither an env var nor a code constant', () => {
   const result = runSeam({
     files: listFiles(MONEY_MODEL_ENV_SCAN_ROOTS, MONEY_MODEL_ENV_SCAN_FILES),
     pattern: MONEY_MODEL_ENV_READ,
@@ -119,16 +112,15 @@ describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a r
     allowlist: MONEY_MODEL_ENV_ALLOWLIST,
   });
 
-  it('D-OW-17 no ts/tsx/js/mjs/cjs, Dockerfile, YAML or env file under apps, packages, scripts, infrastructure or .github names MONEY_MODEL_V2 outside a comment', () => {
+  it('D-OW-17 no ts/tsx/js/mjs/cjs, Dockerfile, YAML or env file under apps, packages, scripts, infrastructure or .github names a ratio switch outside a comment', () => {
     expect(
       result.newViolations,
-      `process.env.MONEY_MODEL_V2 must never be read — flip MONEY_MODEL_V2_ACTIVE ` +
-        `in ${MONEY_MODEL_PATH} instead (D-OW-17):\n` +
+      `the included-credit ratio has no switch — ${MONEY_MODEL_PATH} states it unconditionally (D-OW-17, D-OW-42):\n` +
         describeViolations(result.newViolations),
     ).toEqual([]);
   });
 
-  it('D-OW-17 the allowlist stays empty (the env var never comes back)', () => {
+  it('D-OW-17 the allowlist stays empty (no switch comes back)', () => {
     expect(result.staleAllowlist).toEqual([]);
     expect(Object.keys(MONEY_MODEL_ENV_ALLOWLIST)).toEqual([]);
   });
@@ -163,17 +155,21 @@ describe('D-OW-17 seam: the money-model ratio flag is a code constant, never a r
     ['      MONEY_MODEL_V2: "true"'],
     ['ENV MONEY_MODEL_V2=true'],
     ['MONEY_MODEL_V2=true'],
-  ])('D-OW-17 the pattern MUST match: %s', (line) => {
-    expect(MONEY_MODEL_ENV_READ.test(line)).toBe(true);
-  });
-
-  it.each([
     ['process.env.MONEY_MODEL_V2_ACTIVE'],
     ['const x = MONEY_MODEL_V2_ACTIVE;'],
     ["envBool('MONEY_MODEL_V2_ACTIVE', false)"],
     ['export const MONEY_MODEL_V2_ACTIVE = false;'],
     ['isMoneyModelV2Enabled()'],
-  ])('D-OW-17 the pattern must NOT match the constant or a longer name: %s', (line) => {
+    ['const LEGACY_INCLUDED_CREDIT_RATIO_BPS = 10_000;'],
+  ])('D-OW-17 the pattern MUST match: %s', (line) => {
+    expect(MONEY_MODEL_ENV_READ.test(line)).toBe(true);
+  });
+
+  it.each([
+    ['const MONEY_MODEL_V2_ACTIVE_LABEL = 1;'],
+    ['INCLUDED_CREDIT_RATIO_BPS.pro'],
+    ['isMoneyModelV2'],
+  ])('D-OW-17 the pattern must NOT match a longer or unrelated name: %s', (line) => {
     expect(MONEY_MODEL_ENV_READ.test(line)).toBe(false);
   });
 });
