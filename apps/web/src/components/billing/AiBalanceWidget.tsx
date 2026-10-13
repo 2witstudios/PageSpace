@@ -25,13 +25,16 @@ export function AiBalanceWidget() {
   const entries = useSpendContextStore((state) => state.entries);
   const [pinned, setPinned] = useState<SpendContext | null>(null);
   const target = pinned ?? active;
-  const { spend: conversationSpend, choose } = useConversationSpend(target?.conversationId ?? null, {
+  const { spend: conversationSpend, isPending, choose } = useConversationSpend(target?.conversationId ?? null, {
     driveId: target?.driveId ?? null,
     isGlobal: target?.isGlobal ?? false,
   });
-  // No conversation surface mounted: the drive the person is in (none outside a drive).
+  // A fresh local draft has no stored row until its first send. Its authoritative 404
+  // previews the mounted session drive; a stored conversation still loading keeps its choice.
   const currentDriveId = focusDriveId(useFocus()) ?? null;
-  const { spend: driveSpend } = useDriveSpend(target ? null : currentDriveId);
+  const previewDriveId = target ? target.driveId : currentDriveId;
+  const usePreview = !target || (isPending && !conversationSpend);
+  const { spend: driveSpend } = useDriveSpend(usePreview ? previewDriveId : null);
   const [driveOpen, setDriveOpen] = useState(false);
 
   // The pinned conversation's surface unmounted (or moved to another conversation): close.
@@ -40,7 +43,7 @@ export function AiBalanceWidget() {
     if (pinned && !pinnedStillMounted) setPinned(null);
   }, [pinned, pinnedStillMounted]);
 
-  if (!target) {
+  if (usePreview) {
     const driveChip = driveSpend ? spendChipModel({ options: driveSpend.options, resolved: driveSpend.resolved }) : null;
     if (!driveSpend || !driveChip) return <CreditBalance />;
     return (
@@ -57,6 +60,7 @@ export function AiBalanceWidget() {
 
   const spend = conversationSpend;
   const chip = spend ? spendChipModel({ options: spend.options, resolved: spend.resolved }) : null;
+  if (!spend && target?.driveId) return null;
   if (!spend || !chip) return <CreditBalance />;
 
   const driveName = spend.options.find((o) => o.driveName)?.driveName ?? null;
