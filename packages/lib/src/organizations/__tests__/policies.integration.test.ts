@@ -125,6 +125,32 @@ const marker = async (table: typeof driveShareLinks | typeof pageShareLinks, id:
   return r;
 };
 
+describe('policy mutation current authority', () => {
+  it.each(['MEMBER', null] as const)('Given an actor who lost Admin authority (%s), should refuse without changing policies, suspensions or audit', async (role) => {
+    // Authority was removed before the domain mutation; a previous route decision is irrelevant.
+    await db.update(orgMembers).set({ role: 'ADMIN' }).where(eq(orgMembers.userId, w.member));
+    if (role === 'MEMBER') await db.update(orgMembers).set({ role }).where(eq(orgMembers.userId, w.member));
+    if (role === null) await db.delete(orgMembers).where(eq(orgMembers.userId, w.member));
+    const live = await link(w.orgDrive);
+    const before = await getOrgPolicies(orgId);
+    const result = await updateOrgPolicies({ orgId, actorId: w.member, actorAuthentication: null, patch: { publicShareLinks: false } });
+    expect(result).toEqual({ ok: false, reason: role === null ? 'not_member' : 'insufficient_role' });
+    expect(await getOrgPolicies(orgId)).toEqual(before);
+    expect(await marker(driveShareLinks, live)).toEqual({ m: null, active: true });
+    expect(audit.events).toEqual([]);
+  });
+
+  it.each(['OWNER', 'ADMIN'] as const)('Given a current %s, should apply and audit the policy', async (role) => {
+    const actorId = role === 'OWNER' ? w.owner : w.member;
+    if (role === 'ADMIN') await db.update(orgMembers).set({ role }).where(eq(orgMembers.userId, actorId));
+    const live = await link(w.orgDrive);
+    const result = await updateOrgPolicies({ orgId, actorId, actorAuthentication: null, patch: { publicShareLinks: false } });
+    expect(result.ok).toBe(true);
+    expect((await marker(driveShareLinks, live)).m).toBe('publicShareLinks');
+    expect(audit.events.some((event) => event.eventType === 'org.policy.changed')).toBe(true);
+  });
+});
+
 describe('the policy reader', () => {
   it('POL-1 (partial) an org that never set a policy reads the default for every one', async () => {
     expect(await getOrgPolicies(orgId)).toEqual(DEFAULT_ORG_POLICIES);

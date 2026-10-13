@@ -7,8 +7,8 @@
  * so a change applies immediately and in every process (Spec POL-1, leaf E3 "no restart").
  */
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
-import { organizations, type SuspensionKind } from '@pagespace/db/schema/organizations';
+import { and, eq } from '@pagespace/db/operators';
+import { organizations, orgMembers, type SuspensionKind } from '@pagespace/db/schema/organizations';
 import { publishOrgAuditEvents, stageOrgAuditEvents, type OrgAuditEvent } from '../audit/org-audit';
 import {
   mergeOrgPolicies,
@@ -22,6 +22,7 @@ import {
   type OrgPolicyKey,
 } from './policies-core';
 import { getOrgPolicies, lockStoredOrgPolicies } from './policy-reader';
+import { decideOrgRole } from './authorize-core';
 import { retryOnDeadlock } from './repository';
 import { applySuspension, type PolicySuspensionItem } from './policy-suspension';
 import { listPolicyBlockedItems, type PolicyBlockedItems } from './policy-blocked-items';
@@ -62,7 +63,7 @@ export type UpdateOrgPoliciesResult =
       /** POL-1 for the sign-in keys: who a tightened sign-in policy now refuses (counts only); null when it did not tighten. */
       signInBlocked: SignInBlockedCounts | null;
     }
-  | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'not_found' | 'not_member' | 'insufficient_role' }
   /**
    * SEAT-9 as amended by [D-OW-33]: a LAPSED org may only restrict (billing never blocks security). A change that
    * loosens any policy is refused whole and nothing is stored until the org pays.
@@ -161,6 +162,11 @@ export async function updateOrgPolicies(input: {
   const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
     const row = await lockStoredOrgPolicies(tx, orgId);
     if (!row) return null;
+    // All authority mutations lock org before membership, so a stale route preflight cannot authorize this write.
+    const [membership] = await tx.select({ role: orgMembers.role }).from(orgMembers)
+      .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, actorId))).for('update');
+    const authority = decideOrgRole({ membershipRole: membership?.role ?? null, minRole: 'ADMIN' });
+    if (!authority.ok) return { authorityRefusal: authority.reason };
     const before = parseOrgPolicies(row.stored);
     const stored = mergeOrgPolicies(row.stored, patch);
     const after = parseOrgPolicies(stored);
@@ -189,6 +195,7 @@ export async function updateOrgPolicies(input: {
     return { lapsed: false as const, refused: false as const, signInRefused: null, after, changes, outcome, blocked, signInBlocked, staged };
   }));
   if (!done) return { ok: false, reason: 'not_found' };
+  if (done.authorityRefusal) return { ok: false, reason: done.authorityRefusal };
   if (done.lapsed) return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
   if (done.signInRefused) {
     const refusal = done.signInRefused;

@@ -37,6 +37,7 @@ export interface OrgRoomWatch {
 
 export function createOrgRoomWatch(socket: OrgRoomWatchSocket, deps: OrgRoomWatchDeps): OrgRoomWatch {
   const rooms = new Map<string, string>();
+  const knownPolicies = new Map<string, JoinedOrgRoom['policy']>();
   let timer: unknown = null;
   let disposed = false;
   // Rechecks run one after another: a timer fire and a policy-change nudge never interleave their leaves.
@@ -47,17 +48,13 @@ export function createOrgRoomWatch(socket: OrgRoomWatchSocket, deps: OrgRoomWatc
     timer = null;
   };
 
-  async function runRecheck(): Promise<void> {
-    disarm();
+  function enforcePolicies(policies: Map<string, JoinedOrgRoom['policy']>, retryAfterError = false): void {
     const actor = socket.data.actor;
     if (disposed || !actor || rooms.size === 0) return;
-    const entries = [...rooms.entries()];
-    const policies = await deps.readPolicies([...new Set(entries.map(([, resourceId]) => resourceId))]);
-    if (disposed) return;
     const nowMs = deps.now();
     const plan = planOrgRoomExpiry({
       actor,
-      rooms: entries.map(([room, resourceId]) => ({ room, resourceId, policy: policies.get(resourceId) ?? null })),
+      rooms: [...rooms].map(([room, resourceId]) => ({ room, resourceId, policy: policies.get(resourceId) ?? null })),
       nowMs,
     });
     for (const { room, resourceId, code } of plan.expired) {
@@ -66,19 +63,38 @@ export function createOrgRoomWatch(socket: OrgRoomWatchSocket, deps: OrgRoomWatc
       deps.onLeft(room);
       socket.emit(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code, resourceId });
     }
-    if (plan.nextCheckAtMs !== null) {
-      timer = deps.setTimer(() => void recheck(), Math.max(0, plan.nextCheckAtMs - nowMs));
+    const retryAtMs = retryAfterError && rooms.size > 0 ? nowMs + RETRY_AFTER_ERROR_MS : null;
+    const nextCheckAtMs = plan.nextCheckAtMs === null ? retryAtMs
+      : retryAtMs === null ? plan.nextCheckAtMs : Math.min(plan.nextCheckAtMs, retryAtMs);
+    if (nextCheckAtMs !== null) {
+      timer = deps.setTimer(() => {
+        disarm();
+        enforcePolicies(knownPolicies);
+        void recheck();
+      }, Math.max(0, nextCheckAtMs - nowMs));
     }
+  }
+
+  async function runRecheck(): Promise<void> {
+    disarm();
+    if (disposed || !socket.data.actor || rooms.size === 0) return;
+    // Known credential expiry cannot depend on a successful policy lookup.
+    enforcePolicies(knownPolicies);
+    if (rooms.size === 0) return;
+    const resourceIds = [...new Set(rooms.values())];
+    const policies = await deps.readPolicies(resourceIds);
+    if (disposed) return;
+    for (const resourceId of resourceIds) knownPolicies.set(resourceId, policies.get(resourceId) ?? null);
+    disarm();
+    enforcePolicies(knownPolicies);
   }
 
   function recheck(): Promise<void> {
     queue = queue.then(runRecheck).catch((error: unknown) => {
       deps.onError(error);
-      // A failed read must not leave held rooms unwatched: try again shortly.
-      if (!disposed && rooms.size > 0) {
-        disarm();
-        timer = deps.setTimer(() => void recheck(), RETRY_AFTER_ERROR_MS);
-      }
+      // Preserve the last successfully read policy and retry no later than its known deadline.
+      disarm();
+      enforcePolicies(knownPolicies, true);
     });
     return queue;
   }
@@ -95,6 +111,7 @@ export function createOrgRoomWatch(socket: OrgRoomWatchSocket, deps: OrgRoomWatc
     dispose() {
       disposed = true;
       rooms.clear();
+      knownPolicies.clear();
       disarm();
     },
   };
@@ -104,7 +121,7 @@ export interface PolicyChangeFanoutDeps {
   /** Every live watch on this process, read at fan-out time. */
   watches(): Iterable<OrgRoomWatch>;
   now(): number;
-  /** Repeat notices for one org within this window are one change (the broadcast arrives once per member). */
+  /** Legacy fan-out settings retained for callers; notices carry no reliable revision identity. */
   windowMs: number;
 }
 
@@ -112,17 +129,11 @@ export interface PolicyChangeFanoutDeps {
  * An org's sign-in policy changed (SEC-2/3): re-decide EVERY watch on this process, not only the org's members' — a
  * guest or former member can hold a room in one of the org's drives, and the policy binds them too. A watch holding
  * no rooms returns without reading anything, so the fan-out costs one policy read per socket that holds a room.
- * `org:changed` is broadcast once per member, so repeats for one org within `windowMs` are folded into one fan-out.
+ * Notices may repeat per member, but have no event identity: every notice queues a recheck so a distinct tightening
+ * cannot disappear, including when another recheck is already running.
  */
 export function createPolicyChangeFanout(deps: PolicyChangeFanoutDeps): (orgId: string) => void {
-  const lastFanoutAt = new Map<string, number>();
-  return (orgId) => {
-    const nowMs = deps.now();
-    for (const [id, at] of lastFanoutAt) {
-      if (nowMs - at >= deps.windowMs) lastFanoutAt.delete(id);
-    }
-    if (lastFanoutAt.has(orgId)) return;
-    lastFanoutAt.set(orgId, nowMs);
+  return () => {
     for (const watch of deps.watches()) void watch.recheck();
   };
 }

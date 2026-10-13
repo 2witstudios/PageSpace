@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
-import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from '../org-room-watch';
+import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT } from '../org-room-watch';
 
 const T0 = Date.parse('2026-10-12T12:00:00Z');
 const minutes = (n: number) => n * 60_000;
@@ -95,6 +95,33 @@ describe('org room watch', () => {
     expect(socket.leave).toHaveBeenCalledWith('drive:d');
   });
 
+  it('SEC-3 enforces last known expiry despite failed reads, retaining a still-valid room until its deadline', async () => {
+    const socket = {
+      data: { actor: credentialActor('user-1', { authenticatedAtMs: T0, assurance: 'single_factor' as const }) },
+      leave: vi.fn(), emit: vi.fn(),
+    };
+    let failing = false;
+    const watch = createOrgRoomWatch(socket, {
+      readPolicies: async () => {
+        if (failing) throw new Error('policy read failed');
+        return new Map([['d', { requireStrongSignIn: false, maximumSessionAgeMinutes: 15 }]]);
+      },
+      onLeft: vi.fn(), now: () => Date.now(),
+      setTimer: (run, delay) => setTimeout(run, delay),
+      clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>), onError: vi.fn(),
+    });
+    await watch.track('drive:d', 'd');
+    failing = true;
+    await vi.advanceTimersByTimeAsync(minutes(15) - 1);
+    await watch.recheck();
+    expect(socket.leave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.leave.mock.calls).toEqual([['drive:d']]);
+    expect(socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_reauthentication_required', resourceId: 'd' });
+    await vi.advanceTimersByTimeAsync(minutes(2));
+    expect(socket.leave).toHaveBeenCalledTimes(1);
+  });
+
   it('a watch disposed while its policy read is in flight leaves nothing and arms nothing', async () => {
     const socket = { data: { actor: credentialActor('user-1', null) }, leave: vi.fn(), emit: vi.fn() };
     let release: (value: Map<string, { requireStrongSignIn: boolean; maximumSessionAgeMinutes: number | null } | null>) => void = () => {};
@@ -160,22 +187,51 @@ describe('org room watch', () => {
       expect(member.socket.leave).toHaveBeenCalledWith('drive:d');
     });
 
-    it('SEC-2 (partial) the per-member org:changed repeats for one org are folded into one fan-out within the window; a later change fans out again', () => {
-      const recheck = vi.fn(async () => {});
-      const watch: OrgRoomWatch = { track: vi.fn(async () => {}), untrack: vi.fn(), recheck, dispose: vi.fn() };
+    it('SEC-2 distinct same-org changes within 100ms both recheck and tightening evicts', async () => {
+      const { socket, watch, current } = setup({ d: { requireStrongSignIn: false, maximumSessionAgeMinutes: null } });
+      await watch.track('drive:d', 'd');
       const fanOut = createPolicyChangeFanout({ watches: () => [watch], now: () => Date.now(), windowMs: 1_000 });
+      fanOut('org-1');
+      await vi.advanceTimersByTimeAsync(100);
+      current.d = { requireStrongSignIn: true, maximumSessionAgeMinutes: null };
+      fanOut('org-1');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.leave).toHaveBeenCalledWith('drive:d');
+      expect(socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_strong_sign_in_required', resourceId: 'd' });
+    });
 
+    it('SEC-2 a tightening notice during an earlier lookup is checked after that lookup finishes', async () => {
+      const socket = {
+        data: { actor: credentialActor('user-1', { authenticatedAtMs: T0, assurance: 'single_factor' as const }) },
+        leave: vi.fn(), emit: vi.fn(),
+      };
+      let strong = false;
+      let pause = false;
+      let release: () => void = () => {};
+      const watch = createOrgRoomWatch(socket, {
+        readPolicies: async () => {
+          const policy = { requireStrongSignIn: strong, maximumSessionAgeMinutes: null };
+          if (pause) {
+            pause = false;
+            await new Promise<void>((resolve) => { release = resolve; });
+          }
+          return new Map([['d', policy]]);
+        },
+        onLeft: vi.fn(), now: () => Date.now(),
+        setTimer: (run, delay) => setTimeout(run, delay),
+        clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>), onError: vi.fn(),
+      });
+      await watch.track('drive:d', 'd');
+      const fanOut = createPolicyChangeFanout({ watches: () => [watch], now: () => Date.now(), windowMs: 1_000 });
+      pause = true;
       fanOut('org-1');
+      await Promise.resolve();
+      strong = true;
       fanOut('org-1');
-      fanOut('org-1');
-      expect(recheck).toHaveBeenCalledTimes(1);
-
-      fanOut('org-2');
-      expect(recheck).toHaveBeenCalledTimes(2);
-
-      vi.setSystemTime(T0 + 1_000);
-      fanOut('org-1');
-      expect(recheck).toHaveBeenCalledTimes(3);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.leave).toHaveBeenCalledWith('drive:d');
+      expect(socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_strong_sign_in_required', resourceId: 'd' });
     });
   });
 });

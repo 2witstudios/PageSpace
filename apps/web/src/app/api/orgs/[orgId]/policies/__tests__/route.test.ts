@@ -31,6 +31,7 @@ vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ reconcileO
 vi.mock('@/lib/canvas/published-storage', () => ({ createPublishedObjectStore: () => ({ store: true }), isPublishConfigured: vi.fn() }));
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { findMembershipRole } from '@pagespace/lib/organizations/repository';
 import { getOrgPolicies, updateOrgPolicies } from '@pagespace/lib/organizations/policies';
@@ -68,6 +69,20 @@ beforeEach(() => {
     restored: [],
     blocked: { counts: {}, total: 0, items: [] },
     signInBlocked: null,
+  });
+});
+
+describe('policy transaction authority refusals', () => {
+  it.each([
+    ['insufficient_role', 403, 'insufficient_role'],
+    ['not_member', 404, 'org_not_found'],
+  ] as const)('Given current authority refused as %s, should return %s without announcing a change', async (reason, status, code) => {
+    vi.mocked(findMembershipRole).mockResolvedValue('ADMIN');
+    vi.mocked(updateOrgPolicies).mockResolvedValue({ ok: false, reason });
+    const response = await PATCH(req('PATCH', '', { publicShareLinks: false }), ctx);
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ code });
+    expect(announceOrgChange).not.toHaveBeenCalled();
   });
 });
 

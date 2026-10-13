@@ -75,6 +75,7 @@ export async function PATCH(request: Request, context: Context) {
     const moneyRefusal = gate.credential === 'session' ? null : delegatedPolicyPatchRefusal(parsed.patch);
     if (moneyRefusal) return apiError(403, moneyRefusal.code, moneyRefusal.message, { policy: moneyRefusal.key });
     const result = await updateOrgPolicies({ orgId, actorId: gate.userId, actorAuthentication: gate.authentication, patch: parsed.patch });
+    if (!result.ok && result.reason === 'insufficient_role') return apiError(403, result.reason, 'Insufficient organization role');
     if (!result.ok && result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
     if (!result.ok && (result.reason === 'org_strong_sign_in_required' || result.reason === 'org_reauthentication_required')) {
       // D-OW-45: loosening a sign-in policy needs a credential that satisfies the policy in force.
