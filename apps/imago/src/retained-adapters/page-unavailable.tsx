@@ -6,7 +6,6 @@ import { dispatch, transactions } from '@/ui/store/transactions';
 
 export const PAGE_UNAVAILABLE_TITLE = 'This page isn’t available';
 export const PAGE_UNAVAILABLE_DETAIL = 'The link points to a page that was moved to trash, or one you don’t have access to.';
-export const PAGE_UNAVAILABLE_NOTE = 'While it resolves, the same spot reads “Opening page…”, then the page opens in its drive with chat on the right.';
 
 export type PageUnavailableProps = {
   /** The viewer's Home drive; Browse Files leads into it, and is left out when there is none. */
@@ -17,7 +16,8 @@ const linkButtonClass = 'inline-flex h-9 items-center rounded-lg px-3.5 text-sm 
 
 /**
  * The middle a /p/ link shows when it cannot resolve to a page the viewer may open: a trashed page,
- * or one they may not see. It names neither case, and draws no Imago column beside it.
+ * or one they may not see. It names neither case. (The board's dashed note about the resolving
+ * state is a design annotation; that state is PageResolver's "Opening page…".)
  */
 export function renderPageUnavailable({ homeDriveId }: PageUnavailableProps): ReactNode {
   return (
@@ -42,10 +42,6 @@ export function renderPageUnavailable({ homeDriveId }: PageUnavailableProps): Re
         <button type="button" className={askImagoClass} onClick={() => dispatch(transactions.expandImago, undefined)}>
           Ask Imago
         </button>
-        <div className={`${notFoundDetailClass} mt-6 flex w-full items-center gap-2.5 rounded-xl border border-dashed border-accent/40 px-3.5 py-2.5 text-left text-xs`}>
-          <span className="size-3.5 shrink-0 rounded-full border-2 border-accent/30 border-t-accent" aria-hidden="true" />
-          <span>{PAGE_UNAVAILABLE_NOTE}</span>
-        </div>
       </div>
     </div>
   );

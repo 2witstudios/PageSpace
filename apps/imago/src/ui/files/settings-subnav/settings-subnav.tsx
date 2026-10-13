@@ -50,7 +50,7 @@ export function SettingsSubnav<Key extends string>({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1">
       {open && (
-        <nav aria-label={navLabel} className="flex min-h-0 w-tree-pane flex-none flex-col border-r border-hairline">
+        <nav aria-label={navLabel} className="flex min-h-0 w-settings-nav flex-none flex-col border-r border-hairline">
           <div className={paneHeaderClass}>
             <span className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{heading}</span>
             <button

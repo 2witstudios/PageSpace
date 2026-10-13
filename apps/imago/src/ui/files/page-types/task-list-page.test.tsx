@@ -21,6 +21,9 @@ const controls = (overrides: Partial<TaskListToolsControls> = {}): TaskListTools
   canEdit: true,
   statusSettings: createElement('button', { 'aria-label': 'Status settings' }),
   onNewTask: vi.fn(),
+  searchField: createElement('input', { 'aria-label': 'Filter tasks' }),
+  canManageWorkflows: false,
+  onOpenWorkflows: vi.fn(),
   ...overrides,
 });
 
@@ -92,6 +95,35 @@ describe('TaskListToolsStrip', () => {
         calls: onNewTask.mock.calls.length,
       },
       expected: { viewer: false, editor: true, calls: 1 },
+    });
+  });
+
+  test('places the filter box the page supplies inside the strip', () => {
+    const container = mount(createElement(TaskListToolsStrip, { controls: controls() }));
+    const filter = container.querySelector('input[aria-label="Filter tasks"]');
+    assert({
+      given: 'a page that supplies its filter box',
+      should: 'render that filter box inside the List controls strip',
+      actual: filter !== null && container.querySelector('[role="toolbar"]')?.contains(filter) === true,
+      expected: true,
+    });
+  });
+
+  test('shows Workflows to drive managers only and opens the workflows dialog', () => {
+    const onOpenWorkflows = vi.fn();
+    const manager = mount(createElement(TaskListToolsStrip, { controls: controls({ canManageWorkflows: true, onOpenWorkflows }) }));
+    const viewer = mount(createElement(TaskListToolsStrip, { controls: controls({ canManageWorkflows: false }) }));
+    const workflows = [...manager.querySelectorAll('button')].find((b) => b.textContent === 'Workflows');
+    if (workflows) click(workflows);
+    assert({
+      given: 'a drive manager and a viewer of the list',
+      should: 'show Workflows to the manager only, and open the dialog on click',
+      actual: {
+        manager: workflows !== undefined,
+        viewer: [...viewer.querySelectorAll('button')].some((b) => b.textContent === 'Workflows'),
+        calls: onOpenWorkflows.mock.calls.length,
+      },
+      expected: { manager: true, viewer: false, calls: 1 },
     });
   });
 

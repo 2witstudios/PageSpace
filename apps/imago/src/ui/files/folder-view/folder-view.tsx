@@ -10,6 +10,7 @@ import { todayOf } from '../../time/time';
 import { fileHref, isCreatingIn, useCreateFile } from '../create-file/create-file';
 import { onlyListed, pathTo, withPendingCreates } from '../tree-view/tree-view';
 import { useFileTree } from '../use-file-tree/use-file-tree';
+import { browseHref } from '../files-browser/files-browser-model';
 import { renderFolderView } from './folder-view.render';
 
 export type FolderViewProps = {
@@ -68,7 +69,8 @@ export function FolderView({ driveId, folderId, now = systemNow }: FolderViewPro
   }
   return renderFolderView({
     path,
-    filesHref,
+    // The Browse files link opens this folder in the browser: its path of ids from the top of the drive.
+    filesHref: browseHref(driveId, path),
     hrefFor,
     pendingIds: drawn.pendingIds,
     today: todayOf(now()),

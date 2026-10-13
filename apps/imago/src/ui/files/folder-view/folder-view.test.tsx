@@ -195,6 +195,18 @@ describe('FolderView browsing', () => {
     });
   });
 
+  test('Browse files', async () => {
+    const { container } = show({ [TREE]: () => Response.json(driveTree()) }, 'launch');
+    await listed(container);
+    const browse = [...container.querySelectorAll('a')].find((link) => link.textContent === 'Browse files');
+    assert({
+      given: 'a folder two levels down',
+      should: 'point Browse files at the folder browser, under the path of folders that holds it',
+      actual: browse?.getAttribute('href'),
+      expected: '/d1/files/browse/work/launch',
+    });
+  });
+
   test('into a child', async () => {
     const { container } = show({ [TREE]: () => Response.json(driveTree()) }, 'work');
     await listed(container);

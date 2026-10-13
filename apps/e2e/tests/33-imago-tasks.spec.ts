@@ -104,6 +104,18 @@ const checkbox = (scope: Page | Locator, title: string) =>
   scope.getByRole('checkbox', { name: new RegExp(`^(Complete|Reopen) ${title}$`) }).filter({ visible: true });
 
 /**
+ * Shows the Done group's rows: the Table groups tasks by status and starts the Done group
+ * collapsed, and a reload forgets both that and the All filter.
+ */
+const showDone = async (page: Page): Promise<void> => {
+  const all = treeOf(page).getByRole('button', { name: 'All', exact: true });
+  if ((await all.getAttribute('aria-pressed')) !== 'true') await all.click();
+  const group = treeOf(page).getByRole('button', { name: /^Done\b/ });
+  await expect(group).toBeVisible();
+  if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
+};
+
+/**
  * Adds a task with the "Add task" (or "Add subtask") control under `scope`, which writes it to
  * the list on `listPage`, and closes the field again. Resolves with what apps/web created.
  */
@@ -183,12 +195,14 @@ test('a task added in the Table view, then ticked, stays added and done across r
   const ticked = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
   await checkbox(treeOf(page), 'Write the brief').click();
   await expectOk(await ticked);
+  await showDone(page);
   await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
   const done = await storedTask(task.id);
   expect(done?.status).toBe('completed');
   expect(done?.completedAt).not.toBeNull();
 
   await reload(page);
+  await showDone(page);
   await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
 });
 
