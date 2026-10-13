@@ -22,8 +22,8 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
   /** Materialize a new agent conversation with its source atomically, without sending a turn. */
   readonly onChooseDraftSource?: (walletId: string) => Promise<void>;
 } = {}): ReactNode {
-  const { spend: conversation, choose } = useConversationSpend(conversationId, { driveId, isGlobal });
-  const { spend: drive } = useDriveSpend(conversationId ? null : driveId);
+  const { spend: conversation, isPending: conversationPending, error: conversationError, choose, refresh: refreshConversation } = useConversationSpend(conversationId, { driveId, isGlobal });
+  const { spend: drive, isPending: drivePending, error: driveError, refresh: refreshDrive } = useDriveSpend(conversationId ? null : driveId);
   const scoped = conversationId !== null || driveId !== null;
   const { data, mutate } = useSWR<unknown>(scoped ? null : CREDITS);
   const socket = useSocketStore(state => state.socket);
@@ -47,6 +47,22 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
     tone: 'normal' as const,
   } : refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null) : null;
   const personal = scoped ? null : spendSourceOf(data);
+  // JOURNEYS-2: in a drive (multi-source) context an UNRESOLVED source is state the sender
+  // must see, not silence — sending pauses (the composer's readiness gate reads the same
+  // preview) until the source resolves, and a failed preview offers the retry.
+  if (scoped && conversation === null && drive === null) {
+    const failed = (conversationId ? conversationError : driveError) !== null && (conversationId ? conversationError : driveError) !== undefined;
+    const retry = () => { if (conversationId) void refreshConversation(); else void refreshDrive(); };
+    return (
+      <div className={spendStripClass} role="status" aria-label={failed ? 'Credit source could not be checked' : 'Resolving credit source'}>
+        {renderIcon({ name: 'wallet', size: 13 })}
+        <span className="min-w-0 flex-1 truncate">
+          {failed ? 'Who pays could not be checked — sending is paused until the source is shown.' : 'Resolving who pays…'}
+        </span>
+        {failed ? <button type="button" className="font-medium text-accent-deep hover:underline" onClick={retry}>Retry check</button> : null}
+      </div>
+    );
+  }
   if (strip === null && personal === null) return null;
   const refused = strip?.tone === 'refused';
   const label = strip?.label ?? personal?.label;

@@ -4,7 +4,8 @@ import type { MyWallets } from '@pagespace/lib/services/drive-wallet-service';
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 const put = vi.hoisted(() => vi.fn(async () => ({})));
-vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({ ...(await importOriginal<object>()), put }));
+const fetchWithAuth = vi.hoisted(() => vi.fn(async () => ({ ok: true, json: async () => ({ alwaysOwnCredits: false, alwaysOwnCreditsInDrive: null }) })));
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({ ...(await importOriginal<object>()), put, fetchWithAuth }));
 const state = vi.hoisted(() => ({ wallets: null as MyWallets | null, refresh: vi.fn(async () => undefined) }));
 vi.mock('@/hooks/useMyWallets', () => ({ useMyWallets: () => ({ wallets: state.wallets, isLoading: false, refresh: state.refresh }) }));
 vi.mock('@/hooks/useCreditBalance', () => ({ useCreditBalance: () => ({ balance: { monthly: { allowance: 90_000, periodEnd: '2026-10-01T00:00:00Z' } } }) }));
@@ -58,14 +59,14 @@ describe('Settings › Usage › Wallets', () => {
     expect(screen.getByTestId('usage-fund-drive').textContent).toContain('Side project wallet');
     expect(screen.getByTestId('usage-fund-pool').textContent).toContain('90,000 credits');
     // Default: choosing one PUTs the default route and the choice is marked once saved.
-    const own = screen.getByRole('radio', { name: /Always my own credits/ });
+    const own = screen.getByRole('radio', { name: /My own credits/ });
     expect(own.getAttribute('aria-checked')).toBe('false');
     fireEvent.click(own);
     await waitFor(() => expect(put).toHaveBeenCalledWith('/api/wallets/default', { source: 'own_credits' }));
     expect(state.refresh).toHaveBeenCalled();
     state.wallets = { ...state.wallets, personal: { ...state.wallets.personal, defaultSpendSource: 'own_credits' } };
     render(<UsageWallets />);
-    expect(screen.getAllByRole('radio', { name: /Always my own credits/ }).at(-1)?.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getAllByRole('radio', { name: /My own credits/ }).at(-1)?.getAttribute('aria-checked')).toBe('true');
   });
 
   it('UI-10 (partial) lists what I spend from: my credits, my seat (my own allowance, never the pool), and drive wallets with a paused one saying so', () => {
@@ -97,7 +98,7 @@ describe('Settings › Usage › Wallets', () => {
 
   it('SPEND-3 (partial) my default is saved through the default route and preselects new conversations', async () => {
     render(<UsageWallets />);
-    fireEvent.click(screen.getByRole('radio', { name: /Always my own credits/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /My own credits/ }));
     await waitFor(() => expect(put).toHaveBeenCalledWith('/api/wallets/default', { source: 'own_credits' }));
     expect(state.refresh).toHaveBeenCalled();
   });
@@ -105,7 +106,7 @@ describe('Settings › Usage › Wallets', () => {
   it('SPEND-3 (partial) with no default set, "The drive\'s wallet, if it has one" shows as selected (the out-of-box default) and promises only what the gate does', () => {
     render(<UsageWallets />);
     expect(screen.getByRole('radio', { name: /The drive's wallet, if it has one/ }).getAttribute('aria-checked')).toBe('true');
-    expect(screen.getByRole('radio', { name: /Always my own credits/ }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('radio', { name: /My own credits/ }).getAttribute('aria-checked')).toBe('false');
     expect(screen.getByText(/Where there isn't one you can spend, your own credits/)).toBeTruthy();
     expect(screen.queryByText(/Then your allowance/)).toBeNull();
   });
@@ -113,8 +114,23 @@ describe('Settings › Usage › Wallets', () => {
   it('SPEND-3 (partial) a saved own-credits default shows as selected', () => {
     state.wallets = { ...base, personal: { ...base.personal, defaultSpendSource: 'own_credits' } };
     render(<UsageWallets />);
-    expect(screen.getByRole('radio', { name: /Always my own credits/ }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('radio', { name: /My own credits/ }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('radio', { name: /The drive's wallet, if it has one/ }).getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('JOURNEYS-1 the ABSOLUTE switches are their own controls — global and per-drive, on the always-own-credits route, never conflated with the editable default', async () => {
+    render(<UsageWallets />);
+    // The card reads the switches for the picked drive.
+    await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledWith('/api/wallets/always-own-credits?driveId=d-product'));
+    // The default radio may only promise a preselection; "always" lives in the absolute card.
+    expect(screen.getByRole('radio', { name: /My own credits/ }).textContent).toContain('A conversation can still switch to a wallet');
+    expect(screen.getByText('Always my own credits')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('always-own-credits-global'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/api/wallets/always-own-credits', { driveId: null, enabled: true }));
+    fireEvent.click(screen.getByTestId('always-own-credits-drive'));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/api/wallets/always-own-credits', { driveId: 'd-product', enabled: true }));
+    expect(state.refresh).toHaveBeenCalled();
   });
 
   it('UI-12 (partial) every amount is a credit count, never a dollar figure', () => {

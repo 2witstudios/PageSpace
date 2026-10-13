@@ -22,6 +22,7 @@ import { HomeLine } from '@/retained/components/ai/chat/layouts/HomeLine';
 import { HomeSuggestions } from '@/retained/components/ai/chat/layouts/HomeSuggestions';
 import { useHomeSignals } from '@/retained/hooks/useHomeSignals';
 import { SpendStrip } from '@/ui/chat/spend-strip/spend-strip';
+import { useDriveSpend } from '@/retained/hooks/useConversationSpend';
 import { OnboardingGate } from '@/retained/components/onboarding/OnboardingGate';
 
 /** Classic's Home line and suggestions for a new, empty conversation; picking one fills the composer. */
@@ -64,6 +65,12 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
   } | null>(null);
   const input = useUiState(state => state.resources.chatDraft);
   const { attachments, addFiles, removeFile, getFilesForSend } = useChatAttachments();
+  // JOURNEYS-2: the first send in a drive waits for the drive's spend preview to RESOLVE.
+  // undefined = no drive context (never gated); false = still pending or failed (gated).
+  const firstSendDrivePreview = useDriveSpend(page?.driveId ?? null);
+  const firstSendPreviewResolved: boolean | undefined = page?.driveId
+    ? firstSendDrivePreview.spend !== null
+    : undefined;
   const restoreDraft = (text: string) => {
     if (getUiState().resources.chatDraft === '') dispatch(transactions.setChatDraft, text);
   };
@@ -91,6 +98,9 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     const text = getUiState().resources.chatDraft;
     const files = getFilesForSend();
     if (creating.current || !agentId || !page || permissions?.canEdit !== true || (!text.trim() && !files.length)) return;
+    // JOURNEYS-2: unresolved source preview → no conversation, no charge. The strip above
+    // the composer shows the loading/retry state; the send resumes once it resolves.
+    if (page.driveId && firstSendPreviewResolved === false) return;
     creating.current = true;
     setPreparing(true);
     setCreationError(false);
@@ -125,7 +135,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}
     <div className="p-2">{aboveComposer}<SpendStrip conversationId={null} driveId={page.driveId} onChooseDraftSource={permissions?.canEdit === true && !preparing ? chooseDraftSource : undefined} /><ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
-      disabled={preparing || permissions?.canEdit !== true} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention
+      disabled={preparing || permissions?.canEdit !== true || firstSendPreviewResolved === false} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention
       placeholder={placeholder ?? `Message ${name}...`} inputLabel={`Message ${name}`} hasVision={hasVisionCapability(page.aiModel || '')}
       attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} driveId={page.driveId} crossDrive commandDriveId={page.driveId} /></div>
   </div></RetainedSurface>;

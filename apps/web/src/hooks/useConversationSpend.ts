@@ -17,6 +17,8 @@ export interface ConversationSpend {
 
 /** The realtime event a drive wallet's viewers hear (lib realtime/org-wallet-events; payloads carry no amounts). */
 export const WALLET_CHANGED_EVENT = 'wallet:changed';
+/** JOURNEYS-3: this person changed a spend preference elsewhere — conversation source, default, absolute switch. */
+export const SPEND_PREFERENCES_EVENT = 'spend:preferences';
 
 export function conversationSpendKey(conversationId: string | null, driveId: string | null, isGlobal: boolean): string | null {
   if (!conversationId) return null;
@@ -83,11 +85,16 @@ export function useConversationSpend(conversationId: string | null, options: { d
       if (payload?.driveId && payload.driveId === spendDriveId) void mutate();
     };
     const onCredits = () => void mutate();
+    // JOURNEYS-3: another window of this person changed a spend preference — the displayed
+    // source must re-resolve so it never disagrees with the next send's wallet.
+    const onPreferences = () => void mutate();
     socket.on(WALLET_CHANGED_EVENT, onWallet);
     socket.on('credits:updated', onCredits);
+    socket.on(SPEND_PREFERENCES_EVENT, onPreferences);
     return () => {
       socket.off(WALLET_CHANGED_EVENT, onWallet);
       socket.off('credits:updated', onCredits);
+      socket.off(SPEND_PREFERENCES_EVENT, onPreferences);
     };
   }, [socket, key, spendDriveId, mutate]);
 
@@ -128,7 +135,7 @@ const driveFetcher = async (url: string): Promise<DriveSpend | null> => {
  */
 export function useDriveSpend(driveId: string | null) {
   const key = driveSpendKey(driveId);
-  const { data, mutate } = useSWR<DriveSpend | null>(key, driveFetcher, { revalidateOnFocus: false });
+  const { data, error, isLoading, mutate } = useSWR<DriveSpend | null>(key, driveFetcher, { revalidateOnFocus: false });
   const socket = useSocketStore((state) => state.socket);
 
   useEffect(() => {
@@ -137,13 +144,17 @@ export function useDriveSpend(driveId: string | null) {
       if (payload?.driveId && payload.driveId === driveId) void mutate();
     };
     const onCredits = () => void mutate();
+    const onPreferences = () => void mutate();
     socket.on(WALLET_CHANGED_EVENT, onWallet);
     socket.on('credits:updated', onCredits);
+    socket.on(SPEND_PREFERENCES_EVENT, onPreferences);
     return () => {
       socket.off(WALLET_CHANGED_EVENT, onWallet);
       socket.off('credits:updated', onCredits);
+      socket.off(SPEND_PREFERENCES_EVENT, onPreferences);
     };
   }, [socket, key, driveId, mutate]);
 
-  return { spend: data ?? null };
+  // JOURNEYS-2: send readiness reads this preview too — it exposes its state and a retry.
+  return { spend: data ?? null, isPending: data === undefined && !error, error, isLoading, refresh: mutate };
 }

@@ -76,7 +76,7 @@ import {
 import { transactionWithOrgAudit, type OrgAuditEvent } from '../audit/org-audit';
 import { decryptUserRow } from '../auth/user-repository';
 import type { OrgApiErrorCode } from '../organizations/api-error-codes';
-import { announceDriveWalletChange, announceWalletChange } from '../billing/wallet-change-events';
+import { announceDriveWalletChange, announceSpendPreferenceChange, announceWalletChange } from '../billing/wallet-change-events';
 import { announceOrgChange } from '../organizations/org-change-events';
 import type { AccessActor, OrgAuthenticationDenialCode } from '../permissions/access-actor';
 
@@ -1376,6 +1376,9 @@ export async function setPersonalDefaultSource(
   if (refused) return refused;
   const walletId = await ensurePersonalRootWalletId(db, userId);
   await db.update(wallets).set({ defaultSpendSource: source }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
+  // JOURNEYS-3: the person's other windows refetch their previews, so what they display
+  // stays the source the next send will actually spend.
+  void announceSpendPreferenceChange(userId);
   return { ok: true, defaultSpendSource: source };
 }
 
@@ -1417,6 +1420,7 @@ export async function setAlwaysOwnCredits(
   if (input.driveId === null) {
     const walletId = await ensurePersonalRootWalletId(db, userId);
     await db.update(wallets).set({ alwaysOwnCredits: input.enabled }).where(and(eq(wallets.id, walletId), personalRootWalletOf(userId)));
+    void announceSpendPreferenceChange(userId);
     return { ok: true, driveId: null, enabled: input.enabled };
   }
   if (!(await getUserDriveAccess(actor, input.driveId))) return notFound();
@@ -1425,6 +1429,7 @@ export async function setAlwaysOwnCredits(
   } else {
     await db.delete(driveSpendOverrides).where(and(eq(driveSpendOverrides.userId, userId), eq(driveSpendOverrides.driveId, input.driveId)));
   }
+  void announceSpendPreferenceChange(userId);
   return { ok: true, driveId: input.driveId, enabled: input.enabled };
 }
 
@@ -1571,5 +1576,7 @@ export async function setConversationSpend(
     .update(conversations)
     .set({ chosenWalletId: walletId })
     .where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId)));
+  // JOURNEYS-3: the person's other windows refetch this conversation's preview.
+  void announceSpendPreferenceChange(userId);
   return getConversationSpend(actor, conversationId, globalDriveId);
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Building2, Folder, HandCoins, Sparkles } from 'lucide-react';
@@ -12,7 +12,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
 import { Skeleton } from '@/components/ui/skeleton';
-import { put } from '@/lib/auth/auth-fetch';
+import { Switch } from '@/components/ui/switch';
+import { fetchWithAuth, put } from '@/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useDriveStore } from '@/hooks/useDrive';
@@ -42,6 +43,7 @@ export function UsageWallets() {
       <SpendFromSection wallets={wallets} />
       <FundSection wallets={wallets} />
       <DefaultSourceCard stored={wallets.personal.defaultSpendSource} onChanged={refresh} />
+      <AbsoluteOwnCreditsCard drives={wallets.driveWallets} onChanged={refresh} />
     </div>
   );
 }
@@ -213,7 +215,9 @@ function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal'
   };
   const options = [
     { value: 'drive_wallet' as const, label: "The drive's wallet, if it has one", hint: "Where there isn't one you can spend, your own credits." },
-    { value: 'own_credits' as const, label: 'Always my own credits', hint: 'Never spend a wallet or an allowance unless you switch for that conversation.' },
+    // JOURNEYS-1: this is a PRESELECTION, not the absolute switch — a conversation (or its
+    // window) can still choose a drive wallet, and the label may not promise otherwise.
+    { value: 'own_credits' as const, label: 'My own credits', hint: 'What new conversations start on. A conversation can still switch to a wallet — the absolute switch below never can.' },
   ];
   return (
     <Card>
@@ -238,6 +242,119 @@ function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal'
             </button>
           ))}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface AlwaysOwnCreditsState {
+  alwaysOwnCredits: boolean;
+  alwaysOwnCreditsInDrive: boolean | null;
+}
+
+/**
+ * The SPEND-5 ABSOLUTE switches (JOURNEYS-1): one global, one per drive. Either makes every
+ * call own-credits-or-refusal — no default, no preselection, no conversation switch can open
+ * another wallet. This is the control the old "Always my own credits" radio label promised
+ * and the default never delivered.
+ */
+function AbsoluteOwnCreditsCard({ drives, onChanged }: { drives: MyWallets['driveWallets']; onChanged: () => Promise<unknown> }) {
+  const [state, setState] = useState<AlwaysOwnCreditsState | null>(null);
+  const [selectedDriveId, setSelectedDriveId] = useState<string>(drives[0]?.driveId ?? '');
+  const [pending, setPending] = useState(false);
+
+  const read = async () => {
+    try {
+      const driveParam = selectedDriveId ? `?driveId=${encodeURIComponent(selectedDriveId)}` : '';
+      const response = await fetchWithAuth(`/api/wallets/always-own-credits${driveParam}`);
+      if (!response.ok) throw new Error(`Failed to read: ${response.status}`);
+      setState(await response.json() as AlwaysOwnCreditsState);
+    } catch {
+      toast.error('Your spend switches could not be read. Try again.');
+    }
+  };
+
+  // Re-read when the selected drive changes or the wallets behind us refresh.
+  useEffect(() => { void read(); /* eslint-disable-line react-hooks/exhaustive-deps -- re-reads on the selected drive only */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDriveId]);
+
+  const setSwitch = async (driveId: string | null, enabled: boolean) => {
+    if (pending) return;
+    setPending(true);
+    const optimistic = driveId === null
+      ? { alwaysOwnCredits: enabled, alwaysOwnCreditsInDrive: state?.alwaysOwnCreditsInDrive ?? null }
+      : { alwaysOwnCredits: state?.alwaysOwnCredits ?? false, alwaysOwnCreditsInDrive: enabled };
+    setState(optimistic); // the switch must never lie while the request is in flight
+    try {
+      await put('/api/wallets/always-own-credits', { driveId, enabled });
+      await onChanged(); // refresh wallets (and, via the spend-preference event, other windows' previews)
+    } catch (error) {
+      toast.error(orgErrorMessage(error, 'Your switch could not be saved. Try again.'));
+      await read(); // read the truth back before claiming anything
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const selectedDrive = drives.find((d) => d.driveId === selectedDriveId) ?? null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Always my own credits</CardTitle>
+        <CardDescription>The absolute switch: while on, nothing you do can spend a drive wallet — calls either use your credits or are refused.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <label className="flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3">
+          <span className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium">Everywhere, always</span>
+            <span className="text-xs text-muted-foreground">No conversation, window or drive can choose anything else.</span>
+          </span>
+          <Switch
+            checked={state?.alwaysOwnCredits ?? false}
+            disabled={pending || state === null}
+            onCheckedChange={(enabled) => void setSwitch(null, enabled)}
+            aria-label="Always my own credits, globally"
+            data-testid="always-own-credits-global"
+          />
+        </label>
+        {drives.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border px-3.5 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium">One drive only</span>
+                <span className="text-xs text-muted-foreground">The same absolute rule, scoped to the drive you pick.</span>
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" data-testid="always-own-credits-drive-picker">
+                    {selectedDrive?.driveName ?? 'Pick a drive'}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Drives you can spend in</DropdownMenuLabel>
+                  {drives.map((d) => (
+                    <DropdownMenuItem key={d.driveId} onClick={() => setSelectedDriveId(d.driveId)}>
+                      {d.driveName ?? d.driveId}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {selectedDrive && (
+              <label className="flex items-center justify-between gap-3 rounded-md bg-accent/50 px-3 py-2.5">
+                <span className="text-sm">{selectedDrive.driveName ?? selectedDrive.driveId}</span>
+                <Switch
+                  checked={state?.alwaysOwnCreditsInDrive ?? false}
+                  disabled={pending || state === null}
+                  onCheckedChange={(enabled) => void setSwitch(selectedDrive.driveId, enabled)}
+                  aria-label={`Always my own credits in ${selectedDrive.driveName ?? 'this drive'}`}
+                  data-testid="always-own-credits-drive"
+                />
+              </label>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

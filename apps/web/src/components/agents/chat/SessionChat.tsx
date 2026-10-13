@@ -31,6 +31,7 @@ import { Conversation, ConversationScrollButton } from '@/components/ai/ui/conve
 import { SidebarMessagesContent } from '@/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
 import { hasVisionCapability } from '@/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/lib/ai/shared/hooks/useOpenPagePane';
+import { useConversationSpend } from '@/hooks/useConversationSpend';
 import { useSideQuestion, parseSideQuestionInput } from '@/components/ai/btw/useSideQuestion';
 import { SideQuestionCard } from '@/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/types/agent';
@@ -129,11 +130,22 @@ export function SessionChatView({
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
   const sideQuestion = useSideQuestion(conversationId);
 
+  // JOURNEYS-2: the first send in a drive (multi-source) context waits for a RESOLVED,
+  // displayed source. An unresolved preview must not charge the drive on an undisclosed
+  // wallet — submission is paused, and the strip above the composer says why (with a retry
+  // on failure). SWR dedupes this read with the strip's.
+  const spendPreview = useConversationSpend(
+    spendScope ? conversationId : null,
+    { driveId: spendScope?.driveId ?? null, isGlobal: spendScope?.isGlobal ?? false },
+  );
+  const sendPausedBySpend = Boolean(spendScope?.driveId) && spendPreview.spend === null;
+
   useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
 
   const handleSendClick = useCallback(async () => {
     const text = input;
     if (!text.trim()) return;
+    if (sendPausedBySpend) return; // the strip shows loading/retry; no reservation, no charge
     // Clear immediately — typing during the handoff wait must not merge into
     // the old draft; restore only if the composer is still empty on refusal.
     setInput('');
@@ -141,7 +153,7 @@ export function SessionChatView({
     if (!dispatched) {
       setInput((current) => (current === '' ? text : current));
     }
-  }, [input, chat]);
+  }, [input, chat, sendPausedBySpend]);
 
   const handleSideQuestion = useCallback(() => {
     const question = parseSideQuestionInput(input) ?? '';

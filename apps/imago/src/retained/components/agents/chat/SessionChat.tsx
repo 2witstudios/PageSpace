@@ -38,6 +38,7 @@ import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/retained/lib/ai/shared/hooks/useOpenPagePane';
 import { useChatAttachments } from '@/retained-adapters/chat-attachments';
 import { useSideQuestion, parseSideQuestionInput } from '@/retained/components/ai/btw/useSideQuestion';
+import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
 import { SideQuestionCard } from '@/retained/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/retained/types/agent';
 import { SpendSurfaceProvider } from '@/retained/components/wallets/SpendSurface';
@@ -162,10 +163,20 @@ export function SessionChatView({
 
   useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
 
+  // JOURNEYS-2: the first send in a drive (multi-source) context waits for a RESOLVED,
+  // displayed source — an unresolved preview must not charge an undisclosed wallet. The
+  // strip above the composer shows the loading/retry state; SWR dedupes this read.
+  const spendPreview = useConversationSpend(
+    spendScope ? conversationId : null,
+    { driveId: spendScope?.driveId ?? null, isGlobal: spendScope?.isGlobal ?? false },
+  );
+  const sendPausedBySpend = Boolean(spendScope?.driveId) && spendPreview.spend === null;
+
   const handleSendClick = useCallback(async () => {
     const text = input;
     const files = getFilesForSend();
     if (!text.trim() && files.length === 0) return;
+    if (sendPausedBySpend) return; // the strip shows loading/retry; no reservation, no charge
     const sentIds = attachments.filter(attachment => !attachment.processing && attachment.dataUrl).map(attachment => attachment.id);
     // Clear immediately — typing during the handoff wait must not merge into
     // the old draft; restore only if the composer is still empty on refusal.
@@ -175,7 +186,7 @@ export function SessionChatView({
     if (!dispatched) {
       setInput((current) => (current === '' ? text : current));
     }
-  }, [input, chat, attachments, getFilesForSend, removeFile, setInput]);
+  }, [input, chat, attachments, getFilesForSend, removeFile, setInput, sendPausedBySpend]);
 
   const handleSideQuestion = useCallback(() => {
     const question = parseSideQuestionInput(input) ?? '';

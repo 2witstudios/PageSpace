@@ -20,6 +20,8 @@ import { driveWalletRoom } from './rooms';
 
 export const WALLET_CHANGED_EVENT = 'wallet:changed' as const;
 export const ORG_CHANGED_EVENT = 'org:changed' as const;
+/** JOURNEYS-3: one person's spend preferences changed (conversation source, default, absolute switches). */
+export const SPEND_PREFERENCES_EVENT = 'spend:preferences' as const;
 
 export type WalletChange = 'balance' | 'allocation' | 'status' | 'caps' | 'rules';
 /**
@@ -36,6 +38,21 @@ export interface RealtimeMessage<P> {
 
 export interface WalletChangedPayload { driveId: string; walletId: string; change: WalletChange }
 export interface OrgChangedPayload { orgId: string; change: OrgChange }
+export interface SpendPreferencesPayload { userId: string }
+
+/** The person's own notifications room: every window of theirs hears it. */
+export function spendPreferencesMessage(input: SpendPreferencesPayload): RealtimeMessage<SpendPreferencesPayload> {
+  return { channelId: `notifications:${input.userId}`, event: SPEND_PREFERENCES_EVENT, payload: { userId: input.userId } };
+}
+
+/** Tell the person's windows a spend preference changed. Never throws. */
+export async function emitSpendPreferencesChanged(input: SpendPreferencesPayload): Promise<void> {
+  try {
+    await send(spendPreferencesMessage(input));
+  } catch (error) {
+    loggers.realtime.warn('spend:preferences broadcast failed', { ...errorLogFields(error), userId: input.userId });
+  }
+}
 
 export function walletChangedMessage(input: WalletChangedPayload): RealtimeMessage<WalletChangedPayload> {
   return { channelId: driveWalletRoom(input.driveId), event: WALLET_CHANGED_EVENT, payload: { driveId: input.driveId, walletId: input.walletId, change: input.change } };

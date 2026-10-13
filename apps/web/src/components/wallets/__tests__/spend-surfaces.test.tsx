@@ -8,13 +8,16 @@ vi.mock('sonner', () => ({ toast }));
 
 const spendState = vi.hoisted(() => ({
   spend: null as ConversationSpend | null,
+  isPending: false,
+  error: undefined as unknown,
+  refresh: vi.fn(async () => undefined),
   choose: vi.fn(async () => undefined),
 }));
 vi.mock('@/hooks/useConversationSpend', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks/useConversationSpend')>();
   return {
     ...actual,
-    useConversationSpend: () => ({ spend: spendState.spend, choose: spendState.choose, error: undefined, isLoading: false, refresh: vi.fn() }),
+    useConversationSpend: () => ({ spend: spendState.spend, isPending: spendState.isPending, error: spendState.error, isLoading: false, refresh: spendState.refresh, choose: spendState.choose }),
   };
 });
 vi.mock('@/hooks/useDriveWallet', () => ({
@@ -41,10 +44,37 @@ const conversation = (options: SurfaceChoice[], resolved: SurfaceDecision): Conv
 
 beforeEach(() => {
   spendState.spend = null;
+  spendState.isPending = false;
+  spendState.error = undefined;
+  spendState.refresh.mockClear();
   spendState.choose.mockClear();
   toast.success.mockClear();
   toast.error.mockClear();
   useSpendContextStore.setState({ entries: [], active: null });
+});
+
+describe('JOURNEYS-2: an unresolved source preview is state the sender sees', () => {
+  const context = { conversationId: 'c1', driveId: 'd-product', isGlobal: false };
+
+  it('a failed preview names the pause and offers the retry; the retry re-reads', () => {
+    spendState.error = new Error('503');
+    render(<ComposerSpendStrip {...context} hasMessages={false} />);
+    expect(screen.getByTestId('composer-spend-strip-error').textContent).toContain('sending is paused');
+    fireEvent.click(screen.getByTestId('composer-spend-retry'));
+    expect(spendState.refresh).toHaveBeenCalled();
+  });
+
+  it('a still-resolving preview says so instead of silently hiding the disclosure', () => {
+    spendState.isPending = true;
+    render(<ComposerSpendStrip {...context} hasMessages={false} />);
+    expect(screen.getByTestId('composer-spend-strip-pending').textContent).toContain('Resolving who pays');
+  });
+
+  it('no drive context (one source): nothing to disclose, no strip', () => {
+    spendState.error = new Error('503');
+    render(<ComposerSpendStrip conversationId="c1" driveId={null} isGlobal={false} hasMessages={false} />);
+    expect(screen.queryByTestId('composer-spend-strip-error')).toBeNull();
+  });
 });
 
 describe('SpendSourcePopover: the header chip', () => {

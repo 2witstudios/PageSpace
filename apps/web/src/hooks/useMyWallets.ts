@@ -5,7 +5,7 @@ import useSWR from 'swr';
 import type { MyWallets } from '@pagespace/lib/services/drive-wallet-service';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
-import { WALLET_CHANGED_EVENT } from './useConversationSpend';
+import { SPEND_PREFERENCES_EVENT, WALLET_CHANGED_EVENT } from './useConversationSpend';
 
 export type { MyWallets };
 
@@ -27,9 +27,9 @@ export function useMyWallets(enabled: boolean) {
   useEffect(() => {
     if (!socket || !enabled) return;
     const refetch = () => void mutate();
-    for (const event of ['credits:updated', 'org:changed', WALLET_CHANGED_EVENT]) socket.on(event, refetch);
+    for (const event of ['credits:updated', 'org:changed', WALLET_CHANGED_EVENT, SPEND_PREFERENCES_EVENT]) socket.on(event, refetch);
     return () => {
-      for (const event of ['credits:updated', 'org:changed', WALLET_CHANGED_EVENT]) socket.off(event, refetch);
+      for (const event of ['credits:updated', 'org:changed', WALLET_CHANGED_EVENT, SPEND_PREFERENCES_EVENT]) socket.off(event, refetch);
     };
   }, [socket, enabled, mutate]);
 
