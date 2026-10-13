@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -421,7 +421,7 @@ describe('chatContextFor() with names', () => {
         chatContextFor(stageFor('/drive-1/tasks')),
       ],
       expected: [
-        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask about your files…' },
+        { density: 'roomy', contextLabel: 'Files in context', placeholder: 'Ask across Files, or @mention a page' },
         {
           density: 'roomy',
           contextLabel: 'Messages in context',
@@ -505,6 +505,33 @@ describe('chatContextFor() before names load', () => {
         chatContextFor(stageFor('/drive-1/files/page-1'), { object: '   ' }).contextLabel,
       ],
       expected: ['This drive in context', 'This page in context'],
+    });
+  });
+});
+
+describe('chatChipFor() (IMC-2.1)', () => {
+  test('the bare name of what Imago answers about', () => {
+    assert({
+      given: 'a page, a setting, a drive tool, the account, a section index and the chat home',
+      should: 'name the page, the screen, "Account", the section, and nothing on the chat home',
+      actual: [
+        chatChipFor(stageFor('/d1/files/p1'), { object: 'Q4 Launch Plan' }),
+        chatChipFor(stageFor('/d1/settings/general'), {}),
+        chatChipFor(stageFor('/d1/calendar'), {}),
+        chatChipFor(stageFor('/account/display'), {}),
+        chatChipFor(stageFor('/d1/files'), {}),
+        chatChipFor(stageFor('/d1'), {}),
+      ],
+      expected: ['Q4 Launch Plan', 'Drive settings', 'Calendar', 'Account', 'Files', null],
+    });
+  });
+
+  test('a page whose name has not loaded', () => {
+    assert({
+      given: 'a page open before its name arrives',
+      should: 'show no chip rather than a placeholder',
+      actual: chatChipFor(stageFor('/d1/files/p1'), {}),
+      expected: null,
     });
   });
 });

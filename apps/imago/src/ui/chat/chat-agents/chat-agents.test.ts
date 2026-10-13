@@ -21,11 +21,11 @@ describe('agentMenu()', () => {
           {
             label: 'Imago',
             options: [
-              { value: 'p-imago', title: 'Imago', disabled: false },
+              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model' },
             ],
           },
           {
-            label: 'Alpha',
+            label: 'Agents in Alpha',
             options: [
               { value: 'a1', title: 'Support', disabled: false },
               { value: 'a2', title: 'Release notes', disabled: false },
@@ -56,7 +56,7 @@ describe('agentMenu()', () => {
       expected: [
         {
           label: 'Imago',
-          options: [{ value: 'pending:imago', title: 'Imago', disabled: true }],
+          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model' }],
         },
       ],
     });
@@ -73,7 +73,7 @@ describe('agentMenu()', () => {
         elsewhere.groups.map((group) => group.label),
         elsewhere.groups.at(-1)?.options,
       ],
-      expected: ['a2', 'b7', ['Imago', 'Beta', 'Chosen'], [{ value: 'b7', title: 'Legal', disabled: false }]],
+      expected: ['a2', 'b7', ['Imago', 'Agents in Beta', 'Chosen'], [{ value: 'b7', title: 'Legal', disabled: false }]],
     });
   });
 
@@ -100,6 +100,34 @@ describe('agentFor()', () => {
         agentFor(lists, 'zz'),
       ],
       expected: [null, { id: 'a1', title: 'Support' }, undefined, undefined],
+    });
+  });
+});
+
+describe('the v3 picker rows (IMC-2.1)', () => {
+  const builtins = [{ key: 'imago', title: 'Imago', pageId: 'p-imago' }] as const;
+  const driveAgents = [
+    { id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5', parentId: 'f-launch' },
+    { id: 'a2', title: 'Inbox Triage', aiModel: 'claude-haiku-5-5', parentId: 'root' },
+  ];
+  const folders: Readonly<Record<string, string>> = { 'f-launch': 'Launch' };
+  const menu = agentMenu({
+    builtins: [...builtins],
+    driveAgents,
+    driveName: 'Studio',
+    selected: null,
+    folderTitle: (id) => folders[id],
+  });
+
+  test('Imago first, then the drive’s agents', () => {
+    assert({
+      given: 'the Imago agent and two drive agents',
+      should: 'offer Imago (global, your model) then "Agents in Studio" with model · folder',
+      actual: menu.groups.map((group) => [group.label, group.options.map((option) => [option.title, option.meta])]),
+      expected: [
+        ['Imago', [['Imago', 'Global · your chosen model']]],
+        ['Agents in Studio', [['Launch Agent', 'claude-sonnet-5-5 · Launch'], ['Inbox Triage', 'claude-haiku-5-5 · Studio']]],
+      ],
     });
   });
 });

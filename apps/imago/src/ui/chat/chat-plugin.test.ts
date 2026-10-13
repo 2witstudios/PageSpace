@@ -20,7 +20,7 @@ describe('chatPlugin', () => {
     const first = chatPlugin.resources();
     assert({
       given: 'the chat slice’s resources, built twice, and a fresh UI state',
-      should: 'stream nothing, draft nothing, open no conversation and no new chat, fresh each time and composed into the initial state',
+      should: 'stream nothing, draft nothing, open no conversation and no new chat, show the thread, fresh each time and composed into the initial state',
       actual: [
         first,
         first === chatPlugin.resources(),
@@ -29,12 +29,13 @@ describe('chatPlugin', () => {
           createInitialState().resources.chatDraft,
           createInitialState().resources.chatConversationId,
           createInitialState().resources.chatNew,
+          createInitialState().resources.chatView,
         ],
       ],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false },
+        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
         false,
-        [null, '', null, false],
+        [null, '', null, false, 'thread'],
       ],
     });
   });
@@ -216,12 +217,44 @@ describe('chatPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the chat slice',
-      should: 'start with nothing streaming, no draft, no conversation, Imago and no new chat, and own the streaming, draft, conversation, agent and new chat transactions',
+      should: 'start with nothing streaming, no draft, no conversation, Imago, no new chat and the thread, and own the streaming, draft, conversation, agent, new chat and History transactions',
       actual: [chatPlugin.resources(), Object.keys(chatPlugin.transactions).sort()],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false },
-        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'startNewChat', 'startStreaming'],
+        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
+        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'startNewChat', 'startStreaming', 'toggleChatHistory'],
       ],
+    });
+  });
+});
+
+describe('Imago’s History view (IMC-2.1)', () => {
+  const { toggleChatHistory, openConversation, startNewChat } = chatPlugin.transactions;
+  test('History toggles the view; opening a conversation or a new chat returns to the thread', () => {
+    const history = toggleChatHistory(createInitialState());
+    assert({
+      given: 'History pressed, then a conversation opened, and History then New chat',
+      should: 'show the history, then the thread each time',
+      actual: [
+        history.resources.chatView,
+        openConversation(history, 'c1').resources.chatView,
+        startNewChat(toggleChatHistory(createInitialState())).resources.chatView,
+        toggleChatHistory(history).resources.chatView,
+        transactions.toggleChatHistory === toggleChatHistory,
+      ],
+      expected: ['history', 'thread', 'thread', 'thread', true],
+    });
+  });
+});
+
+describe('opening the open conversation from History (IMC-2.7)', () => {
+  test('returns to the thread', () => {
+    const open = chatPlugin.transactions.openConversation(createInitialState(), 'c1');
+    const history = chatPlugin.transactions.toggleChatHistory(open);
+    assert({
+      given: 'c1 open, History shown, and c1 picked again',
+      should: 'show the thread',
+      actual: chatPlugin.transactions.openConversation(history, 'c1').resources.chatView,
+      expected: 'thread',
     });
   });
 });

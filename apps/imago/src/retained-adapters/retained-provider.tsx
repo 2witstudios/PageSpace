@@ -10,6 +10,7 @@ import { StreamingBridge } from './streaming-bridge';
 import { SessionDirectoryListener } from '@/retained/lib/realtime/session-directory-listener';
 import { WorkspaceNodesListener } from '@/retained/lib/realtime/workspace-nodes-listener';
 import { VoiceSessionProvider } from '@/retained/contexts/VoiceSessionContext';
+import { VoiceSessionBridge } from '@/retained/components/ai/voice/realtime';
 import { ChatAttachmentsProvider } from './chat-attachments';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useParams } from 'next/navigation';
@@ -42,6 +43,7 @@ export function RetainedProvider({ children }: { children: ReactNode }) {
   return (
     <TooltipProvider><VoiceSessionProvider><ChatAttachmentsProvider>
       {children}
+      <VoiceSessionBridge />
       <SessionDirectoryListener />
       <WorkspaceNodesListener />
       <DerivedStreamingRegistrations />

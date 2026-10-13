@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { agentConversation } from '../chat-model/fixtures';
-import { historyDayLabel, historyDays, untilNextDay } from './history-days';
+import { historyBucket, historyDayLabel, historyDays, historyRowTime, untilNextDay } from './history-days';
 
 // Days are the viewer's, not UTC's: every case runs in a zone far from UTC,
 // where a UTC calendar would file the evening's chats under tomorrow.
@@ -90,19 +90,21 @@ describe('historyDays()', () => {
         at('c4', '2026-10-05T15:00:00.000Z'),
         at('c3', '2026-10-05T07:05:00.000Z'),
         at('c2', '2026-10-05T06:55:00.000Z'),
+        at('cw', '2026-10-01T18:00:00.000Z'),
         at('c1', '2026-09-18T12:00:00.000Z'),
         at('c0', '2026-09-18T11:00:00.000Z'),
       ],
       NOW,
     );
     assert({
-      given: 'conversations most recent first, two of them either side of local midnight',
-      should: 'file each under its local day, in the order given',
+      given: 'conversations most recent first, two either side of local midnight, one last week, two older',
+      should: 'file each under Today, Yesterday, Previous 7 days or Older (C-Chat-Home-Empty), in the order given',
       actual: days.map(({ label, conversations }) => [label, conversations.map((entry) => entry.id)]),
       expected: [
         ['Today', ['c4', 'c3']],
         ['Yesterday', ['c2']],
-        ['Sep 18', ['c1', 'c0']],
+        ['Previous 7 days', ['cw']],
+        ['Older', ['c1', 'c0']],
       ],
     });
   });
@@ -119,9 +121,29 @@ describe('historyDays()', () => {
   test('an unreadable time', () => {
     assert({
       given: 'a conversation whose time does not parse',
-      should: 'file it under Earlier rather than a broken date',
+      should: 'file it under Older rather than a broken date',
       actual: historyDays([at('c1', 'not a time')], NOW).map(({ label }) => label),
-      expected: ['Earlier'],
+      expected: ['Older'],
+    });
+  });
+});
+
+describe('historyBucket() and historyRowTime() (IMC-2.6)', () => {
+  test('the buckets', () => {
+    assert({
+      given: 'today, yesterday, six days ago, eight days ago',
+      should: 'name Today, Yesterday, Previous 7 days, Older',
+      actual: ['2026-10-05T14:00:00.000Z', '2026-10-04T18:00:00.000Z', '2026-09-29T18:00:00.000Z', '2026-09-27T18:00:00.000Z'].map((iso) => historyBucket(iso, NOW)),
+      expected: ['Today', 'Yesterday', 'Previous 7 days', 'Older'],
+    });
+  });
+
+  test('a row’s time (C-Chat-Home-Empty: now, 9:40, Sun, Oct 8)', () => {
+    assert({
+      given: 'just now, earlier today, within the week, and older',
+      should: 'read now, the local time, the weekday, then the date',
+      actual: ['2026-10-05T15:29:40.000Z', '2026-10-05T14:05:00.000Z', '2026-10-04T18:00:00.000Z', '2026-09-27T18:00:00.000Z'].map((iso) => historyRowTime(iso, NOW)),
+      expected: ['now', '7:05', 'Sun', 'Sep 27'],
     });
   });
 });

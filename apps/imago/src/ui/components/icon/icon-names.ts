@@ -21,6 +21,8 @@ import {
   Folder,
   GripVertical,
   Hash,
+  History,
+  SquarePen,
   LayoutGrid,
   ListTodo,
   Lock,
@@ -44,6 +46,7 @@ import {
   SquareTerminal,
   Trash2,
   Users,
+  Wallet,
   Workflow,
   Wrench,
   X,
@@ -102,6 +105,11 @@ export const icons = {
   sheet: FileSpreadsheet,
   code: FileCode,
   file: File,
+  // Imago's head: History and New chat (IMC-2.1).
+  history: History,
+  // The spend strip above the composer (IMC-2.4).
+  wallet: Wallet,
+  newChat: SquarePen,
   // The Files pane's filter field (IMC-1.8).
   filter: ListFilter,
   // The v3.2 column controls (IMC-1.6): Close/Show sidebar, Collapse Imago.

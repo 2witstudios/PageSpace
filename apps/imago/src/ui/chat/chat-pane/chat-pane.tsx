@@ -8,6 +8,7 @@
 // Opening an object changes only the context a turn carries, never the agent
 // or the conversation.
 
+import { focusComposerAtEnd } from './focus-composer';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { RetainedChat } from '@/retained-adapters/retained-chat';
@@ -16,7 +17,20 @@ import { useUiState } from '@/ui/store/store';
 import type { UiState } from '@/ui/store/state';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { usePageTrail } from '@/ui/tasks/use-tasks/use-tasks';
-import { chatContextFor, type Stage } from '../../frame/stage/stage';
+import { chatChipFor, chatContextFor, type Stage } from '../../frame/stage/stage';
+import { tabLabelFor } from '../../frame/tabs/tab-label';
+import { AgentPicker } from '../agent-picker/agent-picker';
+import { SpendStrip } from '../spend-strip/spend-strip';
+import { ChipsRow } from '../chips-row/chips-row';
+import { ImagoHistory } from '../imago-history/imago-history';
+import { FilesIntro } from '../files-intro/files-intro';
+import { usePathname } from 'next/navigation';
+import { RetainedSurface } from '@/retained-adapters/retained-provider';
+import { ProviderModelSelector } from '@/retained/components/ai/chat/input/ProviderModelSelector';
+import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
+import { usePageTree } from '@/retained/hooks/usePageTree';
+import { findNodeAndParent } from '@/retained/lib/tree/tree-utils';
+import { useUIStore } from '@/retained/stores/useUIStore';
 import { agentFor, agentMenu } from '../chat-agents/chat-agents';
 import { shownConversationId } from '../chat-plugin';
 import { useAgentConversations, useDriveAgents } from '../use-chat-data/use-chat-data';
@@ -38,6 +52,19 @@ export type ChatPaneProps = {
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
 const selectNew = (state: UiState) => state.resources.chatNew;
 const selectLost = (state: UiState) => state.resources.chatAgentLost;
+const selectView = (state: UiState) => state.resources.chatView;
+
+/** Imago's global model, as classic's composer keeps it; an agent page fixes its own. */
+function ImagoModel() {
+  const provider = useAssistantSettingsStore((state) => state.currentProvider);
+  const model = useAssistantSettingsStore((state) => state.currentModel);
+  const setProviderSettings = useAssistantSettingsStore((state) => state.setProviderSettings);
+  return (
+    <RetainedSurface fill={false}>
+      <ProviderModelSelector provider={provider} model={model} onChange={setProviderSettings} />
+    </RetainedSurface>
+  );
+}
 
 /** How the agent routes say the viewer may no longer use an agent: it is gone (404) or not theirs to view (403). */
 const lostAccess = (error: unknown): boolean => error instanceof ApiError && (error.status === 403 || error.status === 404);
@@ -68,7 +95,7 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     const returned = stage.section === 'chat' && previousSection.current !== 'chat';
     previousSection.current = stage.section;
     if (returned && document.querySelector('[aria-modal="true"], dialog[open]') === null) {
-      chatHost.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+      focusComposerAtEnd(chatHost.current);
     }
   }, [stage.section]);
   const { conversations, error: conversationsError } = useAgentConversations(agentId);
@@ -81,29 +108,58 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
   const conversationId = shownConversationId({ chatConversationId: chosen, chatNew }, conversations?.[0]?.id ?? null);
 
   const { trail } = usePageTrail(stage.object?.kind === 'page' ? stage.object.pageId : null);
+  const pathname = usePathname() ?? '/';
+  const view = useUiState(selectView);
+  const { tree } = usePageTree(stage.driveId ?? undefined);
+  const folderTitle = (pageId: string) => findNodeAndParent(tree, pageId)?.node.title;
+  const screen = tabLabelFor(pathname);
   const resolving = !chatNew && chosen === null && conversations === undefined && conversationsError === undefined;
   const context = chatContextFor(stage, { drive: driveName, object: objectNameOf(stage, trail) });
   const headerAgent = retainedSelection ? {
     id: retainedSelection.agentId ?? 'retained-global-assistant',
-    title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Global Assistant' : 'Opening agent…'),
+    title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Imago' : 'Opening agent…'),
   } : chosenAgent;
+  // The Files ground: no page open, so the column opens with the drive's page count (IMC-2.12).
+  const filesGround = stage.section === 'files' && stage.object === null && stage.driveId !== null;
+  const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} aboveComposer={<><ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /><SpendStrip /></>} /></div>;
   return renderChatPane({
     density: context.density,
     agentName: headerAgent?.title ?? agentName,
     leading,
     trailing,
-    agents: agentMenu({ builtins: agents, driveAgents, driveName, selected: headerAgent }),
-    selectAgent: (value) => {
+    picker: (
+      <AgentPicker
+        agentName={headerAgent?.title ?? agentName}
+        imago={headerAgent === null || retainedSelection?.agentId === null}
+        agents={agentMenu({ builtins: agents, driveAgents, driveName, selected: retainedSelection?.agentId === null ? null : headerAgent, folderTitle })}
+        selectAgent={(value) => {
+          useRetainedChatSelection.getState().select(null);
+          const next = agentFor({ builtins: agents, driveAgents }, value);
+          if (next !== undefined) dispatch(transactions.selectAgent, next);
+        }}
+        model={<ImagoModel />}
+        allAgentsHref={stage.driveId === null ? null : `/${encodeURIComponent(stage.driveId)}/agents`}
+        onNewAgent={stage.driveId === null ? null : () => useUIStore.getState().openQuickCreate(null)}
+      />
+    ),
+    chip: chatChipFor(stage, { object: objectNameOf(stage, trail), screen: screen.kind === 'screen' ? screen.title : undefined }),
+    onHistory: () => dispatch(transactions.toggleChatHistory, undefined),
+    historyOpen: view === 'history',
+    onNewChat: () => {
       useRetainedChatSelection.getState().select(null);
-      const next = agentFor({ builtins: agents, driveAgents }, value);
-      if (next !== undefined) dispatch(transactions.selectAgent, next);
+      dispatch(transactions.startNewChat, undefined);
     },
     contextLabel: context.contextLabel,
     messages: [],
     streamingMessageId: null,
     notice: agentsError !== undefined || conversationsError !== undefined ? NOTICES.load : lost ? NOTICES.lost(lost) : null,
     citationDriveId: stage.driveId ?? homeDriveId,
-    content: <div ref={chatHost} className="h-full min-h-0"><RetainedChat agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} /></div>,
+    content: filesGround && stage.driveId !== null ? (
+      <div className="flex h-full min-h-0 flex-col">
+        <FilesIntro driveId={stage.driveId} driveName={driveName} />
+        <div className="min-h-0 flex-1">{thread}</div>
+      </div>
+    ) : thread,
     composer: null,
   });
 }

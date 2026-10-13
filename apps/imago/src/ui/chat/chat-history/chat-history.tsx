@@ -13,7 +13,7 @@ import { dispatch, transactions } from '@/ui/store/transactions';
 import { shownConversationId } from '../chat-plugin';
 import { useAgentConversations } from '../use-chat-data/use-chat-data';
 import { useChatAgent } from '../use-chat-agent/use-chat-agent';
-import { historyDays, untilNextDay } from './history-days';
+import { historyDays, historyRowTime, untilNextDay } from './history-days';
 import { renderChatHistory, type ChatHistoryList } from './chat-history.render';
 
 const selectConversation = (state: UiState) => state.resources.chatConversationId;
@@ -26,6 +26,11 @@ export function ChatHistory() {
   const chatConversationId = useUiState(selectConversation);
   const chatNew = useUiState(selectNew);
   const activeId = shownConversationId({ chatConversationId, chatNew }, conversations?.[0]?.id ?? null);
+  // "Search chats" filters what has loaded: the conversations route has no search yet
+  // (needs-api — conversation title search).
+  const [filter, setFilter] = useState('');
+  const query = filter.trim().toLowerCase();
+  const shown = conversations?.filter((conversation) => query === '' || conversation.title.toLowerCase().includes(query));
 
   // Days are read from the clock on every render. A re-render is forced at
   // the viewer's next midnight, and when the page is shown or focused again:
@@ -58,7 +63,7 @@ export function ChatHistory() {
     if (agents !== undefined && agentId === null) return { status: 'ready', days: [], hasMore: false, loadingMore: false };
     if (agentsError !== undefined || error !== undefined) return { status: 'error' };
     if (conversations === undefined) return { status: 'loading' };
-    return { status: 'ready', days: historyDays(conversations, new Date()), hasMore, loadingMore: isLoadingMore };
+    return { status: 'ready', days: historyDays(shown ?? [], new Date()), hasMore, loadingMore: isLoadingMore };
   })();
 
   return renderChatHistory({
@@ -69,5 +74,8 @@ export function ChatHistory() {
     hide: () => dispatch(transactions.collapseSection, 'chat'),
     loadMore: () => void loadMore(),
     retry: () => void revalidate(),
+    filter,
+    onFilter: setFilter,
+    timeOf: (iso) => historyRowTime(iso, new Date()),
   });
 }

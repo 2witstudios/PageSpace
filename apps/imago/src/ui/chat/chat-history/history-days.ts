@@ -16,6 +16,11 @@ const dayMs = 86_400_000;
 /** For a time that does not parse: it still belongs somewhere. */
 const EARLIER = 'Earlier';
 
+const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+/** How many local calendar days a time is behind `now` (0 today, never negative). */
+const daysBehind = (at: Date, now: Date): number => Math.max(0, Math.round((calendarDay(now) - calendarDay(at)) / dayMs));
+
 /** Local midnight of a time's day, as a UTC instant on the same calendar date (DST-free arithmetic). */
 const calendarDay = (at: Date): number => Date.UTC(at.getFullYear(), at.getMonth(), at.getDate());
 
@@ -31,12 +36,35 @@ export const historyDayLabel = (iso: string, now: Date): string => {
   return at.getFullYear() === now.getFullYear() ? date : `${date}, ${at.getFullYear()}`;
 };
 
+/** The history's groups (C-Chat-Home-Empty): Today, Yesterday, Previous 7 days, Older. */
+export const historyBucket = (iso: string, now: Date): string => {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'Older';
+  const behind = daysBehind(at, now);
+  if (behind === 0) return 'Today';
+  if (behind === 1) return 'Yesterday';
+  return behind <= 7 ? 'Previous 7 days' : 'Older';
+};
+
+/** A row's time: "now", today's local time ("9:40"), the weekday this week, else the date. */
+export const historyRowTime = (iso: string, now: Date): string => {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return '';
+  const behind = daysBehind(at, now);
+  if (behind === 0) {
+    if (now.getTime() - at.getTime() < 60_000) return 'now';
+    return `${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`;
+  }
+  if (behind < 7) return weekdays[at.getDay()] ?? '';
+  return `${months[at.getMonth()] ?? ''} ${at.getDate()}`;
+};
+
 /** Milliseconds from `now` to the viewer's next local midnight, when every label moves a day. */
 export const untilNextDay = (now: Date): number =>
   new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
 
 export type HistoryDay = {
-  /** Sentence case: Today, Yesterday, Sep 18. */
+  /** Today, Yesterday, Previous 7 days or Older. */
   readonly label: string;
   readonly conversations: readonly AgentConversation[];
 };
@@ -48,7 +76,7 @@ export type HistoryDay = {
 export const historyDays = (conversations: readonly AgentConversation[], now: Date): readonly HistoryDay[] => {
   const days = new Map<string, AgentConversation[]>();
   for (const conversation of conversations) {
-    const label = historyDayLabel(conversation.updatedAt, now);
+    const label = historyBucket(conversation.updatedAt, now);
     const day = days.get(label);
     if (day === undefined) days.set(label, [conversation]);
     else day.push(conversation);

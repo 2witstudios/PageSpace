@@ -39,6 +39,7 @@
   --type-canvas: light-dark(oklch(0.58 0.16 350), oklch(0.7 0.14 350));
   --type-code: light-dark(oklch(0.45 0.03 250), oklch(0.72 0.03 250));
   --type-file: light-dark(oklch(0.5 0.01 220), oklch(0.7 0.01 220));
+  --agent-soft: light-dark(oklch(0.55 0.15 25 / 0.12), oklch(0.7 0.14 25 / 0.18));
 }
 
 @theme inline {
@@ -70,6 +71,7 @@
   --color-type-canvas: var(--type-canvas);
   --color-type-code: var(--type-code);
   --color-type-file: var(--type-file);
+  --color-agent-soft: var(--agent-soft);
 }
 
 /* The stage sheet's lift off the spine. */
@@ -115,6 +117,15 @@
   --spacing-ask-pill: 30px;
   --spacing-pane-row: 30px;
   --spacing-filter: 32px;
+  --spacing-agent-tile: 22px;
+  --spacing-agent-row-tile: 30px;
+  --spacing-agent-picker: 340px;
+  --spacing-context-chip: 22px;
+  --spacing-spend-strip: 28px;
+  /* Imago on the ground centres its thread and composer (C-Files-Doc asd-wide). */
+  --container-imago-ground: 760px;
+  --spacing-segment: 28px;
+  --spacing-history-row: 36px;
 }
 
 /* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger

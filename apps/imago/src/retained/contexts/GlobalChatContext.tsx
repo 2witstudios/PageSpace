@@ -347,3 +347,11 @@ export function useGlobalChatConversation() {
   return context;
 }
 
+/**
+ * `useGlobalChatConversation` for callers that also run where no GlobalChatProvider
+ * is mounted (Imago's shell): null there, never a throw.
+ */
+export function useOptionalGlobalChatConversation() {
+  return useContext(GlobalChatConversationContext) ?? null;
+}
+

@@ -6,18 +6,23 @@ import postcss from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
-  chatAgentNameClass,
-  chatAgentPickerClass,
-  chatAgentSelectClass,
-  chatContextLabelClass,
+  chatChipClass,
   chatEmptyClass,
-  chatHeaderTitleClass,
   chatNoticeClass,
   chatPaneClass,
   chatScrollClass,
   chatThreadClass,
 } from './chat-pane/chat-pane-class';
 import { chatMessageClass } from './chat-message/chat-message-class';
+import {
+  agentTileClass,
+  pickerFooterClass,
+  pickerGroupLabelClass,
+  pickerHeadClass,
+  pickerPopoverClass,
+  pickerRowClass,
+  pickerTriggerClass,
+} from './agent-picker/agent-picker-class';
 import { citationChipClass } from './citation-chip/citation-chip-class';
 import {
   composerActionsClass,
@@ -157,33 +162,25 @@ describe('tool summary classes', () => {
 describe('chat pane classes', () => {
   test('exact strings', () => {
     assert({
-      given: 'the pane and thread, roomy and dense, and the header, scroller, empty and notice text',
-      should: 'centre a roomy thread at the thread width and pack a dense one beside the object',
+      given: 'the pane and thread, roomy and dense, and the context chip, scroller, empty and notice text',
+      should: 'tint the column, centre a roomy thread at the thread width and pack a dense one beside the object',
       actual: [
         chatPaneClass('roomy'),
         chatPaneClass('dense'),
         chatThreadClass('roomy'),
         chatThreadClass('dense'),
         chatScrollClass,
-        chatHeaderTitleClass,
-        chatAgentNameClass,
-        chatAgentPickerClass,
-        chatAgentSelectClass,
-        chatContextLabelClass,
+        chatChipClass,
         chatEmptyClass,
         chatNoticeClass,
       ],
       expected: [
-        'flex h-full w-full min-w-0 flex-col',
-        'flex h-full w-full min-w-0 flex-col border-l border-hairline',
+        'flex h-full w-full min-w-0 flex-col bg-tint',
+        'flex h-full w-full min-w-0 flex-col border-l border-hairline bg-tint',
         'mx-auto flex w-full max-w-thread flex-col gap-4 px-6 py-8',
         'flex w-full flex-col gap-3 p-4',
         'min-h-0 flex-1 overflow-y-auto',
-        'flex min-w-0 items-center gap-2',
-        'flex-none font-medium',
-        'inline-flex min-w-0 flex-none items-center gap-1 text-ink-faint',
-        'field-sizing-content min-w-0 cursor-pointer appearance-none truncate border-none bg-transparent font-medium text-ink',
-        'truncate text-xs font-normal text-ink-muted',
+        'inline-flex h-context-chip min-w-0 items-center truncate rounded-round bg-accent-soft px-2 text-xs font-medium whitespace-nowrap text-accent-deep',
         'my-auto text-center text-ink-faint',
         'text-sm text-warn',
       ],
@@ -214,13 +211,16 @@ const moduleClasses = [
   chatThreadClass('roomy'),
   chatThreadClass('dense'),
   chatScrollClass,
-  chatHeaderTitleClass,
-  chatAgentNameClass,
-  chatAgentPickerClass,
-  chatAgentSelectClass,
-  chatContextLabelClass,
+  chatChipClass,
   chatEmptyClass,
   chatNoticeClass,
+  pickerTriggerClass,
+  ...([true, false] as const).flatMap((imago) => (['head', 'row'] as const).map((size) => agentTileClass(imago, size))),
+  pickerPopoverClass,
+  pickerHeadClass,
+  pickerGroupLabelClass,
+  ...([true, false] as const).flatMap((checked) => ([true, false] as const).map((disabled) => pickerRowClass(checked, disabled))),
+  pickerFooterClass,
   ...Object.values(proseClasses),
 ]
   .flatMap((list) => list.split(' '))
