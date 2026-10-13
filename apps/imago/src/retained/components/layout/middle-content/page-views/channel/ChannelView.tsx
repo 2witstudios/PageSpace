@@ -1044,6 +1044,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
         <SheetContent
           side="right"
+          showCloseButton={false}
           className="w-full sm:max-w-full p-0"
         >
           <SheetTitle className="sr-only">Thread</SheetTitle>
