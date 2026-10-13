@@ -95,6 +95,8 @@ export interface SheetToolbarProps {
   disabled: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  /** Undo and redo; the page strip owns them, so its More panel turns them off. */
+  showHistory?: boolean;
   frozenRows: number;
   frozenColumns: number;
   onCommand: (command: FormatCommand) => void;
@@ -127,6 +129,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
   disabled,
   canUndo,
   canRedo,
+  showHistory = true,
   frozenRows,
   frozenColumns,
   onCommand,
@@ -145,14 +148,17 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
   return (
     <div className="w-full overflow-x-auto scrollbar-thin">
       <div className="flex items-center gap-1 p-2 min-w-max">
-        <ToolButton onClick={onUndo} disabled={!canUndo} label="Undo">
-          <Undo2 size={16} />
-        </ToolButton>
-        <ToolButton onClick={onRedo} disabled={!canRedo} label="Redo">
-          <Redo2 size={16} />
-        </ToolButton>
-
-        <Divider />
+        {showHistory && (
+          <>
+            <ToolButton onClick={onUndo} disabled={!canUndo} label="Undo">
+              <Undo2 size={16} />
+            </ToolButton>
+            <ToolButton onClick={onRedo} disabled={!canRedo} label="Redo">
+              <Redo2 size={16} />
+            </ToolButton>
+            <Divider />
+          </>
+        )}
 
         <Select
           value={format.fontSize ? String(format.fontSize) : 'default'}

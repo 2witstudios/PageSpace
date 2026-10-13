@@ -44,6 +44,7 @@ import {
   type FileRelation,
 } from '@/retained/lib/attachment-utils';
 import { isFirstInGroup, formatMessageDate } from '@/retained/lib/messages/grouping';
+import { unreadBoundary } from './unread-boundary';
 import { MessageDateSeparator } from '@/retained/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
 import { cn } from '@/retained/lib/utils';
@@ -82,6 +83,11 @@ interface ChannelRef {
 
 interface ChannelViewProps {
   page: ChannelRef;
+  /**
+   * Whether this view draws its own floating Webhooks button and dialog. The Files channel
+   * page turns this off and puts Webhooks in its Channel tools strip instead.
+   */
+  floatingWebhooks?: boolean;
 }
 
 interface CommandExecutionEntry {
@@ -127,7 +133,7 @@ interface MessageWithReactions extends MessageWithUser {
   clientNonce?: string;
 }
 
-function ChannelView({ page }: ChannelViewProps) {
+function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
   const { draft: inputValue, setDraft: setInputValue, clearDraft: clearInputDraft } = useDraft(
@@ -189,6 +195,8 @@ function ChannelView({ page }: ChannelViewProps) {
   const canEdit = permissions?.canEdit || false;
   const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  // The viewer's read watermark as the channel opened; drives the "<n> new" divider.
+  const [lastReadAt, setLastReadAt] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -261,6 +269,7 @@ function ChannelView({ page }: ChannelViewProps) {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
       const data = await res.json();
       setMessages(data.messages ?? data);
+      setLastReadAt(data.lastReadAt ?? null);
       setHasMore(data.hasMore ?? false);
       setNextCursor(data.nextCursor ?? null);
 
@@ -664,6 +673,11 @@ function ChannelView({ page }: ChannelViewProps) {
     }
   }, [page.id]);
 
+  const unread = useMemo(
+    () => unreadBoundary(messages, lastReadAt, user?.id ?? null),
+    [messages, lastReadAt, user?.id],
+  );
+
   const threadParent = isThreadVisible
     ? messages.find((mm) => mm.id === threadPanelParentId) ?? null
     : null;
@@ -745,25 +759,29 @@ function ChannelView({ page }: ChannelViewProps) {
     <div role="region" aria-label={page.title ? `# ${page.title}` : "Channel"} className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
-          {/* Deliberately not permission-gated: the dialog itself explains the
-              owner/admin requirement, so the feature stays discoverable. */}
-          <button
-            type="button"
-            onClick={() => setWebhooksOpen(true)}
-            title="Incoming Webhooks"
-            aria-label="Incoming Webhooks"
-            className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-          >
-            <Webhook size={14} aria-hidden />
-          </button>
-          <PageWebhooksDialog
-            open={webhooksOpen}
-            onOpenChange={setWebhooksOpen}
-            pageId={page.id}
-            pageType="CHANNEL"
-          />
+          {floatingWebhooks && (
+            <>
+              {/* Deliberately not permission-gated: the dialog itself explains the
+                  owner/admin requirement, so the feature stays discoverable. */}
+              <button
+                type="button"
+                onClick={() => setWebhooksOpen(true)}
+                title="Incoming Webhooks"
+                aria-label="Incoming Webhooks"
+                className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                <Webhook size={14} aria-hidden />
+              </button>
+              <PageWebhooksDialog
+                open={webhooksOpen}
+                onOpenChange={setWebhooksOpen}
+                pageId={page.id}
+                pageType="CHANNEL"
+              />
+            </>
+          )}
           <Conversation className="h-full">
-            <ConversationContent className="max-w-4xl mx-auto p-4">
+            <ConversationContent role="log" aria-label="Posts" className="max-w-4xl mx-auto p-4">
                     {hasMore && (
                       <div className="flex justify-center py-2">
                         <button
@@ -809,16 +827,29 @@ function ChannelView({ page }: ChannelViewProps) {
                         const currentDateStr = new Date(m.createdAt).toDateString();
                         const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
                         const showDateSeparator = currentDateStr !== previousDateStr;
+                        const isPending = m.id.startsWith("temp-");
+                        const showNewDivider = unread?.id === m.id;
                         return (
                         <Fragment key={m.id}>
                         {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
+                        {showNewDivider && unread && (
+                          <div
+                            role="separator"
+                            aria-label="New messages"
+                            className="my-2 flex items-center gap-2.5 text-[11.5px] font-semibold text-orange-600 dark:text-orange-400"
+                          >
+                            <span className="h-px flex-1 bg-orange-400/60" />
+                            {unread.count} new
+                          </div>
+                        )}
                         <div
                           role="article"
                           aria-label="Channel message"
-                          aria-busy={m.id.startsWith("temp-") || undefined}
+                          aria-busy={isPending || undefined}
                           data-message-id={m.id}
                           className={cn(
                             `group/msg flex items-start gap-4 ${rowSpacing} relative rounded`,
+                            isPending && 'opacity-60',
                             findMatchSet.has(m.id) && 'find-highlight',
                             currentFindMsgId === m.id && 'find-highlight-current',
                           )}
@@ -850,7 +881,13 @@ function ChannelView({ page }: ChannelViewProps) {
                                       {m.editedAt && (
                                         <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                       )}
+                                      {isPending && (
+                                        <span className="text-xs text-muted-foreground">Sending…</span>
+                                      )}
                                   </div>
+                                )}
+                                {!isFirst && isPending && (
+                                  <span className="text-xs text-muted-foreground">Sending…</span>
                                 )}
                                 {editingMessageId === m.id ? (
                                   <div className="mt-1 flex flex-col gap-2">

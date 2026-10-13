@@ -76,7 +76,7 @@ export function clientExtensions({ readOnly, isPaginated, collab }: ClientExtens
     }),
     CodeBlockShiki,
     Markdown,
-    ...(readOnly ? [] : [Placeholder.configure({ placeholder: 'Start writing...' })]),
+    ...(readOnly ? [] : [Placeholder.configure({ placeholder: 'Type / for blocks, @ to mention a page' })]),
     TextStyleKit,
     TableKit,
     TaskList,

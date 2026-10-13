@@ -5,7 +5,7 @@ import { clientExtensions } from '@/retained/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import React, { useEffect } from 'react';
 import { useRouter } from '@/retained-adapters/navigation';
-import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
+import { Bold, Italic, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
 import { subscribeToNavigationEvents } from '@/retained/lib/navigation/app-navigation';
 import LinkButton from './LinkButton';
 
@@ -220,20 +220,16 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           editor={editor}
           pluginKey="bubbleMenu"
           shouldShow={({ from, to }) => {
-            // show the bubble menu when the user selects some text
+            // show the selection bubble when the user selects some text
             return from !== to;
           }}
+          role="toolbar"
+          aria-label="Selection"
           className="flex items-center gap-1 p-2 border rounded-md bg-card shadow-lg"
         >
-          <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleStrike().run()} className={`p-2 rounded ${editor.isActive('strike') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Strikethrough size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleCode().run()} className={`p-2 rounded ${editor.isActive('code') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Code size={16} /></button>
+          <button type="button" aria-label="Bold" aria-pressed={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded ${editor.isActive('bold') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Bold size={16} /></button>
+          <button type="button" aria-label="Italic" aria-pressed={editor.isActive('italic')} onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded ${editor.isActive('italic') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Italic size={16} /></button>
           <LinkButton editor={editor} variant="bubble" />
-          <div className="w-[1px] h-6 bg-muted-foreground/50 mx-2" />
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 1 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading1 size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 2 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading2 size={16} /></button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
         </BubbleMenu>
       )}
       {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (

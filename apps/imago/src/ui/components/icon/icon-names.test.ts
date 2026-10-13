@@ -54,6 +54,9 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   ListFilter,
+  Undo2,
+  Redo2,
+  Webhook,
 } from 'lucide-react';
 import { iconNames, icons } from './icon-names';
 
@@ -113,6 +116,9 @@ describe('icon names', () => {
         code: FileCode,
         file: File,
         history: History,
+        undo: Undo2,
+        redo: Redo2,
+        webhook: Webhook,
         wallet: Wallet,
         newChat: SquarePen,
         grip: GripVertical,
