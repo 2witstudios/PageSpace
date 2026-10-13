@@ -104,7 +104,7 @@ describe('wallet-views: the numbers', () => {
   });
 });
 
-describe('wallet-views: spend by member, today and via automations (UI-9, SPEND-10, D-OW-67)', () => {
+describe('wallet-views: spend by member, today and via automations (D-OW-67)', () => {
   const people = new Map([['u-priya', 'Priya Nair'], ['u-marcus', 'Marcus Oyelaran'], ['u-lena', 'Lena Lead']]);
   const automations = new Map([['wf-digest', { name: 'Weekly digest', createdBy: 'u-priya' }]]);
   const names = { people, automations };
@@ -279,7 +279,7 @@ describe('wallet-views: the kill switch and the guest switch', () => {
   });
 });
 
-describe('driveWalletListEntry (UI-10: a drive wallet I spend from)', () => {
+describe('driveWalletListEntry (a drive wallet I spend from)', () => {
   const row = { id: 'w-product', subjectId: 'd-product', status: 'active' as const, monthlyAllowanceCents: c(1200), spentCents: c(100), topupRemainingCents: 0, debtCents: 0 };
 
   it('UI-10 (partial) shows what is left and what I spent from it this period, both as credit counts', () => {

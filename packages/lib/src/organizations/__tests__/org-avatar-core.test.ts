@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isOrgAvatarPath, orgAvatarFilename, orgAvatarFilenameFromPath, orgAvatarPath } from '../org-avatar-core';
 
-describe('org avatar paths (ORG-1: the avatar is a file PageSpace stores and serves, never an outside URL)', () => {
+describe('org avatar paths (the avatar is a file PageSpace stores and serves, never an outside URL)', () => {
   it('ORG-1 (partial) every upload is its own file (named from its type and a fresh nonce), and the stored avatar is its org-scoped PageSpace path', () => {
     expect(orgAvatarFilename('image/png', 'k3x9')).toBe('avatar-k3x9.png');
     expect(orgAvatarPath('org_nw1', 'avatar-k3x9.png')).toBe('/api/orgs/org_nw1/avatar/avatar-k3x9.png');

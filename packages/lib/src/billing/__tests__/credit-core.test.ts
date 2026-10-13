@@ -477,7 +477,7 @@ describe('computeMonthlyRefill', () => {
   });
 });
 
-describe('forgivenAtRefillCents — the debt a refill clamps away (WAL-5: it is ledgered)', () => {
+describe('forgivenAtRefillCents — the debt a refill clamps away (it is ledgered)', () => {
   it('WAL-5 (partial) is exactly what the clamp drops: debt past the carried balance plus the allowance, else nothing', () => {
     expect(forgivenAtRefillCents(1500, 100, 200)).toBe(0);
     expect(forgivenAtRefillCents(1500, 100, 1600)).toBe(0);
@@ -622,7 +622,7 @@ describe('computeBackfillActions — orphan wallet and spend kind', () => {
   });
 });
 
-describe('decideSettleTarget — the wallet a settle charges (WAL-5, WAL-6b)', () => {
+describe('decideSettleTarget — the wallet a settle charges (ledger attribution)', () => {
   it('WAL-6 (partial) a live hold names the wallet, and its fallback origin wins over a carried one', () => {
     expect(decideSettleTarget({ hold: { walletId: 'w-own', fallbackFromWalletId: 'w-drive' }, requestedWalletId: undefined, carriedFallbackFromWalletId: 'w-other' }))
       .toEqual({ kind: 'charge', walletId: 'w-own', fallbackFromWalletId: 'w-drive' });

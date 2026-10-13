@@ -640,7 +640,7 @@ describe('isTerminalSubscriptionStatus', () => {
   });
 });
 
-describe('decideDedicatedPurchaser — who buys an app\'s dedicated hosting, and whose bill it is (WAL-9)', () => {
+describe('decideDedicatedPurchaser — who buys an app\'s dedicated hosting, and whose bill it is', () => {
   const personal = { kind: 'user' as const, userId: 'owner-1' };
   const org = { kind: 'org' as const, orgId: 'org-northwind' };
   const ok = { orgActive: true, orgHasStripeCustomer: true };

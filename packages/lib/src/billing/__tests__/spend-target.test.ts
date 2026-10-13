@@ -631,7 +631,7 @@ describe('spend-target: a drive-wallet leg capped per consumer', () => {
   });
 });
 
-describe('spend-target: what a consumer sees of a drive wallet (SPEND-9)', () => {
+describe('spend-target: what a consumer sees of a drive wallet', () => {
   // Product's wallet: 1,200 allocated, 200 spent, a 50 top-up — under a pool holding 30.
   const product = wallet({ id: 'w-product', parentWalletId: 'w-pool', monthlyAllowanceCents: c(1200), spentCents: c(200), topupRemainingCents: c(50) });
 

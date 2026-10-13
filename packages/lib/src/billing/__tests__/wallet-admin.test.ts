@@ -114,7 +114,7 @@ describe('the drive\'s guest switch (D-OW-4)', () => {
   });
 });
 
-describe('planOrgPoolPause — the org pool\'s kill switch (WAL-7)', () => {
+describe('planOrgPoolPause — the org pool\'s kill switch', () => {
   it('WAL-7 (partial) pausing the pool always applies, even while the org is lapsed (D-OW-33: billing never blocks restricting)', () => {
     expect(planOrgPoolPause({ paused: true, debtCents: 0, orgActive: true })).toEqual({ kind: 'set', status: 'paused' });
     expect(planOrgPoolPause({ paused: true, debtCents: c(3), orgActive: false })).toEqual({ kind: 'set', status: 'paused' });

@@ -57,7 +57,7 @@ describe('parseOrgGiftMetadata: Stripe is the single source of an applied gift (
   });
 });
 
-describe('planOrgGift (SEAT-8 admin gift, D-OW-23, D-OW-54)', () => {
+describe('planOrgGift (admin gift, D-OW-23, D-OW-54)', () => {
   it('D-OW-54 a gift Stripe already holds with the requested seats is COMPLETED (pin and revision committed, nothing written to Stripe), whatever the mirror says', () => {
     for (const mirrored of [stored(), stored({ gifted: true, giftedExtraSeats: 2 })]) {
       expect(planOrgGift(facts({ stored: mirrored, stripeGift: { typed: true, giftedExtraSeats: 2 } }))).toEqual({
@@ -186,7 +186,7 @@ const ungift = (over: Partial<OrgUngiftFacts> = {}): OrgUngiftFacts => ({
   ...over,
 });
 
-describe('planOrgUngift (SEAT-8 revoke, D-OW-54)', () => {
+describe('planOrgUngift (revoke, D-OW-54)', () => {
   it('removes the gift coupon and every gift metadata key from the org\'s own subscription, with no proration: the org pays from its next renewal', () => {
     const plan = planOrgUngift(ungift());
     expect(plan.kind).toBe('ungift');

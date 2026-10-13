@@ -432,7 +432,7 @@ describe('createValidatedServiceToken', () => {
     });
   });
 
-  describe('organization resource type (ORG-1 org avatar upload)', () => {
+  describe('organization resource type (org avatar upload)', () => {
     it('ORG-1 (partial) an org Owner or Admin gets an org-bound org-avatars:write token, bound to that org', async () => {
       mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'ADMIN' });
       const result = await createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['org-avatars:write'], '2m');

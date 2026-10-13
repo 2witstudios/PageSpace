@@ -390,7 +390,7 @@ describe('consumerCapsInForce — a guest is always capped (D-OW-4, D-OW-31)', (
   });
 });
 
-describe('walletChainStatus — a paused parent stops its children (WAL-7)', () => {
+describe('walletChainStatus — a paused parent stops its children', () => {
   it.each([
     ['active', null, 'active'],
     ['over', null, 'over'],
