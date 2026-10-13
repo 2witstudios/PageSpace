@@ -20,6 +20,8 @@ interface ActivityTimelineProps {
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
   /** Ids of changes a later rollback already undid. */
   rolledBackIds?: ReadonlySet<string>;
+  /** Drive names by id, so each row can say which drive it happened in. */
+  driveNames?: ReadonlyMap<string, string>;
 }
 
 export function ActivityTimeline({
@@ -33,6 +35,7 @@ export function ActivityTimeline({
   context,
   onRollback,
   rolledBackIds,
+  driveNames,
 }: ActivityTimelineProps) {
   const groupedActivities = groupActivitiesByDate(activities);
 
@@ -74,6 +77,7 @@ export function ActivityTimeline({
                     context={context}
                     onRollback={onRollback}
                     rolledBack={rolledBackIds?.has(item.activity.id) ?? false}
+                    driveName={item.activity.driveId ? driveNames?.get(item.activity.driveId) : undefined}
                   />
                 ) : (
                   <ActivityGroupItem

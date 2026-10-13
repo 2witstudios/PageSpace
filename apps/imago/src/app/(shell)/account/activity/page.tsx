@@ -1,8 +1,13 @@
-import RetainedPage from '@/retained/app/dashboard/activity/page';
-import type { ComponentProps } from 'react';
+import { Suspense } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { ActivityDashboard } from '@/retained/components/activity';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
+/** Your activity (C-Account-Activity): the user's change log in the account settings chrome. */
+export default async function Page() {
   await getViewer();
-  return <RetainedPage {...props} />;
+  return (
+    <Suspense fallback={null}>
+      <ActivityDashboard context="user" variant="settings" />
+    </Suspense>
+  );
 }

@@ -4,11 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '@/retained/hooks/useAuth';
 import { useRouter, useSearchParams } from '@/retained-adapters/navigation';
 import { useDriveStore } from '@/retained/hooks/useDrive';
-import { BackupDiffPreview } from '@/retained/components/BackupDiffPreview';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Button } from '@/retained/components/ui/button';
-import { Badge } from '@/retained/components/ui/badge';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/retained/components/ui/tooltip';
 import { Input } from '@/retained/components/ui/input';
 import { Label } from '@/retained/components/ui/label';
 import {
@@ -19,21 +15,15 @@ import {
   SelectValue,
 } from '@/retained/components/ui/select';
 import { toast } from 'sonner';
-import { ArrowLeft, Download, Eye, HardDrive, Loader2, Plus, RotateCcw } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import useSWR from 'swr';
 import { fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
-import { Separator } from '@/retained/components/ui/separator';
-import { format, formatDistanceToNow } from 'date-fns';
-import type { DriveBackupWithDriveName } from '@/retained-adapters/ui-contracts';
-import { getExportFilename, getDownloadButtonLabel } from './utils';
+import { SettingsGroup, SettingsScreen, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
+import { BackupRow } from './BackupRow';
+import { BackupRestorePreview } from './BackupRestorePreview';
+import { getExportFilename, type SerializedBackup } from './utils';
 
 const PAGE_SIZE = 50;
-
-type SerializedBackup = Omit<DriveBackupWithDriveName, 'createdAt' | 'completedAt' | 'failedAt'> & {
-  createdAt: string;
-  completedAt: string | null;
-  failedAt: string | null;
-};
 
 type BackupListResponse = { backups: SerializedBackup[]; total: number };
 
@@ -54,19 +44,6 @@ const fetcher = async (url: string): Promise<BackupListResponse> => {
   }
   return r.json();
 };
-
-function sourceLabel(source: string): string {
-  if (source === 'pre_restore') return 'Safety snapshot';
-  if (source === 'scheduled') return 'Scheduled';
-  if (source === 'system') return 'System';
-  return source;
-}
-
-function statusVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-  if (status === 'ready') return 'default';
-  if (status === 'failed') return 'destructive';
-  return 'secondary';
-}
 
 export default function BackupsPage() {
   const { user, isLoading: authLoading } = useAuth();
@@ -214,238 +191,145 @@ export default function BackupsPage() {
     );
   }
 
-  return (
-    <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
-      <div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/settings')}
-          className="mb-4"
-        >
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back to Settings
-        </Button>
-        <h1 className="text-3xl font-bold flex items-center gap-2">
-          <HardDrive className="h-8 w-8" />
-          Drive Backups
-        </h1>
-        <p className="text-muted-foreground mt-2">
-          Create and manage snapshots of your drives. Backups capture all pages, permissions, and members at a point in time.
-        </p>
+  if (authLoading) {
+    return (
+      <div className="flex min-h-[400px] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
 
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between space-y-0">
-          <div>
-            <CardTitle>Backups</CardTitle>
-            <CardDescription>All backups across your drives</CardDescription>
+  const total = data?.total ?? 0;
+
+  return (
+    <SettingsScreen
+      title="Backups"
+      lede="Snapshots of your drives. A backup captures every page, permission and member at a point in time."
+      actions={
+        showCreateForm ? null : (
+          <Button size="sm" onClick={() => setShowCreateForm(true)} disabled={adminDrives.length === 0}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create backup
+          </Button>
+        )
+      }
+    >
+      {showCreateForm && (
+        <form
+          aria-label="Create backup"
+          className="flex flex-wrap items-end gap-3 rounded-xl border p-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleCreateBackup();
+          }}
+        >
+          <div className="flex w-44 flex-col gap-1.5">
+            <Label>Drive</Label>
+            {isLoadingDrives ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Loading drives…
+              </div>
+            ) : (
+              <Select value={createDriveId} onValueChange={setCreateDriveId}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a drive" />
+                </SelectTrigger>
+                <SelectContent>
+                  {adminDrives.map((drive) => (
+                    <SelectItem key={drive.id} value={drive.id}>
+                      {drive.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
-          {!showCreateForm && (
-            <Button size="sm" onClick={() => setShowCreateForm(true)} disabled={adminDrives.length === 0}>
-              <Plus className="h-4 w-4 mr-2" />
-              Create Backup
-            </Button>
-          )}
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {restoreBackup && (
-            <div className="p-4 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 space-y-2">
-              <p className="text-sm font-medium">
-                Restore from: <span className="font-semibold">{restoreBackup.label ?? `Backup ${restoreBackup.id.slice(0, 8)}`}</span>
-              </p>
-              <BackupDiffPreview
-                driveId={restoreBackup.driveId}
-                backup={restoreBackup}
-                onRestore={handleRestore}
-              />
-              {isRestoring && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Restoring…
-                </div>
-              )}
-            </div>
-          )}
-          {restoreBackup && <Separator />}
-          {showCreateForm && (
-            <div className="space-y-3 p-4 rounded-lg border bg-muted/40">
-              <div className="space-y-1.5">
-                <Label>Drive</Label>
-                {isLoadingDrives ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Loading drives…
-                  </div>
-                ) : (
-                  <Select value={createDriveId} onValueChange={setCreateDriveId}>
-                    <SelectTrigger className="w-full max-w-sm">
-                      <SelectValue placeholder="Select a drive" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {adminDrives.map((drive) => (
-                        <SelectItem key={drive.id} value={drive.id}>
-                          {drive.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-              <div className="flex items-end gap-3">
-                <div className="flex-1 space-y-1.5">
-                  <Label htmlFor="backup-label">Label <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                  <Input
-                    id="backup-label"
-                    placeholder="e.g. Before Q2 restructure"
-                    value={newLabel}
-                    onChange={(e) => setNewLabel(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleCreateBackup();
-                      if (e.key === 'Escape') { setShowCreateForm(false); setNewLabel(''); }
-                    }}
-                    disabled={isCreating}
-                    autoFocus
-                  />
-                </div>
-                <Button onClick={handleCreateBackup} disabled={isCreating || !createDriveId}>
-                  {isCreating && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                  Snapshot Now
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => { setShowCreateForm(false); setNewLabel(''); }}
-                  disabled={isCreating}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
+          <div className="flex min-w-[200px] flex-1 flex-col gap-1.5">
+            <Label htmlFor="backup-label">
+              Label <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              id="backup-label"
+              placeholder="e.g. Before Q2 restructure"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { setShowCreateForm(false); setNewLabel(''); }
+              }}
+              disabled={isCreating}
+              autoFocus
+            />
+          </div>
+          <Button type="submit" disabled={isCreating || !createDriveId}>
+            {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Snapshot now
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => { setShowCreateForm(false); setNewLabel(''); }}
+            disabled={isCreating}
+          >
+            Cancel
+          </Button>
+        </form>
+      )}
 
-          {error ? (
-            <p className="text-sm text-muted-foreground py-4">Failed to load backups.</p>
-          ) : isLoadingBackups ? (
-            <div className="flex items-center gap-2 text-muted-foreground py-4">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span className="text-sm">Loading backups…</span>
-            </div>
-          ) : !accumulatedBackups.length ? (
-            <p className="text-sm text-muted-foreground py-4">
-              No backups yet. Create one to snapshot a drive&apos;s current state.
-            </p>
-          ) : (
-            <>
-              <div className="divide-y">
-                {accumulatedBackups.map((backup) => (
-                  <div key={backup.id} className="flex items-start justify-between py-3 gap-4">
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Badge variant={statusVariant(backup.status)}>{backup.status}</Badge>
-                        <Badge variant="outline">{sourceLabel(backup.source)}</Badge>
-                        {backup.driveName && (
-                          <span className="text-sm text-muted-foreground">{backup.driveName}</span>
-                        )}
-                        {backup.label && (
-                          <span className="text-sm font-medium truncate">{backup.label}</span>
-                        )}
-                      </div>
-                      {backup.failureReason && (
-                        <p className="text-xs text-destructive">{backup.failureReason}</p>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <div
-                        className="text-right text-sm text-muted-foreground mr-1"
-                        title={format(new Date(backup.createdAt), 'PPpp')}
-                      >
-                        {formatDistanceToNow(new Date(backup.createdAt), { addSuffix: true })}
-                      </div>
-                      {backup.status === 'ready' && (
-                        <>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7"
-                                onClick={() => router.push(`/settings/backups/${backup.id}/snapshot`)}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>View snapshot</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7"
-                                disabled={!!downloadingId}
-                                onClick={() => handleDownload(backup)}
-                              >
-                                {downloadingId === backup.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Download className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{getDownloadButtonLabel(downloadingId === backup.id)}</TooltipContent>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                className="h-7 w-7"
-                                onClick={() => router.push(`/settings/backups?restore=${backup.id}`)}
-                              >
-                                <RotateCcw className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Restore drive to this backup</TooltipContent>
-                          </Tooltip>
-                        </>
-                      )}
-                      {backup.status !== 'ready' && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span>
-                              <Button size="sm" variant="outline" disabled aria-disabled="true">
-                                <Download className="h-3 w-3 mr-1.5" />
-                                Download
-                              </Button>
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>Backup not ready</TooltipContent>
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
-                ))}
+      <SettingsSection
+        title="All backups"
+        description={`${total} total`}
+      >
+        {error ? (
+          <p className="py-4 text-sm text-muted-foreground">Failed to load backups.</p>
+        ) : isLoadingBackups ? (
+          <div className="flex items-center gap-2 py-4 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span className="text-sm">Loading backups…</span>
+          </div>
+        ) : accumulatedBackups.length === 0 ? (
+          <p className="py-4 text-sm text-muted-foreground">
+            No backups yet. Create one to snapshot a drive&apos;s current state.
+          </p>
+        ) : (
+          <>
+            <SettingsGroup label="All backups">
+              {accumulatedBackups.map((backup) => (
+                <BackupRow
+                  key={backup.id}
+                  backup={backup}
+                  downloading={downloadingId === backup.id}
+                  anyDownloading={downloadingId !== null}
+                  onView={(b) => router.push(`/settings/backups/${b.id}/snapshot`)}
+                  onDownload={handleDownload}
+                  onRestore={(b) => router.push(`/settings/backups?restore=${b.id}`)}
+                >
+                  {restoreBackup?.id === backup.id && backup.status === 'ready' && (
+                    <BackupRestorePreview
+                      driveId={backup.driveId}
+                      backup={backup}
+                      restoring={isRestoring}
+                      onRestore={handleRestore}
+                      onCancel={() => router.replace('/settings/backups')}
+                    />
+                  )}
+                </BackupRow>
+              ))}
+            </SettingsGroup>
+            {data && accumulatedBackups.length < data.total && (
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-xs text-muted-foreground">
+                  Showing {accumulatedBackups.length} of {data.total}
+                </span>
+                <Button variant="ghost" size="sm" onClick={handleLoadMore} disabled={isLoadingMore}>
+                  {isLoadingMore && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+                  Load more
+                </Button>
               </div>
-              {data && accumulatedBackups.length < data.total && (
-                <div className="flex items-center justify-between pt-2">
-                  <span className="text-xs text-muted-foreground">
-                    Showing {accumulatedBackups.length} of {data.total}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleLoadMore}
-                    disabled={isLoadingMore}
-                  >
-                    {isLoadingMore && <Loader2 className="h-3 w-3 mr-2 animate-spin" />}
-                    Load more
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+            )}
+          </>
+        )}
+      </SettingsSection>
+    </SettingsScreen>
   );
 }
