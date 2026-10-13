@@ -174,14 +174,12 @@ export async function moveDriveToOrg(
   input: { orgId: string; orgVisibility?: OrgDriveVisibility },
   deps: OrgDriveServiceDeps
 ): Promise<MoveDriveResult> {
-  // Org row before drive row, as every org-drive path locks (org deletion, joins, move-out); a
-  // leave that reassigns a led drive locks both in one statement, so a deadlock retries whole.
+  // Org, then membership, then drive: departures hold membership before reassigning drives.
   const outcome = await retryOnOrgSlugConflict(() => retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
     const orgExists = await lockOrg(tx, input.orgId);
+    const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
-
-    const actorOrgRole = orgExists ? await deps.getOrgRole(tx, input.orgId, actorId) : null;
     const verdict = decideMoveDriveIntoOrg({ drive, actorId, actorOrgRole });
     if (!verdict.ok) return verdict;
     // POL-5: moving a drive in makes it an org drive, so it is judged by the same who-can-create policy as creating one.
@@ -252,13 +250,14 @@ export async function moveDriveOutOfOrg(
     const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
     if (!current) return driveNotFound();
     const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
+    const lockedActorRole = orgLocked && current.orgId !== null ? await deps.getOrgRole(tx, current.orgId, actorId) : null;
     const drive = await lockDrive(tx, driveId);
     if (!drive) return driveNotFound();
 
     const { orgId } = drive;
     // A drive that changed org between the read and the lock is judged as outside the org locked.
     const actorOrgRole =
-      orgId !== null && orgId === current.orgId && orgLocked ? await deps.getOrgRole(tx, orgId, actorId) : null;
+      orgId !== null && orgId === current.orgId && orgLocked ? lockedActorRole : null;
     const verdict = decideMoveDriveOutOfOrg({ drive, actorOrgRole, implicitMembers: input.implicitMembers });
     if (!verdict.ok) return verdict;
     if (orgId === null) throw new Error('Unreachable: move-out admitted a drive with no org');
@@ -354,24 +353,34 @@ export async function createOrgDrive(
 }
 
 /**
- * Lock the drive's org (share) then the drive (update), the order every org-drive path takes, and
- * read the actor's org role under those locks. The role is null for a personal drive, or when the
- * drive changed org between the unlocked read and the lock.
+ * Org, sorted memberships, then drive: departures/removals hold a membership before
+ * reassigning its led drives. Holding the drive while waiting for that membership
+ * would invert that order. A changed org is refused using the locked drive facts.
  */
 async function lockDriveWithOrg(
   tx: OrgDriveTx,
   driveId: string,
   actorId: string,
-  deps: OrgDriveServiceDeps
-): Promise<{ drive: DriveRow; actorOrgRole: OrgRole | null } | null> {
+  deps: OrgDriveServiceDeps,
+  targetId?: string,
+): Promise<{ drive: DriveRow; actorOrgRole: OrgRole | null; targetOrgRole: OrgRole | null } | null> {
   const [current] = await tx.select({ orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId));
   if (!current) return null;
   const orgLocked = current.orgId !== null && (await lockOrg(tx, current.orgId));
+  const roles = new Map<string, OrgRole | null>();
+  if (orgLocked && current.orgId !== null) {
+    for (const userId of [...new Set(targetId === undefined ? [actorId] : [actorId, targetId])].sort()) {
+      roles.set(userId, await deps.getOrgRole(tx, current.orgId, userId));
+    }
+  }
   const drive = await lockDrive(tx, driveId);
   if (!drive) return null;
   const sameOrg = drive.orgId !== null && drive.orgId === current.orgId && orgLocked;
-  const actorOrgRole = sameOrg && drive.orgId !== null ? await deps.getOrgRole(tx, drive.orgId, actorId) : null;
-  return { drive, actorOrgRole };
+  return {
+    drive,
+    actorOrgRole: sameOrg ? roles.get(actorId) ?? null : null,
+    targetOrgRole: sameOrg && targetId !== undefined ? roles.get(targetId) ?? null : null,
+  };
 }
 
 export type ChangeVisibilityResult =
@@ -445,13 +454,9 @@ export async function changeOrgDriveLead(
   deps: OrgDriveServiceDeps
 ): Promise<ChangeLeadResult> {
   const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit) => {
-    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps);
+    const locked = await lockDriveWithOrg(tx, driveId, actorId, deps, input.newLeadId);
     if (!locked) return driveNotFound();
-    const { drive, actorOrgRole } = locked;
-    // Share-locks the target's org_members row too, so they cannot leave the org mid-handover.
-    const targetOrgRole = actorOrgRole !== null && drive.orgId !== null
-      ? await deps.getOrgRole(tx, drive.orgId, input.newLeadId)
-      : null;
+    const { drive, actorOrgRole, targetOrgRole } = locked;
 
     const verdict = decideChangeOrgDriveLead({ drive, actorId, actorOrgRole, targetId: input.newLeadId, targetOrgRole });
     if (!verdict.ok) return verdict;

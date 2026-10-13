@@ -231,6 +231,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
     decideOwnershipTransfer: { ownerCompares: 2, reason: NOT_A_DRIVE("currentOwnerId is the organization's Owner (org ownership transfer, ORG-1)") },
   },
   'packages/lib/src/organizations/leave.ts': {
+    leaveAllOrganizations: { ownerCompares: 1, reason: 'account-deletion writer: discovers org ids of drives the departing account LEADS, including legacy orphan leads, solely to prelock the complete sorted org union before departure/reassignment; grants no read access and every membership departure still passes decideLeave' },
     reassignLedOrgDrives: { ownerCompares: 2, reason: 'writer: selects the org drives a leaving member LEADS so their lead can be reassigned to the org Owner (ORG-6): their org ids first, then the drive rows FOR UPDATE, in the lock order org deletion uses' },
     planLeadReassignments: { ownerCompares: 1, reason: NOT_A_DRIVE("orgOwnerId is the organization's Owner, excluded as a reassignment source") },
   },

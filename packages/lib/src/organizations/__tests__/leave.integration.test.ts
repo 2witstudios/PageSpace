@@ -7,7 +7,7 @@
  *
  * Requires DATABASE_URL → a migrated Postgres. Fails loudly when none is reachable (requireDb).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull, sql } from '@pagespace/db/operators';
@@ -22,6 +22,8 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { leaveOrganization, reassignLedOrgDrives, LeaveOrganizationRefusedError } from '../leave';
 import { accountRepository } from '../../repositories/account-repository';
 import { getUserDriveAccess } from '../../permissions/permissions';
+import { changeOrgDriveLead } from '../../services/org-drive-service';
+import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { updateDriveLastAccessed } from '../../services/drive-service';
 import { credentialActor } from '../../permissions/access-actor';
 
@@ -120,6 +122,56 @@ describe('leave and delete cascades (Postgres)', () => {
       await pool.end();
     }
   });
+
+  it('O-7 a public leave completes while an idempotent public lead change waits to check the departing target, without a member/drive lock cycle', async () => {
+    const owner = await user();
+    const lead = await user();
+    const org = await orgWith(owner.id, [lead.id]);
+    const drive = await factories.createDrive(lead.id, { orgId: org.id });
+    let arrived!: () => void;
+    let release!: () => void;
+    const atTarget = new Promise<void>(resolve => { arrived = resolve; });
+    const resume = new Promise<void>(resolve => { release = resolve; });
+    let handoverPid = 0;
+    let targetCalls = 0;
+    const handover = changeOrgDriveLead(owner.id, drive.id, { newLeadId: lead.id }, {
+      ...orgDriveServiceDeps,
+      getOrgRole: async (tx, orgId, userId) => {
+        if (userId === lead.id && ++targetCalls === 1) {
+          const pid = await tx.execute(sql`SELECT pg_backend_pid() AS pid`);
+          handoverPid = Number(pid.rows[0].pid);
+          arrived();
+          await resume;
+        }
+        return orgDriveServiceDeps.getOrgRole(tx, orgId, userId);
+      },
+    }).then(result => ({ result }), error => ({ error }));
+    let leave: ReturnType<typeof leaveOrganization> | undefined;
+    let leaveFinished = false;
+    let blockedOnHandover = false;
+    try {
+      await Promise.race([atTarget, handover.then(() => { throw new Error('Lead change completed before the target barrier'); })]);
+      leave = leaveOrganization(lead.id, org.id);
+      // Catch immediately so a genuine deadlock refusal remains an asserted result.
+      const leaving = leave.then(result => { leaveFinished = true; return { result }; }, error => { leaveFinished = true; return { error }; });
+      await vi.waitFor(async () => {
+        const waiting = await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND ${handoverPid} = ANY(pg_blocking_pids(pid))`);
+        blockedOnHandover = waiting.rows.length > 0;
+        expect(leaveFinished || blockedOnHandover).toBe(true);
+      }, { timeout: 5000 });
+      // A handover awaiting target membership must not already hold the drive
+      // that a leave, after locking that membership, needs to reassign.
+      expect(blockedOnHandover).toBe(false);
+      release();
+      expect(await leaving).toMatchObject({ result: { ok: true } });
+      expect(await handover).toMatchObject({ result: { ok: false, code: 'TARGET_NOT_ORG_MEMBER', status: 409 } });
+      expect(await db.select().from(orgMembers).where(and(eq(orgMembers.orgId, org.id), eq(orgMembers.userId, lead.id)))).toEqual([]);
+      expect((await db.select().from(drives).where(eq(drives.id, drive.id)))[0].ownerId).toBe(owner.id);
+    } finally {
+      release();
+      await Promise.allSettled([leave, handover]);
+    }
+  }, 15000);
 
   it('O-8 leaving an org revokes all four artifact types the leaver handed out in its drives', async () => {
     if (!dbAvailable) return;
