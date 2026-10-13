@@ -43,7 +43,7 @@ beforeEach(() => {
     mirror ? { userId: mirror.userId, orgId: mirror.orgId } : { userId: null, orgId: 'org_northwind' });
 });
 
-describe('handleDedicatedSubscriptionEvent — who the mirror says pays (WAL-9, D-OW-64)', () => {
+describe('handleDedicatedSubscriptionEvent — who the mirror says pays (D-OW-64)', () => {
   it('WAL-9 (partial) an org drive\'s subscription with no mirror yet is mirrored with the org its app\'s drive bills — never metadata\'s userId', async () => {
     await handleDedicatedSubscriptionEvent(
       subscription({ kind: 'published_app_dedicated', publishedAppId: 'app_1', guestPreset: 'small', userId: 'user_admin', orgId: 'org_forged' }),

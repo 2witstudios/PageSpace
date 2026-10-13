@@ -41,7 +41,7 @@ beforeEach(() => {
   mocks.patch.mockResolvedValue({ admitted: true });
 });
 
-describe('join requests on a Restricted drive (DRV-6)', () => {
+describe('join requests on a Restricted drive', () => {
   it('DRV-6 (partial) the drive lead sees pending requests with the note and approves one', async () => {
     renderCard(drive({ isOwned: true }));
     expect(await screen.findByText('Marcus')).toBeTruthy();

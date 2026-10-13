@@ -810,7 +810,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
   });
 
-  describe('the org model allowlists (POL-8)', () => {
+  describe('the org model allowlists', () => {
     it('POL-8 (partial) a model the drive\'s org does not allow is refused 403 naming the policy, not a 500', async () => {
       mockApplyPageMutation.mockRejectedValueOnce(Object.assign(new Error('refused'), {
         refusal: { message: "This organization doesn't allow that AI model.", code: 'org_policy', policy: 'modelAllowlist', status: 403 },

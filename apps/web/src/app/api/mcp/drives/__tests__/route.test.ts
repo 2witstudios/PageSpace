@@ -125,7 +125,7 @@ describe('POST /api/mcp/drives — reserved name guard', () => {
   });
 });
 
-describe('POST /api/mcp/drives — DRV-3 creates through the drive service, personal or in an org', () => {
+describe('POST /api/mcp/drives — creates through the drive service, personal or in an org', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateMCPRequest).mockResolvedValue(mockSessionAuth());

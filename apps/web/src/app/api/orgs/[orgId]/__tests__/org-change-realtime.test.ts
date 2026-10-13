@@ -58,7 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('X-4 org writes announce org:changed', () => {
+describe('org writes announce org:changed', () => {
   it('X-4 (partial) renaming an org announces a profile change to its members', async () => {
     vi.mocked(updateOrganization).mockResolvedValue({ ok: true, organization } as never);
     const res = await PATCH(json('PATCH', { name: 'Contoso' }), ctx);

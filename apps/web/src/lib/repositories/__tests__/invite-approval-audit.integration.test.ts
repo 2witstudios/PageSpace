@@ -72,7 +72,7 @@ afterAll(async () => {
   await db.delete(users).where(inArray(users.id, created.users));
 });
 
-describe('an emailed invitation carries its approval event (AUD-1)', () => {
+describe('an emailed invitation carries its approval event', () => {
   it('AUD-1 (partial) a drive invitation committed but never published (crash after the email) is delivered by the drainer when the hold ends', async () => {
     if (!dbAvailable) return;
     const invite = await driveInviteRepository.createPendingInvite({

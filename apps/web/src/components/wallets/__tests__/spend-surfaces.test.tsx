@@ -218,7 +218,7 @@ describe('ComposerSpendStrip: the strip before the first message', () => {
   });
 });
 
-describe('UI-8: the refusal card and automation state', () => {
+describe('the refusal card and automation state', () => {
   it('UI-8 (partial) a refused source in a chat renders the refusal card in the error banner, naming the source and offering the others', () => {
     spendState.spend = conversation([product, seat, own], { kind: 'refuse', reason: 'source_empty', source: 'drive_wallet', options: ['seat_allowance', 'own_credits'] } as unknown as SurfaceDecision);
     render(

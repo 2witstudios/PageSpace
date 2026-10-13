@@ -267,7 +267,7 @@ async function poolOf(orgId: string) {
 
 const poolCents = async (orgId: string) => (await poolOf(orgId))?.monthlyRemainingCents ?? 0;
 
-describe('SEAT-8 an org exists only paid or gifted (real Postgres, in-memory Stripe)', () => {
+describe('an org exists only paid or gifted (real Postgres, in-memory Stripe)', () => {
   beforeAll(async () => {
     try {
       await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);

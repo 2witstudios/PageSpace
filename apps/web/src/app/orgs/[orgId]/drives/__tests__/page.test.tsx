@@ -46,7 +46,7 @@ beforeEach(() => {
 
 const section = (name: string) => screen.getByRole('region', { name });
 
-describe('the org Drives directory for a plain Member (DRV-6, D-OW-25)', () => {
+describe('the org Drives directory for a plain Member (D-OW-25)', () => {
   it('DRV-6 (partial) a Member sees Open drives, drives they joined and Private drives they are on to open, and Restricted drives to ask to join', () => {
     render(<OrgDrivesDirectoryPage />);
     const mine = section('Your drives');

@@ -949,7 +949,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
  * subscription row does, and publishing it can never fail a call whose Stripe create has committed. The chain append
  * is captured here; `refuse` makes it fail.
  */
-describe('org subscription provisioning audit (AUD-1, real Postgres, in-memory Stripe)', () => {
+describe('org subscription provisioning audit (real Postgres, in-memory Stripe)', () => {
   const chain = { appended: [] as AuditEvent[], refuse: false };
   const billingEvents = (orgId: string) =>
     chain.appended.filter((e) => e.details?.orgId === orgId && e.eventType === 'org.billing.subscription_changed').map((e) => e.details);

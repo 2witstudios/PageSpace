@@ -189,7 +189,7 @@ describe('POST /api/ai/page-agents/create', () => {
     vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: true });
   });
 
-  describe('the org model allowlists (POL-8)', () => {
+  describe('the org model allowlists', () => {
     it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 naming the policy, and no agent is created', async () => {
       vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
       const response = await POST(createRequest({

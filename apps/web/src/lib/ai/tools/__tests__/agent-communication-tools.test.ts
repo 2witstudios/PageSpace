@@ -1242,7 +1242,7 @@ describe('agent-communication-tools', () => {
       });
     });
 
-    describe('its own reservation (WAL-6a)', () => {
+    describe('its own reservation', () => {
       const turnTarget = { kind: 'drive' as const, driveId: 'drive-1', chosen: 'drive_wallet' as const, followOn: true as const };
       const run = () => executeAskAgent(
         { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },

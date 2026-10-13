@@ -486,7 +486,7 @@ describe('POST /api/voice/realtime/call', () => {
     });
   });
 
-  describe('the org model policy (POL-8)', () => {
+  describe('the org model policy', () => {
     it('POL-8 (partial) judges the realtime model and its vendor against the org of the drive the call belongs to, before OpenAI is contacted', async () => {
       mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
       vi.stubEnv('OPENAI_REALTIME_MODEL', 'gpt-realtime-x');
