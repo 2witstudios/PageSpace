@@ -369,10 +369,12 @@ test('uploads a file through the retained palette and opens its specialized view
 test('agent sessions and drive configuration remain native and preserve one chat', async ({ browser, baseURL }) => {
   const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
-  await expect(page.getByRole('button', { name: 'New Session', exact: true })).toBeVisible();
+  // On a drive the sessions are the Agents tool's left pane; its head button starts one.
+  const sessions = page.getByRole('region', { name: 'Agents and sessions', exact: true });
+  await expect(sessions.getByRole('button', { name: 'Session', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toHaveCount(1);
-  await expect(page.getByRole('complementary', { name: 'Agent sessions', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'New Session', exact: true }).click();
+  await expect(sessions).toBeVisible();
+  await sessions.getByRole('button', { name: 'Session', exact: true }).click();
   const palette = page.getByRole('dialog', { name: 'New session', exact: true });
   await palette.getByRole('option').filter({ hasText: 'Support proof' }).first().click();
   const name = page.getByRole('dialog', { name: 'Name your session', exact: true }).getByRole('textbox', { name: 'Session name', exact: true });
@@ -382,7 +384,7 @@ test('agent sessions and drive configuration remain native and preserve one chat
   const createdResponse = await created;
   expect(createdResponse.ok()).toBe(true);
   const workspace = await createdResponse.json() as { conversationId: string };
-  await expect(page.getByRole('complementary', { name: 'Agent sessions', exact: true })).toContainText('Native agent session');
+  await expect(sessions).toContainText('Native agent session');
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toBeEditable();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toHaveCount(1);
   const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
