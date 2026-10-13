@@ -213,4 +213,102 @@ describe('TrashView', () => {
       expected: ['Only drive owners and admins can see the trash', null],
     });
   });
+  test('offers Try again on a load failure that is not a refusal, and reloads', async () => {
+    let calls = 0;
+    const { root } = await open(
+      server({
+        'GET /api/drives/d1/trash': () => {
+          calls += 1;
+          return calls === 1 ? Response.json({ error: 'boom' }, { status: 500 }) : Response.json(TREE);
+        },
+      }),
+    );
+    const heading = root.querySelector('h2')?.textContent;
+    click(buttonIn(root, 'Try again')!);
+    await settle(() => {
+      if (!root.querySelector('[role="treegrid"]')) throw new Error('not reloaded');
+    });
+    assert({
+      given: 'a 500 from the trash route, then a successful retry',
+      should: 'say the trash could not load, then draw the treegrid',
+      actual: [heading, calls >= 2, root.querySelector('[role="treegrid"]') !== null],
+      expected: ['Could not load the trash', true, true],
+    });
+  });
+
+  test('says the trash is empty, and falls back to "this drive" when the drive is unknown', async () => {
+    const { root } = await open(
+      server({
+        'GET /api/drives/d1/trash': () => Response.json([]),
+        'GET /api/drives': () => Response.json([{ id: 'other', name: 'Elsewhere', kind: 'STANDARD' }]),
+      }),
+    );
+    assert({
+      given: 'nothing trashed in a drive missing from the roster',
+      should: 'show the empty state with no treegrid, and name "this drive" in the line',
+      actual: [
+        root.querySelector('[role="treegrid"]'),
+        root.textContent?.includes('Nothing in the trash'),
+        root.textContent?.includes('Pages trashed from this drive, with'),
+      ],
+      expected: [null, true, true],
+    });
+  });
+
+  test('says nothing matches when the filter keeps no row', async () => {
+    const { root } = await open(
+      server({ 'GET /api/drives/d1/trash': () => Response.json([TREE[1]]) }),
+      'pages',
+    );
+    assert({
+      given: 'only a file in the trash under the Pages filter',
+      should: 'keep the head row and say nothing here matches, with Pages pressed',
+      actual: [
+        root.textContent?.includes('Nothing here matches this filter.'),
+        root.querySelector('[aria-pressed="true"]')?.textContent,
+      ],
+      expected: [true, 'Pages'],
+    });
+  });
+
+  test('keeps the row and says so when a restore does not go through, then lets the next write run', async () => {
+    const { root, web } = await open(
+      server({ 'POST /api/pages/b1/restore': () => Response.json({ error: 'nope' }, { status: 500 }) }),
+    );
+    click(buttonIn(rowOf(root, 'launch-banner@2x.png')!, 'Restore')!);
+    await settle(() => {
+      if (!root.querySelector('[role="alert"]')) throw new Error('no failure shown');
+    });
+    const failed = root.querySelector('[role="alert"]')?.textContent;
+    // Starting another action clears the notice.
+    click(root.querySelector<HTMLButtonElement>('[aria-label="Delete Old pricing draft forever"]')!);
+    assert({
+      given: 'a 500 from restore',
+      should: 'show the retry notice, keep the row, and clear the notice when Delete forever is opened',
+      actual: [
+        failed,
+        rowOf(root, 'launch-banner@2x.png') !== undefined,
+        web.writes().length,
+        root.querySelector('p[role="alert"]'),
+      ],
+      expected: ['That did not go through. Check your connection, then try again.', true, 1, null],
+    });
+  });
+
+  test('keeps the confirm open when the permanent delete fails', async () => {
+    const { root } = await open(
+      server({ 'DELETE /api/trash/f1': () => Response.json({ error: 'nope' }, { status: 500 }) }),
+    );
+    click(root.querySelector<HTMLButtonElement>('[aria-label="Delete Old pricing draft forever"]')!);
+    click(buttonIn(root.querySelector('[role="alertdialog"]')!, 'Delete forever')!);
+    await settle(() => {
+      if (!root.querySelector('p[role="alert"]')) throw new Error('no failure shown');
+    });
+    assert({
+      given: 'a 500 from the permanent delete',
+      should: 'leave the alertdialog up beside the retry notice',
+      actual: [root.querySelector('[role="alertdialog"]') !== null, root.querySelector('p[role="alert"]') !== null],
+      expected: [true, true],
+    });
+  });
 });

@@ -155,3 +155,66 @@ describe('deleteDetail', () => {
     });
   });
 });
+
+describe('pages the API sends without children or a size', () => {
+  // GET /trash omits `children` on a leaf and `fileSize` on anything that is not an upload.
+  const bare = (id: string, extra: Partial<TrashPage> = {}): TrashPage => ({
+    id,
+    title: id,
+    type: 'DOCUMENT',
+    parentId: null,
+    originalParentId: null,
+    position: 0,
+    trashedAt: null,
+    ...extra,
+  });
+
+  test('treats a missing children list as empty, in the rows and in withoutPage', () => {
+    const leaves = [bare('a'), bare('b')];
+    assert({
+      given: 'two leaf pages with no children property',
+      should: 'list both with nothing inside, and drop one by id without touching the other',
+      actual: [trashRows(leaves).map((row) => [row.id, row.descendants, row.fileSize]), withoutPage(leaves, 'a').map((node) => node.id)],
+      expected: [[['a', 0, null], ['b', 0, null]], ['b']],
+    });
+  });
+
+  test('labels a one-page folder in the singular and a file of unknown size with nothing', () => {
+    const rows = trashRows([
+      bare('f', { type: 'FOLDER', children: [bare('only', { parentId: 'f' })] }),
+      bare('unsized', { type: 'FILE', fileSize: null }),
+      bare('unsized-too', { type: 'FILE' }),
+    ]);
+    assert({
+      given: 'a folder holding one page and files with a null or missing size',
+      should: 'say "1 page", and give a file no meta without a size',
+      actual: [metaLabel(rows[0]!), metaLabel(rows[2]!), metaLabel(rows[3]!)],
+      expected: ['1 page', null, null],
+    });
+  });
+
+  test('warns about a single page inside a permanent delete, and rounds a size below a kilobyte', () => {
+    const rows = trashRows([bare('f', { type: 'FOLDER', children: [bare('only', { parentId: 'f' })] })]);
+    assert({
+      given: 'a folder with exactly one page inside',
+      should: 'name "1 page inside it" and format the byte count at the unit edges',
+      actual: [deleteDetail(rows[0]!), formatBytes(1023), formatBytes(1024), formatBytes(1024 * 1024)],
+      expected: [
+        'Its content, version history and the 1 page inside it can’t be restored after this.',
+        '1023 B',
+        '1.0 KB',
+        '1.0 MB',
+      ],
+    });
+  });
+
+  test('leaves "Was in" empty for a top-level page whose parent was never recorded', () => {
+    const [row] = trashRows([bare('orphan', { originalParentId: 'gone' })]);
+    assert({
+      given: 'a top-level page whose original parent is not in the title lookup',
+      should: 'show nothing',
+      actual: wasInLabel(row!, new Map([['launch', 'Launch']])),
+      expected: null,
+    });
+  });
+});
