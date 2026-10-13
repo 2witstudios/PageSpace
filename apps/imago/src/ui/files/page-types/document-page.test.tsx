@@ -2,10 +2,12 @@
 import type { Editor } from '@tiptap/react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { mount, unmountAll } from '../../test-support/dom';
+import { mount, press, unmountAll } from '../../test-support/dom';
 import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
 import { useDocumentStore } from '@/retained/stores/useDocumentStore';
-import { DocumentTitle, FormattingStrip, editedAtOf, editedLabel } from './document-page';
+import { useFindStore } from '@/retained/stores/useFindStore';
+import { getEffectiveBinding } from '@/retained/stores/useHotkeyStore';
+import { DocumentTitle, FindStrip, FormattingStrip, editedAtOf, editedLabel, useFindShortcut } from './document-page';
 
 vi.mock('@/retained/hooks/useMobile', () => ({ useMobile: () => false }));
 vi.mock('@/retained/hooks/useDisplayPreferences', () => ({
@@ -143,6 +145,60 @@ describe('DocumentTitle (IMC-3.2)', () => {
       should: 'leave out the meta line and keep the title',
       actual: [root.querySelector('p'), root.querySelector('h1')?.textContent],
       expected: [null, 'Q4 Launch Plan'],
+    });
+  });
+});
+
+describe('find in page (IMC-9.10)', () => {
+  beforeEach(() => {
+    useFindStore.getState().reset();
+  });
+
+  const ShortcutProbe = () => {
+    useFindShortcut();
+    return null;
+  };
+
+  test('Cmd+F on the document opens the find strip, and a second Cmd+F refocuses it', () => {
+    mount(<ShortcutProbe />);
+    // The default binding is Cmd+F on a Mac and Ctrl+F elsewhere; match whichever this platform resolves.
+    const modifier = getEffectiveBinding('editing.find').startsWith('Ctrl+') ? { ctrlKey: true } : { metaKey: true };
+    const event = new KeyboardEvent('keydown', { key: 'f', ...modifier, bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+    assert({
+      given: 'a document with find closed',
+      should: 'open find and cancel the browser find on Cmd+F',
+      actual: [useFindStore.getState().isOpen, event.defaultPrevented],
+      expected: [true, true],
+    });
+  });
+
+  test('the find strip is labelled "Find in page" and shows only while find is open', () => {
+    const closed = mount(<FindStrip />);
+    const whileClosed = closed.querySelector('[role="toolbar"]');
+    useFindStore.setState({ isOpen: true, query: 'owner', totalMatches: 2, currentIndex: 0 });
+    const open = mount(<FindStrip />);
+    assert({
+      given: 'find closed, then open with the query "owner" and two matches',
+      should: 'render no strip while closed and a labelled toolbar with "1 of 2" when open',
+      actual: [
+        whileClosed,
+        open.querySelector('[role="toolbar"]')?.getAttribute('aria-label'),
+        open.textContent?.includes('1 of 2'),
+      ],
+      expected: [null, 'Find in page', true],
+    });
+  });
+
+  test('Enter in the find strip advances the match', () => {
+    useFindStore.setState({ isOpen: true, query: 'owner', totalMatches: 2, currentIndex: 0 });
+    const open = mount(<FindStrip />);
+    press(open.querySelector('input') as HTMLInputElement, 'Enter');
+    assert({
+      given: 'the find strip with two matches',
+      should: 'advance to the second match on Enter',
+      actual: useFindStore.getState().currentIndex,
+      expected: 1,
     });
   });
 });

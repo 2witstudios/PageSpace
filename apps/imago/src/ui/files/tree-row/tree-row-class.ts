@@ -40,3 +40,10 @@ export const treeCountClass = 'flex-none text-2xs text-ink-faint';
 
 /** One level down: a real nested list, stepped in. */
 export const treeChildrenClass = 'flex flex-col gap-1 pl-tree-step';
+
+/** A row's checkbox while Select multiple is on: a 16px target ahead of the name. */
+export const treeCheckboxClass = 'size-4 flex-none cursor-pointer accent-accent-deep';
+
+/** A row's hover "…": hidden until the row is hovered or focused, so the tree stays quiet. */
+export const treeRowActionsClass =
+  'flex-none opacity-0 transition-opacity duration-120 group-hover:opacity-100 focus-within:opacity-100';

@@ -225,6 +225,9 @@ export function MovePageDialog({
           )}
           <FolderInput className="h-4 w-4 mr-2 flex-shrink-0" />
           <span className="truncate text-sm">{node.title}</span>
+          {currentParentId === node.id && (
+            <span className="ml-auto pl-2 text-xs text-muted-foreground">current</span>
+          )}
         </div>
         {isExpanded && filteredChildren && filteredChildren.length > 0 && (
           <div>
@@ -238,10 +241,12 @@ export function MovePageDialog({
   const pageNames = pages.map((p) => p.title).join(", ");
   const displayPageNames =
     pageNames.length > 50 ? pageNames.slice(0, 50) + "..." : pageNames;
+  // The folder the selection currently lives in (null = top level).
+  const currentParentId = pages[0]?.parentId ?? null;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[460px] rounded-2xl">
         <DialogHeader>
           <DialogTitle>Move {pages.length === 1 ? "Page" : "Pages"}</DialogTitle>
           <DialogDescription>
@@ -293,6 +298,9 @@ export function MovePageDialog({
                   >
                     <FolderInput className="h-4 w-4 mr-2" />
                     <span className="text-sm font-medium">Root (Top Level)</span>
+                    {currentParentId === null && (
+                      <span className="ml-auto text-xs text-muted-foreground">current</span>
+                    )}
                   </div>
                   {pageTree.map((node) => renderTreeNode(node))}
                 </>

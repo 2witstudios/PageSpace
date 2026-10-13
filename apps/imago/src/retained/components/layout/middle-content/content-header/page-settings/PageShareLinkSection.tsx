@@ -48,7 +48,7 @@ export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSecti
                       readOnly
                       value={link.shareUrl ?? ''}
                       aria-label="Share link URL"
-                      className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+                      className="flex-1 h-[30px] min-w-0 px-2.5 text-xs font-mono bg-muted rounded-lg border border-border truncate focus:ring-2 focus:ring-ring cursor-text"
                       onClick={(e) => (e.target as HTMLInputElement).select()}
                     />
                     <Button
@@ -80,7 +80,7 @@ export function PageShareLinkSection({ pageId, permissions }: PageShareLinkSecti
             </div>
           )}
 
-          <div className={links.length > 0 ? 'border-t border-gray-200 dark:border-gray-700 pt-3' : ''}>
+          <div className={links.length > 0 ? 'border-t border-border pt-3' : ''}>
             <Button
               variant="outline"
               size="sm"

@@ -59,6 +59,8 @@ export function CopyPageDialog({
 
   // Check if any page has children (for showing the include children option)
   const anyPageHasChildren = pages.some((p) => p.type === "FOLDER");
+  // The folder the selection currently lives in (null = top level).
+  const currentParentId = pages[0]?.parentId ?? null;
 
   // Fetch drives on mount
   useEffect(() => {
@@ -222,6 +224,9 @@ export function CopyPageDialog({
           )}
           <FolderInput className="h-4 w-4 mr-2 flex-shrink-0" />
           <span className="truncate text-sm">{node.title}</span>
+          {currentParentId === node.id && (
+            <span className="ml-auto pl-2 text-xs text-muted-foreground">current</span>
+          )}
         </div>
         {isExpanded && filteredChildren && filteredChildren.length > 0 && (
           <div>
@@ -238,7 +243,7 @@ export function CopyPageDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[460px] rounded-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Copy className="h-5 w-5" />
@@ -293,6 +298,9 @@ export function CopyPageDialog({
                   >
                     <FolderInput className="h-4 w-4 mr-2" />
                     <span className="text-sm font-medium">Root (Top Level)</span>
+                    {currentParentId === null && (
+                      <span className="ml-auto text-xs text-muted-foreground">current</span>
+                    )}
                   </div>
                   {pageTree.map((node) => renderTreeNode(node))}
                 </>
@@ -308,7 +316,7 @@ export function CopyPageDialog({
                 onCheckedChange={(checked) => setIncludeChildren(checked === true)}
               />
               <Label htmlFor="include-children" className="text-sm cursor-pointer">
-                Include all child pages
+                Include child pages
               </Label>
             </div>
           )}

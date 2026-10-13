@@ -20,7 +20,7 @@ async function copyToClipboard(text: string, label: string) {
   }
 }
 
-function CopyableRow({ label, value, ariaLabel }: { label: string; value: string; ariaLabel: string }) {
+function CopyableRow({ label, value, ariaLabel, copyLabel }: { label: string; value: string; ariaLabel: string; copyLabel: string }) {
   return (
     <div className="flex items-center gap-2">
       <span className="w-8 shrink-0 text-xs text-muted-foreground">{label}</span>
@@ -29,16 +29,17 @@ function CopyableRow({ label, value, ariaLabel }: { label: string; value: string
         readOnly
         value={value}
         aria-label={ariaLabel}
-        className="flex-1 h-7 min-w-0 px-2 text-xs font-mono bg-muted rounded border border-input truncate focus:ring-2 focus:ring-ring cursor-text"
+        className="flex-1 h-[30px] min-w-0 px-2.5 text-xs font-mono bg-muted rounded-lg border border-border truncate focus:ring-2 focus:ring-ring cursor-text"
         onClick={(e) => (e.target as HTMLInputElement).select()}
       />
       <Button
         variant="ghost"
         size="sm"
-        className="h-7 px-2 shrink-0"
+        className="h-[30px] px-2 shrink-0"
         onClick={() => copyToClipboard(value, label)}
         disabled={!value}
-        aria-label={`Copy ${ariaLabel}`}
+        aria-label={copyLabel}
+        title={copyLabel}
       >
         <Copy className="h-3.5 w-3.5" />
       </Button>
@@ -57,11 +58,8 @@ export function PageLinkSection({ pageId, driveId }: PageLinkSectionProps) {
 
   return (
     <div className="space-y-2">
-      <CopyableRow label="Link" value={pageUrl} ariaLabel="Page link" />
-      <CopyableRow label="ID" value={pageId} ariaLabel="Page ID" />
-      <p className="text-xs text-muted-foreground">
-        The link opens this page for people who already have access.
-      </p>
+      <CopyableRow label="Link" value={pageUrl} ariaLabel="Page link" copyLabel="Copy page link" />
+      <CopyableRow label="ID" value={pageId} ariaLabel="Page ID" copyLabel="Copy page id" />
     </div>
   );
 }

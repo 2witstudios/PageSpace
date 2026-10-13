@@ -2,6 +2,8 @@
 
 import { useState, type ReactNode } from 'react';
 import useSWR from 'swr';
+import { usePathname } from 'next/navigation';
+import { stageFor } from '../../frame/stage/stage';
 import { useApiClient } from '@/api/swr-provider';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import SidebarActivityTab from '@/retained/components/layout/right-sidebar/ai-assistant/SidebarActivityTab';
@@ -104,6 +106,9 @@ export type ImagoHistoryProps = { readonly agentId: string | null; readonly acti
  */
 export function ImagoHistory({ agentId, activeId }: ImagoHistoryProps): ReactNode {
   const [view, setView] = useState<'history' | 'activity'>('history');
+  // Activity is the open page's history; with no page open there is nothing to list.
+  const stage = stageFor(usePathname() ?? '/');
+  const openPageId = stage.object?.kind === 'page' ? stage.object.pageId : null;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div role="tablist" aria-label="Imago view" className="m-3 flex flex-none rounded-lg bg-fill p-px">
@@ -118,9 +123,13 @@ export function ImagoHistory({ agentId, activeId }: ImagoHistoryProps): ReactNod
         <ConversationHistory agentId={agentId} activeId={activeId} />
       ) : (
         <div className="min-h-0 flex-1">
-          <RetainedSurface>
-            <SidebarActivityTab />
-          </RetainedSurface>
+          {openPageId === null ? (
+            <p className="p-4 text-sm text-ink-muted">Open a page to see its changes here.</p>
+          ) : (
+            <RetainedSurface>
+              <SidebarActivityTab pageId={openPageId} />
+            </RetainedSurface>
+          )}
         </div>
       )}
     </div>

@@ -24,7 +24,7 @@ export function DeletePageDialog({
 }: DeletePageDialogProps) {
   return (
     <AlertDialog open={isOpen} onOpenChange={onClose}>
-      <AlertDialogContent>
+      <AlertDialogContent className="sm:max-w-[480px] rounded-2xl">
         <AlertDialogHeader>
           <AlertDialogTitle>Are you sure?</AlertDialogTitle>
           <AlertDialogDescription>
@@ -39,16 +39,22 @@ export function DeletePageDialog({
             <>
               <AlertDialogAction
                 onClick={() => onConfirm(false)}
-                className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                className="border border-border bg-transparent text-foreground hover:bg-muted"
               >
                 Move Page Only
               </AlertDialogAction>
-              <AlertDialogAction onClick={() => onConfirm(true)}>
+              <AlertDialogAction
+                onClick={() => onConfirm(true)}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
                 Move Page and All Contents
               </AlertDialogAction>
             </>
           ) : (
-            <AlertDialogAction onClick={() => onConfirm(true)}>
+            <AlertDialogAction
+              onClick={() => onConfirm(true)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
               Move to Trash
             </AlertDialogAction>
           )}
