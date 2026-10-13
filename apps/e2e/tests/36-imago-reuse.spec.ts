@@ -1,4 +1,4 @@
-import { openTaskConfiguration, selectTaskFilter, openTaskActions } from '../fixtures/retained-tasks.fixture';
+import { openTaskConfiguration, selectTaskFilter, openTaskActions, newTaskButton } from '../fixtures/retained-tasks.fixture';
 import { browserGet } from '../fixtures/browser-api.fixture';
 import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
 import { test, expect, type BrowserContext } from '@playwright/test';
@@ -486,7 +486,7 @@ test('task creation and completion persist through retained task controls', asyn
   const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Interactive tasks' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `files/${list.id}`));
   const object = page.locator('[data-slot="object"]');
-  await object.getByRole('button', { name: 'New Task', exact: true }).click();
+  await newTaskButton(object).click();
   const input = object.locator('input[placeholder="+ Add a new task..."]:visible');
   await expect(input).toBeFocused();
   const creation = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks`);
@@ -506,7 +506,7 @@ test('task agent triggers save, survive reload and remove through retained contr
   const agent = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Trigger proof agent' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
   const object = page.locator('[data-slot="object"]');
-  await object.getByRole('button', { name: 'New Task', exact: true }).click();
+  await newTaskButton(object).click();
   const input = object.locator('input[placeholder="+ Add a new task..."]:visible');
   const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks`);
   await input.fill('Task with a trigger');

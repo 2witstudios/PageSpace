@@ -14,6 +14,7 @@ import {
   signIn,
   type ImagoUser,
 } from '../fixtures/imago.fixture';
+import { newTaskButton } from '../fixtures/retained-tasks.fixture';
 
 /**
  * # Tasks in imago, end to end (IMG-9.6)
@@ -113,7 +114,7 @@ const addTask = async (
 ): Promise<TaskCreated> => {
   const created = answerTo(page, 'POST', tasksPath(listPage));
   const rootTask = label === 'Add task';
-  await scope.getByRole('button', { name: rootTask ? 'New Task' : label, exact: true }).click();
+  await (rootTask ? newTaskButton(scope) : scope.getByRole('button', { name: label, exact: true })).click();
   const field = rootTask
     ? scope.locator('input[placeholder="+ Add a new task..."]:visible')
     : scope.getByRole('textbox', { name: label, exact: true });

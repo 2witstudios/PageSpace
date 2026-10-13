@@ -50,3 +50,7 @@ export async function openTaskActions(page: Page, taskId: string, title: string)
   await expect(details).toBeVisible();
   return details;
 }
+
+/** The "+ Task" button in the task list's List controls strip, which focuses the new-task field. */
+export const newTaskButton = (scope: Locator): Locator =>
+  scope.getByRole('toolbar', { name: 'List controls', exact: true }).getByRole('button', { name: 'Task', exact: true });

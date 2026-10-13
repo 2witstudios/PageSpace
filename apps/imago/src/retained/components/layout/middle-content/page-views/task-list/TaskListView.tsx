@@ -1234,9 +1234,12 @@ function TaskListView({ page, renderTools }: TaskListViewProps) {
         onConfigsChanged={() => mutateTasks()}
       />
     ) : null,
+    // The strip's button serves both layouts: the table's field, or the compact list's when the
+    // pane is too narrow for the table. Only the one on screen has an offsetParent to focus.
     onNewTask: () => {
-      wideNewTaskInputRef.current?.scrollIntoView({ block: 'nearest' });
-      wideNewTaskInputRef.current?.focus();
+      const input = [wideNewTaskInputRef.current, newTaskInputRef.current].find((el) => el?.offsetParent);
+      input?.scrollIntoView({ block: 'nearest' });
+      input?.focus();
     },
   };
 
