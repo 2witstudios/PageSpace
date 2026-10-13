@@ -13,23 +13,27 @@
  * forwards `/socket.io` (including the websocket upgrade) to realtime and everything else to
  * web, so the browser only ever sees one origin and `NEXT_PUBLIC_REALTIME_URL` stays UNSET.
  *
+ * With `E2E_IMAGO_TARGET` set it also plays the edge's `/imago` rule: apps/imago (basePath
+ * `/imago`) on the same origin as web, so imago's signed-out redirect reaches classic's sign-in
+ * on that origin and sign-in returns to the imago path it was given — the production round trip
+ * that `next dev` on its own port cannot make (tests/27-imago-shell.spec.ts). The split itself
+ * lives in e2e-proxy-routes.ts.
+ *
  * Used by the `e2e` job in .github/workflows/ci.yml and by anyone reproducing the specs locally
  * (see the header of tests/16-dispatch-multiplayer.spec.ts).
  *
  *   E2E_PROXY_PORT=3000 E2E_WEB_TARGET=http://127.0.0.1:3100 \
- *   E2E_REALTIME_TARGET=http://127.0.0.1:3001 bun run support/e2e-proxy.ts
+ *   E2E_REALTIME_TARGET=http://127.0.0.1:3001 [E2E_IMAGO_TARGET=http://127.0.0.1:3106] \
+ *   bun run support/e2e-proxy.ts
  */
 import http from 'node:http';
 import net from 'node:net';
+import { proxyTargets, targetFor as routeFor } from './e2e-proxy-routes';
 
 const PORT = Number(process.env.E2E_PROXY_PORT ?? 3000);
-const WEB = new URL(process.env.E2E_WEB_TARGET ?? 'http://127.0.0.1:3100');
-const REALTIME = new URL(process.env.E2E_REALTIME_TARGET ?? 'http://127.0.0.1:3001');
+const TARGETS = proxyTargets(process.env);
 
-/** The one path Traefik splits on. Everything else is the app. */
-const isRealtimePath = (url: string | undefined): boolean => (url ?? '/').startsWith('/socket.io');
-
-const targetFor = (url: string | undefined): URL => (isRealtimePath(url) ? REALTIME : WEB);
+const targetFor = (url: string | undefined): URL => routeFor(url, TARGETS);
 
 const server = http.createServer((req, res) => {
   const target = targetFor(req.url);
@@ -94,7 +98,8 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
+  const imago = TARGETS.imago ? ` | /imago -> imago ${TARGETS.imago.origin}` : '';
   console.log(
-    `[e2e-proxy] :${PORT} -> web ${WEB.origin} | /socket.io -> realtime ${REALTIME.origin}`
+    `[e2e-proxy] :${PORT} -> web ${TARGETS.web.origin} | /socket.io -> realtime ${TARGETS.realtime.origin}${imago}`
   );
 });

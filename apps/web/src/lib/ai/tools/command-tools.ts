@@ -19,6 +19,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/so
 import type { ToolExecutionContext } from '../core/types';
 import { toolActor } from '@/lib/ai/tools/actor-permissions';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { driveDeniedForActor, filterDriveIdsForActor } from './actor-permissions';
 
 async function broadcastCommandChange(driveId: string): Promise<void> {
   try {
@@ -31,12 +32,16 @@ async function broadcastCommandChange(driveId: string): Promise<void> {
 
 const commandLogger = loggers.ai.child({ module: 'command-tools' });
 
+const IMAGO_EXCLUDED_DRIVE = 'This drive is outside your reach here';
+
 async function loadCommandForManage(actor: AccessActor, commandId: string): Promise<SelectCommand> {
   const { userId } = actor;
   const command = await db.query.commands.findFirst({
     where: eq(commands.id, commandId),
   });
   if (!command) throw new Error('Command not found');
+  // A drive the user keeps their Imago agent out of: its commands do not exist here.
+  if (command.driveId && await driveDeniedForActor(context, command.driveId)) throw new Error('Command not found');
   if (command.userId !== null) {
     if (command.userId !== userId) throw new Error('Command not found');
     return command;
@@ -47,6 +52,7 @@ async function loadCommandForManage(actor: AccessActor, commandId: string): Prom
 }
 
 async function validateEntryPageForTool(
+  context: ToolExecutionContext,
   actor: AccessActor,
   entryPageId: string,
   commandDriveId: string | null
@@ -55,7 +61,7 @@ async function validateEntryPageForTool(
     where: eq(pages.id, entryPageId),
     columns: { id: true, driveId: true, isTrashed: true },
   });
-  if (!page) throw new Error('Entry page not found');
+  if (!page || await driveDeniedForActor(context, page.driveId)) throw new Error('Entry page not found');
   if (page.isTrashed) throw new Error('Entry page is in the trash');
   const canView = await canUserViewPage(actor, entryPageId);
   if (!canView) throw new Error('You do not have access to the entry page');
@@ -109,11 +115,14 @@ export const commandTools = {
 
       try {
         if (commandDriveId !== null) {
+          if (await driveDeniedForActor(context as ToolExecutionContext, commandDriveId)) {
+            throw new Error(IMAGO_EXCLUDED_DRIVE);
+          }
           const allowed = await isDriveOwnerOrAdmin(toolActor(context as ToolExecutionContext), commandDriveId);
           if (!allowed) throw new Error('Only the drive owner or admins can create drive commands');
         }
 
-        await validateEntryPageForTool(toolActor(context as ToolExecutionContext), entryPageId, commandDriveId);
+        await validateEntryPageForTool(context as ToolExecutionContext, toolActor(context as ToolExecutionContext), entryPageId, commandDriveId);
 
         const duplicate = await db.query.commands.findFirst({
           where: and(
@@ -225,7 +234,7 @@ export const commandTools = {
         }
 
         if (typeof entryPageId === 'string') {
-          await validateEntryPageForTool(toolActor(context as ToolExecutionContext), entryPageId, command.driveId);
+          await validateEntryPageForTool(context as ToolExecutionContext, toolActor(context as ToolExecutionContext), entryPageId, command.driveId);
         }
 
         const updateData: Partial<{
@@ -317,8 +326,10 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        // Drives the caller is a member of (org-aware; page-level access does not count).
-        const allMemberDriveIds = await getMemberDriveIds(toolActor(context as ToolExecutionContext), { includeTrashed: false });
+        const allMemberDriveIds = await filterDriveIdsForActor(
+          context as ToolExecutionContext,
+          await getMemberDriveIds(toolActor(context as ToolExecutionContext), { includeTrashed: false }),
+        );
 
         if (driveId && !allMemberDriveIds.includes(driveId)) {
           throw new Error('Drive not found or you are not a member of that drive');

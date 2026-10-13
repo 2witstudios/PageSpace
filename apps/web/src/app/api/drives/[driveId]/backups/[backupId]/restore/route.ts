@@ -19,6 +19,7 @@ import {
   planRoleRestoreOps,
   applyPermRestoreOps,
   type RestoreAdmission,
+  revokeAgentGrantsOfRemovedMembers,
 } from '@/services/api/restore-permissions-service';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
@@ -166,6 +167,7 @@ export async function POST(
           sp as never,
           admit,
         )));
+      await revokeAgentGrantsOfRemovedMembers(tx, driveId, memberOps, skippedMembers);
 
       return {
         pagesCreated: diff.toCreate.length,

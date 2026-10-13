@@ -22,6 +22,7 @@ COPY apps/atlas/package.json ./apps/atlas/
 COPY apps/control-plane/package.json ./apps/control-plane/
 COPY apps/desktop/package.json ./apps/desktop/
 COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/imago/package.json ./apps/imago/
 COPY apps/ios/package.json ./apps/ios/
 COPY apps/marketing/package.json ./apps/marketing/
 COPY apps/processor/package.json ./apps/processor/
@@ -62,6 +63,7 @@ COPY --from=builder /app/apps/atlas/package.json ./apps/atlas/
 COPY --from=builder /app/apps/control-plane/package.json ./apps/control-plane/
 COPY --from=builder /app/apps/desktop/package.json ./apps/desktop/
 COPY --from=builder /app/apps/e2e/package.json ./apps/e2e/
+COPY --from=builder /app/apps/imago/package.json ./apps/imago/
 COPY --from=builder /app/apps/ios/package.json ./apps/ios/
 COPY --from=builder /app/apps/marketing/package.json ./apps/marketing/
 COPY --from=builder /app/apps/processor/package.json ./apps/processor/

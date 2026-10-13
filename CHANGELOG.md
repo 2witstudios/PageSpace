@@ -134,6 +134,47 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Imago's new shell (C · Blue Spine)** — Imago now sits on a blue spine: the drive tile, Search (⌘K), Chat, Files, Messages and Tasks, then Calendar, Agents, Workflows, Activity, Members and Trash, with the notification bell, Drive settings and your avatar at the foot. Open pages live in a tab bar across the top (Back, Forward, tabs that remember themselves per drive, and a + for a new page); under it every column has the same 48px head. The left sidebar folds away with its panel button and comes back from "Show sidebar"; a page closes with ×; Imago docked beside a page folds into an "Ask" pill, and when no page is open Imago fills the middle and can be closed, leaving "Nothing open" with your recent pages and "Ask Imago". A page's head carries its path, who is viewing, Share and a "…" for page actions, and its tools sit in one strip beneath it. The Files pane gains a filter, Favorites and Recents; drive settings and your account each get a sidebar of their screens.
+
+- **Imago's chat column (C · Blue Spine)** — the Imago column's head now has the agent picker (Imago first), History, New chat and a collapse button. A "Spending from …" line above the compact composer shows which credits a reply draws on. Tool calls appear as short rows ("Read Page: Brief") instead of raw tool names. The Chats pane can be searched and groups your conversations by date, and a home greeting suggests where to pick up.
+
+- **Imago's pages (C · Blue Spine)** — each page type has one tool strip under its head:
+  - Documents: Formatting, plus an "Ask" button in the selection bubble that quotes your selection to Imago.
+  - Sheets: Cell and Formula.
+  - Code: Language.
+  - Files: file facts and Download.
+  - Channels: Webhooks, a "New messages" divider, and "Sending…" on pending posts.
+  - Canvases: Code, Preview and Settings tabs, with "Republish" when the published copy is out of date.
+  - Folders: their contents as a table with Name, Type and Modified.
+  - Agent pages: Chat, History and Settings views.
+  - Task lists: Table/Board, Active/Completed/All, and a progress line.
+
+  A public link that no longer works now says so.
+
+- **Imago's files browser (C · Blue Spine)** — a folder opens in a browser of its own, from its "Browse files" link: a Files strip with the breadcrumb, List and Grid views (your choice is remembered), and New Page. The list sorts by Name, Type and Last Modified. A row's "…" or right-click opens Open, Open in new tab, Rename, Favorite, Move to, Copy to and Trash. An empty folder says "No child pages" with Upload files and Create page, and files dragged over it show how many will go in.
+
+- **Imago's settings (C · Blue Spine)** — agent and canvas settings open with a category list beside the form, which you can fold away with "Close settings menu". Editing an agent's settings shows a bar with "Unsaved changes to …", Discard and Save. A published canvas's strip shows its URL, Settings (publish title, description, share image and search visibility), Copy link and Unpublish.
+
+- **Imago's messages (C · Blue Spine)** — the Messages index lists channels and direct messages together, newest first, with an All · Channels · Direct filter, and opens on your unread counts. Direct messages get their own pane with a filter and the people you can message. An open conversation has one head ("Direct messages › name", Conversation options), and New message groups people by how you know them. Channel composers say how to mention and send. The Webhooks button only appears for drive owners and admins. Account › Messages lists every channel across your drives, with search, a drive filter, an Unread toggle and Load older.
+
+- **Imago's tasks (C · Blue Spine)** — the Tasks pane has New list, views with counts (Assigned to me, Overdue, Due today, This week, Upcoming) and each list's progress. The ground shows the tasks assigned to you by due window, with Active · Completed · All. The board view has a column per status with counts and richer cards. An open task shows its list's other tasks in the pane, Previous / Next, its automations and its activity. The Agent triggers and Manage statuses dialogs match the new look. Account › Tasks groups your tasks by drive, with due chips and a drive filter.
+
+- **Imago's drive tools (C · Blue Spine)** — Calendar, Agents, Workflows, Activity, Members and Trash now open with a pane on the left that folds away like every other. Calendar has a mini month, calendars and event types beside a week toolbar, and event popovers with attendees and triggers. Agents lists sessions by environment, with the published app, a session toolbar and closable chat and shell panes. Workflows lists your workflows beside a detail you can enable, run, edit or delete. Activity filters by person, operation, resource and date, with Undo and Roll back on each change. Trash is a tree of trashed pages with Restore and Delete forever. Members has counts for each group, a profile with role and page permissions behind a save bar, and an invite flow with role and expiry. The Ask pill asks about the week, what changed, or why a workflow failed.
+
+- **Imago's settings and account (C · Blue Spine)** — every drive settings and account screen now uses one layout: a single heading with a short explanation, then plain sections, with the settings list in the pane on the left. Drive settings has an overview with live hints, General (name, home page, Imago access), Roles with an inline editor and access grid, Integrations with an audit log, Commands created inline, Context with a character counter, Backups, Domains with DNS records, and a Danger zone that deletes a drive only after you type its name. The account has an overview, your profile with passkeys, devices and connected apps, display, personalization, notifications, hotkeys, privacy, AI providers, agents, agent accounts, commands, plan, billing, usage, storage, drives, backups with snapshots, trash, activity, connections, integrations, Google Calendar, MCP, local MCP and your calendar. The Danger zone row shows only to a drive's owner, Privacy is hidden in the mobile app, and screens like Calendar and Activity open with Imago folded to its Ask pill.
+
+- **Imago's overlays and dialogs (C · Blue Spine)** — dialogs, popovers, menus and side sheets share one look. Toasts are dark pills, at most three at a time. A page's "…" opens its actions (open in new tab, add child page, rename, favorite, protect, permissions, home page, select multiple, move, copy, trash), and multi-select shows a toolbar to move, copy or trash several pages at once. Share, Page history (with undo and roll back), the create-page palette, find in page (⌘F), the drive switcher, ⌘K search with Pages and Users, the notifications popover and a full Notifications page, the account menu with your credits and Send feedback, an offline banner and the verify-email banner, the first-run onboarding, and DM report and block all match the new design.
+
+- **Signed-out pages in the Imago look (C · Blue Spine)** — when Imago is enabled, sign-in, sign-up, check your email, the cookie banner, status pages, passkey setup, device activation, OAuth consent, invitations, share links, provisioning, offline and unsubscribe pages use the new frame with the blue spine, and finishing them lands you in Imago instead of the classic dashboard. A "Cookie preferences" link on sign-in reopens the cookie banner. With Imago off, these pages look as before. In Imago, running out of credits shows an alert with Buy credits and the Pro upgrade.
+
+- **Imago on tablets, phones and the desktop app (C · Blue Spine)** — between 1024 and 1279 pixels wide, Imago opens as a sheet over the page instead of a third column; below 1024 the sidebar slides in as a sheet too. On a phone Imago shows one screen at a time with a bottom bar (Chat, Files, Messages, Tasks, More), a full-screen Files screen, a page view with an "open pages" sheet, and Ask opening Imago full-screen with Back. In the desktop app on macOS the spine leaves room for the window buttons and the top of the window can be dragged.
+
+- **Imago's avatar crop, account deletion and drive actions (C · Blue Spine)** — uploading an avatar opens Crop Avatar with a circle or square crop; deleting your account first asks you to hand off or delete drives you co-own, then asks you to type your email; each drive in Account › Drives has an actions menu to open, rename, favorite or move it to trash.
+
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
 - Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
 
 - Reactivating an organization now only pays what is owed or starts a new paid subscription. If the subscription was changed outside PageSpace (for example a trial, a pause or invoice billing set up in Stripe), Reactivate no longer tries to repair it: Owners and Admins are told it needs support and can contact us from the banner, and the organization is never shown as active until it really is. An organization whose subscription is switched to invoice billing in Stripe is treated as unpaid until support restores automatic payment.
@@ -241,6 +282,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
   subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
   at its next AI request after the date passed. The renewal date no longer drifts later each month.
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
 
 ### Added
@@ -340,6 +383,88 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   next ten-minute settle, and the window the move fell in stays with whoever owed it. An
   organization's app is no longer refused because the lead spent a lot on AI that day: daily and
   in-flight limits count AI and organization compute separately.
+- **Imago preview at `/imago`** — a first look at PageSpace's new interface, served
+  beside classic PageSpace and signed in with the same account. Live on pagespace.ai since the
+  IMG-11.2 flip; self-hosted installs stay dark until they set `IMAGO_ENABLED=true` (and
+  `NEXT_PUBLIC_IMAGO_ENABLED=true` for the "Try Imago" link in the user menu); until then every
+  `/imago` address answers not found. One frame stays put as you move
+  around: a rail of sections, a drive switcher with your Home drive first, and an avatar menu with
+  theme, "Classic PageSpace" and sign out.
+  **Chat** talks to your agents. The header picks who you talk to: your Imago agents first, then the
+  agents you can use in the open drive; switching agent opens that agent's latest conversation, and
+  an agent you can no longer use hands the chat back to Imago with a note saying so. Replies stream
+  in as you watch, with one expandable line per tool the agent used and page citations as chips that
+  open the page in Files; Stop ends a reply and keeps what it had written so far. Whatever you open
+  elsewhere in the frame is what the agent answers about, and the draft in the composer waits for you
+  when you come back. The chat history lists the agent's conversations grouped by day, switches
+  between them in place, and starts a fresh one with New chat.
+  **Files** shows a drive's pages as a live tree: open a folder in place with its caret, filter by
+  name (the folders on the way to a match stay in view), and press + to create a document in the
+  open folder, which appears at once and opens. Opening a folder shows it Finder-style: the path back
+  up the drive, then each page in it with its type icon, kind and when it last changed; an empty
+  folder offers New page. Opening a document shows it in a centred column with the path of pages
+  above it; if you can edit it, you edit its title and text in place and it saves as you pause
+  ("Saving…", "Saved"). If someone else saved it while you were editing, your text stays put and you
+  choose "Keep my version" or "Use the saved version"; if you lose edit access, Imago says your
+  last changes were not saved. A sheet, canvas, code page, file or task list shows a card with an
+  "Open in classic" button; an agent page also offers "Chat with this agent".
+  **Messages** lists a drive's channels and your direct messages with unread counts, and opens a
+  channel or a direct message to read and post in, with new posts arriving live; the unread count on
+  the rail keeps up wherever you are. **Tasks** lists a drive's task lists with progress and opens one
+  in Tree or Focus view, where you can tick and add tasks, or open a task to edit its title, status,
+  priority, due date, assignees, description and subtasks. **Settings** shows a drive's name (owners
+  and admins can rename it), its members, and an "Imago access" switch that lets your Imago agents
+  work in that drive; your Home drive can't be renamed and your agents always have access to it.
+  Account links to your account, billing and connections settings in classic PageSpace.
+  Press ⌘K (Ctrl-K on Windows and Linux) anywhere to search the open drive's pages by name, or tick
+  "Include all workspaces" to search every drive you can open; move with the arrow keys, press Enter
+  to jump straight to a page, channel, task list or agent, and Escape to go back where you were. An
+  empty drive, a section that fails to load and an address that names nothing you can open each get
+  their own screen inside the frame: a note about what will show up, a "Try again" button, or "not
+  found" with a link back. Imago is a preview, and classic PageSpace is unchanged.
+
+- **Imago in your Home drive** — every account now gets Imago, the assistant that replaces the global
+  assistant: it works with your own access, the global assistant's tools and context, and its own
+  memory, everywhere except drives you keep it out of, in an `Imago` folder in your Home drive. It is
+  added when you sign in (including with a passkey), and if you delete it it comes back the next time
+  you sign in. Existing accounts get them (and a Home drive, if they lack one) from a
+  one-time backfill, without having to sign in.
+- **Imago agents can read the drives you own** — when your Imago agents are first set up, and
+  whenever you create a drive, they are added to each regular drive you own as members: they can
+  read its pages but not private ones, and cannot edit, share or delete. They are never added to
+  drives you only belong to. When you hand a drive to a new owner — or undo or redo that handover
+  from the drive's history — your Imago agents leave it; the new owner decides which agents get in.
+- **Turn Imago's access to a drive on or off** — drive owners and admins can switch their own Imago
+  agents into or out of a drive (`/api/drives/{driveId}/imago-access`). Your choice is saved for
+  each drive, so a drive you switch off stays off for good: through later sign-ins, when an Imago
+  agent you delete comes back, and even after all three are deleted permanently (emptied from the
+  trash). Older copies of your Imago agents left in the trash keep no access to other drives, so
+  restoring one cannot bring it back into a drive you switched off. In a drive you administer but do not own,
+  turning Imago on keeps all three agents in it, including any that come back after being deleted.
+  Your Home drive is where the agents live, so it cannot be switched off.
+- **Imago agents know where they can work** — each Imago agent is told which drives it has been
+  added to (by name and role) and, each turn, whether the drive or page you are looking at is one of
+  them. Asked to work somewhere it has not been added, it says so and tells you how to give it
+  access instead of trying and failing. It is never told about drives it has not been added to, and
+  a page you cannot open is never passed to it as your location.
+- **Imago agents can use your integrations** — Imago agents get the same connected integrations
+  your global assistant uses, following the same settings (which integrations are enabled, per-drive
+  overrides, visibility). A drive's own integrations are available only in your Home drive and in
+  drives the agent has been added to, never in a drive it has not been added to. Self-hosted
+  (on-prem) installs expose no external integrations to Imago agents.
+- **Imago agents never see more than you do** — an Imago agent can read, search, list or change
+  something only if it has been added to that drive AND you can still do the same yourself. If you
+  lose access to a drive while the agent is still in it (for example after a member change is
+  undone from the drive's history), the agent loses it too: it no longer finds, opens or even names
+  pages and drives you cannot see, and does not show their activity. If an Imago agent's setup
+  cannot be loaded, the chat fails with an error instead of running without its usual limits. An
+  Imago agent can manage a drive's scheduled workflows only where you are its owner or an admin.
+  The same limits hold wherever an Imago agent runs — chat, @-mentions in a channel, consulted
+  through the API, or a workflow: it never uses integrations from a drive it has not been added to,
+  and run by someone else it gets none of yours. When you leave a drive because a member change is
+  undone or redone from its history, or a backup is restored, your Imago agents leave it too. A
+  restore never removes the drive owner's own agents, even when the backup predates the owner's
+  first visit to the drive.
 - **Give an agent its own account** — in an agent's settings (Accounts), or in your personal
   settings for your global assistant, add an API key for a site so the agent can call that site's
   API for you. The agent refers to the account by name and never sees the key: PageSpace keeps it in
@@ -880,6 +1005,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and the top-up rate as three separate facts. The Founder plan is no longer sold; its subscriber
   moves to Pro at the end of the current billing period, and anyone already on the earlier $100
   personal Business plan keeps Business features at the price they pay today.
+- **New global assistant sessions live in your Home drive** — a sandbox session started from the
+  global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
+  set up for you if you do not have one yet, so it is listed under Home rather than under "Global
+  Assistant". Only you can open it, and it is billed to you and runs in the same sandbox as before.
+  Existing assistant sessions stay where they are.
 - **The privacy policy now describes AI routing as it actually works** — every cloud AI request
   goes through OpenRouter to the provider of the model you picked, including Anthropic, OpenAI,
   Google and xAI models. The policy previously described those four as direct and said OpenRouter
@@ -971,6 +1101,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
+
+- **Signing up at the same moment as someone else no longer fails to set up your Home drive** —
+  when several new accounts were created at once, all but one could end up without a Home drive
+  until their next sign-in.
 
 - **A dropped database connection no longer takes the server down** — if the database restarted,
   failed over or closed an idle connection while PageSpace held a background lock (starting an AI

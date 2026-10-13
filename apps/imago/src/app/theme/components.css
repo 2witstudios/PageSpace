@@ -1,0 +1,34 @@
+/* Component-owned size tokens (myimago ADR 0028). Theme variables only;
+   classes stay in the markup. */
+@theme {
+  /* Controls: buttons are 36px tall; icon buttons use the 32px step. */
+  --spacing-control: 36px;
+  --spacing-avatar-xs: 20px;
+  --spacing-checkbox: 16px;
+  --spacing-avatar-sm: 28px;
+  --spacing-avatar-md: 36px;
+  --spacing-avatar-lg: 44px;
+  --spacing-avatar-presence: 2px;
+  --spacing-presence-dot: 10px;
+  --spacing-badge-x: 6px;
+  --spacing-badge-y: 2px;
+  --text-badge: 0.625rem;
+  --container-search: 420px;
+  --spacing-search-x: 2px;
+  --spacing-search-y: 1px;
+  /* Unstyled route copy keeps the browser's default rhythm (em, so it scales
+     with the element's own size). */
+  --text-prose-h1: 2em;
+  --text-prose-h2: 1.5em;
+  --spacing-prose-h1: 0.67em;
+  --spacing-prose-h2: 0.83em;
+  --spacing-prose-block: 1em;
+  --spacing-prose-list: 40px;
+  --font-mono: var(--font-face-mono), ui-monospace, monospace;
+}
+
+/* The focus halo as a shadow utility, for controls whose own shadow (a
+   lifted segment) would otherwise replace the global :focus-visible halo. */
+@theme inline {
+  --shadow-focus: var(--focus-ring);
+}

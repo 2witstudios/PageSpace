@@ -24,7 +24,6 @@ vi.mock('@pagespace/db/db', () => ({
         findFirst: vi.fn(),
       },
     },
-    update: vi.fn(),
     delete: vi.fn(),
     // The drive delete runs in a transaction now — its chat history has to go
     // with it, and the two must not be able to half-happen. The tx exposes the
@@ -38,6 +37,12 @@ const { mockReattributeOwnerStorage, mockLockedDrive } = vi.hoisted(() => ({ moc
 vi.mock('@pagespace/lib/services/storage-limits', () => ({ reattributeDriveOwnerStorageInTx: mockReattributeOwnerStorage }));
 vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
+}));
+// The transfer write (owner change + the previous owner's Imago grant revocation)
+// has its own live-DB coverage in
+// `packages/lib/src/agents/__tests__/grant-imago-agents.integration.test.ts`.
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  transferDriveOwnership: vi.fn(),
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field: unknown, value: unknown) => ({ field, value, type: 'eq' })),
@@ -88,6 +93,7 @@ import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { transferDriveOwnership } from '@pagespace/lib/services/drive-service';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -130,12 +136,10 @@ describe('POST /api/account/handle-drive', () => {
   const mockDriveId = 'drive_abc';
   const mockNewOwnerId = 'admin_456';
 
-  // Helper to setup update mock
-  const setupUpdateMock = () => {
-    const whereMock = vi.fn().mockResolvedValue(undefined);
-    const setMock = vi.fn().mockReturnValue({ where: whereMock });
-    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
-    return whereMock;
+  // Helper to setup the ownership transfer mock
+  const setupTransferMock = () => {
+    vi.mocked(transferDriveOwnership).mockResolvedValue(undefined);
+    return vi.mocked(transferDriveOwnership);
   };
 
   // Helper to setup delete mock. The route deletes inside a transaction, so
@@ -175,7 +179,7 @@ describe('POST /api/account/handle-drive', () => {
       drive.ownerId === userId ? { isOwner: true, membership: null } : targetRelationship])));
 
     // Setup default database operations
-    setupUpdateMock();
+    setupTransferMock();
     setupDeleteMock();
 
     // Setup default actor info for activity logging
@@ -291,7 +295,7 @@ describe('POST /api/account/handle-drive', () => {
 
   describe('transfer action', () => {
     it('should successfully transfer ownership to admin', async () => {
-      const updateMock = setupUpdateMock();
+      const transferMock = setupTransferMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -309,7 +313,8 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.success).toBe(true);
       expect(body.action).toBe('transfer');
       expect(body.message).toContain('transferred successfully');
-      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect(transferMock).toHaveBeenCalledTimes(1);
+      expect(transferMock).toHaveBeenCalledWith(mockDriveId, mockUserId, mockNewOwnerId);
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );
@@ -343,7 +348,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('rejects transfer of a Home drive with 403 (Home stays bound to its owner)', async () => {
-      const updateMock = setupUpdateMock();
+      const transferMock = setupTransferMock();
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
         ...mockDrive({ id: mockDriveId, name: 'Home', ownerId: mockUserId }),
         kind: 'HOME' as const,
@@ -363,7 +368,7 @@ describe('POST /api/account/handle-drive', () => {
 
       expect(response.status).toBe(403);
       expect(body.error).toBe('Your Home drive cannot be transferred to another user.');
-      expect(updateMock).not.toHaveBeenCalled();
+      expect(transferMock).not.toHaveBeenCalled();
     });
 
     it.each(['delete', 'transfer'] as const)(
@@ -591,9 +596,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should handle transfer database errors', async () => {
-      const whereMock = vi.fn().mockRejectedValueOnce(new Error('Update failed'));
-      const setMock = vi.fn().mockReturnValue({ where: whereMock });
-      vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+      vi.mocked(transferDriveOwnership).mockRejectedValueOnce(new Error('Update failed'));
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -614,7 +617,7 @@ describe('POST /api/account/handle-drive', () => {
 
   describe('activity logging boundary', () => {
     it('should log ownership_transfer with previous and new ownerId on successful transfer', async () => {
-      setupUpdateMock();
+      setupTransferMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -644,7 +647,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should call getActorInfo with userId on transfer', async () => {
-      setupUpdateMock();
+      setupTransferMock();
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',

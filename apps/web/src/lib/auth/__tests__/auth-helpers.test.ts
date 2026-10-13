@@ -479,6 +479,49 @@ describe('isSafeNextPath', () => {
     });
   });
 
+  describe('/imago under the real signin allowlist (IMG-1.9)', () => {
+    const isAllowed = (path: string) =>
+      isSafeNextPath({ path, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES });
+
+    it('given /imago exactly, should return true', () => {
+      expect(isAllowed('/imago')).toBe(true);
+    });
+
+    it('given /imago/<driveId>/files/<pageId>, should return true', () => {
+      expect(isAllowed('/imago/drv_abc/files/pg_xyz')).toBe(true);
+    });
+
+    it('given /imago with a query or hash, should return true', () => {
+      expect(isAllowed('/imago?tab=chat')).toBe(true);
+      expect(isAllowed('/imago/dm/conv_1#latest')).toBe(true);
+    });
+
+    it('given a protocol-relative value, should return false', () => {
+      expect(isAllowed('//evil.com')).toBe(false);
+      expect(isAllowed('//evil.com/imago')).toBe(false);
+    });
+
+    it('given an absolute URL whose path is /imago, should return false', () => {
+      expect(isAllowed('https://evil.com/imago')).toBe(false);
+    });
+
+    it('given a backslash-smuggled value, should return false', () => {
+      expect(isAllowed('/\\evil.com')).toBe(false);
+      expect(isAllowed('/\\evil.com/imago')).toBe(false);
+      expect(isAllowed('/%5Cevil.com/imago')).toBe(false);
+    });
+
+    it('given look-alike paths that merely start with "/imago", should return false', () => {
+      expect(isAllowed('/imagoevil')).toBe(false);
+      expect(isAllowed('/imago.evil.com')).toBe(false);
+      expect(isAllowed('/imago-evil')).toBe(false);
+    });
+
+    it('given traversal out of /imago, should return false', () => {
+      expect(isAllowed('/imago/../api/auth/logout')).toBe(false);
+    });
+  });
+
   describe('"/" prefix means root only (regression: would otherwise match every path)', () => {
     const rootOnly = ['/'] as const;
 

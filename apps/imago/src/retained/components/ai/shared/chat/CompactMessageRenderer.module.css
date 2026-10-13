@@ -1,0 +1,129 @@
+/**
+ * Compact Message Renderer - Defensive width constraints for sidebar AI chat
+ *
+ * PURPOSE: Prevents ReactMarkdown-rendered content from breaking sidebar width.
+ * ROOT CAUSE: AI streaming can generate long unbreakable strings (URLs, code, base64)
+ *             that expand beyond the 320px sidebar width, causing layout overflow.
+ *
+ * STRATEGY: Apply max-width and smart word-breaking to all ReactMarkdown output elements
+ *           because dynamically rendered HTML doesn't inherit Tailwind utilities.
+ *
+ * WORD-BREAKING APPROACH:
+ * - Use overflow-wrap: break-word (not anywhere/break-all) for prose text
+ * - Add hyphens: auto for proper hyphenation when words must break
+ * - Add text-wrap: pretty to avoid orphaned words/characters on line endings
+ * - Reserve break-all only for code, URLs, and truly unbreakable strings
+ */
+
+.compactProseContent {
+  /* Base constraint - all content must respect container width */
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;               /* Allow shrinking in flex contexts */
+  overflow-wrap: break-word;  /* Only break words when necessary to prevent overflow */
+  word-break: normal;         /* Use normal word-breaking rules for prose */
+  hyphens: auto;              /* Enable automatic hyphenation when words break */
+  -webkit-hyphens: auto;      /* Safari support */
+  text-wrap: pretty;          /* Avoid orphaned words/characters at line endings */
+}
+
+/* Markdown content elements need width constraints - enumerated to avoid breaking icons/UI components */
+.compactProseContent p,
+.compactProseContent li,
+.compactProseContent a,
+.compactProseContent blockquote,
+.compactProseContent ul,
+.compactProseContent ol {
+  max-width: 100%;
+}
+
+/* Flex-child elements need min-width: 0 to allow shrinking */
+.compactProseContent img,
+.compactProseContent code,
+.compactProseContent pre,
+.compactProseContent table {
+  max-width: 100%;
+  min-width: 0;
+}
+
+/**
+ * Code blocks - Most common width-breaking culprit
+ * Long single-line code, base64 data, file paths trigger this
+ */
+.compactProseContent pre {
+  max-width: 100%;
+  overflow-x: auto;         /* Horizontal scroll for very long lines */
+  overflow-y: hidden;
+  white-space: pre-wrap;    /* Wrap long lines instead of horizontal scroll */
+  word-break: break-all;    /* Break anywhere in long tokens (URLs, hashes) */
+}
+
+.compactProseContent pre code {
+  white-space: pre-wrap;    /* Inherit wrapping from pre */
+  word-break: break-all;
+}
+
+/**
+ * Inline code - URLs, file paths, JSON keys
+ * Need aggressive breaking to prevent inline overflow
+ */
+.compactProseContent :not(pre) > code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;    /* Allow wrapping within inline code */
+}
+
+/**
+ * Links - Long URLs are the #1 cause of width breaking in markdown
+ * Links need break-all since URLs don't have natural word boundaries
+ * display: inline-block allows width constraints to work on inline elements
+ */
+.compactProseContent a {
+  max-width: 100%;
+  overflow-wrap: anywhere;  /* URLs have no word boundaries, break anywhere */
+  word-break: break-all;    /* Aggressive breaking for URLs */
+  display: inline-block;    /* Required for max-width to apply */
+}
+
+/**
+ * Tables - Can overflow with wide columns or many columns
+ * display: block + overflow-x creates a scrollable table container
+ */
+.compactProseContent table {
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+
+.compactProseContent table td,
+.compactProseContent table th {
+  max-width: min(200px, 50vw);  /* Responsive: smaller on narrow screens */
+  overflow-wrap: break-word;    /* Only break when necessary */
+  word-break: normal;           /* Normal word boundaries */
+  hyphens: auto;                /* Hyphenate when breaking */
+  -webkit-hyphens: auto;        /* Safari support */
+}
+
+/**
+ * Text containers - Paragraphs, list items, blockquotes
+ * These inherit base rules but need explicit max-width for ReactMarkdown elements
+ * Use smarter word-breaking with hyphenation to avoid orphaned characters
+ */
+.compactProseContent p,
+.compactProseContent li,
+.compactProseContent blockquote {
+  max-width: 100%;
+  overflow-wrap: break-word;  /* Only break when necessary */
+  word-break: normal;         /* Normal word boundaries */
+  hyphens: auto;              /* Hyphenate when breaking words */
+  -webkit-hyphens: auto;      /* Safari support */
+  text-wrap: pretty;          /* Avoid orphans at line endings */
+}
+
+/**
+ * Images - Prevent oversized images from breaking layout
+ */
+.compactProseContent img {
+  max-width: 100%;
+  height: auto;
+}

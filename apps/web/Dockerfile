@@ -19,6 +19,7 @@ COPY apps/atlas/package.json ./apps/atlas/
 COPY apps/control-plane/package.json ./apps/control-plane/
 COPY apps/desktop/package.json ./apps/desktop/
 COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/imago/package.json ./apps/imago/
 COPY apps/ios/package.json ./apps/ios/
 COPY apps/marketing/package.json ./apps/marketing/
 COPY apps/processor/package.json ./apps/processor/
@@ -56,6 +57,9 @@ ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV4=""
 ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV6=""
 ARG NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=""
 ARG NEXT_PUBLIC_COOKIE_DOMAIN=""
+# Imago rollout flag (IMG-10.7): only the exact value "true" shows "Try Imago".
+# Baked at build time, so flipping it means rebuilding web with this arg set.
+ARG NEXT_PUBLIC_IMAGO_ENABLED="false"
 
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
@@ -67,6 +71,7 @@ ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV4=$NEXT_PUBLIC_PUBLISH_EDGE_IPV4
 ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV6=$NEXT_PUBLIC_PUBLISH_EDGE_IPV6
 ENV NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=$NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET
 ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN
+ENV NEXT_PUBLIC_IMAGO_ENABLED=$NEXT_PUBLIC_IMAGO_ENABLED
 ARG NEXT_PUBLIC_SENTRY_DSN=""
 ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
 ARG SENTRY_AUTH_TOKEN=""

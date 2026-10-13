@@ -1,0 +1,399 @@
+"use client";
+
+import React, { useEffect, useState, useCallback, useRef, useId } from 'react';
+import dynamic from 'next/dynamic';
+import { useDocument } from '@/retained/hooks/useDocument';
+import { Editor } from '@tiptap/react';
+import Toolbar from '@/retained/components/editors/Toolbar';
+import { motion, AnimatePresence } from 'motion/react';
+import { useDocumentStore } from '@/retained/stores/useDocumentStore';
+import { usePageContentSocket } from '@/retained/hooks/usePageContentSocket';
+import { PageEventPayload } from '@/retained-adapters/ui-contracts';
+import { toast } from 'sonner';
+import { usePermissions } from '@/retained/hooks/usePermissions';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { useDocumentManagerStore } from '@/retained/stores/useDocumentManagerStore';
+import { useFindStore } from '@/retained/stores/useFindStore';
+import { dispatchFind, getPluginMatches } from '@/retained/lib/editor/find-plugin';
+import { PullToRefresh } from '@/retained/components/ui/pull-to-refresh';
+import { CustomScrollArea } from '@/retained/components/ui/custom-scroll-area';
+import DocumentConflictGate from './DocumentConflictGate';
+
+interface DocumentViewProps {
+  pageId: string;
+  driveId?: string;
+}
+
+const MonacoEditor = dynamic(() => import('@/retained/components/editors/MonacoEditor'), { ssr: false });
+const RichEditor = dynamic(() => import('@/retained/components/editors/RichEditor'), { ssr: false });
+
+
+const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
+  const activeView = useDocumentStore((state) => state.activeView);
+  const [editor, setEditor] = useState<Editor | null>(null);
+  const { permissions } = usePermissions(pageId);
+  const isReadOnly = permissions?.canEdit !== true;
+  const [isEditorFocused, setIsEditorFocused] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDirtyRef = useRef(false);
+  // Distinguishes this mount from any other simultaneous mount of the SAME
+  // page (e.g. the main center panel and an agent-session pane both showing
+  // it) — without this, both compute the identical `document-${pageId}` key
+  // and collide in useEditingStore's Map: whichever unmounts first calls
+  // endEditing and wipes the entry while the other is still dirty.
+  const instanceId = useId();
+
+  const {
+    document: documentState,
+    isLoading,
+    initializeAndActivate,
+    updateContent,
+    updateContentFromServer,
+    saveWithDebounce,
+    forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
+  } = useDocument(pageId);
+
+  // Track editor focus state for pull-to-refresh
+  useEffect(() => {
+    if (!editor) return;
+
+    const handleFocus = () => setIsEditorFocused(true);
+    const handleBlur = () => setIsEditorFocused(false);
+
+    editor.on('focus', handleFocus);
+    editor.on('blur', handleBlur);
+
+    // Set initial state
+    setIsEditorFocused(editor.isFocused);
+
+    return () => {
+      editor.off('focus', handleFocus);
+      editor.off('blur', handleBlur);
+    };
+  }, [editor]);
+
+  // Pull-to-refresh handler
+  const handleRefresh = useCallback(async () => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        updateContentFromServer(updatedPage.content, updatedPage.revision);
+        if (updatedPage.contentMode) {
+          useDocumentManagerStore.getState().updateDocument(pageId, {
+            contentMode: updatedPage.contentMode,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Failed to refresh document:', error);
+    }
+  }, [pageId, updateContentFromServer]);
+
+  // Disable pull-to-refresh when editing
+  const isPullToRefreshDisabled = isEditorFocused || documentState?.isDirty || activeView === 'code';
+
+  // Store forceSave in ref to prevent cleanup effects from re-running
+  const forceSaveRef = useRef(forceSave);
+  useEffect(() => {
+    forceSaveRef.current = forceSave;
+  }, [forceSave]);
+
+  useEffect(() => {
+    initializeAndActivate();
+  }, [initializeAndActivate]);
+
+  // Register editing state when document is dirty
+  useEffect(() => {
+    const componentId = `document-${pageId}-${instanceId}`;
+
+    if (documentState?.isDirty && !isReadOnly) {
+      useEditingStore.getState().startEditing(componentId, 'document', {
+        pageId: pageId,
+        componentName: 'DocumentView',
+      });
+    } else {
+      useEditingStore.getState().endEditing(componentId);
+    }
+
+    return () => {
+      useEditingStore.getState().endEditing(componentId);
+    };
+  }, [documentState?.isDirty, pageId, isReadOnly, instanceId]);
+
+
+  // Live content updates from AI or other users while the document is open.
+  // contentMode is updated atomically with content to prevent mode/content mismatch
+  // if another user converts while we have unsaved edits.
+  const handleContentUpdate = useCallback(async (_eventData: PageEventPayload) => {
+    try {
+      const response = await fetchWithAuth(`/api/pages/${pageId}`);
+      if (response.ok) {
+        const updatedPage = await response.json();
+        if (!documentState?.isDirty) {
+          const contentChanged = updatedPage.content !== documentState?.content;
+          const modeChanged = updatedPage.contentMode && updatedPage.contentMode !== documentState?.contentMode;
+          if (contentChanged || modeChanged) {
+            useDocumentManagerStore.getState().updateDocument(pageId, {
+              content: updatedPage.content,
+              contentMode: updatedPage.contentMode,
+              revision: updatedPage.revision,
+              isDirty: false,
+              lastSaved: Date.now(),
+              lastUpdateTime: Date.now(),
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch updated content:', error);
+    }
+  }, [pageId, documentState?.isDirty, documentState?.content, documentState?.contentMode]);
+
+  usePageContentSocket(pageId, driveId, {
+    onContentUpdated: handleContentUpdate,
+    enabled: !!driveId,
+  });
+
+
+  // Handle content changes
+  const handleContentChange = useCallback((newContent: string | undefined) => {
+    if (isReadOnly) {
+      toast.error('You do not have permission to edit this document');
+      return;
+    }
+
+    let content = newContent || '';
+
+    // Normalize code blocks when HTML content comes from code editor
+    // to prevent TipTap misparse on re-entry to rich view
+    if (documentState?.contentMode !== 'markdown' && activeView === 'code') {
+      content = content
+        .replace(/<pre>\s*<code/g, '<pre><code')
+        .replace(/<\/code>\s*<\/pre>/g, '</code></pre>');
+    }
+
+    // Update content (sets isDirty flag)
+    updateContent(content);
+
+    // Save timer - CRITICAL for data persistence (1000ms)
+    // Triggered every time content changes
+    saveWithDebounce(content);
+  }, [updateContent, saveWithDebounce, isReadOnly, documentState?.contentMode, activeView]);
+
+  // Track isDirty in ref without causing effect recreation
+  useEffect(() => {
+    isDirtyRef.current = documentState?.isDirty || false;
+  }, [documentState?.isDirty]);
+
+  // Cleanup on unmount - auto-save any unsaved changes
+  // Empty deps array ensures cleanup only runs on TRUE component unmount
+  useEffect(() => {
+    return () => {
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
+      }
+    };
+  }, []); // ✅ Empty deps - only runs on mount/unmount
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    // Only run on client side with proper document API
+    if (typeof document === 'undefined' || !document.addEventListener) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+S / Cmd+S to save
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        forceSaveRef.current();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      if (typeof document !== 'undefined' && document.removeEventListener) {
+        document.removeEventListener('keydown', handleKeyDown);
+      }
+    };
+  }, []); // ✅ Empty deps - uses ref for latest forceSave
+
+  // Connect find store to TipTap find plugin
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || activeView !== 'rich') {
+      reportMatches(0);
+      return;
+    }
+    if (!isFindOpen || !findQuery) {
+      dispatchFind(editor.view, '', 0);
+      reportMatches(0);
+      return;
+    }
+
+    // Initial sync: dispatch query/index to plugin and scroll to active match
+    dispatchFind(editor.view, findQuery, findIndex);
+    const initialMatches = getPluginMatches(editor.state);
+    reportMatches(initialMatches.length);
+    const initialMatch = initialMatches[Math.min(findIndex, Math.max(initialMatches.length - 1, 0))];
+    if (initialMatch) {
+      editor.commands.setTextSelection(initialMatch);
+      editor.commands.scrollIntoView();
+    }
+
+    // Re-read match count when document changes while find is open.
+    // The plugin auto-recomputes matches on docChanged — we only need to
+    // report the new count without re-dispatching (which would loop).
+    const handleDocUpdate = ({ transaction }: { transaction: { docChanged: boolean } }) => {
+      if (!transaction.docChanged) return;
+      reportMatches(getPluginMatches(editor.state).length);
+    };
+    editor.on('update', handleDocUpdate);
+    return () => { editor.off('update', handleDocUpdate); };
+  }, [isFindOpen, findQuery, findIndex, editor, activeView, reportMatches]);
+
+  // Auto-save on window blur
+  useEffect(() => {
+    // Only run on client side with proper window API
+    if (typeof window === 'undefined' || !window.addEventListener) return;
+
+    const handleBlur = () => {
+      // Check if dirty using ref (always current)
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
+      }
+    };
+
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      if (typeof window !== 'undefined' && window.removeEventListener) {
+        window.removeEventListener('blur', handleBlur);
+      }
+    };
+  }, []); // ✅ Empty deps - uses refs for latest state
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      transition={{ duration: 0.2 }}
+      ref={containerRef} 
+      className="h-full flex flex-col relative"
+    >
+
+      {/* Editor toolbar for rich text mode */}
+      <AnimatePresence>
+        {activeView === 'rich' && !isReadOnly && (
+          <motion.div
+            initial={{ y: -10, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -10, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="sticky top-0 z-10 mx-4 mt-4 rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)] overflow-hidden"
+          >
+            <Toolbar editor={editor} contentMode={documentState?.contentMode || 'html'} />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Save conflict — persistent until the user picks a side. The local
+          buffer is untouched and autosave is paused while this is shown. */}
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
+      />
+
+      {/* Read-only indicator */}
+      {isReadOnly && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 px-4 py-2">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200 text-center">
+            You don&apos;t have permission to edit this document
+          </p>
+        </div>
+      )}
+
+      {/* Editor content with pull-to-refresh */}
+      <PullToRefresh
+        direction="top"
+        onRefresh={handleRefresh}
+        disabled={isPullToRefreshDisabled}
+        className="flex-1"
+      >
+        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
+          <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
+            <AnimatePresence mode="wait">
+              {activeView === 'code' ? (
+                <motion.div
+                  key="code-editor"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full h-full"
+                >
+                  <div className={`h-full ${isReadOnly ? 'editor-readonly' : ''}`}>
+                    <MonacoEditor
+                      value={documentState?.content || ''}
+                      onChange={handleContentChange}
+                      language={documentState?.contentMode === 'markdown' ? 'markdown' : 'html'}
+                      readOnly={isReadOnly}
+                    />
+                  </div>
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="rich-editor"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="w-full h-full"
+                >
+                  <div className="max-w-4xl mx-auto w-full">
+                    <RichEditor
+                      value={documentState?.content || ''}
+                      onChange={handleContentChange}
+                      onEditorChange={setEditor}
+                      readOnly={isReadOnly}
+                      isPaginated={false}
+                      contentMode={documentState?.contentMode || 'html'}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </CustomScrollArea>
+      </PullToRefresh>
+
+      {/* Loading overlay */}
+      <AnimatePresence>
+        {isLoading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 bg-background/80 backdrop-blur-sm flex items-center justify-center"
+          >
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-muted-foreground">Loading document...</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+};
+
+export default React.memo(DocumentView, (prevProps, nextProps) => prevProps.pageId === nextProps.pageId);

@@ -77,6 +77,9 @@ vi.mock('@/lib/auth', () => ({
   // Session auth = unscoped, which is all this route accepts. Stubbed because
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

@@ -1,0 +1,89 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "@/retained-adapters/navigation";
+import { post } from '@/retained/lib/auth/auth-fetch';
+import { Drive } from '@pagespace/lib/types';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/retained/components/ui/dialog";
+import { Button } from "@/retained/components/ui/button";
+import { Input } from "@/retained/components/ui/input";
+import { Label } from "@/retained/components/ui/label";
+import { useDriveStore } from "@/retained/hooks/useDrive";
+interface CreateDriveDialogProps {
+  isOpen: boolean;
+  setIsOpen: (isOpen: boolean) => void;
+}
+
+export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
+  const [driveName, setDriveName] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Use selective Zustand subscriptions to prevent unnecessary re-renders
+  const addDrive = useDriveStore(state => state.addDrive);
+  const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
+  const fetchDrives = useDriveStore(state => state.fetchDrives);
+
+  const router = useRouter();
+
+  const handleCreateDrive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!driveName.trim() || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const newDrive = await post<Drive>("/api/drives", { name: driveName });
+      // Add the drive with correct ownership flag
+      addDrive(newDrive);
+      setCurrentDrive(newDrive.id);
+      // Force a refresh to ensure all drives have correct data
+      await fetchDrives();
+      router.push(`/dashboard/${newDrive.id}`);
+      setDriveName("");
+      setIsOpen(false);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={setIsOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create a new drive</DialogTitle>
+          <DialogDescription>
+            Enter a name for your new drive.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleCreateDrive}>
+          <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="name" className="text-right">
+                Name
+              </Label>
+              <Input
+                id="name"
+                value={driveName}
+                onChange={(e) => setDriveName(e.target.value)}
+                className="col-span-3"
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Creating...' : 'Create'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

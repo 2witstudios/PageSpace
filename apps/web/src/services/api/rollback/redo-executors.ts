@@ -7,6 +7,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { applyPageUpdateWithRevision } from './page-mutation';
+import { applyDriveOwnerChange } from './drive-owner';
 import { pickConversationTable } from './page-mutation-plan';
 import {
   planPageRedo,
@@ -22,6 +23,7 @@ import type { RollbackDeps, PageUpdateContext, PageChangeResult } from './deps';
 import type { ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
 import { assertRestoredLeadEligible } from './lead-eligibility';
 import type { ActivityLogForRollback } from './types';
+import { revokeAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
 
 /** POL-2: the result of a rollback or redo write the org's guests policy did not let through (nothing was written). */
 function guestPolicySkip(decision: ReentryDecision, ids: Record<string, string>): Record<string, unknown> {
@@ -143,7 +145,8 @@ export async function redoDriveChange(
   }
 
   await assertRestoredLeadEligible(deps, activity.driveId, updateData);
-  await deps.db.update(drives).set({ ...updateData, updatedAt: deps.clock() }).where(eq(drives.id, activity.driveId));
+  const fields = await applyDriveOwnerChange(deps, activity.driveId, updateData);
+  await deps.db.update(drives).set({ ...fields, updatedAt: deps.clock() }).where(eq(drives.id, activity.driveId));
 
   return updateData;
 }
@@ -208,6 +211,9 @@ export async function redoMemberChange(
       await deps.db
         .delete(driveMembers)
         .where(and(eq(driveMembers.driveId, plan.driveId), eq(driveMembers.userId, plan.userId)));
+      // As the member-removal route does: agent grants this user made in the
+      // drive (their Imago agents included) must not outlive the membership.
+      await revokeAgentMembershipsGrantedBy(deps.db, plan.driveId, plan.userId);
       return { deleted: true, driveId: plan.driveId, userId: plan.userId };
     }
     case 'update': {

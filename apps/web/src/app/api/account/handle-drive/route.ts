@@ -11,6 +11,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 import { reattributeDriveOwnerStorageInTx } from '@pagespace/lib/services/storage-limits';
+import { transferDriveOwnership } from '@pagespace/lib/services/drive-service';
 
 const handleDriveBodySchema = z.object({
   driveId: z.string().optional(),
@@ -104,6 +105,8 @@ export async function POST(req: Request) {
       // The drive row is LOCKED and re-read inside the transaction (D-OW-64): a concurrent move into
       // an org (or another hand-over) between the check above and this write would otherwise move an
       // org drive's bytes onto a person, or hand over a drive this caller no longer leads.
+      // The ownership change goes through transferDriveOwnership (Home-drive guard, owner check) inside
+      // this transaction, so the lock above covers it. Imago needs nothing here (IMG-10.10).
       const transferred = await db.transaction(async (tx) => {
         const [locked] = await tx
           .select({ ownerId: drives.ownerId, orgId: drives.orgId })
@@ -111,10 +114,7 @@ export async function POST(req: Request) {
           .where(eq(drives.id, driveId))
           .for('update');
         if (!locked || locked.orgId !== null || !isDriveLead(userId, locked)) return false;
-        await tx
-          .update(drives)
-          .set({ ownerId: newOwnerId })
-          .where(eq(drives.id, driveId));
+        await transferDriveOwnership(driveId, userId, newOwnerId, tx);
         await reattributeDriveOwnerStorageInTx(tx, { driveId, fromUserId: locked.ownerId, toUserId: newOwnerId });
         return true;
       });

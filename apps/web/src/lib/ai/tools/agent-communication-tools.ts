@@ -12,7 +12,7 @@ import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/contex
 import { PERSONAL_SPEND, spendDriveId, spendFallbackFromWalletId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { MODEL_ENTITLEMENT_MESSAGES, modelEntitlement } from '@/lib/ai/core/model-entitlement';
 import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
-import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId, toolActor } from './actor-permissions';
+import { canActorViewPage, canActorAccessDrive, canActorConsultAgent, filterAgentDriveIdsByActorReach, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId, toolActor } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
 import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
@@ -313,7 +313,7 @@ export const agentCommunicationTools = {
         if (agentPageId) {
           const allAgentDrives = await listAgentDrives(agentPageId);
           const scopedIds = new Set(
-            await filterDriveIdsByAppTokenScope(executionContext, allAgentDrives.map((d) => d.driveId)),
+            await filterAgentDriveIdsByActorReach(executionContext, allAgentDrives.map((d) => d.driveId)),
           );
           userDrives = allAgentDrives
             .filter((d) => scopedIds.has(d.driveId))
@@ -754,9 +754,11 @@ export async function executeAskAgent(
           const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
           integrationTools = await resolvePageAgentIntegrationTools({
             agentId,
-            userId,
+            actor: toolActor(executionContext),
             driveId: targetAgent.driveId,
             currentTools: agentTools,
+            contextDriveId: executionContext.locationContext?.currentDrive?.id ?? null,
+            allowedDriveIds: executionContext.mcpAllowedDriveIds ?? [],
           });
         } catch (error) {
           loggers.ai.error('ask_agent: failed to resolve integration tools, falling back to built-in tools only', error as Error);

@@ -1,7 +1,9 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "baseUrl": "../.."
+    "baseUrl": "../..",
+    // support/mock-server-main.ts runs on Node, whose ESM loader needs the .ts extension.
+    "allowImportingTsExtensions": true
   },
   "include": ["**/*.ts"]
 }

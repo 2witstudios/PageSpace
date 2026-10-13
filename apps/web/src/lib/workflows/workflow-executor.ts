@@ -725,9 +725,12 @@ async function runExecution(
       const { resolvePageAgentIntegrationTools } = await import('@/lib/ai/core/integration-tool-resolver');
       const integrationTools = await resolvePageAgentIntegrationTools({
         agentId: agent.id,
-        userId: input.createdBy,
+        actor: workflowActor(input),
         driveId: input.driveId,
         currentTools: availableTools,
+        // The workflow's drive is where it works; an Imago agent draws that
+        // drive's integrations only when it is Home or granted.
+        contextDriveId: input.driveId,
       });
 
       if (Object.keys(integrationTools).length > 0) {

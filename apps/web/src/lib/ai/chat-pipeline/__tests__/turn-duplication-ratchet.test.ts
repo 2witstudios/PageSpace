@@ -90,8 +90,11 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * 161 → 163 (POL-8 command pages): both turns judge their command chips against the
  * model they resolved through the shared `commandsForModel` (command-model-policy.ts);
  * the two new identical lines are its import and its one call.
+ * 163 → 153 (assistant-surface extraction): master's Imago work extracted the
+ * assistant context/tool assembly the Global Assistant shared with Imago into
+ * `assistant-surface.ts`; ten formerly duplicated lines now have one home.
  */
-const RECORDED_IDENTICAL_LINES = 163;
+const RECORDED_IDENTICAL_LINES = 153;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>
