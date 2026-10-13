@@ -159,6 +159,17 @@
 
 /* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
    is classic's ShareDialog button, re-skinned here rather than forked. */
+/* A page on a phone (C-Resp-Phone-Doc): the Formatting toolbar scrolls sideways and its tools are at least 38px. */
+@utility phone-doc-body {
+  & [role='toolbar'] {
+    overflow-x: auto;
+  }
+  & [role='toolbar'] button {
+    min-block-size: var(--spacing-phone-tap);
+    min-inline-size: var(--spacing-phone-tap);
+  }
+}
+
 @utility share-trigger {
   & button {
     height: 30px;
@@ -182,4 +193,6 @@
   --spacing-phone-bar: 64px;
   --spacing-phone-row: 44px;
   --spacing-phone-ask-bottom: 80px;
+  --spacing-phone-tap: 38px;
+  --spacing-phone-sheet-row: 48px;
 }

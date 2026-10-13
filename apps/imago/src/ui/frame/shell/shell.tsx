@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
 import type { UiState } from '../../store/state';
@@ -32,7 +32,10 @@ import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-na
 import { Rail } from '../rail/rail';
 import { PhoneAsk } from '../phone/phone-ask';
 import { PhoneBottomBar } from '../phone/phone-bar';
+import { PhoneChatBack } from '../phone/phone-chat-back';
+import { PhoneDocHead } from '../phone/phone-doc-head';
 import { PhoneFilesHeader } from '../phone/phone-files-header';
+import { phoneDocBodyClass } from '../phone/phone-doc-class';
 import { renderPhoneShell } from '../phone/phone-shell.render';
 import { useViewportTier } from '../viewport/use-viewport-tier';
 import { railDrive } from '../rail/rail-items';
@@ -51,6 +54,7 @@ import { columnClass } from './shell-class';
 import { dispatch, transactions } from '../../store/transactions';
 import { renderShell } from './shell.render';
 import { useHydrated } from './use-hydrated';
+import { useDesktopFrame } from './desktop-frame';
 
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
@@ -219,6 +223,9 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const drive = drives?.find((entry) => entry.id === stage.driveId);
   const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
   const hydrated = useHydrated();
+  // Ask on a phone page opens Imago full-screen; it is the page it was asked on, so leaving the page ends it.
+  const [askedAt, setAskedAt] = useState<string | null>(null);
+  const desktopFrame = useDesktopFrame();
   const pageTrailing = (
     <span className="flex flex-none items-center gap-1">
       {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
@@ -249,12 +256,36 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     />
   );
   if (phone) {
+    const pageObject = !missing && stage.object?.kind === 'page' ? stage.object : null;
+    const asking = pageObject !== null && askedAt === pathname;
+    // A page on a phone: its 52px head over the body; the toolbar scrolls sideways (C-Resp-Phone-Doc).
+    const phoneObject =
+      pageObject === null ? (
+        objectColumn
+      ) : (
+        <section className={columnClass} aria-label={title}>
+          <PhoneDocHead stage={stage} pageId={pageObject.pageId} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />
+          <div className={`${phoneDocBodyClass} overflow-y-auto`}>{children}</div>
+        </section>
+      );
+    // Full-screen Imago over the page, Back in its head (C-Resp-Phone-Chat).
+    const phoneChat = (
+      <ChatPane
+        stage={stage}
+        driveName={drive?.name}
+        homeDriveId={homeDriveId}
+        leading={pageObject === null ? null : <PhoneChatBack pageId={pageObject.pageId} onBack={() => setAskedAt(null)} />}
+        trailing={null}
+      />
+    );
     // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
     const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
     const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null } : undefined);
     const screen =
-      stage.object !== null || missing
-        ? objectColumn
+      asking
+        ? phoneChat
+        : stage.object !== null || missing
+        ? phoneObject
         : stage.section === 'chat'
           ? chatColumn
           : (listScreen ?? objectColumn);
@@ -262,8 +293,13 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       stage,
       hydrated,
       screen,
-      ask: onTree && stage.driveId !== null ? <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} /> : null,
-      bar: <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
+      ask:
+        onTree && stage.driveId !== null ? (
+          <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} />
+        ) : pageObject !== null && !asking ? (
+          <PhoneAsk onPress={() => setAskedAt(pathname)} />
+        ) : null,
+      bar: asking ? null : <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
       palette: <CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} />,
     });
   }
@@ -277,6 +313,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);
     },
     hydrated,
+    desktopFrame,
     rail: (
       <Rail
         stage={stage}

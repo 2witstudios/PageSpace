@@ -149,6 +149,14 @@ vi.mock('@/ui/files/page-head/page-head', async () => {
   };
 });
 
+// The phone page head and Back load the page, its trail and the drive's tabs; their own suite proves them.
+vi.mock('@/ui/frame/phone/phone-doc-head', () => ({
+  PhoneDocHead: ({ pageId }: { pageId: string }) => h('header', { 'data-phone-head': pageId }, h('a', { 'aria-label': 'Back to Files', href: '/' })),
+}));
+vi.mock('@/ui/frame/phone/phone-chat-back', () => ({
+  PhoneChatBack: ({ onBack }: { onBack: () => void }) => h('button', { type: 'button', 'aria-label': 'Back to Q4 Launch Plan', onClick: onBack }),
+}));
+
 // The chat history loads through SWR; its own suite proves it beside the real
 // chat pane. Here it only has to be in the list slot, with its Close sidebar
 // wired to the store as the real one is.
@@ -364,6 +372,57 @@ describe('Shell on a phone (C-Resp-Phone-Tree)', () => {
       should: 'show the page screen and no Files pane',
       actual: [container.querySelector('[data-route]') !== null, container.querySelector('[data-phone-files]'), byLabel('page page-1') === null],
       expected: [true, null, true],
+    });
+  });
+
+  test('a page shows its phone head, the bottom bar and a floating Ask button', () => {
+    render('/drive-1/files/page-1');
+    assert({
+      given: 'a page at 390px',
+      should: 'draw the phone page head, the bottom bar and Ask, and no Imago',
+      actual: [
+        container.querySelector('[data-phone-head]')?.getAttribute('data-phone-head'),
+        container.querySelector('nav[data-slot="phone-bar"]') !== null,
+        Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Ask'),
+        byLabel('Imago'),
+      ],
+      expected: ['page-1', true, true, null],
+    });
+  });
+
+  test('Ask opens Imago full-screen with Back and no bottom bar; Back returns to the page', () => {
+    render('/drive-1/files/page-1');
+    act(() => Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Ask')?.click());
+    assert({
+      given: 'Ask pressed on a phone page',
+      should: 'show Imago with Back to the page, hide the bottom bar, the page and Ask',
+      actual: [
+        byLabel('Imago') !== null,
+        byLabel('Back to Q4 Launch Plan') !== null,
+        container.querySelector('nav[data-slot="phone-bar"]'),
+        container.querySelector('[data-route]'),
+        Array.from(container.querySelectorAll('button')).some((b) => b.textContent === 'Ask'),
+      ],
+      expected: [true, true, null, null, false],
+    });
+    press('Back to Q4 Launch Plan');
+    assert({
+      given: 'Back pressed',
+      should: 'return to the page with the bottom bar visible',
+      actual: [byLabel('Imago'), container.querySelector('[data-route]') !== null, container.querySelector('nav[data-slot="phone-bar"]') !== null],
+      expected: [null, true, true],
+    });
+  });
+
+  test('leaving the page ends its full-screen Imago', () => {
+    render('/drive-1/files/page-1');
+    act(() => Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Ask')?.click());
+    render('/drive-1/files/page-2');
+    assert({
+      given: 'a navigation to another page while asking',
+      should: 'show that page, not the chat',
+      actual: [byLabel('Imago'), container.querySelector('[data-route]') !== null],
+      expected: [null, true],
     });
   });
 

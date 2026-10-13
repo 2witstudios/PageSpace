@@ -40,6 +40,8 @@ export type ShellRenderProps = {
   readonly onDismissImago?: () => void;
   /** Void action: the scrim behind the pane sheet was pressed. */
   readonly onDismissPane?: () => void;
+  /** Under the Electron desktop app: the frame marks itself so the desktop CSS insets the spine. */
+  readonly desktopFrame?: boolean;
 };
 
 /**
@@ -62,8 +64,9 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       data-imago={columns.imago}
       data-tier={tier}
       data-hydrated={hydrated ? '' : undefined}
+      data-desktop-frame={props.desktopFrame ? '' : undefined}
     >
-      <nav aria-label="Sections" className={railClass} data-slot="rail">
+      <nav aria-label="Sections" className={railClass} data-slot="rail" data-desktop-drag="">
         {rail}
       </nav>
       <div className={stageSheetClass} data-slot="stage">
