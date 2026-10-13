@@ -17,7 +17,7 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { filterPulseEligible } from '@pagespace/lib/billing/automation-preferences';
-import { fetchCalendarContext } from '../calendar-context';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -33,7 +33,6 @@ import {
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
-import { orgIdsOfSources } from '@pagespace/lib/permissions/org-derived-content';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
@@ -244,8 +243,6 @@ async function buildAndPersistPulse(
   ]);
   const driveIds = userDrives;
   const accessiblePages = new Set(accessiblePagesList);
-  // SEC-2/3 (D-OW-62): every org whose drive or page can feed this summary; readers must satisfy all of them.
-  const contributingOrgIds = await orgIdsOfSources({ driveIds, pageIds: accessiblePagesList });
 
   // ========================================
   // 1. WORKSPACE CONTEXT - Drives and team members
@@ -771,6 +768,8 @@ async function buildAndPersistPulse(
   const tomorrowEvents = calendarContext.tomorrow;
   const pendingRsvps = calendarContext.pendingInvites;
   const allCalendarEvents = calendarContext.allEvents;
+  // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+  const contributingOrgIds = await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext });
 
   // ========================================
   // BUILD THE RICH CONTEXT WITH DIFFS
