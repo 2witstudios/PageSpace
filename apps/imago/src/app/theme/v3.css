@@ -82,6 +82,13 @@
   --container-browser: 1024px;
 }
 
+/* Trash treegrid columns (C-Drive-Trash): Was in 160px, Trashed 96px, actions 224px. */
+@theme {
+  --spacing-trash-was-in: 160px;
+  --spacing-trash-when: 96px;
+  --spacing-trash-actions: 224px;
+}
+
 /* The in-middle settings sub-nav is 220px wide (C-Files-AiSettings). */
 @theme {
   --spacing-settings-nav: 220px;

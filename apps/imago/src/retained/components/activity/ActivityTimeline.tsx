@@ -18,6 +18,8 @@ interface ActivityTimelineProps {
   emptyDescription?: string;
   context?: RollbackContext;
   onRollback?: (activityId: string, force: boolean) => Promise<ActivityActionResult>;
+  /** Ids of changes a later rollback already undid. */
+  rolledBackIds?: ReadonlySet<string>;
 }
 
 export function ActivityTimeline({
@@ -30,6 +32,7 @@ export function ActivityTimeline({
   emptyDescription = 'Activity will appear here',
   context,
   onRollback,
+  rolledBackIds,
 }: ActivityTimelineProps) {
   const groupedActivities = groupActivitiesByDate(activities);
 
@@ -70,6 +73,7 @@ export function ActivityTimeline({
                     activity={item.activity}
                     context={context}
                     onRollback={onRollback}
+                    rolledBack={rolledBackIds?.has(item.activity.id) ?? false}
                   />
                 ) : (
                   <ActivityGroupItem
@@ -77,6 +81,7 @@ export function ActivityTimeline({
                     group={item}
                     context={context}
                     onRollback={onRollback}
+                    rolledBackIds={rolledBackIds}
                   />
                 )
               )}

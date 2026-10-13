@@ -1,6 +1,7 @@
 export { ActivityDashboard } from './ActivityDashboard';
 export { ActivityFilterBar } from './ActivityFilterBar';
 export { ActivityItem } from './ActivityItem';
+export { DriveActivityTimeline } from './DriveActivityTimeline';
 export { ActivityTimeline } from './ActivityTimeline';
 export { ActorFilter } from './ActorFilter';
 export { DateRangeFilter } from './DateRangeFilter';
