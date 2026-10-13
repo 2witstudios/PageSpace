@@ -27,7 +27,8 @@ export const profileFrom = (body: unknown): Profile => {
 };
 
 /** The avatar menu, bound to the viewer's profile, the page's theme and web's logout. */
-export function AvatarMenu() {
+/** `active`: the account is open, so the avatar carries the spine's ring. */
+export function AvatarMenu({ active = false }: { readonly active?: boolean } = {}) {
   const { data } = useSWR<unknown>(ME);
   const { open, setOpen, ref } = useDisclosure();
   const [signingOut, setSigningOut] = useState(false);
@@ -51,5 +52,6 @@ export function AvatarMenu() {
     onSignOut,
     signingOut,
     detailsRef: ref,
+    active,
   });
 }

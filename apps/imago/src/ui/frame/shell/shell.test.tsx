@@ -467,7 +467,7 @@ describe('Shell', () => {
   test('the rail', () => {
     render();
     const rail = slot('rail');
-    const names = [...rail.querySelectorAll('a[aria-label], summary[aria-label]')].map((element) =>
+    const names = [...rail.querySelectorAll('a[aria-label], button[aria-label], summary[aria-label]')].map((element) =>
       element.getAttribute('aria-label'),
     );
     const messages = rail.querySelector('a[aria-label^="Messages"]');
@@ -476,18 +476,36 @@ describe('Shell', () => {
 
     assert({
       given: 'the shell on a drive chat, then on a channel',
-      should: 'fill the rail slot with the drive switcher, the drive’s destinations and the avatar menu, and move aria-current without remounting the link',
+      should: 'fill the spine with the drive switcher, Search, the drive’s sections and tools, the bell, Drive settings and the avatar menu, and move aria-current without remounting the link',
       actual: [
         names,
         [...rail.querySelectorAll('button')].some((button) => button.textContent === 'Sign out'),
         current === messages,
         rail.querySelectorAll(':scope > ul [aria-current]').length,
+        rail.querySelector('summary[aria-label="Account menu"]')?.classList.contains('spine-avatar-ring'),
       ],
       expected: [
-        ['Switch drive, Alpha', 'Chat', 'Files', 'Messages', 'Tasks', 'More', 'Settings', 'Account menu'],
+        [
+          'Switch drive: Alpha',
+          'Search',
+          'Chat',
+          'Files',
+          'Messages',
+          'Tasks',
+          'Calendar',
+          'Agents',
+          'Workflows',
+          'Activity',
+          'Members',
+          'Trash',
+          'Notifications',
+          'Drive settings',
+          'Account menu',
+        ],
         true,
         true,
         1,
+        false,
       ],
     });
   });
@@ -512,12 +530,13 @@ describe('Shell', () => {
 
     assert({
       given: 'the account stage, which names no drive',
-      should: 'link the rail into the Home drive and mark no section current',
+      should: 'link the rail into the Home drive, mark no section current and ring the avatar instead',
       actual: [
-        slot('rail').querySelector('a[aria-label="Settings"]')?.getAttribute('href'),
+        slot('rail').querySelector('a[aria-label="Drive settings"]')?.getAttribute('href'),
         slot('rail').querySelector(':scope > ul [aria-current]'),
+        slot('rail').querySelector('summary[aria-label="Account menu"]')?.classList.contains('spine-avatar-ring'),
       ],
-      expected: ['/home-1/settings', null],
+      expected: ['/home-1/settings', null, true],
     });
   });
 

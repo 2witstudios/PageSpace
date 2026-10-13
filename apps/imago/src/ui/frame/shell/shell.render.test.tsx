@@ -28,7 +28,7 @@ describe('renderShell()', () => {
       given: 'the drive chat, where neither the list nor the object is open',
       should: 'still mount the rail and all three panes',
       actual: [
-        html.includes('aria-label="Primary"'),
+        html.includes('aria-label="Sections"'),
         html.includes('data-slot="rail"'),
         html.includes('data-slot="list"'),
         html.includes('data-slot="object"'),

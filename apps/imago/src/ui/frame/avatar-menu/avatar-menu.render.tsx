@@ -1,9 +1,8 @@
 import Link from 'next/link';
 import type { ReactNode, Ref, SyntheticEvent } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
-import { railHitClass } from '../rail-button/rail-button-class';
 import { renderRailTooltip } from '../rail-button/rail-button.render';
-import { accountItemClass, accountMenuClass, accountNameClass } from './avatar-menu-class';
+import { accountItemClass, accountMenuClass, accountNameClass, avatarSummaryClass } from './avatar-menu-class';
 
 /** Classic's landing page, outside imago's basePath: a plain anchor, not Next's Link. */
 export const CLASSIC_HOME = '/dashboard';
@@ -22,6 +21,8 @@ export type AvatarMenuRenderProps = {
   readonly onSignOut: () => void;
   readonly signingOut: boolean;
   readonly detailsRef?: Ref<HTMLDetailsElement> | undefined;
+  /** The account is open: the avatar carries the spine's active ring. */
+  readonly active?: boolean;
 };
 
 /**
@@ -29,7 +30,7 @@ export type AvatarMenuRenderProps = {
  * classic PageSpace and sign-out (D5).
  */
 export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
-  const { name, image, open, onToggle, onPick, theme, onSignOut, signingOut, detailsRef } = props;
+  const { name, image, open, onToggle, onPick, theme, onSignOut, signingOut, detailsRef, active = false } = props;
   return (
     <details
       ref={detailsRef}
@@ -37,7 +38,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
       open={open}
       onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => onToggle(event.currentTarget.open)}
     >
-      <summary className={`${railHitClass(true)} summary-plain`} aria-label="Account menu">
+      <summary className={avatarSummaryClass(active)} aria-label="Account menu">
         {renderAvatar({ name: name ?? '', src: image ?? undefined, size: 'md' })}
         {renderRailTooltip('Account')}
       </summary>

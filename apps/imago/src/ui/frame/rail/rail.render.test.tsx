@@ -3,18 +3,19 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
-import { overflowItems, railItems, settingsItem } from './rail-items';
+import { spineCountClass, spineDividerClass, spineTileClass } from '../rail-button/rail-button-class';
+import { railItems, secondaryItems, settingsItem } from './rail-items';
 import { renderRail, type RailRenderProps } from './rail.render';
 
 const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
   items: railItems('drive-1'),
+  tools: secondaryItems('drive-1'),
   settings: settingsItem('drive-1'),
   activeId: 'files',
   activeAt: 'page',
   unread: { messages: 4 },
-  overflow: overflowItems('drive-1'),
-  moreOpen: false,
-  onMoreToggle: () => {},
+  notifications: 0,
+  onSearch: () => {},
   brand: <span data-brand="">Alpha</span>,
   footer: <button type="button">Sign out</button>,
   ...overrides,
@@ -27,13 +28,120 @@ const markup = (overrides: Partial<RailRenderProps> = {}): string =>
 const names = (html: string): string[] =>
   [...html.matchAll(/<(?:a|button|summary)\b[^>]*?aria-label="([^"]+)"/g)].map((match) => match[1] ?? '');
 
+const tools = ['Calendar', 'Agents', 'Workflows', 'Activity', 'Members', 'Trash'];
+
 describe('renderRail()', () => {
   test('the destinations, in order', () => {
     assert({
-      given: 'the rail for a drive',
-      should: 'list Chat, Files, Messages (with its count), Tasks, the ⋯ overflow below Tasks, and Settings pinned at the foot',
+      given: 'the spine for a drive',
+      should: 'list Search, Chat, Files, Messages (with its count), Tasks, the six drive tools, the bell and Drive settings',
       actual: names(markup()),
-      expected: ['Chat', 'Files', 'Messages, 4 unread', 'Tasks', 'More', 'Settings'],
+      expected: ['Search', 'Chat', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'Notifications', 'Drive settings'],
+    });
+  });
+
+  test('section tiles and tool tiles', () => {
+    const html = markup({ activeId: null });
+    const classOf = (name: string): string | undefined =>
+      new RegExp(`class="([^"]+)"[^>]*aria-label="${name}"`).exec(html)?.[1];
+    assert({
+      given: 'nothing active',
+      should: 'draw the four sections as 48px tiles and Search, the tools, the bell and Drive settings as small ones',
+      actual: [
+        ['Chat', 'Files', 'Tasks'].map(classOf),
+        ['Calendar', 'Trash', 'Notifications', 'Drive settings'].map(classOf),
+        classOf('Search'),
+      ],
+      expected: [
+        Array(3).fill(spineTileClass('primary', false)),
+        Array(4).fill(spineTileClass('small', false)),
+        `${spineTileClass('small', false)} mb-2`,
+      ],
+    });
+  });
+
+  test('the divider', () => {
+    const html = markup();
+    const divider = html.indexOf(`<span class="${spineDividerClass}" aria-hidden="true"></span>`);
+    assert({
+      given: 'the spine',
+      should: 'draw one decorative rule between Tasks and the drive tools',
+      actual: [
+        (html.match(new RegExp(spineDividerClass, 'g')) ?? []).length,
+        divider > html.indexOf('aria-label="Tasks"'),
+        divider < html.indexOf('aria-label="Calendar"'),
+      ],
+      expected: [1, true, true],
+    });
+  });
+
+  test('the drive tools', () => {
+    const tree = renderRail(props());
+    const hrefs = tools.map(
+      (name) =>
+        findElement<{ href: string; 'aria-label': string }>(
+          tree,
+          (element) => element.type === Link && (element.props as { 'aria-label'?: string })['aria-label'] === name,
+        )?.props.href,
+    );
+    assert({
+      given: 'the tools under the divider',
+      should: 'link each into the drive through the Imago router',
+      actual: hrefs,
+      expected: [
+        '/drive-1/calendar',
+        '/drive-1/agents',
+        '/drive-1/workflows',
+        '/drive-1/activity',
+        '/drive-1/members',
+        '/drive-1/trash',
+      ],
+    });
+  });
+
+  test('an active drive tool', () => {
+    const html = markup({ activeId: 'members' });
+    assert({
+      given: 'Members open',
+      should: 'mark only Members current and fill its small tile',
+      actual: [
+        html.match(/aria-current="[^"]+"/g),
+        new RegExp(`class="${spineTileClass('small', true)}" aria-label="Members" aria-current="page"`).test(html),
+      ],
+      expected: [['aria-current="page"'], true],
+    });
+  });
+
+  test('Search', () => {
+    const onSearch = vi.fn();
+    const button = findElement<{ onClick: () => void; 'aria-label': string }>(
+      renderRail(props({ onSearch })),
+      (element) => element.type === 'button' && (element.props as { 'aria-label'?: string })['aria-label'] === 'Search',
+    );
+    button?.props.onClick();
+    assert({
+      given: 'Search clicked',
+      should: 'open the palette through the container’s action',
+      actual: onSearch.mock.calls.length,
+      expected: 1,
+    });
+  });
+
+  test('the bell', () => {
+    const quiet = markup({ unread: {} });
+    const loud = markup({ unread: {}, notifications: 3 });
+    const many = markup({ unread: {}, notifications: 150 });
+    assert({
+      given: 'no unread notifications, then three, then 150',
+      should: 'link to classic’s notifications with a plain name, then carry the count in the name and the amber badge, capped at 99+',
+      actual: [
+        /<a href="\/notifications"[^>]*aria-label="Notifications">/.test(quiet),
+        quiet.includes(spineCountClass),
+        /<a href="\/notifications"[^>]*aria-label="Notifications, 3 unread">/.test(loud),
+        loud.includes(`<span class="${spineCountClass}" aria-hidden="true">3</span>`),
+        many.includes(`<span class="${spineCountClass}" aria-hidden="true">99+</span>`),
+      ],
+      expected: [true, false, true, true, true],
     });
   });
 
@@ -56,73 +164,26 @@ describe('renderRail()', () => {
     const html = markup();
     assert({
       given: 'a footer control (the avatar menu)',
-      should: 'render it in the pinned list after Settings',
-      actual: html.indexOf('Sign out') > html.indexOf('aria-label="Settings"'),
-      expected: true,
-    });
-  });
-
-  test('the overflow, closed', () => {
-    const html = markup();
-    assert({
-      given: 'the overflow closed',
-      should: 'render a disclosure named More without the open attribute',
-      actual: [/<details[^>]*>/.exec(html)?.[0].includes(' open'), /<summary[^>]*aria-label="More"/.test(html)],
-      expected: [false, true],
-    });
-  });
-
-  test('the overflow, open', () => {
-    const html = markup({ moreOpen: true });
-    const links = [...(html.match(/<details[\s\S]*?<\/details>/)?.[0] ?? '').matchAll(/<a\b[^>]*href="(\/drive-1\/[^"]+)"[^>]*>(.*?)<\/a>/g)].map(match => [
-      match[2]?.match(/([^<>]+)$/)?.[1], match[1],
-    ]);
-    assert({
-      given: 'the overflow open',
-      should: 'list all secondary destinations as native links for this drive',
-      actual: [/<details[^>]* open=""/.test(html), links],
-      expected: [
-        true,
-        [
-          ['Calendar', '/drive-1/calendar'],
-          ['Agents', '/drive-1/agents'],
-          ['Connections', '/drive-1/settings/integrations'],
-          ['Activity', '/drive-1/activity'],
-          ['Trash', '/drive-1/trash'],
-          ['Workflows', '/drive-1/workflows'],
-        ],
+      should: 'render it at the foot, after the bell and Drive settings',
+      actual: [
+        html.indexOf('aria-label="Notifications"') < html.indexOf('aria-label="Drive settings"'),
+        html.indexOf('Sign out') > html.indexOf('aria-label="Drive settings"'),
       ],
-    });
-  });
-
-  test('overflow links use the Imago router', () => {
-    const tree = renderRail(props({ moreOpen: true }));
-    const link = findElement<{ href: string }>(tree, element => element.type === Link && element.props.href === '/drive-1/calendar');
-    assert({ given: 'Calendar in the overflow', should: 'navigate inside the persistent shell', actual: link?.props.href, expected: '/drive-1/calendar' });
-  });
-
-  test('toggling the overflow', () => {
-    const onMoreToggle = vi.fn();
-    const details = findElement<{ onToggle: (event: { currentTarget: { open: boolean } }) => void }>(
-      renderRail(props({ onMoreToggle })),
-      (element) => element.type === 'details',
-    );
-    details?.props.onToggle({ currentTarget: { open: true } });
-    assert({
-      given: 'the browser toggling the disclosure open',
-      should: 'report the new state to the container',
-      actual: onMoreToggle.mock.calls,
-      expected: [[true]],
+      expected: [true, true],
     });
   });
 
   test('no drive', () => {
-    const html = markup({ items: railItems(null), settings: settingsItem(null), overflow: null, activeId: null });
+    const html = markup({ items: railItems(null), tools: secondaryItems(null), settings: settingsItem(null), activeId: null });
     assert({
       given: 'no drive to link to',
-      should: 'render every destination and More as disabled buttons, with no links',
-      actual: [html.includes('<a '), html.includes('<details'), (html.match(/disabled=""/g) ?? []).length],
-      expected: [false, false, 6],
+      should: 'render every drive destination as a disabled button, leaving Search and the bell working',
+      actual: [
+        [...html.matchAll(/<a\b[^>]*href="([^"]+)"/g)].map((match) => match[1]),
+        (html.match(/disabled=""/g) ?? []).length,
+        /<button[^>]*aria-label="Search">/.test(html),
+      ],
+      expected: [['/notifications'], 11, true],
     });
   });
 
@@ -130,15 +191,15 @@ describe('renderRail()', () => {
     const html = markup();
     assert({
       given: 'a drive switcher',
-      should: 'render it above the sections',
-      actual: [html.indexOf('data-brand') >= 0, html.indexOf('data-brand') < html.indexOf('aria-label="Chat"')],
+      should: 'render it above Search and the sections',
+      actual: [html.indexOf('data-brand') >= 0, html.indexOf('data-brand') < html.indexOf('aria-label="Search"')],
       expected: [true, true],
     });
 
     assert({
       given: 'no drive switcher',
       should: 'render no wrapper for it',
-      actual: markup({ brand: null }).includes('mb-rail-y'),
+      actual: markup({ brand: null }).startsWith('<div'),
       expected: false,
     });
   });

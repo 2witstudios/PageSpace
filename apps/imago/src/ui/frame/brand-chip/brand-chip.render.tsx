@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import type { ReactNode, Ref, SyntheticEvent } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
-import { railHitClass } from '../rail-button/rail-button-class';
 import { renderRailTooltip } from '../rail-button/rail-button.render';
 import type { DriveSummary } from '../drives/drives';
-import { brandChipClass, driveInitialClass, driveLinkClass, driveMenuClass, driveNoteClass } from './brand-chip-class';
+import { brandChipClass, brandSummaryClass, driveInitialClass, driveLinkClass, driveMenuClass, driveNoteClass } from './brand-chip-class';
 
 export type BrandChipRenderProps = {
   /** The drive the URL names (or the Home drive on driveless stages); null with none. */
@@ -55,7 +54,7 @@ const rows = (props: BrandChipRenderProps): ReactNode => {
 };
 
 /**
- * The drive switcher at the top of the rail: the open drive's initial on the
+ * The drive switcher at the top of the spine: the open drive's initial on the
  * brand chip, and a native disclosure listing the viewer's drives. A drive
  * is named only once the API has listed it, so an address naming a drive the
  * viewer cannot reach shows no name at all.
@@ -63,7 +62,7 @@ const rows = (props: BrandChipRenderProps): ReactNode => {
 export function renderBrandChip(props: BrandChipRenderProps): ReactNode {
   const { drives, currentId, open, onToggle, detailsRef } = props;
   const current = drives?.find((drive) => drive.id === currentId) ?? null;
-  const label = current === null ? 'Switch drive' : `Switch drive, ${current.name}`;
+  const label = current === null ? 'Switch drive' : `Switch drive: ${current.name}`;
   return (
     <details
       ref={detailsRef}
@@ -71,7 +70,7 @@ export function renderBrandChip(props: BrandChipRenderProps): ReactNode {
       open={open}
       onToggle={(event: SyntheticEvent<HTMLDetailsElement>) => onToggle(event.currentTarget.open)}
     >
-      <summary className={`${railHitClass(true)} summary-plain`} aria-label={label}>
+      <summary className={brandSummaryClass} aria-label={label}>
         <span className={brandChipClass} aria-hidden="true">
           {current === null ? renderIcon({ name: 'grid' }) : initial(current.name)}
         </span>

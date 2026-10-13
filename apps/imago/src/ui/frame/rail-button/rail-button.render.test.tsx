@@ -4,8 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
-import { railChipClass, railHitClass } from './rail-button-class';
-import { renderRailButton, type RailButtonRenderProps } from './rail-button.render';
+import { spineCountClass, spineMarkerClass, spineTileClass } from './rail-button-class';
+import { renderRailButton, renderSpineCount, type RailButtonRenderProps } from './rail-button.render';
 
 const files: RailButtonRenderProps = {
   icon: 'files',
@@ -44,13 +44,14 @@ describe('renderRailButton()', () => {
     const html = renderToStaticMarkup(renderRailButton({ ...files, current: 'page' }));
     assert({
       given: 'the item whose own URL is open',
-      should: 'mark the link aria-current="page" and tint its chip',
+      should: 'mark the link aria-current="page", fill its tile and draw the marker',
       actual: [
         linkOf({ ...files, current: 'page' })['aria-current'],
         html.includes('aria-current="page"'),
-        html.includes(`class="${railChipClass(true, true)}"`),
+        html.includes(`class="${spineTileClass('small', true)}"`),
+        html.includes(`<span class="${spineMarkerClass('small')}" aria-hidden="true"></span>`),
       ],
-      expected: ['page', true, true],
+      expected: ['page', true, true, true],
     });
   });
 
@@ -58,8 +59,8 @@ describe('renderRailButton()', () => {
     const html = renderToStaticMarkup(renderRailButton({ ...files, current: 'section' }));
     assert({
       given: 'a page open inside the item’s section, not the item’s own URL',
-      should: 'mark the link aria-current="true", not "page", and still tint its chip',
-      actual: [linkOf({ ...files, current: 'section' })['aria-current'], html.includes(`class="${railChipClass(true, true)}"`)],
+      should: 'mark the link aria-current="true", not "page", and still fill its tile',
+      actual: [linkOf({ ...files, current: 'section' })['aria-current'], html.includes(`class="${spineTileClass('small', true)}"`)],
       expected: ['true', true],
     });
   });
@@ -70,10 +71,10 @@ describe('renderRailButton()', () => {
     );
     assert({
       given: 'three unread messages',
-      should: 'draw the accent count and carry it in the control’s name',
+      should: 'draw the amber count and carry it in the control’s name',
       actual: [
         html.includes('aria-label="Messages, 3 unread"'),
-        /<span class="[^"]*bg-accent[^"]*text-accent-ink[^"]*absolute top-0 right-0" aria-hidden="true">3<\/span>/.test(html),
+        html.includes(`<span class="${spineCountClass}" aria-hidden="true">3</span>`),
       ],
       expected: [true, true],
     });
@@ -84,7 +85,7 @@ describe('renderRailButton()', () => {
     assert({
       given: 'a zero count',
       should: 'draw no count and keep the plain name',
-      actual: [html.includes('bg-accent '), html.includes('aria-label="Files"')],
+      actual: [html.includes('bg-notice'), html.includes('aria-label="Files"')],
       expected: [false, true],
     });
   });
@@ -107,7 +108,10 @@ describe('renderRailButton()', () => {
     assert({
       given: 'an item with no destination',
       should: 'render a disabled button, not a link to nowhere',
-      actual: [html.startsWith(`<button type="button" class="${railHitClass(false)}" aria-label="Files" disabled="">`), html.includes('href')],
+      actual: [
+        html.startsWith(`<button type="button" class="${spineTileClass('small', false, false)}" aria-label="Files" disabled="">`),
+        html.includes('href'),
+      ],
       expected: [true, false],
     });
   });
@@ -119,6 +123,46 @@ describe('renderRailButton()', () => {
       should: 'carry its label in a tooltip hidden from assistive technology',
       actual: /<span class="pointer-events-none[^"]*" aria-hidden="true">Files<\/span>/.test(html),
       expected: true,
+    });
+  });
+
+  test('a section tile', () => {
+    const html = renderToStaticMarkup(renderRailButton({ ...files, size: 'primary', current: 'page' }));
+    assert({
+      given: 'one of the four sections, active',
+      should: 'draw the 48px tile with the taller marker and a 20px icon',
+      actual: [
+        html.includes(`class="${spineTileClass('primary', true)}"`),
+        html.includes(`class="${spineMarkerClass('primary')}"`),
+        /<svg[^>]*width="20"/.test(html),
+      ],
+      expected: [true, true, true],
+    });
+  });
+
+  test('the size by default', () => {
+    const html = renderToStaticMarkup(renderRailButton(files));
+    assert({
+      given: 'no size',
+      should: 'draw the small tool tile with an 18px icon and no marker while inactive',
+      actual: [html.includes(`class="${spineTileClass('small', false)}"`), /<svg[^>]*width="18"/.test(html), html.includes('bg-spine-marker')],
+      expected: [true, true, false],
+    });
+  });
+});
+
+describe('renderSpineCount()', () => {
+  test('counts', () => {
+    const html = (count: number): string => renderToStaticMarkup(<>{renderSpineCount(count)}</>);
+    assert({
+      given: 'zero, a few and more than 99 unread',
+      should: 'draw nothing at zero, the number, then cap it at 99+',
+      actual: [html(0), html(7), html(120)],
+      expected: [
+        '',
+        `<span class="${spineCountClass}" aria-hidden="true">7</span>`,
+        `<span class="${spineCountClass}" aria-hidden="true">99+</span>`,
+      ],
     });
   });
 });

@@ -11,8 +11,15 @@ export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'ac
 export type StageObject =
   | { readonly kind: 'page'; readonly pageId: string }
   | { readonly kind: 'conversation'; readonly conversationId: string }
-  | { readonly kind: 'settings'; readonly title?: string }
+  | { readonly kind: 'settings'; readonly title?: string; readonly tool?: DriveTool }
   | { readonly kind: 'account' };
+
+/** The drive tools under the spine's divider (SPEC v3 spine; IMC-1.4). */
+export type DriveTool = 'calendar' | 'agents' | 'workflows' | 'activity' | 'members' | 'trash';
+
+export const driveTools: readonly DriveTool[] = ['calendar', 'agents', 'workflows', 'activity', 'members', 'trash'];
+
+const isDriveTool = (segment: string): segment is DriveTool => (driveTools as readonly string[]).includes(segment);
 
 /** Which panes are open, derived from the URL and nothing else. */
 export type Stage = {
@@ -103,8 +110,13 @@ const driveStage = (driveId: string, rest: readonly string[]): Stage => {
   if (section === 'settings') {
     return { driveId, section: 'settings', list: 'closed', object: { kind: 'settings' } };
   }
-  if (['calendar', 'agents', 'workflows', 'activity', 'trash', 'members'].includes(section)) {
-    return { driveId, section: 'settings', list: 'closed', object: { kind: 'settings', title: section.charAt(0).toUpperCase() + section.slice(1) } };
+  if (isDriveTool(section)) {
+    return {
+      driveId,
+      section: 'settings',
+      list: 'closed',
+      object: { kind: 'settings', title: section.charAt(0).toUpperCase() + section.slice(1), tool: section },
+    };
   }
   if (extra.length > 0) return driveChat(driveId);
   if (!isListSection(section)) return driveChat(driveId);

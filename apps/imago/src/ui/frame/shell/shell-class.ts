@@ -26,12 +26,11 @@ export const chatSlotClass = (layout: PaneLayout): string => {
 export const shellClass = 'flex h-screen w-full overflow-hidden';
 
 /**
- * One rail width for every stage (myimago ADR 0029 decision 4). Its glass
- * makes it a stacking context, so it takes its own layer above the panes:
- * otherwise the later list pane paints over its tooltips and ⋯ menu.
+ * The spine: one 72px blue column for every stage (SPEC v3). It takes its own
+ * layer above the panes, so its tooltips and menus paint over an open pane.
  */
 export const railClass =
-  'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap border-r border-hairline py-rail-y surface-glass';
+  'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap bg-spine py-rail-y text-spine-ink';
 
 /** The object and chat columns inside their panes. */
 export const columnClass = 'flex h-full w-full min-w-0 flex-col';

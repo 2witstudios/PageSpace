@@ -6,67 +6,70 @@ import postcss from 'postcss';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
-  overflowLinkClass,
-  overflowMenuClass,
-  railChipClass,
-  railHitClass,
-  railListClass,
-  railPinnedClass,
   railTooltipClass,
-  railUnreadClass,
+  spineCountClass,
+  spineDividerClass,
+  spineListClass,
+  spineMarkerClass,
+  spineTileClass,
 } from './rail-button-class';
 
-const hitBase =
-  'group relative flex size-rail-hit flex-none items-center justify-center rounded-lg no-underline hover:no-underline';
-const chipBase =
-  'flex size-rail-chip items-center justify-center rounded-lg transition-colors duration-120 ease-standard';
+const tileBase =
+  'group relative flex flex-none items-center justify-center no-underline transition-colors duration-120 ease-standard hover:no-underline';
+const primary = `${tileBase} size-spine-tile rounded-spine-tile`;
+const small = `${tileBase} size-spine-tile-small rounded-lg`;
 
-describe('railHitClass()', () => {
-  test('hit box', () => {
+describe('spineTileClass()', () => {
+  test('primary tiles', () => {
     assert({
-      given: 'a linked and a driveless rail item',
-      should: 'keep the 44px box and change only the cursor',
-      actual: [railHitClass(true), railHitClass(false)],
-      expected: [`${hitBase} cursor-pointer`, `${hitBase} cursor-default`],
+      given: 'a 48px section tile active, linked and driveless',
+      should: 'fill the active one white with white ink, and keep the rest quiet, hovering only when linked',
+      actual: [spineTileClass('primary', true), spineTileClass('primary', false), spineTileClass('primary', false, false)],
+      expected: [
+        `${primary} bg-spine-active text-spine-on`,
+        `${primary} text-spine-quiet cursor-pointer hover:bg-spine-hover`,
+        `${primary} text-spine-quiet cursor-default`,
+      ],
     });
   });
-});
 
-describe('railChipClass()', () => {
-  test('states', () => {
+  test('small tiles', () => {
     assert({
-      given: 'the active, linked and driveless states',
-      should: 'give each its own fill and ink, the active one a soft tint with ink rather than blue',
-      actual: [railChipClass(true, true), railChipClass(false, true), railChipClass(false, false)],
+      given: 'a 40px tool tile active, linked and driveless',
+      should: 'share the active fill and sit dimmer than the sections otherwise',
+      actual: [spineTileClass('small', true), spineTileClass('small', false), spineTileClass('small', false, false)],
       expected: [
-        `${chipBase} bg-accent-soft text-ink`,
-        `${chipBase} text-ink-muted group-hover:bg-surface-overlay group-hover:text-ink`,
-        `${chipBase} text-ink-faint`,
+        `${small} bg-spine-active text-spine-on`,
+        `${small} text-spine-dim cursor-pointer hover:bg-spine-hover`,
+        `${small} text-spine-dim cursor-default`,
       ],
     });
   });
 });
 
-describe('the rail’s fixed classes', () => {
+describe('spineMarkerClass()', () => {
+  test('marker heights', () => {
+    const marker = 'absolute top-1/2 w-spine-marker -translate-y-1/2 rounded-r-sm bg-spine-marker';
+    assert({
+      given: 'the active marker beside a section tile and beside a tool',
+      should: 'sit at the spine’s edge, taller beside the larger tile',
+      actual: [spineMarkerClass('primary'), spineMarkerClass('small')],
+      expected: [`${marker} -left-3 h-spine-marker-tall`, `${marker} -left-4 h-spine-marker-short`],
+    });
+  });
+});
+
+describe('the spine’s fixed classes', () => {
   test('exact strings', () => {
     assert({
-      given: 'the rail lists, tooltip, unread corner and overflow menu',
+      given: 'the spine’s count, lists, divider and tooltip',
       should: 'stay these token-locked strings',
-      actual: [
-        railListClass,
-        railPinnedClass,
-        railTooltipClass,
-        railUnreadClass,
-        overflowMenuClass,
-        overflowLinkClass,
-      ],
+      actual: [spineCountClass, spineListClass, spineDividerClass, railTooltipClass],
       expected: [
+        'absolute top-1 right-1 flex h-spine-count min-w-spine-count items-center justify-center rounded-round bg-notice px-1 text-badge leading-none font-bold text-notice-ink',
         'm-0 flex list-none flex-col items-center gap-rail-gap p-0',
-        'm-0 mt-auto flex list-none flex-col items-center gap-rail-gap p-0',
+        'my-2 h-px w-spine-divider flex-none bg-spine-active',
         'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100',
-        'absolute top-0 right-0',
-        'absolute top-0 left-rail-tooltip-x z-popover m-0 flex w-menu list-none flex-col rounded-lg border border-hairline p-1 shadow-2 surface-glass-raised',
-        'flex items-center gap-2 rounded-md px-2 py-row-y text-sm font-medium text-ink no-underline hover:bg-surface-overlay hover:no-underline',
       ],
     });
   });
@@ -89,17 +92,18 @@ const escape = (cls: string): string => cls.replace(/[:/.]/g, (char) => `\\${cha
 describe('rail classes against the theme', () => {
   test('every class resolves', async () => {
     const classes = [
-      railHitClass(true),
-      railHitClass(false),
-      railChipClass(true, true),
-      railChipClass(false, true),
-      railChipClass(false, false),
-      railListClass,
-      railPinnedClass,
+      spineTileClass('primary', true),
+      spineTileClass('primary', false),
+      spineTileClass('primary', false, false),
+      spineTileClass('small', true),
+      spineTileClass('small', false),
+      spineTileClass('small', false, false),
+      spineMarkerClass('primary'),
+      spineMarkerClass('small'),
+      spineCountClass,
+      spineListClass,
+      spineDividerClass,
       railTooltipClass,
-      railUnreadClass,
-      overflowMenuClass,
-      overflowLinkClass,
     ]
       .flatMap((list) => list.split(' '))
       .filter((cls, index, all) => all.indexOf(cls) === index)

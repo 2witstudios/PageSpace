@@ -3,8 +3,13 @@ import type { MouseEvent, ReactNode } from 'react';
 import type { IconName } from '../../components/icon/icon-names';
 import type { RailPlace } from '../rail/rail-items';
 import { renderIcon } from '../../components/icon/icon.render';
-import { renderUnreadCount } from '../../components/unread-count/unread-count.render';
-import { railChipClass, railHitClass, railTooltipClass, railUnreadClass } from './rail-button-class';
+import {
+  railTooltipClass,
+  spineCountClass,
+  spineMarkerClass,
+  spineTileClass,
+  type SpineTileSize,
+} from './rail-button-class';
 
 export type RailButtonRenderProps = {
   readonly icon: IconName;
@@ -13,11 +18,12 @@ export type RailButtonRenderProps = {
   readonly href: string | null;
   /** Where the viewer is if this is the active item; null otherwise. */
   readonly current: RailPlace | null;
-  /** Drawn as the accent count above zero. */
+  /** Drawn as the amber count above zero. */
   readonly unread: number;
+  readonly size?: SpineTileSize;
   /**
-   * Void action, present only on the active item while its section's list is
-   * hidden: the click reopens the list instead of navigating.
+   * Void action, present only on the active item while its section's pane is
+   * hidden: the click reopens the pane instead of navigating.
    */
   readonly onReopen?: (() => void) | undefined;
 };
@@ -29,29 +35,37 @@ export const renderRailTooltip = (label: string): ReactNode => (
   </span>
 );
 
+/** The amber count on a spine tile: hidden at zero, "99+" past 99. */
+export const renderSpineCount = (count: number): ReactNode =>
+  count > 0 ? (
+    <span className={spineCountClass} aria-hidden="true">
+      {count > 99 ? '99+' : count}
+    </span>
+  ) : null;
+
 /** `page` only on the URL the link points at; `true` anywhere inside its section. */
 const ariaCurrent: Readonly<Record<RailPlace, 'page' | 'true'>> = { page: 'page', section: 'true' };
 
 /**
- * One rail destination: a 44px control carrying a 38px chip, the active
- * marker, its tooltip and any unread count. Every link prefetches its full
- * route, so a section opens from the cache.
+ * One spine destination: a tile with its icon, the active marker, its tooltip and any unread
+ * count. Every link prefetches its full route, so a section opens from the cache.
  */
 export function renderRailButton(props: RailButtonRenderProps): ReactNode {
-  const { icon, label, href, current, unread, onReopen } = props;
+  const { icon, label, href, current, unread, onReopen, size = 'small' } = props;
   const active = current !== null;
   const name = unread > 0 ? `${label}, ${unread} unread` : label;
   const inner = (
     <>
-      <span className={railChipClass(active, href !== null)}>{renderIcon({ name: icon, size: 18 })}</span>
-      {renderUnreadCount({ count: unread, className: railUnreadClass })}
+      {active ? <span className={spineMarkerClass(size)} aria-hidden="true" /> : null}
+      {renderIcon({ name: icon, size: size === 'primary' ? 20 : 18 })}
+      {renderSpineCount(unread)}
       {renderRailTooltip(label)}
     </>
   );
 
   if (href === null) {
     return (
-      <button type="button" className={railHitClass(false)} aria-label={name} disabled>
+      <button type="button" className={spineTileClass(size, false, false)} aria-label={name} disabled>
         {inner}
       </button>
     );
@@ -69,7 +83,7 @@ export function renderRailButton(props: RailButtonRenderProps): ReactNode {
     <Link
       href={href}
       prefetch={true}
-      className={railHitClass(true)}
+      className={spineTileClass(size, active)}
       aria-label={name}
       aria-current={current === null ? undefined : ariaCurrent[current]}
       onClick={reopen}

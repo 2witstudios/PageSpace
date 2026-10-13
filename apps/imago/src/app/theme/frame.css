@@ -22,7 +22,7 @@
   --spacing-rail-brand: 34px;
   --spacing-rail-gap: 4px;
   --spacing-rail-y: 14px;
-  --spacing-rail-tooltip-x: 54px;
+  --spacing-rail-tooltip-x: 62px;
   /* The rail and the panes are each glass (a backdrop-filter), so each is a
      stacking context; the rail's layer sits over the panes, so its tooltips
      and the ⋯ menu are drawn above an open list. `popover` orders those
