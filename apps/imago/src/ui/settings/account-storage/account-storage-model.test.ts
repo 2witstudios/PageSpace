@@ -114,3 +114,82 @@ describe('bytesLabel', () => {
     });
   });
 });
+
+describe('storageOf on a sparse summary', () => {
+  test('falls back to the Free tier and empty figures when the API omits the optional parts', () => {
+    const view = storageOf({ quota: {} });
+    assert({
+      given: 'a body with a quota and nothing else',
+      should: 'name the Free tier, leave the figures blank, and list only the Files limit',
+      actual: [view?.tier, view?.quota, view?.used, view?.available, view?.usedBytes, view?.limits, view?.types, view?.drives],
+      expected: ['Free', '', '', '', 0, [{ label: 'Files', value: '0' }], [], []],
+    });
+  });
+
+  test('defaults the blanks of every row it is sent', () => {
+    const view = storageOf({
+      quota: { usedBytes: 10 },
+      storageByDrive: [{}, 'junk'],
+      largestFiles: [{ id: '', title: '' }],
+      recentFiles: [
+        { id: 'a', title: 'No date', formattedSize: '2 MB' },
+        { id: 'b', title: 'Bad date', formattedSize: '3 MB', createdAt: 'not a date' },
+        { id: 'c' },
+      ],
+    });
+    assert({
+      given: 'rows missing their ids, titles, sizes and dates',
+      should: 'use an empty id, "Untitled file", "Untitled drive" and the size alone when the date is missing or invalid',
+      actual: [view?.drives, view?.largest, view?.recent],
+      expected: [
+        [{ driveId: '', name: 'Untitled drive', files: 0, size: '' }],
+        [{ id: '', title: 'Untitled file', detail: '' }],
+        [
+          { id: 'a', title: 'No date', detail: '2 MB' },
+          { id: 'b', title: 'Bad date', detail: '3 MB' },
+          { id: 'c', title: 'Untitled file', detail: '' },
+        ],
+      ],
+    });
+  });
+
+  test('reads a body that is not a summary as nothing loaded', () => {
+    assert({
+      given: 'an error body, a missing quota and a non-object',
+      should: 'give no view',
+      actual: [storageOf({ error: 'x' }), storageOf({ quota: 5 }), storageOf(null)],
+      expected: [null, null, null],
+    });
+  });
+});
+
+describe('typesOf edge cases', () => {
+  test('folds categories into Other, skips malformed ones and gives no share without used bytes', () => {
+    assert({
+      given: 'two unknown categories, a junk entry, a zero-count category and no used bytes',
+      should: 'merge the unknowns into one Other segment with 0 percent, dropping the rest',
+      actual: typesOf(
+        { Docs: { count: 1, totalSize: 5 }, Archives: { count: 2 }, Broken: 'x', PDFs: { count: 0, totalSize: 9 }, Odd: { count: 'many' } },
+        0,
+      ),
+      expected: [{ label: 'Other', count: 3, bytes: 5, percent: 0 }],
+    });
+    assert({
+      given: 'a breakdown that is not an object',
+      should: 'draw no segments',
+      actual: typesOf(null, 10),
+      expected: [],
+    });
+  });
+});
+
+describe('bytesLabel edge cases', () => {
+  test('writes tiny, NaN and huge sizes without going off the unit scale', () => {
+    assert({
+      given: 'zero, NaN, one byte, and far more than a terabyte',
+      should: '0B for the first two, then B, and capped at TB',
+      actual: [bytesLabel(0), bytesLabel(Number.NaN), bytesLabel(1), bytesLabel(5 * 1024 ** 5)],
+      expected: ['0B', '0B', '1B', '5120TB'],
+    });
+  });
+});
