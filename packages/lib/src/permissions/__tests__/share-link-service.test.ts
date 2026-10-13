@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
 // resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
 vi.mock('../actor-authentication', () => ({
-  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
   checkActorResourceAuthentication: async () => ({ allowed: true }),
   filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
   filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
@@ -107,9 +107,14 @@ import {
   listPageShareLinks,
   redeemPageShareLink,
   resolveShareToken,
+  completeApprovedLinkAdmission,
 } from '../share-link-service';
 import { EnforcedAuthContext } from '../enforced-context';
 import { isDriveOwnerOrAdmin, canUserSharePage, isUserDriveMember } from '../permissions';
+import { checkActorDriveAuthentication } from '../actor-authentication';
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '../../organizations/policies-core';
+import type { ClaimedGuestApproval } from '../guest-holds';
 import { hashToken } from '../../auth/token-utils';
 import type { SessionClaims } from '../../auth/session-service';
 
@@ -177,6 +182,8 @@ function makeUpdateChain(result: unknown[] = []) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(checkActorDriveAuthentication).mockReset().mockResolvedValue({ allowed: true });
+  vi.mocked(getDrivePolicies).mockReset().mockResolvedValue(null);
   // Default: drives are STANDARD (not Home), pages have a drive
   mockDb.query.drives.findFirst.mockResolvedValue({ kind: 'STANDARD' });
   mockDb.query.pages.findFirst.mockResolvedValue({ driveId: DRIVE_ID });
@@ -793,5 +800,84 @@ describe('resolveShareToken', () => {
     expect(result).not.toBeNull();
     expect(result?.type).toBe('page');
     expect(result?.pageTitle).toBe('My Page');
+  });
+});
+
+
+describe('share-link refusal boundaries', () => {
+  it.each(['drive', 'page'] as const)('refuses creation of a %s link under the live org sharing policy without writing', async kind => {
+    vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
+    vi.mocked(canUserSharePage).mockResolvedValue(true);
+    vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org_policy', policies: { ...DEFAULT_ORG_POLICIES, publicShareLinks: false } });
+    const result = kind === 'drive' ? await createDriveShareLink(makeCtx(), DRIVE_ID, {}) : await createPageShareLink(makeCtx(), PAGE_ID, {});
+    expect(result).toMatchObject({ ok: false, error: 'POLICY_FORBIDDEN' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  for (const kind of ['drive', 'page'] as const) {
+    it.each(['revoked', 'expired', 'paused', 'policy_off', 'weak_credential'] as const)('a %s '+kind+' link discloses no target and grants no access', async refusal => {
+      makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, role: 'MEMBER', permissions: ['VIEW'],
+        isActive: refusal !== 'revoked', expiresAt: refusal === 'expired' ? new Date(0) : null,
+        suspendedByPolicy: refusal === 'paused' ? 'publicShareLinks' : null }]);
+      if (refusal === 'policy_off') vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org_policy', policies: { ...DEFAULT_ORG_POLICIES, publicShareLinks: false } });
+      if (refusal === 'weak_credential') vi.mocked(checkActorDriveAuthentication).mockResolvedValue({ allowed: false, code: 'org_strong_sign_in_required' });
+      const result = kind === 'drive' ? await redeemDriveShareLink(makeCtx(), 'refused-token') : await redeemPageShareLink(makeCtx(), 'refused-token');
+      expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+      expect(mockDb.insert).not.toHaveBeenCalled();
+      expect(mockDb.update).not.toHaveBeenCalled();
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(['drive', 'page'] as const)('a valid %s landing link retains its real expiry and creator identity', async kind => {
+    const expiry = new Date(Date.now() + 60_000);
+    let call = 0;
+    mockDb.select.mockImplementation(() => ({ from: vi.fn().mockReturnThis(), leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(),
+      limit: vi.fn(async () => kind === 'page' && ++call === 1 ? [] : [{ id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID, isActive: true, expiresAt: expiry, suspendedByPolicy: null, driveName: 'Shared drive', pageTitle: 'Shared page', creatorName: 'Test creator' }]),
+    }));
+    expect(await resolveShareToken('valid-token')).toMatchObject({ type: kind, driveId: DRIVE_ID, expiresAt: expiry, creatorName: 'Test creator' });
+  });
+
+  it.each(['drive', 'page'] as const)('a paused %s landing link does not disclose resource or creator names', async kind => {
+    let call = 0;
+    mockDb.select.mockImplementation(() => ({ from: vi.fn().mockReturnThis(), leftJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(),
+      limit: vi.fn(async () => kind === 'page' && ++call === 1 ? [] : [{ id: LINK_ID, pageId: PAGE_ID, driveId: DRIVE_ID, isActive: true, expiresAt: null, suspendedByPolicy: 'publicShareLinks', driveName: 'Private drive', creatorName: 'Private creator' }]),
+    }));
+    expect(await resolveShareToken('paused-token')).toBeNull();
+  });
+});
+
+describe('approved share links retain the original admission boundaries', () => {
+  const claim = (origin: 'drive_link' | 'page_link'): ClaimedGuestApproval => ({ holdId: 'hold', driveId: DRIVE_ID, userId: ACTOR_ID, email: null, origin, createdAt: new Date(), orgId: 'org', request: { linkId: LINK_ID }, requestedBy: null });
+
+  it.each(['no_account', 'no_offer', 'non_link_request'] as const)('refuses an approval with %s without granting access', invalid => {
+    const request = claim('drive_link');
+    if (invalid === 'no_account') request.userId = null;
+    if (invalid === 'no_offer') request.request = {};
+    if (invalid === 'non_link_request') request.origin = 'invite';
+    return expect(completeApprovedLinkAdmission(request)).resolves.toEqual({ ok: false, error: 'NOT_A_LINK_REQUEST' });
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s cannot bypass a later guests-off policy', async origin => {
+    vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org', policies: { ...DEFAULT_ORG_POLICIES, guests: 'off' } });
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'POLICY_OFF' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s with a revoked offer cannot restore access', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: false, expiresAt: null, suspendedByPolicy: null }]);
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'LINK_GONE' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('an approved %s still refuses a lapse that occurs before the write', async origin => {
+    makeSelectChain([{ id: LINK_ID, driveId: DRIVE_ID, pageId: PAGE_ID, isActive: true, expiresAt: null, suspendedByPolicy: null }]);
+    checkDriveMayLoosen.mockResolvedValueOnce({ message: 'Lapsed' });
+    expect(await completeApprovedLinkAdmission(claim(origin))).toEqual({ ok: false, error: 'POLICY_OFF' });
+    expect(mockDb.insert).not.toHaveBeenCalled();
+    expect(mockDb.update).not.toHaveBeenCalled();
   });
 });

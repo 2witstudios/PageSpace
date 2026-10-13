@@ -12,15 +12,18 @@
  * Locally:
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test:integration -- src/permissions/__tests__/guest-reentry.integration.test.ts
  */
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db, pool } from '@pagespace/db/db';
-import { and, eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray, sql } from '@pagespace/db/operators';
 import { mcpTokens, users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, mcpTokenDrives, pagePermissions } from '@pagespace/db/schema/members';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { pageShareLinks, driveShareLinks } from '@pagespace/db/schema/share-links';
+import { completeApprovedLinkAdmission, redeemPageShareLink, redeemDriveShareLink } from '../share-link-service';
+import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
 
 vi.mock('../revocation-kick', () => ({ kickForDriveMembershipRevocation: vi.fn(async () => {}), kickForPagePermissionRevocation: vi.fn(async () => {}) }));
@@ -30,10 +33,30 @@ import { leaveOrganization } from '../../organizations/leave';
 import { moveDriveToOrg, type OrgDriveServiceDeps } from '../../services/org-drive-service';
 import { orgDriveServiceDeps } from '../../services/org-drive-service-deps';
 import { getUserAccessLevel } from '../permissions';
-import { admitReentry, claimPendingGuestApproval, consumeApprovedInvitation, holdOrgGuestsUnderPolicy, listPendingGuestApprovalViews, markApprovedInvitation } from '../guest-holds';
+import { admitReentry, claimPendingGuestApproval, consumeApprovedInvitation, holdOrgGuestsUnderPolicy, listPendingGuestApprovalViews, markApprovedInvitation, queueHeldAccess, requestGuestApproval, grantStillLive, claimGuestApprovalDecision } from '../guest-holds';
 import { lockOrgsOfDrivesForShare } from '../../organizations/policy-reader';
 import { completeApprovedPageGrant } from '../page-grant-admission';
+import { EnforcedAuthContext } from '../enforced-context';
+import type { SessionClaims } from '../../auth/session-service';
+import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '../../audit/security-audit';
 import { credentialActor } from '../access-actor';
+
+// This app-chain suite verifies the audit records its app transactions publish.
+// Dedicated Admin suites own CI's separate scratch schema and binding tests.
+const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+const savedAuditEnv = new Map<string, string | undefined>();
+const resetAuditBinding = () => {
+  resetAuditDbBindingForTests();
+  resetDefaultSecurityAuditForTests();
+};
+beforeAll(() => {
+  for (const key of AUDIT_ENV) {
+    savedAuditEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+  resetAuditBinding();
+});
 
 const deps: OrgDriveServiceDeps = { ...orgDriveServiceDeps, syncOrgMembership: async () => async () => {} };
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -91,8 +114,16 @@ beforeEach(async () => {
 
 afterEach(cleanup);
 afterAll(async () => {
-  await cleanup();
-  await pool.end();
+  try {
+    await cleanup();
+    await pool.end();
+  } finally {
+    for (const [key, value] of savedAuditEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    resetAuditBinding();
+  }
 });
 
 const setGuests = async (guests: 'off' | 'approve' | 'on') => {
@@ -376,5 +407,226 @@ describe('who counts as an admitted guest when access re-enters', () => {
     await db.insert(driveMembers).values({ driveId: w.orgDrive, userId: w.outsider, role: 'GUEST', acceptedAt: new Date() });
     const outcome = await db.transaction((tx) => admitReentry(tx, { driveId: w.orgDrive, userId: w.outsider, grants: [{ pageId: w.orgPage, ...EDIT }], requestedBy: w.owner }));
     expect(outcome).toMatchObject({ outcome: 'held' });
+  });
+});
+
+
+describe('guest approval requests preserve recipient and grant boundaries', () => {
+  it('an approved page link grants only its page permissions and a GUEST row, once claimed', async () => {
+    await setGuests('approve');
+    const other = await factories.createPage(w.orgDrive);
+    const [link] = await db.insert(pageShareLinks).values({ pageId: w.orgPage, token: createId(), createdBy: w.owner, permissions: ['VIEW', 'EDIT'] }).returning();
+    const claims: SessionClaims = { sessionId: 'guest-approval', userId: w.outsider, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'user', scopes: ['*'], expiresAt: new Date(Date.now() + 3600_000) };
+    const ctx = EnforcedAuthContext.fromSession(claims);
+    expect(await redeemPageShareLink(ctx, link.token)).toEqual({ ok: false, error: 'PENDING_APPROVAL' });
+    expect(await redeemPageShareLink(ctx, link.token)).toEqual({ ok: false, error: 'PENDING_APPROVAL' });
+    const pending = (await holds('pending_approval'))[0];
+    expect(await holds('pending_approval')).toHaveLength(1);
+    expect((await db.select().from(pageShareLinks).where(eq(pageShareLinks.id, link.id)))[0].useCount).toBe(0);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+    const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id });
+    if (!claim) throw new Error('Expected queued approval');
+    expect(await completeApprovedLinkAdmission(claim)).toMatchObject({ ok: true, driveId: w.orgDrive, userId: w.outsider, role: 'GUEST', memberId: null });
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage))?.canEdit).toBe(true);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), other.id)).toBeNull();
+    expect(await db.select({ role: driveMembers.role }).from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.outsider)))).toEqual([{ role: 'GUEST' }]);
+    expect((await db.select().from(pageShareLinks).where(eq(pageShareLinks.id, link.id)))[0].useCount).toBe(1);
+    expect(await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id })).toBeNull();
+  });
+
+  it('an approved legacy ADMIN drive offer discards its custom role and grants an Admin membership', async () => {
+    await setGuests('approve');
+    const [role] = await db.insert(driveRoles).values({ driveId: w.orgDrive, name: 'Legacy template', permissions: {} }).returning();
+    const [link] = await db.insert(driveShareLinks).values({ driveId: w.orgDrive, token: createId(), createdBy: w.owner, role: 'ADMIN', customRoleId: role.id }).returning();
+    const claims: SessionClaims = { sessionId: 'admin-approval', userId: w.outsider, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'user', scopes: ['*'], expiresAt: new Date(Date.now() + 3600_000) };
+    expect(await redeemDriveShareLink(EnforcedAuthContext.fromSession(claims), link.token)).toEqual({ ok: false, error: 'PENDING_APPROVAL', driveId: w.orgDrive });
+    const pending = (await holds('pending_approval'))[0];
+    expect(pending.request).toMatchObject({ role: 'ADMIN', customRoleId: role.id });
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+    const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.id });
+    if (!claim) throw new Error('Expected queued approval');
+    expect(await completeApprovedLinkAdmission(claim)).toMatchObject({ ok: true, driveId: w.orgDrive, userId: w.outsider, role: 'ADMIN', customRoleId: null });
+    expect(await db.select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId }).from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive), eq(driveMembers.userId, w.outsider)))).toEqual([{ role: 'ADMIN', customRoleId: null }]);
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage))?.canEdit).toBe(true);
+    expect((await db.select().from(driveShareLinks).where(eq(driveShareLinks.id, link.id)))[0].useCount).toBe(1);
+  });
+
+  it.each(['missing_identity', 'ambiguous_identity'] as const)('a %s request cannot create a pending guest', async invalid => {
+    await expect(requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, origin: 'invite', request: {}, requestedBy: w.owner,
+      ...(invalid === 'ambiguous_identity' ? { userId: w.outsider, email: 'outsider@example.com' } : {}),
+    })).rejects.toThrow('exactly one of userId or email');
+    expect(await db.select().from(orgGuestHolds).where(eq(orgGuestHolds.orgId, w.orgId))).toEqual([]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+  });
+
+  it('an emailed request normalizes identity and refreshes one queue item without granting access or inventing a requester account', async () => {
+    const first = await requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, email: '  Invitee@Example.com  ', origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.owner });
+    const refreshed = await requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, email: 'invitee@example.com', origin: 'page_link', request: { pageId: w.orgPage }, requestedBy: null });
+    expect(refreshed).toMatchObject({ holdId: first.holdId, email: 'invitee@example.com', userId: null, origin: 'page_link' });
+    const view = await listPendingGuestApprovalViews(w.orgId, 10);
+    expect(view.total).toBe(1);
+    expect(view.items).toEqual([expect.objectContaining({ holdId: first.holdId, requesterName: null,
+      request: { role: null, customRoleId: null, pageGrants: 1, tokenScopes: 0, earliestExpiry: null, viaLink: true },
+    })]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+  });
+
+  it('repeated held page grants keep their union and latest expiry without creating live access, and expired-only repeats do not resurrect anything', async () => {
+    await setGuests('approve');
+    const soon = new Date(Date.now() + 60_000);
+    const later = new Date(Date.now() + 120_000);
+    const ask = (flags: typeof EDIT, expiresAt: Date | null, grantedBy = w.sharer) => queueHeldAccess(db, {
+      orgId: w.orgId, driveId: w.orgDrive, userId: w.outsider, member: null,
+      grants: [{ pageId: w.orgPage, ...flags, expiresAt, grantedBy }], requestedBy: w.owner,
+    });
+    const first = await ask(EDIT, soon);
+    expect(first?.request.permissions).toEqual([{ pageId: w.orgPage, ...EDIT, expiresAt: soon.toISOString() }]);
+    const sharing = { canView: true, canEdit: false, canShare: true, canDelete: false };
+    const second = await ask(sharing, later, w.member);
+    expect(second?.id).toBe(first?.id);
+    expect(second?.request).toMatchObject({ invitedBy: w.sharer, permissions: [{ pageId: w.orgPage, canView: true, canEdit: true, canShare: true, canDelete: false, expiresAt: later.toISOString() }] });
+    const deleting = { canView: false, canEdit: false, canShare: false, canDelete: true };
+    const third = await ask(deleting, soon);
+    expect(third?.request.permissions).toEqual([{ pageId: w.orgPage, canView: true, canEdit: true, canShare: true, canDelete: true, expiresAt: later.toISOString() }]);
+    const unlimited = await ask(sharing, null);
+    expect(unlimited?.request.permissions).toEqual([{ pageId: w.orgPage, canView: true, canEdit: true, canShare: true, canDelete: true, expiresAt: null }]);
+    const finiteRepeat = await ask(EDIT, later);
+    expect(finiteRepeat?.request.permissions).toEqual(unlimited?.request.permissions);
+    expect(await ask(EDIT, new Date(0))).toBeNull();
+    expect(await holds('pending_approval')).toEqual([finiteRepeat]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, w.outsider))).toEqual([]);
+  });
+
+  it('a replacement emailed invitation approval admits only the newest offer, once', async () => {
+    await markApprovedInvitation(db, { orgId: w.orgId, driveId: w.orgDrive, email: 'Person@example.com', approvedBy: w.owner, invite: { kind: 'drive', id: 'first-offer' } });
+    await markApprovedInvitation(db, { orgId: w.orgId, driveId: w.orgDrive, email: ' PERSON@example.com ', approvedBy: w.owner, invite: { kind: 'page', id: 'replacement-offer' } });
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'drive', id: 'first-offer' } })).toBe(false);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'replacement-offer' } })).toBe(true);
+    expect(await consumeApprovedInvitation(db, { driveId: w.orgDrive, invite: { kind: 'page', id: 'replacement-offer' } })).toBe(false);
+  });
+
+  it('an expired-only legacy grant entering approve mode is removed rather than queued or resurrected', async () => {
+    await db.insert(pagePermissions).values({ pageId: w.orgPage, userId: w.outsider, ...EDIT, grantedBy: w.owner, expiresAt: new Date(0) });
+    await setGuests('approve');
+    await db.transaction(tx => holdOrgGuestsUnderPolicy(tx, { orgId: w.orgId, driveId: w.orgDrive, pageIds: [w.orgPage] }));
+    expect(await holds('pending_approval')).toEqual([]);
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, w.outsider))).toEqual([]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+  });
+
+  it('parking additional legacy access merges one hold and restores the original member, token and both page grants', async () => {
+    await setGuests('off');
+    const { drive, page, tokenId } = await personalDriveWithOutsider();
+    await moveDriveToOrg(w.owner, drive, { orgId: w.orgId, orgVisibility: 'RESTRICTED' }, deps);
+    const [first] = await holds('suspended');
+    const extra = await factories.createPage(drive, { isPrivate: true });
+    await db.insert(pagePermissions).values({ pageId: extra.id, userId: w.outsider, canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: w.owner });
+    await db.transaction(tx => holdOrgGuestsUnderPolicy(tx, { orgId: w.orgId, driveId: drive }));
+    const [merged] = await holds('suspended');
+    expect(merged.id).toBe(first.id);
+    expect(merged.parked?.member).toEqual(first.parked?.member);
+    expect(merged.parked?.tokenScopes).toEqual(first.parked?.tokenScopes);
+    expect(merged.parked?.grants?.map(grant => grant.pageId).sort()).toEqual([page, extra.id].sort());
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), extra.id)).toBeNull();
+    await setGuests('on');
+    expect((await getUserAccessLevel(credentialActor(w.outsider, null), page))?.canEdit).toBe(true);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), extra.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(await db.select({ tokenId: mcpTokenDrives.tokenId }).from(mcpTokenDrives).where(eq(mcpTokenDrives.driveId, drive))).toEqual([{ tokenId }]);
+    expect(await holds('suspended')).toEqual([]);
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('a claimed %s rechecks a concurrent guests-off change under the admission lock before granting access', async origin => {
+    await setGuests('approve');
+    const [link] = origin === 'drive_link'
+      ? await db.insert(driveShareLinks).values({ driveId: w.orgDrive, token: createId(), createdBy: w.owner, role: 'MEMBER' }).returning()
+      : await db.insert(pageShareLinks).values({ pageId: w.orgPage, token: createId(), createdBy: w.owner, permissions: ['VIEW'] }).returning();
+    const pending = await requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, userId: w.outsider, origin, request: { linkId: link.id }, requestedBy: w.owner });
+    const claim = await claimPendingGuestApproval({ orgId: w.orgId, holdId: pending.holdId });
+    if (!claim) throw new Error('Expected queued approval');
+    const blocker = await pool.connect();
+    let approval: ReturnType<typeof completeApprovedLinkAdmission> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      const { rows: [{ pid }] } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+      await blocker.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [w.orgId]);
+      approval = completeApprovedLinkAdmission(claim);
+      // Observe the admission waiting on the actual policy writer, after its
+      // unlocked offer/policy read, rather than depending on a timed delay.
+      await vi.waitFor(async () => expect((await db.execute(sql`SELECT pid FROM pg_stat_activity WHERE ${pid} = ANY(pg_blocking_pids(pid))`)).rows.length).toBeGreaterThan(0), { timeout: 3000 });
+      await blocker.query('UPDATE organizations SET policies = jsonb_set(policies, $1::text[], $2::jsonb) WHERE id = $3', [['guests'], JSON.stringify('off'), w.orgId]);
+      await blocker.query('COMMIT');
+      expect(await approval).toEqual({ ok: false, error: 'POLICY_OFF' });
+      expect(await db.select().from(driveMembers).where(eq(driveMembers.userId, w.outsider))).toEqual([]);
+      expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, w.outsider))).toEqual([]);
+      const stored = origin === 'drive_link'
+        ? await db.select().from(driveShareLinks).where(eq(driveShareLinks.id, link.id))
+        : await db.select().from(pageShareLinks).where(eq(pageShareLinks.id, link.id));
+      expect(stored[0].useCount).toBe(0);
+      expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+    } finally {
+      await blocker.query('ROLLBACK');
+      blocker.release();
+      await Promise.allSettled([approval]);
+    }
+  }, 10000);
+
+  it('member-only and token-only held requests retain their template and requester while granting no drive access', async () => {
+    await setGuests('approve');
+    const [requester] = await db.select({ name: users.name }).from(users).where(eq(users.id, w.outsider));
+    const [role] = await db.insert(driveRoles).values({ driveId: w.orgDrive, name: 'Held template', permissions: {} }).returning();
+    const first = await queueHeldAccess(db, { orgId: w.orgId, driveId: w.orgDrive, userId: w.outsider,
+      member: { role: 'MEMBER', customRoleId: role.id }, grants: [], requestedBy: w.owner });
+    const [token] = await db.insert(mcpTokens).values({ userId: w.outsider, tokenHash: createId(), tokenPrefix: 'mcp_held', name: 'Held credential' }).returning();
+    const second = await queueHeldAccess(db, { orgId: w.orgId, driveId: w.orgDrive, userId: w.outsider,
+      member: null, grants: [], tokenScopes: [{ tokenId: token.id, role: 'MEMBER', customRoleId: role.id }], requestedBy: w.sharer });
+    expect(second?.id).toBe(first?.id);
+    expect(second?.request).toMatchObject({ invitedBy: w.owner, member: { role: 'MEMBER', customRoleId: role.id }, permissions: [], tokenScopes: [{ tokenId: token.id, role: 'MEMBER', customRoleId: role.id }] });
+    const view = await listPendingGuestApprovalViews(w.orgId, 10);
+    expect(view.items).toEqual([expect.objectContaining({ requesterName: requester.name,
+      request: { role: 'MEMBER', customRoleId: role.id, pageGrants: 0, tokenScopes: 1, earliestExpiry: null, viaLink: false },
+    })]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.userId, w.outsider))).toEqual([]);
+    expect(await db.select().from(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, token.id))).toEqual([]);
+  });
+
+  it('declining an emailed guest removes only that request and audits an email target without exposing the address or inventing an account', async () => {
+    const email = 'private-invitee@example.com';
+    const pending = await requestGuestApproval({ orgId: w.orgId, driveId: w.orgDrive, email, origin: 'invite', request: { role: 'MEMBER' }, requestedBy: w.owner });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: pending.holdId, decision: 'decline', actorId: w.owner })).toMatchObject({ ok: true, claim: { userId: null, email } });
+    expect(await claimGuestApprovalDecision({ orgId: w.orgId, holdId: pending.holdId, decision: 'decline', actorId: w.owner })).toEqual({ ok: false, reason: 'not_found' });
+    const events = await db.select().from(securityAuditLog).where(and(eq(securityAuditLog.eventType, 'org.guest.declined'), eq(securityAuditLog.resourceId, w.orgDrive)));
+    expect(events).toHaveLength(1);
+    expect(events[0].details).toMatchObject({ holdId: pending.holdId, origin: 'invite', target: 'email' });
+    expect(events[0].details).not.toHaveProperty('targetUserId');
+    expect(JSON.stringify(events[0].details)).not.toContain(email);
+    expect(await db.select().from(orgGuestHolds).where(eq(orgGuestHolds.orgId, w.orgId))).toEqual([]);
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.orgPage)).toBeNull();
+  });
+
+  it.each(['drive_link', 'page_link'] as const)('a lapsed org member cannot acquire new access from an existing %s despite retaining org membership', async origin => {
+    const [link] = origin === 'drive_link'
+      ? await db.insert(driveShareLinks).values({ driveId: w.orgDrive, token: createId(), createdBy: w.owner, role: 'MEMBER' }).returning()
+      : await db.insert(pageShareLinks).values({ pageId: w.orgPage, token: createId(), createdBy: w.owner, permissions: ['VIEW'] }).returning();
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
+    const claims: SessionClaims = { sessionId: 'lapsed-member', userId: w.member, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'user', scopes: ['*'], expiresAt: new Date(Date.now() + 3600_000) };
+    const ctx = EnforcedAuthContext.fromSession(claims);
+    const result = origin === 'drive_link' ? await redeemDriveShareLink(ctx, link.token) : await redeemPageShareLink(ctx, link.token);
+    expect(result).toEqual({ ok: false, error: 'NOT_FOUND' });
+    expect(await db.select().from(orgMembers).where(and(eq(orgMembers.orgId, w.orgId), eq(orgMembers.userId, w.member)))).toHaveLength(1);
+    expect(await db.select().from(driveMembers).where(eq(driveMembers.userId, w.member))).toEqual([]);
+    expect(await db.select().from(pagePermissions).where(eq(pagePermissions.userId, w.member))).toEqual([]);
+    const stored = origin === 'drive_link' ? await db.select().from(driveShareLinks).where(eq(driveShareLinks.id, link.id)) : await db.select().from(pageShareLinks).where(eq(pageShareLinks.id, link.id));
+    expect(stored[0].useCount).toBe(0);
+    expect(await getUserAccessLevel(credentialActor(w.member, null), w.orgPage)).toBeNull();
+  });
+
+  it('expiry at the admission instant gives no access, while a future ISO expiry or no expiry still does', () => {
+    const now = new Date('2026-10-13T20:00:00Z');
+    expect(grantStillLive(now, now)).toBe(false);
+    expect(grantStillLive('2026-10-13T20:00:00Z', now)).toBe(false);
+    expect(grantStillLive('2026-10-13T20:00:01Z', now)).toBe(true);
+    expect(grantStillLive(null, now)).toBe(true);
   });
 });
