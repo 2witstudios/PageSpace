@@ -30,7 +30,8 @@ export function ChipsRow({ conversationId, agentId, driveId }: ChipsRowProps) {
       <div className={chipsRowClass}>
         <PlanChip conversationId={conversationId} messages={messages} />
         <TasksDropdown messages={messages} driveId={driveId} />
-        <AiUsageMonitor conversationId={conversationId} />
+        {/* compact: the full usage card is taller than the 28px row and would cover the thread above it. */}
+        <AiUsageMonitor conversationId={conversationId} compact />
       </div>
     </RetainedSurface>
   );

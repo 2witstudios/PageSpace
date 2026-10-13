@@ -54,6 +54,15 @@ const composer = (page: Page) => chat(page).getByLabel('Message Imago', { exact:
 const sendButton = (page: Page) => chat(page).getByRole('button', { name: 'Send message', exact: true });
 const stopButton = (page: Page) => chat(page).getByRole('button', { name: 'Stop generating', exact: true });
 const said = (page: Page, role: 'user' | 'assistant') => chat(page).locator(`[data-testid="chat-message"][data-role="${role}"]`);
+/**
+ * The empty chat home: Imago greets with its Home line and suggestions in place of the old
+ * "Start a conversation" text, and no message (the viewer's or Imago's) is in the thread yet.
+ */
+const expectEmptyChat = async (page: Page): Promise<void> => {
+  await expect(chat(page).getByRole('button', { name: 'Plan today', exact: true })).toBeVisible();
+  await expect(chat(page).locator('[data-testid="chat-message"]')).toHaveCount(0);
+};
+
 const history = (page: Page) => page.locator('[data-slot="list"]').getByRole('region', { name: 'Chat history' });
 const historyRow = (page: Page, title: string) => history(page).getByRole('button', { name: title, exact: true });
 
@@ -127,7 +136,7 @@ test('a prompt streams its reply in, and both are there after a reload', async (
   const home = imagoPath(user.homeDriveId);
   const page = await signedIn(browser, baseURL, home);
   await ready(page);
-  await expect(chat(page)).toContainText('Start a conversation with the AI assistant');
+  await expectEmptyChat(page);
 
   await ask(page, 'What ships in October?');
 
@@ -244,7 +253,7 @@ test('the history switches between two conversations', async ({ browser, baseURL
   await expect(historyRow(page, 'Alpha question')).toHaveAttribute('aria-current', 'true');
 
   await history(page).getByRole('button', { name: 'New chat' }).click();
-  await expect(chat(page)).toContainText('Start a conversation with the AI assistant');
+  await expectEmptyChat(page);
   await ask(page, 'Beta question');
   await turnEnded(page);
   await expect(historyRow(page, 'Beta question')).toHaveAttribute('aria-current', 'true');

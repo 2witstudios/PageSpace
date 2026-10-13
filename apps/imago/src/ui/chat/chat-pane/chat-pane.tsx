@@ -8,6 +8,7 @@
 // Opening an object changes only the context a turn carries, never the agent
 // or the conversation.
 
+import { focusComposerAtEnd } from './focus-composer';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { RetainedChat } from '@/retained-adapters/retained-chat';
@@ -94,7 +95,7 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     const returned = stage.section === 'chat' && previousSection.current !== 'chat';
     previousSection.current = stage.section;
     if (returned && document.querySelector('[aria-modal="true"], dialog[open]') === null) {
-      chatHost.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+      focusComposerAtEnd(chatHost.current);
     }
   }, [stage.section]);
   const { conversations, error: conversationsError } = useAgentConversations(agentId);

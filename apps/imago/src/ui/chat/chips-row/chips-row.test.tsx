@@ -57,7 +57,7 @@ describe('ChipsRow', () => {
     mount(<ChipsRow conversationId="c-1" agentId="a-1" driveId="d-1" />);
     assert({
       given: 'a conversation on agent a-1 with one message',
-      should: 'pass the conversation and its messages to the plan and tasks chips, and the conversation to usage',
+      should: 'pass the conversation and its messages to the plan and tasks chips, and the conversation to a compact usage readout that fits the 28px row',
       actual: {
         plan: calls.plan,
         tasks: calls.tasks,
@@ -67,7 +67,7 @@ describe('ChipsRow', () => {
       expected: {
         plan: [{ conversationId: 'c-1', messages: [message] }],
         tasks: [{ messages: [message], driveId: 'd-1' }],
-        usage: [{ conversationId: 'c-1' }],
+        usage: [{ conversationId: 'c-1', compact: true }],
         streams: [['a-1', 'c-1']],
       },
     });
