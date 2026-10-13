@@ -91,6 +91,14 @@ const ORG_GATE = ceiling("copies the credential's drive ceiling onto the org gat
 
 /** Every function in the tree that reads a key's drive scope. Keyed `file#function`. */
 const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
+  'apps/imago/src/retained/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#scopeLabelFor': KEY_SETTINGS,
+  'apps/imago/src/retained/components/layout/middle-content/page-views/settings/mcp/MCPSettingsView.tsx#openEditDialog': KEY_SETTINGS,
+  'apps/web/src/lib/ai/chat-pipeline/assistant-surface.ts#buildAssistantContext': ceiling('drops outside-scope legacy location hints before content reads; forwards the drive ceiling to Home hints, agent awareness, workspace summaries and trees, each still credential-aware'),
+  'apps/web/src/lib/ai/core/agent-awareness.ts#buildAgentAwarenessPrompt': ceiling('narrows candidate drives to the credential ceiling before credential-aware drive and page checks; no outside-scope agent is queried or advertised'),
+  'apps/web/src/lib/ai/core/page-tree-context.ts#getDriveListSummary': ceiling('narrows candidate workspaces to the credential ceiling before credential-aware drive checks and prompt serialization'),
+  'apps/web/src/lib/ai/core/page-tree-context.ts#getPageTreeContext': ceiling('refuses an outside-scope drive before any drive or page read; an admitted drive still requires credential-aware access and accessible-page filtering'),
+  'apps/web/src/lib/ai/core/integration-tool-resolver.ts#resolvePageAgentIntegrationTools': ceiling('restricts the Imago drive-in-view to the credential ceiling; resolveAssistantIntegrationTools then checks credential-aware membership with resolveIntegrationDriveScope'),
+  'apps/web/src/lib/ai/tools/agent-communication-tools.ts#executeAskAgent': AI_CONTEXT,
   // ── owner-bound helpers and their primitive ──────────────────────────────────────────────────────────────
   [`${APP_PERMISSIONS}#fetchAppMembershipContext`]: { kind: 'primitive' },
   [`${PRINCIPAL_PERMISSIONS}#getPrincipalDriveIds`]: OWNER_BOUND_V,

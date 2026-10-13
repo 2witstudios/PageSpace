@@ -39,6 +39,34 @@ const TEAM_ROSTER =
 const NOT_A_DRIVE = (what: string) => `not a drive: ${what}; no drive access is decided here`;
 
 export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
+  // Retained Imago surfaces keep the same API authorization boundaries as their web counterparts.
+  'apps/imago/src/retained/app/dashboard/[driveId]/members/[userId]/page.tsx': {
+    MemberSettingsPage: { ownerCompares: 1, reason: "client display hides role controls on the lead's own member row; member routes re-check authority" },
+  },
+  'apps/imago/src/retained/components/shared/PageWebhooksDialog.tsx': {
+    PageWebhooksDialogImpl: { ownerCompares: 2, reason: NOT_A_DRIVE('revealed.ownerId binds a revealed webhook secret to its account') },
+  },
+  'apps/imago/src/retained/hooks/usePermissions.ts': {
+    usePermissions: { ownerCompares: 1, reason: 'client isOwner display flag; permissions and writes are independently enforced by API routes' },
+  },
+  'apps/imago/src/ui/settings/account-trash/account-trash-model.ts': {
+    trashedDrivesOf: { ownerCompares: 1, reason: 'client narrows already-returned drive DTOs to the viewer-owned trash; restore/delete APIs enforce access' },
+  },
+  'apps/web/src/lib/ai/core/integration-tool-resolver.ts': {
+    resolvePageAgentIntegrationTools: { ownerCompares: 2, reason: NOT_A_DRIVE('builtinOwnerId identifies an owner-bound built-in agent; drive-in-view integration access is decided by resolveIntegrationDriveScope with the credential actor') },
+  },
+  'apps/web/src/lib/ai/tools/actor-permissions.ts': {
+    resolveActor: { ownerCompares: 2, reason: NOT_A_DRIVE('builtinOwnerId identifies a built-in agent; mismatched callers become nobody, while user-scoped drive/page reach remains credential-aware') },
+  },
+  'apps/web/src/services/api/rollback/drive-owner.ts': {
+    applyDriveOwnerChange: { ownerCompares: 4, reason: 'rollback writer compares the restored owner and calls transferDriveOwnership; executeRollback wraps access changes in guardDriveAccess' },
+  },
+  'packages/lib/src/agents/imago-drive-access.ts': {
+    setImagoDriveAccess: { ownerCompares: 1, reason: 'refuses disabling Imago on the caller-owned Home drive after credential-aware getUserDriveAccess; only narrows' },
+  },
+  'packages/lib/src/agents/provision-imago-agents.ts': {
+    provisionImagoAgents: { ownerCompares: 1, reason: 'provisions built-in agents only in the caller-owned HOME drive; owner inventory, no team-drive authority' },
+  },
   // ── apps/web: routes ────────────────────────────────────────────────────
   'apps/web/src/app/api/account/drives-status/route.ts': {
     GET: {
@@ -175,6 +203,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   // ── packages/lib outside permissions ─────────────────────────────────────
   'packages/lib/src/agent-workspaces/decide-workspace-access.ts': {
+    sessionHostsAgentsFromAnyDrive: { ownerCompares: 2, reason: 'Home session classification: matching the session owner to its owner-only HOME drive permits cross-drive hosting; agent and session access checks still run separately' },
     decideAgentSessionAccess: { ownerCompares: 1, reason: NOT_A_DRIVE("session.ownerId is an agent session's owner") },
     decideAgentSessionEndAccess: { ownerCompares: 1, reason: NOT_A_DRIVE("session.ownerId is an agent session's owner") },
     decideAgentSessionRenameAccess: { ownerCompares: 1, reason: NOT_A_DRIVE("session.ownerId is an agent session's owner") },
@@ -228,6 +257,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
     getDriveOwnerAsMember: { ownerCompares: 1, reason: "joins the drive lead's user row to show the owner at the top of the member list (display)" },
   },
   'packages/lib/src/services/drive-service.ts': {
+    transferDriveOwnership: { ownerCompares: 1, reason: 'ownership writer uses the old owner as a compare-and-set predicate; account handover excludes org drives under lock, rollback/redo use guardDriveAccess' },
     getHomeDrive: { ownerCompares: 1, reason: "looks up the user's own HOME drive (never an org drive)" },
     listAccessibleDrivesWithOrgs: {
       ownerCompares: 2,

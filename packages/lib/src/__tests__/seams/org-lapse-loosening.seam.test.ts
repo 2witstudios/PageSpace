@@ -154,7 +154,7 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
     writes: ['insert(pagePermissions)'],
   },
   // ── drive agents (#27) ─────────────────────────────────────────────────────────────────────────────────
-  'packages/lib/src/services/drive-agent-service.ts#addAgentToDrive': SELF,
+  'packages/lib/src/services/drive-agent-service.ts#insertAgentDriveMembership': SELF,
   'packages/lib/src/services/drive-agent-service.ts#setAgentDriveIncludeContext': SELF,
   'apps/web/src/app/api/drives/[driveId]/agents/[agentPageId]/route.ts#PATCH': SELF,
   'packages/lib/src/services/drive-agent-service.ts#recapAgentMembershipsGrantedBy': {
@@ -221,9 +221,17 @@ export const LOOSENING_WRITE_LEDGER: Readonly<Record<string, Verdict>> = {
   // ── custom domains (#29) ────────────────────────────────────────────────────────────────────────────────
   'apps/web/src/app/api/drives/[driveId]/domains/route.ts#POST': SELF,
   // ── drives: other writers of ownerId / orgId / visibility ─────────────────────────────────────────────
-  'apps/web/src/app/api/account/handle-drive/route.ts#POST': {
-    exempt: 'personal drives only: an org drive is refused (409) before the transfer, and the new owner must already be an accepted drive admin',
+  'packages/lib/src/services/drive-service.ts#transferDriveOwnership': {
+    exempt: 'ownership write moved from account handover: that caller refuses org drives under its locked-row check; rollback/redo reach this through applyDriveOwnerChange under executeRollback guardDriveAccess',
     writes: ['update(drives).set({ ownerId })'],
+  },
+  'packages/lib/src/agents/provision-imago-agents.ts#PageCreator.create': {
+    exempt: NEW_AGENT_IN_ITS_OWN_DRIVE,
+    writes: ['insert(driveAgentMembers)'],
+  },
+  'packages/lib/src/agents/provision-imago-agents.ts#PageCreator.mutate': {
+    exempt: 'built-in agent provisioning updates only userScopedAccess and trash fields (typed Pick); never isPrivate or driveId',
+    writes: ['update(pages).set({ ... })'],
   },
   'packages/lib/src/services/drive-service.ts#updateDrive': {
     exempt: 'its update object is typed to name, prompt, home page and publish fields: never ownerId, orgId or orgVisibility',
@@ -322,6 +330,23 @@ describe('seam: [D-OW-33] every write that can loosen access passes the lapse gu
   it('SEAT-9 (partial) [D-OW-33] every ledgered function still writes (the ledger only names real sites)', () => {
     const stale = Object.keys(LOOSENING_WRITE_LEDGER).filter((key) => !byFunction.has(key));
     expect(stale, 'These ledger entries no longer write; remove them from LOOSENING_WRITE_LEDGER').toEqual([]);
+  });
+
+  it('SEAT-9 (partial) ownership writes remain reachable only through personal handover or guarded rollback/redo', () => {
+    const files = listSourceFiles(['apps', 'packages']).filter((f) => !NOT_APPLICATION_CODE.some((p) => f.startsWith(p)));
+    const callers = (fn: string) => referencesOf(fn, files).map((ref) => `${ref.file}#${ref.enclosing}`).sort();
+    expect(callers('transferDriveOwnership')).toEqual([
+      'apps/web/src/app/api/account/handle-drive/route.ts#POST',
+      'apps/web/src/services/api/rollback/drive-owner.ts#applyDriveOwnerChange',
+    ]);
+    expect(callers('applyDriveOwnerChange')).toEqual([
+      'apps/web/src/services/api/rollback/redo-executors.ts#redoDriveChange',
+      'apps/web/src/services/api/rollback/rollback-executors.ts#rollbackDriveChange',
+    ]);
+    const handover = functionText('apps/web/src/app/api/account/handle-drive/route.ts', 'POST')!;
+    expect(handover).toContain(".for('update')");
+    expect(handover).toContain('locked.orgId !== null');
+    expect(callsGuard(ROLLBACK[0])).toBe(true);
   });
 
   it("SEAT-9 (partial) [D-OW-33] each 'self' site calls a lapse guard in its own code", () => {
