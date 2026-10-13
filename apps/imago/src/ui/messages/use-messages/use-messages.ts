@@ -105,9 +105,12 @@ export const useInbox = () => {
 };
 
 /** The viewer's DM conversations (user-level, not per drive), with unread counts, live. */
+/** The SWR key the viewer's DM list lives under, so a guard can ask for it again. */
+export const DIRECT_THREADS_KEY = ['imago:direct-threads'] as const;
+
 export const useDirectThreads = () => {
   const client = useApiClient();
-  const { data, error, isLoading, mutate } = useSWR(['imago:direct-threads'] as const, () =>
+  const { data, error, isLoading, mutate } = useSWR(DIRECT_THREADS_KEY, () =>
     fetchDirectThreads(client),
   );
   useLiveThreads<DirectThread>(data, mutate, { kind: 'dm' });
