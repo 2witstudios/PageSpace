@@ -1,4 +1,4 @@
-import { Crown, Zap, Shield, Star } from 'lucide-react';
+import { Crown, Zap, Shield } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
   TIERS as CANONICAL_PLAN_ORDER,
@@ -74,7 +74,6 @@ export interface PlanDefinition {
 
 // Stripe Price IDs from hardcoded config (avoids Next.js build-time env var issues)
 const STRIPE_PRICE_ID_PRO = stripeConfig.priceIds.pro;
-const STRIPE_PRICE_ID_FOUNDER = stripeConfig.priceIds.founder;
 const STRIPE_PRICE_ID_BUSINESS = stripeConfig.priceIds.business;
 
 // Storage/file-size/price/domain numbers derive from the canonical

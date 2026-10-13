@@ -67,7 +67,6 @@ import { getModelCapabilities, DEFAULT_IMAGE_MODEL } from '@/lib/ai/core/model-c
 import { convertMCPToolsToAISDKSchemas, parseMCPToolName, sanitizeToolNamesForProvider } from '@/lib/ai/core/mcp-tool-converter';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
-import { drives } from '@pagespace/db/schema/core'
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { conversations } from '@pagespace/db/schema/conversations';
@@ -82,7 +81,6 @@ import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { ContextRef } from '@/lib/ai/shared/buildContextRef';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { calculateTotalContextSize } from '@pagespace/lib/monitoring/ai-context-calculator';
-import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import {
   attachStreamFinisher,
   createStreamAbortController,

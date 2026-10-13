@@ -3,6 +3,11 @@ import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
 
 // --- module mocks (hoisted before imports) ---
 
+// Keep the real denial adapter, but isolate its database-backed explanation.
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
