@@ -39,6 +39,7 @@ export function AutomationSpendLine({ creatorName, walletLabel, ownerLeft }: { c
   return (
     <span data-testid="automation-spends-as" className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs font-normal text-muted-foreground">
       {copy.line && <span>{copy.line}</span>}
+      {walletLabel && <span>· {walletLabel}</span>}
       <Tooltip>
         <TooltipTrigger asChild>
           <Badge variant="outline" className="cursor-default font-normal">{copy.badge}</Badge>
