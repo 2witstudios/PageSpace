@@ -14,6 +14,7 @@ import { computePageStateHash, createPageVersion } from '@pagespace/lib/services
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { BACKUP_WITHHELD_METADATA_KEY, withheldBackupPages, type BackupWithheld } from './backup-sign-in-gate';
 
 export type DriveBackupSource = 'manual' | 'scheduled' | 'pre_restore' | 'system';
 
@@ -53,6 +54,8 @@ export interface CreateDriveBackupResult {
     roles: number;
     files: number;
   };
+  /** Pages the org sign-in policy withheld from the credential that took the backup (D-OW-62), by code. */
+  withheld?: BackupWithheld[];
 }
 
 export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string | null; driveSlug: string | null };
@@ -215,9 +218,15 @@ export async function createDriveBackup(
       .from(pages)
       .where(eq(pages.driveId, driveId));
 
-    const pagesToBackup = includeTrashed
+    const listedPages = includeTrashed
       ? drivePages
       : drivePages.filter((page) => !page.isTrashed);
+
+    // SEC-2/3 (D-OW-62): a page restating org-derived content (a memory page) that a contributing org's sign-in
+    // policy withholds from this credential is left out of the snapshot, and the backup records which pages and why,
+    // so its export says so and a restore of it leaves those pages alone rather than trashing them.
+    const withheld = await withheldBackupPages(actor, listedPages.map((page) => page.id));
+    const pagesToBackup = listedPages.filter((page) => !withheld.pageIds.has(page.id));
 
     // A sheet's content is its rows.
     //
@@ -405,6 +414,14 @@ export async function createDriveBackup(
       .set({
         status: 'ready',
         completedAt: new Date(),
+        ...(withheld.pageIds.size > 0
+          ? {
+              metadata: {
+                ...(input.metadata ?? {}),
+                [BACKUP_WITHHELD_METADATA_KEY]: { pageIds: [...withheld.pageIds].sort(), entries: withheld.entries },
+              },
+            }
+          : {}),
       })
       .where(eq(driveBackups.id, backup.id));
 
@@ -419,6 +436,7 @@ export async function createDriveBackup(
           roles: roles.length,
           files: driveFiles.length,
         },
+        withheld: withheld.entries,
       };
     } catch (error) {
       // Mark backup as failed and return error result (don't throw - that would rollback the transaction)
