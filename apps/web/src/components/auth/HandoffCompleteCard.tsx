@@ -2,6 +2,8 @@
 
 import { CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { AuthStatusCard } from './AuthStatusCard';
 
 export type HandoffCompleteVariant = 'signed-in' | 'passkey-added';
 
@@ -20,12 +22,28 @@ const COPY: Record<HandoffCompleteVariant, { title: string; body: string }> = {
   },
 };
 
+const V3_TITLE: Record<HandoffCompleteVariant, string> = {
+  'signed-in': 'You’re signed in',
+  'passkey-added': 'Passkey added',
+};
+
 export function HandoffCompleteCard({ variant }: HandoffCompleteCardProps) {
   const { title, body } = COPY[variant];
 
   const handleClose = () => {
     window.close();
   };
+
+  if (isImagoEnabled()) {
+    return (
+      <AuthStatusCard
+        icon={<CheckCircle2 className="h-5 w-5" />}
+        title={V3_TITLE[variant]}
+      >
+        <p>{body}</p>
+      </AuthStatusCard>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center gap-4 py-6 text-center">

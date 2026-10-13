@@ -32,7 +32,7 @@ function HomeWelcome() {
   </div>;
 }
 
-export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, home, isolated }: {
+export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated }: {
   agentId: string | null; name: string; conversationId: string | null; resolving: boolean;
   /** Imago's chat home (section 'chat'): a new, empty conversation greets the user with the Home line. */
   home?: boolean;
@@ -40,6 +40,8 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
   placeholder?: string;
   /** Imago's spend strip, directly above the composer (IMC-2.4). */
   aboveComposer?: React.ReactNode;
+  /** The host renders its own out-of-credits alert in aboveComposer, so the built-in banner steps aside for that cause (IMC-10.10). */
+  ownsCreditsAlert?: boolean;
   /**
    * Stay on `agentId` and this conversation, ignoring the global selection (the agent page's Chat
    * tab, IMC-3.11): selecting an agent elsewhere must not move this chat, and this chat must not
@@ -117,5 +119,5 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
       }
       setFirstSend(null);
     }} context="page" isReadOnly={selection?.isReadOnly || permissions?.canEdit !== true}
-    imagoComposer={{ placeholder: placeholder ?? `Message ${name}...`, aboveComposer }} /></RetainedSurface>;
+    imagoComposer={{ placeholder: placeholder ?? `Message ${name}...`, aboveComposer, ownsCreditsAlert }} /></RetainedSurface>;
 }
