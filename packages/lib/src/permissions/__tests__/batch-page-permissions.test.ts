@@ -83,6 +83,9 @@ import { credentialActor } from '../access-actor';
 const USER = 'user_abc';
 
 interface Row {
+  driveId: string;
+  driveOrgId: string | null;
+  memberCustomRoleId: string | null;
   pageId: string;
   isTrashed: boolean;
   isPrivate: boolean;
@@ -103,6 +106,9 @@ const READ_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: f
 
 function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
   return {
+    driveId: 'drive_personal',
+    driveOrgId: null,
+    memberCustomRoleId: overrides.customRolePerms || overrides.customRoleDriveWidePerms ? 'role_personal' : null,
     isTrashed: false,
     isPrivate: false,
     pageType: null,

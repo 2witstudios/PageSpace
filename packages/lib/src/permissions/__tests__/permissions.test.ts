@@ -128,7 +128,7 @@ describe('getDriveIdsForUser', () => {
 
   it('returns union of owned drives, member drives, and page permission drives', async () => {
     const ownedDrive = [{ id: 'drive-owned' }];
-    const memberDrive = [{ driveId: 'drive-member' }];
+    const memberDrive = [{ driveId: 'drive-member', role: 'MEMBER', customRoleId: null, source: 'invite' }];
     const pageDrive = [{ driveId: 'drive-page-perm' }];
 
     vi.mocked(db.select)
@@ -140,7 +140,13 @@ describe('getDriveIdsForUser', () => {
             where: vi.fn().mockResolvedValue(pageDrive),
           }),
         }),
-      } as unknown as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
+
+    vi.mocked(db.select).mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([
+      { id: 'drive-member', orgId: null, orgVisibility: 'OPEN' },
+      { id: 'drive-page-perm', orgId: null, orgVisibility: 'OPEN' },
+    ]) }) } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser(credentialActor('user-1', null));
 
@@ -162,7 +168,8 @@ describe('getDriveIdsForUser', () => {
             where: vi.fn().mockResolvedValue([{ driveId: sameId }]),
           }),
         }),
-      } as unknown as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser(credentialActor('user-1', null));
     expect(result).toHaveLength(1);
@@ -179,7 +186,8 @@ describe('getDriveIdsForUser', () => {
             where: vi.fn().mockResolvedValue([{ driveId: null }]),
           }),
         }),
-      } as unknown as ReturnType<typeof db.select>);
+      } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
 
     const result = await getDriveIdsForUser(credentialActor('user-1', null));
     expect(result).toHaveLength(0);

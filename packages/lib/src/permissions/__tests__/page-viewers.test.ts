@@ -40,10 +40,13 @@ vi.mock('../../logging/logger-config', () => ({
 import { db } from '@pagespace/db/db';
 import { getUsersWhoCanViewPage, type PagePermissionRow } from '../permissions';
 
-type ViewerRow = PagePermissionRow & { userId: string };
+type ViewerRow = PagePermissionRow & { userId: string; driveId: string; driveOrgId: string | null; memberCustomRoleId: string | null };
 
 const viewerRow = (userId: string, overrides: Partial<PagePermissionRow> = {}): ViewerRow => ({
   userId,
+  driveId: 'drive_personal',
+  driveOrgId: null,
+  memberCustomRoleId: overrides.customRolePerms || overrides.customRoleDriveWidePerms ? 'role_personal' : null,
   pageId: 'page_private',
   isTrashed: false,
   isPrivate: true,

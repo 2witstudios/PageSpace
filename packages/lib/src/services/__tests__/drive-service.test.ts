@@ -134,7 +134,11 @@ describe('listAccessibleDrives', () => {
       .mockResolvedValueOnce(ownedDrives)
       .mockResolvedValueOnce(sharedDrivesData);
 
-    // Mock member drives selectDistinct - returns member list first, then permission list
+    // Page-only shares use a separate selectDistinct query.
+    // Accepted personal memberships and the always-on org membership lookup.
+    vi.mocked(db.select)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(memberDrives.map(row => ({ customRoleId: null, source: 'invite', ...row }))) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
     vi.mocked(db.selectDistinct).mockImplementation(() => ({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(memberDrives),
@@ -914,6 +918,10 @@ describe('listAccessibleDrives — canCreatePages', () => {
     vi.mocked(db.query.drives.findMany)
       .mockResolvedValueOnce(owned)
       .mockResolvedValueOnce(shared);
+    // Accepted personal memberships and the always-on org membership lookup.
+    vi.mocked(db.select)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(member.map(row => ({ customRoleId: null, source: 'invite', ...row }))) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
     vi.mocked(db.selectDistinct).mockImplementation(() => ({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(member),
@@ -924,16 +932,15 @@ describe('listAccessibleDrives — canCreatePages', () => {
     } as unknown as ReturnType<typeof db.selectDistinct>));
   };
 
-  it('given an owned drive, should set canCreatePages true with an OWNER entry through the rule', async () => {
+  it('given an owned drive, should retain OWNER access and canCreatePages without a shared-member role', async () => {
     setup([createMockDrive({ id: 'drive_own', name: 'Mine', ownerId: 'user_123' })], [], [], []);
     vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_own', true]]));
 
     const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result[0].canCreatePages).toBe(true);
-    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_own', role: 'OWNER', customRoleId: null, openDriveFloor: null },
-    ]);
+    expect(result[0]).toMatchObject({ id: 'drive_own', role: 'OWNER', isOwned: true });
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([]);
   });
 
   it('given a shared plain-member drive, should resolve canCreatePages through the drive-wide rule', async () => {

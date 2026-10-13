@@ -21,6 +21,8 @@
  * checks the membership set AND cross-checks it against the other direction.
  */
 import { describe, it, expect } from 'vitest';
+import { db } from '@pagespace/db/db';
+import { driveRoles } from '@pagespace/db/schema/members';
 import { factories } from '@pagespace/db/test/factories';
 import { getUsersWhoCanViewPage, getBatchPagePermissions } from '../permissions';
 import { credentialActor } from '../access-actor';
@@ -60,6 +62,39 @@ async function expectAgreesWithPerUserCheck(pageId: string, candidateIds: string
  * an explicit candidate list, so leftover rows from any other suite cannot enter these results.
  */
 describe('getUsersWhoCanViewPage (integration)', () => {
+
+  it('personal custom roles preserve per-page edit grants, explicit deny and private-page boundaries in both batch and audience queries', async () => {
+    const owner = await factories.createUser();
+    const member = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const editable = await factories.createPage(drive.id);
+    const readOnly = await factories.createPage(drive.id);
+    const denied = await factories.createPage(drive.id);
+    const privateGranted = await factories.createPage(drive.id, { isPrivate: true });
+    const privateHidden = await factories.createPage(drive.id, { isPrivate: true });
+    const [role] = await db.insert(driveRoles).values({
+      driveId: drive.id, name: 'Bounded editor',
+      permissions: {
+        [editable.id]: { canView: true, canEdit: true, canShare: false },
+        [privateGranted.id]: { canView: true, canEdit: false, canShare: false },
+      },
+      driveWidePermissions: { canView: true, canEdit: false, canShare: false },
+    }).returning();
+    await factories.createDriveMember(drive.id, member.id, { customRoleId: role.id });
+    await factories.createPagePermission(denied.id, member.id, { canView: false, canEdit: false, canShare: false, canDelete: false });
+    const all = [editable, readOnly, denied, privateGranted, privateHidden];
+    const permissions = await getBatchPagePermissions(credentialActor(member.id, null), all.map(page => page.id));
+    expect(permissions.get(editable.id)).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+    expect(permissions.get(readOnly.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(permissions.get(denied.id)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    expect(permissions.get(privateGranted.id)).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+    expect(permissions.get(privateHidden.id)).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+    for (const page of all) {
+      const viewers = await expectAgreesWithPerUserCheck(page.id, [member.id]);
+      expect(viewers.has(member.id)).toBe(permissions.get(page.id)?.canView);
+    }
+  });
+
 
   it('includes an accepted member of a non-private channel with no explicit grant', async () => {
     // The regression case: this user has no page_permissions row and is not an

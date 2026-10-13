@@ -32,8 +32,26 @@ import { accountRepository } from '../../repositories/account-repository';
 import { removeMember } from '../../organizations/membership';
 import { getDriveAccess } from '../drive-service';
 import { credentialActor } from '../../permissions/access-actor';
+import { resetAuditDbBindingForTests } from '../../audit/audit-db-binding';
+import { resetDefaultSecurityAuditForTests } from '../../audit/security-audit';
 import { queryOrgAuditEvents } from '../../audit/org-audit-query';
 import { parseOrgAuditFilter } from '../../audit/org-audit-query-core';
+
+// This app-chain suite reads the audit rows its app transaction writes. CI also
+// supplies an Admin scratch DB to dedicated suites, which own its schema lifecycle.
+const AUDIT_ENV = ['ADMIN_DATABASE_URL', 'ADMIN_DB_BREAK_GLASS', 'AUDIT_TRUST_PLANE_REQUIRED'] as const;
+const savedAuditEnv = new Map<string, string | undefined>();
+const resetAuditBinding = () => {
+  resetAuditDbBindingForTests();
+  resetDefaultSecurityAuditForTests();
+};
+beforeAll(() => {
+  for (const key of AUDIT_ENV) {
+    savedAuditEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+  resetAuditBinding();
+});
 
 // Northwind Labs fixture names (Sequence Spec Part 2), with per-run ids.
 const run = createId().slice(0, 8);
@@ -132,6 +150,11 @@ afterEach(cleanup);
 afterAll(async () => {
   await cleanup();
   await pool.end();
+  for (const [key, value] of savedAuditEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  resetAuditBinding();
 });
 
 describe('moveDriveToOrg', () => {

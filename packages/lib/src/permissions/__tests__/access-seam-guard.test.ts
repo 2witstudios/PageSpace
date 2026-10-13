@@ -112,7 +112,27 @@ describe('SEC-2 (partial) SEC-3 (partial) the org sign-in seam is structural (D-
     expect(importersOf('holdsDriveAccess', /permissions\/permissions$|\.\/permissions$/)).toEqual([
       'packages/lib/src/billing/wallet-funding-shell.ts',
       'packages/lib/src/services/drive-agent-service.ts',
+      'packages/lib/src/services/drive-wallet-service.ts',
     ]);
+    // Conversation source reads first establish standing so a non-member learns no policy.
+    // This is a fenced precondition, not permission to read/spend through bare-user standing.
+    const walletSource = PRODUCTION_SOURCES.find(({ path }) => path === 'packages/lib/src/services/drive-wallet-service.ts')!.text;
+    const conversationFence = walletSource.match(/async function conversationDriveRefusal\([\s\S]*?\n}/)?.[0];
+    expect(conversationFence).toMatch(/conversationDriveRefusal\(actor: AccessActor,/);
+    expect(conversationFence).toMatch(/if \(!\(await holdsDriveAccess\(actor\.userId, driveId\)\)\) return notFound\(\);\s*const signIn = await checkActorDriveAuthentication\(actor, driveId\);/);
+    expect([...walletSource.matchAll(/\bholdsDriveAccess\(/g)]).toHaveLength(1);
+    // Both public operations consume this refusal before resolving choices or writing.
+    for (const operation of ['getConversationSpend', 'setConversationSpend']) {
+      const body = walletSource.slice(walletSource.indexOf(`export async function ${operation}(`)).split(/\nexport (?:async function|interface|type)/)[0];
+      expect(body).toMatch(/const refusal = await conversationDriveRefusal\(actor, [^;]+\);\s*if \(refusal\) return refusal;/);
+      const guard = body.indexOf('if (refusal) return refusal;');
+      expect(guard).toBeLessThan(body.indexOf('await listSpendChoices('));
+      if (operation === 'getConversationSpend') expect(guard).toBeLessThan(body.indexOf('await resolveCallSpend('));
+      else {
+        expect(guard).toBeLessThan(body.indexOf('.update(conversations)'));
+        expect(body.indexOf('if (refused) return refused;')).toBeLessThan(body.indexOf('await ownConversation('));
+      }
+    }
     // Wallet standing, and whether the TARGET of a drive transfer (not the caller) is a member of it.
     expect(importersOf('loadUserDriveRelationships', /drive-relationship-loader$/)).toEqual([
       'apps/web/src/app/api/account/handle-drive/route.ts',
