@@ -1,3 +1,4 @@
+import { purgePendingSetups } from '@/retained/lib/orgs/pending-setup';
 import { SIGN_IN_PATH } from './sign-in-url';
 
 /**
@@ -24,6 +25,7 @@ export async function signOut({ fetch, navigate }: SignOutIO): Promise<void> {
   } catch {
     // Nothing to recover: the landing below happens either way.
   } finally {
+    purgePendingSetups();
     navigate(SIGN_IN_PATH);
   }
 }

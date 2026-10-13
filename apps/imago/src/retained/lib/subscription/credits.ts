@@ -23,12 +23,6 @@ export {
   CREDIT_TOPUP_MIN_CREDITS,
   CREDIT_TOPUP_MAX_CREDITS,
 } from '@pagespace/lib/billing/money-model';
-import { formatCreditCount } from '@pagespace/lib/billing/money-model';
-
-/** Like {@link formatCreditCount} but prefixes negative values with a minus sign (an over-age balance renders as "-12"). */
-export function formatCreditCountSigned(cents: number): string {
-  return cents < 0 ? `-${formatCreditCount(-cents)}` : formatCreditCount(cents);
-}
 export {
   MONTHLY_CREDIT_CENTS,
   monthlyCreditsPhrase,

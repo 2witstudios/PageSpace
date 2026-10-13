@@ -1,8 +1,8 @@
-import { describe, test } from 'vitest';
+import { describe, test, expect } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { accountNav, activeNavHref, driveSettingsNav, type NavContext } from './settings-nav';
 
-const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, orgs: false };
+const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, hasOrganizations: false };
 const labels = (groups: ReturnType<typeof accountNav>) => groups.map((group) => [group.label, group.items.map((item) => item.label)]);
 
 describe('driveSettingsNav() (IMC-1.11)', () => {
@@ -10,22 +10,22 @@ describe('driveSettingsNav() (IMC-1.11)', () => {
     const labels = (access: Parameters<typeof driveSettingsNav>[2]) => driveSettingsNav('d1', cloud, access).map((item) => item.label);
     assert({
       given: 'a plain member, an admin, the owner of a Home drive and the owner of a shared drive',
-      should: 'show a member Overview and Commands; hide Danger zone from admins and on a Home drive',
+      should: 'show a member Overview, Wallet and Commands; hide Danger zone from admins and on a Home drive',
       actual: [
         labels({ role: 'MEMBER', home: false }),
         labels({ role: 'ADMIN', home: false }).includes('Danger zone'),
         labels({ role: 'OWNER', home: true }).includes('Danger zone'),
         labels({ role: 'OWNER', home: false }).includes('Danger zone'),
       ],
-      expected: [['Overview', 'Commands'], false, false, true],
+      expected: [['Overview', 'Wallet', 'Commands'], false, false, true],
     });
   });
 
   test('SPEC order', () => {
     assert({
-      given: 'a cloud drive with orgs on',
+      given: 'a cloud drive',
       should: 'list Overview through Danger zone in the SPEC’s fixed order',
-      actual: driveSettingsNav('d1', { ...cloud, orgs: true }).map((item) => [item.label, item.href]),
+      actual: driveSettingsNav('d1', { ...cloud, hasOrganizations: true }).map((item) => [item.label, item.href]),
       expected: [
         ['Overview', '/d1/settings'],
         ['General', '/d1/settings/general'],
@@ -43,10 +43,10 @@ describe('driveSettingsNav() (IMC-1.11)', () => {
 
   test('gates', () => {
     assert({
-      given: 'orgs off (Wallet) and an on-prem build (Integrations)',
-      should: 'leave those rows out',
+      given: 'an on-prem build',
+      should: 'omit integrations and retain its wallet',
       actual: driveSettingsNav('d1', { ...cloud, onPrem: true }).map((item) => item.label),
-      expected: ['Overview', 'General', 'Members & roles', 'Commands', 'Context', 'Backups', 'Domains', 'Danger zone'],
+      expected: ['Overview', 'General', 'Members & roles', 'Wallet', 'Commands', 'Context', 'Backups', 'Domains', 'Danger zone'],
     });
   });
 });
@@ -61,11 +61,11 @@ describe('accountNav()', () => {
     });
   });
 
-  test('SPEC groups on cloud desktop with orgs on', () => {
+  test('SPEC groups on cloud desktop with organization memberships', () => {
     assert({
       given: 'every gate open',
       should: 'list the account screens grouped YOU · AI · PLAN & DATA · CONNECTIONS · OTHER',
-      actual: labels(accountNav({ ...cloud, isDesktop: true, orgs: true })),
+      actual: labels(accountNav({ ...cloud, isDesktop: true, hasOrganizations: true })),
       expected: [
         ['You', ['Overview', 'Profile', 'Display', 'Personalization', 'Notifications', 'Hotkeys', 'Privacy']],
         ['AI', ['AI providers', 'Agents', 'Agent accounts', 'Commands']],
@@ -76,14 +76,14 @@ describe('accountNav()', () => {
     });
   });
 
-  test('gates on a web on-prem build without billing or orgs', () => {
+  test('gates on a web on-prem build without billing or memberships', () => {
     const groups = accountNav({ ...cloud, onPrem: true, showBilling: false });
     assert({
-      given: 'web, on-prem, no billing, orgs off',
-      should: 'drop Plan, Billing, Wallets, Organizations, Integrations, Google Calendar and Local MCP',
+      given: 'web, on-prem, no billing, no organizations',
+      should: 'retain Wallets and Create, dropping Plan, Billing, Organizations, Integrations, Google Calendar and Local MCP',
       actual: [groups[2]?.items.map((item) => item.label), groups[3]?.items.map((item) => item.label)],
       expected: [
-        ['Usage', 'Storage', 'Drives', 'Backups', 'Trash', 'Activity'],
+        ['Usage', 'Wallets', 'Storage', 'Drives', 'Create organization', 'Backups', 'Trash', 'Activity'],
         ['Connections', 'MCP', 'Calendar'],
       ],
     });
@@ -109,5 +109,18 @@ describe('activeNavHref()', () => {
       actual: [activeNavHref(items, '/account/integrations/google-calendar'), activeNavHref(items, '/account'), activeNavHref(items, '/account/backups/b1/snapshot')],
       expected: ['/account/integrations/google-calendar', '/account', '/account/backups'],
     });
+  });
+});
+
+
+describe('organization wallet final cutover', () => {
+  test('personal wallets and a managed drive wallet are always discoverable', () => {
+    expect(accountNav(cloud).flatMap(group => group.items)).toContainEqual({ label: 'Wallets', href: '/account/wallets' });
+    expect(driveSettingsNav('d1', cloud, { role: 'OWNER', home: false })).toContainEqual({ label: 'Wallet', href: '/d1/settings/wallet' });
+  });
+  test('organizations follow membership, not a build flag', () => {
+    const items = (hasOrganizations: boolean) => accountNav({ ...cloud, hasOrganizations }).flatMap(group => group.items);
+    expect(items(false).some(item => item.label === 'Organizations')).toBe(false);
+    expect(items(true)).toContainEqual({ label: 'Organizations', href: '/account/organizations' });
   });
 });

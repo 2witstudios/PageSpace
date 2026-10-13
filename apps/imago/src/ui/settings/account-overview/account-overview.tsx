@@ -11,8 +11,8 @@ import { signOut } from '@/lib/auth/sign-out';
 import { isBillingEnabled } from '@/retained/lib/deployment-mode';
 import { Avatar } from '../../components/avatar/avatar';
 import { DRIVES } from '../../frame/drives/drives';
-import { accountNav, type NavGroup } from '../settings-nav/settings-nav';
-import { navContext } from '../settings-nav/settings-nav-pane';
+import { type NavGroup } from '../settings-nav/settings-nav';
+import { useAccountNav } from '../settings-nav/settings-nav-pane';
 import { SettingsGroup, SettingsRow, SettingsScreen, SettingsSection } from '../settings-screen/settings-screen';
 import {
   ACCOUNT_ME,
@@ -89,6 +89,7 @@ export function AccountOverview() {
   const { data: creditsBody } = useSWR<unknown>(CREDITS);
   const { data: drivesBody } = useSWR<unknown>(DRIVES);
   const [signingOut, setSigningOut] = useState(false);
+  const groups = useAccountNav();
 
   const glance = glanceRows({ billing: isBillingEnabled(), status: statusBody, credits: creditsBody, drives: drivesBody });
 
@@ -96,7 +97,7 @@ export function AccountOverview() {
     <AccountOverviewView
       account={accountOf(meBody)}
       glance={glance}
-      groups={accountNav(navContext())}
+      groups={groups}
       signingOut={signingOut}
       onSignOut={() => {
         setSigningOut(true);

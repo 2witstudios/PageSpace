@@ -208,3 +208,11 @@ Public auth routes are not prefetched by Imago. Native wrappers are unchanged.
 Native retained chat inputs provide the agent drive to mention search and enable the existing permission-filtered cross-drive search option. Commands remain scoped separately to the agent drive. The original mention search endpoint and authorization logic are unchanged.
 
 Account deletion still clears the ended session and performs a hard navigation, now resolving its original confirmation/Apple manual-disconnect marker against the configured public web origin. Both TipTap editor mention popup creation paths mount beneath retained-portals, separate from the chat mention picker. Agents/calendar/workflow/activity/trash/member context captions use their actual retained surface title rather than the generic drive-settings caption.
+
+## Organization and wallet final cutover
+
+Given a personal account, should expose its wallets without a build flag. Given organization memberships, should expose Organizations; a no-org account should see only the Create affordance. Given a drive consumer, should expose Wallet with the consumer-safe server projection.
+
+The native shell composes the existing wallet page, UsageWallets and AccountOrganizationsSection at `/account/wallets`, `/account/organizations` and `/:drive/settings/wallet`. Organization hub, directory and all available settings links stay under `/orgs/:orgId` inside the same authenticated shell. Usage links to the existing billing pool anchor; the unavailable Backups row retains its disabled canvas state. The scoped `port-org-wallets.py` copier adds missing dependencies without overwriting or pruning existing retained adapters, and the provenance extension records source hashes.
+
+The account nav reads membership from the shared org cache and realtime listener. Wallets remain available independently of membership or billing navigation. Organization creation and reactivation use full Imago document loads, matching the path-exact cloud COEP exceptions; Stripe confirmation returns to the native org hub. Retained auth now includes the shared pending-setup cleanup, so switching accounts and signing out clears saved invite addresses and drive selections.

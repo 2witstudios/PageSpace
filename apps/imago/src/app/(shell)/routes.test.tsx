@@ -27,7 +27,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserDriveAccess })
 const appDir = join(__dirname, '..');
 const shellDir = __dirname;
 
-const viewer = { userId: 'user-1', role: 'user', sessionId: 'session-1' };
+const viewer = { userId: 'user-1', role: 'user', sessionId: 'session-1', actor: { kind: 'user' as const, userId: 'user-1' } };
 
 const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
   digest: 'NEXT_REDIRECT;replace;https://pagespace.ai/auth/signin?next=%2Fimago;307;',
@@ -126,7 +126,7 @@ describe('the (shell) layout', () => {
         element.props.homeDriveId,
         element.props.children,
       ],
-      expected: [1, [['user-1']], [['user-1']], true, 'home-1', 'route'],
+      expected: [1, [['user-1']], [[viewer.actor]], true, 'home-1', 'route'],
     });
 
     assert({
@@ -188,7 +188,7 @@ describe('the drive gate', () => {
       given: 'a drive the access check allows',
       should: 'ask about that drive for that viewer and render the route',
       actual: [await gate('d-alpha'), getUserDriveAccess.mock.calls],
-      expected: ['route', [['user-1', 'd-alpha']]],
+      expected: ['route', [[viewer.actor, 'd-alpha']]],
     });
   });
 

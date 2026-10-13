@@ -10,6 +10,8 @@ export function imagoHref(href: string): string {
   const suffixAt = href.search(/[?#]/);
   const path = suffixAt === -1 ? href : href.slice(0, suffixAt);
   const query = suffixAt === -1 ? '' : href.slice(suffixAt);
+  if (path === '/settings/usage/wallets') return '/account/wallets' + query;
+  if (path === '/settings' && new URLSearchParams(query.slice(1).split('#')[0]).get('createOrg') === '1') return '/account/organizations' + query;
   if (path === '/dashboard') return '/' + query;
   if (path === '/settings' || path.startsWith('/settings/')) return href.replace('/settings', '/account');
   if (!href.startsWith('/dashboard/')) return href;
@@ -72,6 +74,9 @@ export function useRouter() {
 
 /** Retained readers see their established route grammar; writes translate back. */
 export function classicPathname(pathname: string): string {
+  if (pathname === '/account/wallets') return '/settings/usage/wallets';
+  if (pathname === '/account/organizations') return '/settings';
+  if (pathname === '/orgs' || pathname.startsWith('/orgs/')) return pathname;
   if (pathname === '/') return '/dashboard';
   const globalSection = pathname.split('/')[2];
   if (pathname.startsWith('/account/') && ['messages', 'tasks', 'calendar', 'activity', 'trash'].includes(globalSection)) return `/dashboard/${globalSection === 'messages' ? 'channels' : globalSection}`;

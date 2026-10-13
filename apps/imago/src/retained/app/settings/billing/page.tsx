@@ -21,7 +21,7 @@ import { BillingAddressForm, type BillingAddress } from '@/retained/components/b
 import { BillingGuard } from '@/retained/components/billing/BillingGuard';
 import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
 import { getPlan, getPlanFromPriceId, type SubscriptionTier } from '@/retained/lib/subscription/plans';
-import { includedCreditsPhrase, MONTHLY_CREDIT_CENTS, topUpRatePhrase } from '@/retained/lib/subscription/credits';
+import { includedCreditsPhraseForCents, MONTHLY_CREDIT_CENTS, topUpRatePhrase } from '@/retained/lib/subscription/credits';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import {
   SettingsGroup,
@@ -330,7 +330,7 @@ function BillingPageContent() {
               </Link>
             </SettingsRow>
             <SettingsRow label="Included">
-              <span className="text-sm font-medium">{includedCreditsPhrase(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}</span>
+              <span className="text-sm font-medium">{includedCreditsPhraseForCents(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}</span>
             </SettingsRow>
             <SettingsRow label="Top up">
               <span className="text-sm font-medium">{topUpRatePhrase()}</span>

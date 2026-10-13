@@ -1,4 +1,4 @@
-import { describe, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { LOGOUT_ENDPOINT, signOut } from './sign-out';
 
@@ -100,5 +100,23 @@ describe('signOut()', () => {
       actual: errored.navigations,
       expected: ['/auth/signin'],
     });
+  });
+});
+
+
+afterEach(() => vi.unstubAllGlobals());
+test('sign-out removes saved organization setup data before leaving, even on network failure', async () => {
+  const values = new Map([['pagespace.orgSetup.user.org', 'private invitations'], ['unrelated', 'keep']]);
+  vi.stubGlobal('localStorage', {
+    get length() { return values.size; },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => values.delete(key),
+  });
+  await signOut({
+    fetch: async () => { throw new Error('offline'); },
+    navigate: () => {
+      expect(values.has('pagespace.orgSetup.user.org')).toBe(false);
+      expect(values.get('unrelated')).toBe('keep');
+    },
   });
 });

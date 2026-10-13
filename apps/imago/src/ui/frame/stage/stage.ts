@@ -65,7 +65,7 @@ const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'sett
 export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
 
 /** First segments that name a route, never a drive. */
-const reserved: readonly string[] = ['dm', 'account', 'chat', 'settings', 'notifications', ...listSections];
+const reserved: readonly string[] = ['dm', 'account', 'orgs', 'chat', 'settings', 'notifications', ...listSections];
 
 /**
  * Drive, page and conversation ids are cuid2s. Anything else (dots, percent
@@ -97,7 +97,7 @@ const listStage = (
 
 const userStage = (first: string, rest: readonly string[]): Stage => {
   const [id, ...extra] = rest;
-  if (first === 'account') {
+  if (first === 'account' || first === 'orgs') {
     return { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } };
   }
   if (extra.length > 0) return root;
@@ -143,7 +143,7 @@ export const stageFor = (pathname: string): Stage => {
   const [first, ...rest] = pathname.split('/').filter(Boolean);
   if (first === undefined) return root;
   if (first === 'p' && isId(rest[0])) return { driveId: null, section: 'files', list: 'closed', object: { kind: 'page', pageId: rest[0] } };
-  if (first === 'dm' || first === 'account') return userStage(first, rest);
+  if (first === 'dm' || first === 'account' || first === 'orgs') return userStage(first, rest);
   if (first === 'notifications') {
     return rest.length === 0
       ? { driveId: null, section: 'notifications', list: 'closed', object: { kind: 'notifications' } }

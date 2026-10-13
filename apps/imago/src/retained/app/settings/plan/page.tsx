@@ -19,10 +19,12 @@ import { getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition
 import {
   CREDIT_PACK_LIST,
   MONTHLY_CREDIT_CENTS,
+  centsFromCredits,
   creditsCellPhrase,
-  formatCreditDollars,
-  formatWholeCredits,
-  includedCreditsPhrase,
+  formatCreditCount,
+  formatDollars,
+  creditPackPriceCents,
+  includedCreditsPhraseForCents,
   topUpRatePhrase,
 } from '@/retained/lib/subscription/credits';
 import {
@@ -343,7 +345,7 @@ function PlanPageContent() {
   const renewsOn = balance?.monthly.periodEnd
     ? new Date(balance.monthly.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : null;
-  const lede = `You're on ${currentPlan.name} · ${includedCreditsPhrase(currentTier, allowanceCents)}${
+  const lede = `You're on ${currentPlan.name} · ${includedCreditsPhraseForCents(currentTier, allowanceCents)}${
     renewsOn ? ` · renews ${renewsOn}` : ''
   }`;
 
@@ -352,8 +354,8 @@ function PlanPageContent() {
   const tierColumns: PlanDefinition[] = [getPlan('free'), getPlan('pro')];
   const proPriceId = getPlan('pro').stripePriceId ?? '';
 
-  const packCredits = CREDIT_PACK_LIST.map((pack) => formatWholeCredits(pack.cents));
-  const packPrices = CREDIT_PACK_LIST.map((pack) => formatCreditDollars(pack.cents));
+  const packCredits = CREDIT_PACK_LIST.map((pack) => formatCreditCount(centsFromCredits(pack.credits)));
+  const packPrices = CREDIT_PACK_LIST.map((pack) => formatDollars(creditPackPriceCents(pack)));
   const joinOr = (items: string[]): string =>
     items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
 
@@ -489,7 +491,7 @@ function PlanPageContent() {
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">Included</dt>
                         <dd className="text-right font-medium">
-                          {includedCreditsPhrase(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}
+                          {includedCreditsPhraseForCents(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}
                         </dd>
                       </div>
                       <div className="flex justify-between gap-2">
