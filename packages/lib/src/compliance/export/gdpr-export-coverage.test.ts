@@ -78,6 +78,8 @@ const EMPTY: AllUserData = {
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
   personalization: null,
   personalizationCandidates: [],
+  pulseSummaries: [],
+  withheld: [],
   agentWorkspaces: [],
   agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] },
   streamState: [],
@@ -168,6 +170,9 @@ describe('GDPR export table coverage', () => {
       // Omitted entirely when the user has none, so an empty bundle lacks it.
       personalization: null,
       personalizationCandidates: 'personalization-candidates.json',
+      pulseSummaries: 'pulse-summaries.json',
+      // Never a file: written into manifest.json.
+      withheld: null,
       agentWorkspaces: 'agent-workspaces.json',
       agentAccounts: 'agent-accounts.json',
       streamState: 'stream-state.json',

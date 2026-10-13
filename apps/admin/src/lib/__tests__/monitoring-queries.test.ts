@@ -98,7 +98,6 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-core', () => ({
-  computeBalanceDrift: vi.fn(),
   isNegativeMargin: vi.fn(),
 }));
 

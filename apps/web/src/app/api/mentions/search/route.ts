@@ -16,6 +16,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
 import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Build a multi-word search condition
@@ -128,6 +129,7 @@ export async function GET(request: Request) {
     loggers.api.debug('[API] Authentication failed', {});
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
 
   const userId = auth.userId;
 
@@ -207,7 +209,7 @@ export async function GET(request: Request) {
 
     if (crossDrive) {
       // Cross-drive search: get all drives user has access to (owned, member, page permissions)
-      targetDriveIds = await getDriveIdsForUser(userId);
+      targetDriveIds = await getDriveIdsForUser(actor);
 
       // Build context map for drive disambiguation
       if (targetDriveIds.length > 0) {
@@ -231,10 +233,10 @@ export async function GET(request: Request) {
 
       if (!hasAccess) {
         loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
-        return NextResponse.json(
+        return deniedResponse(actor, driveId!, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
 
       targetDriveIds = [driveId!];

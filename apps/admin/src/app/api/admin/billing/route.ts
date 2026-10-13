@@ -18,6 +18,7 @@ import {
   getCreditLiability,
   getLiveHolds,
   getBalanceDriftAlerts,
+  getUnattributedUsage,
   getNegativeMarginAccounts,
   type Granularity,
 } from '@/lib/monitoring';
@@ -72,6 +73,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       holds,
       balanceDrift,
       negativeMargin,
+      unattributedUsage,
     ] = await Promise.all([
       getUnitEconomicsSummary(startDate, endDate),
       getMarginByPeriod(startDate, endDate, granularity),
@@ -90,6 +92,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       getLiveHolds(),
       getBalanceDriftAlerts(),
       getNegativeMarginAccounts(startDate, endDate),
+      getUnattributedUsage(),
     ]);
 
     const enforcement = {
@@ -175,7 +178,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
         rows.push(['debt_user', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', '', '', '', '', '', '', centsToDollars(r.debtCents)]);
       }
       for (const r of balanceDrift) {
-        rows.push(['alert_balance_drift', r.userEmail ?? r.userName ?? r.userId, `expected ${centsToDollars(r.expectedSpendableCents)} materialized ${centsToDollars(r.materializedSpendableCents)}`, '', '', '', '', '', '', '', '', '', centsToDollars(r.driftCents)]);
+        rows.push(['alert_balance_drift', r.userEmail ?? r.userName ?? r.userId ?? `${r.walletKind}:${r.walletId}`, `expected ${centsToDollars(r.expectedNetCents)} materialized ${centsToDollars(r.materializedNetCents)}`, '', '', '', '', '', '', '', '', '', centsToDollars(r.driftCents)]);
       }
       for (const r of negativeMargin) {
         rows.push(['alert_negative_margin', r.userEmail ?? r.userName ?? r.userId, '', '', '', '', r.requestCount, centsToDollars(r.realCostCents), centsToDollars(r.chargedCents), '', centsToDollars(r.marginCents), fmtPct(r.marginPct), '']);
@@ -207,7 +210,7 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       subscriptionsByTier,
       liability,
       holds,
-      alerts: { balanceDrift, negativeMargin },
+      alerts: { balanceDrift, negativeMargin, unattributedUsage },
       tokens: {
         summary: tokenSummary,
         byModel: tokensByModel,

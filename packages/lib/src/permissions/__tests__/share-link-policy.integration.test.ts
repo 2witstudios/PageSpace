@@ -28,6 +28,7 @@ import { getUserAccessLevel } from '../permissions';
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
 import { updateOrgPolicies } from '../../organizations/policies';
+import { credentialActor } from '../access-actor';
 
 const run = createId().slice(0, 8);
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -105,8 +106,8 @@ afterAll(async () => {
   await pool.end();
 });
 
-const off = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { publicShareLinks: false } });
-const on = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { publicShareLinks: true } });
+const off = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: false } });
+const on = () => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { publicShareLinks: true } });
 const newUser = async () => {
   const u = await factories.createUser();
   created.userIds.push(u.id);
@@ -201,7 +202,7 @@ describe('redemption and preview', () => {
 
   it('POL-3 (partial) another org turning its links off changes nothing here', async () => {
     const { drive } = await makeLinks();
-    await updateOrgPolicies({ orgId: w.otherOrg, actorId: (await db.select({ o: organizations.ownerId }).from(organizations).where(eq(organizations.id, w.otherOrg)))[0].o, patch: { publicShareLinks: false } });
+    await updateOrgPolicies({ orgId: w.otherOrg, actorId: (await db.select({ o: organizations.ownerId }).from(organizations).where(eq(organizations.id, w.otherOrg)))[0].o, actorAuthentication: null, patch: { publicShareLinks: false } });
 
     expect((await redeemDriveShareLink(ctxFor(await newUser()), drive.rawToken)).ok).toBe(true);
     const members = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.orgDrive)));
@@ -210,7 +211,7 @@ describe('redemption and preview', () => {
 });
 
 describe('guests policy at redemption', () => {
-  const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+  const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
   const orgMemberUser = async () => {
     const id = await newUser();
     await db.insert(orgMembers).values({ orgId: w.orgId, userId: id, role: 'MEMBER' });
@@ -245,7 +246,7 @@ describe('guests policy at redemption', () => {
     expect(await redeemPageShareLink(ctxFor(outsider), page.rawToken)).toEqual({ ok: false, error: 'PENDING_APPROVAL' });
 
     expect(await memberRow(outsider)).toEqual([]);
-    expect(await getUserAccessLevel(outsider, w.orgPage)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(outsider, null), w.orgPage)).toBeNull();
     const queue = await listPendingGuestApprovals(w.orgId, 10);
     // One queue row per person and drive: the page request refreshes the drive request (the later one wins).
     expect(queue.total).toBe(1);
@@ -270,7 +271,7 @@ describe('guests policy at redemption', () => {
     if (!claimedPage) throw new Error('expected a queued request');
     expect(await completeApprovedLinkAdmission(claimedPage)).toMatchObject({ ok: true, role: 'GUEST' });
     expect((await memberRow(pageGuest))[0].role).toBe('GUEST');
-    expect((await getUserAccessLevel(pageGuest, w.orgPage))?.canView).toBe(true);
+    expect((await getUserAccessLevel(credentialActor(pageGuest, null), w.orgPage))?.canView).toBe(true);
   });
 
   it('POL-2 (partial) approval re-checks the offer and the policy: a link revoked meanwhile, or guests turned OFF meanwhile, admits no one', async () => {

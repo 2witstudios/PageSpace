@@ -214,7 +214,8 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
     subscriptions: OrgSubscriptionFacts[],
     storedSubscriptionId: string | null = 'sub_1',
     fundedSubscriptionIds: ReadonlySet<string> = new Set(['sub_1']),
-  ) => planOrgReactivation({ orgId: ORG, prices: PRICES, storedSubscriptionId, subscriptions, fundedSubscriptionIds, nowSeconds: NOW });
+    storedGiftedExtraSeats: number | null = null,
+  ) => planOrgReactivation({ orgId: ORG, prices: PRICES, storedSubscriptionId, storedGiftedExtraSeats, subscriptions, fundedSubscriptionIds, nowSeconds: NOW });
   const support = (reason: string) => ({ kind: 'requires_support', reason });
 
   describe('already_active', () => {
@@ -271,7 +272,9 @@ describe('planOrgReactivation — D-OW-44: reactivation only repairs states Page
 
     it('SEAT-9 (partial) a $0 paid invoice on the org\'s own GIFTED subscription is funding_pending (a gift is verified funding)', () => {
       const sub = facts({ metadata: giftMetadata, latestInvoice: paidInvoice({ lines: giftLines, paid: 0, gift: true }) });
-      expect(plan([sub], 'sub_1', unfunded)).toMatchObject({ kind: 'funding_pending' });
+      expect(plan([sub], 'sub_1', unfunded, 0)).toMatchObject({ kind: 'funding_pending' });
+      // D-OW-54: a gift without the stored admin pin is not an admin gift, so it is no funding.
+      expect(plan([sub], 'sub_1', unfunded, null)).toEqual(support('unfunded_active'));
     });
 
     it('SEAT-9 (partial) a gift on a subscription the org has not stored is not its own: the webhook refuses that gift, so it needs support', () => {

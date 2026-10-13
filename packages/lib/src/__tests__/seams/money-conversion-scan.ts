@@ -525,34 +525,16 @@ const CENTS_PER_DOLLAR_USE = /(?<!\$\{\s*)\bCENTS_PER_DOLLAR\b(?!\s*\})/g;
  * they are the edge of what a text scan can know. money-model-guard.test.ts asserts
  * every example below is NOT flagged, so this list stays the scanner's true reach, and
  * a change that closes one shows up as a failing "known limit" test to move into the
- * "flags" table. The durable fix is a type (a branded Cents that cannot be divided
- * outside money-model), filed separately; until then MON-5 stays "(partial)".
+ * "flags" table. {@link resolveBindings} closed the aliased operand, the value split across
+ * a variable, the named-constant divisor and the hundred split into steps; what is left
+ * needs a type checker (a parameter's caller in another file) or is not code (quoted SQL,
+ * an index path), and is accepted as the scan's edge.
  */
 export const KNOWN_LIMITS: ReadonlyArray<{ shape: string; example: string; why: string }> = [
-  {
-    shape: 'a destructured or aliased operand',
-    example: 'const { remainingCents: r } = view;\nconst d = r / 100;',
-    why: 'the money name is on the left of the rename; the division sees only `r`',
-  },
-  {
-    shape: 'a value split across a variable',
-    example: 'const n = walletRemainingCents(x);\nconst d = n / 100;',
-    why: 'the scanner does not follow a binding back to its initializer',
-  },
   {
     shape: 'a conversion inside a helper, called with cents from elsewhere',
     example: 'export const toDollars = (v: number) => v / 100;',
     why: 'the parameter has no money name; the caller in another file is never linked',
-  },
-  {
-    shape: 'a divisor spelled as a named constant',
-    example: 'const HUNDRED = 100;\nconst d = cents / HUNDRED;',
-    why: 'only the literal forms (100, 100.0, 1e2, 1e-2, 0.01) and CENTS_PER_DOLLAR are known',
-  },
-  {
-    shape: 'a hundred split into steps',
-    example: 'const d = cents / 10 / 10;',
-    why: 'no single factor is a hundred',
   },
   {
     shape: 'SQL inside a quoted string',
@@ -566,9 +548,86 @@ export const KNOWN_LIMITS: ReadonlyArray<{ shape: string; example: string; why: 
   },
 ];
 
+const VALUE_CHAIN = /^\s*(?:await\s+)?([A-Za-z_$][\w$]*(?:\s*(?:\?\.|\.)\s*[A-Za-z_$][\w$]*|\s*\([^()]*\)|\s*\[[^\]]*\])*)/;
+
+/**
+ * The name a value is known by: the last member of the leading access chain, ignoring call
+ * arguments and indexes — `walletRemainingCents(x)` → walletRemainingCents, `row?.count ?? 0`
+ * → count, `Math.round(x)` → round (a wrapper hides the value, so nothing is inferred).
+ */
+function valueName(init: string): string | null {
+  const chain = VALUE_CHAIN.exec(init)?.[1];
+  if (!chain) return null;
+  const members = chain.replace(/\([^()]*\)|\[[^\]]*\]/g, '').match(/[A-Za-z_$][\w$]*/g);
+  return members ? members[members.length - 1] : null;
+}
+
+/** Where the block a declaration ending at `from` sits in closes (the binding's scope). */
+function scopeEnd(code: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < code.length; i += 1) {
+    if (code[i] === '{') depth += 1;
+    else if (code[i] === '}' && --depth < 0) return i;
+  }
+  return code.length;
+}
+
+/**
+ * Uses of `name` from `from` to the end of its block: not a property (`.name`), an object key
+ * (`name:`) or a longer word. Scoped, so a `const r` in one function never renames another's.
+ */
+function renameUses(code: string, name: string, to: string, from: number): string {
+  const use = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}(?![\\w$])(?!\\s*:(?!:))`, 'g');
+  const end = scopeEnd(code, from);
+  return code.slice(0, from) + code.slice(from, end).replace(use, to) + code.slice(end);
+}
+
+/** True when `expr` has a `*`, `/`, `%`, `+` or `-` outside every bracket: arithmetic, not one value. */
+function hasTopLevelArithmetic(expr: string): boolean {
+  let depth = 0;
+  for (const c of expr) {
+    if (c === '(' || c === '[' || c === '{') depth += 1;
+    else if (c === ')' || c === ']' || c === '}') depth -= 1;
+    else if (depth === 0 && /[*/%+-]/.test(c)) return true;
+  }
+  return false;
+}
+
+/**
+ * Follow the bindings a text scan would otherwise lose, inside one file, before judging any
+ * operator (each closes a former KNOWN_LIMITS entry):
+ *   - a hundred bound to a name (`const HUNDRED = 100`) is a hundred wherever it is used;
+ *   - a hundred split into steps (`/ 10 / 10`, `* 10 * 10`) is a hundred;
+ *   - a money field renamed by destructuring (`{ remainingCents: r }`) keeps its money name;
+ *   - a name bound to ONE money value (`const n = walletRemainingCents(x)`, no arithmetic in
+ *     the initializer, so a ratio such as `used / allowanceCents` is never renamed) keeps it.
+ * Line structure is preserved, so every hit still reports its source line.
+ */
+export function resolveBindings(code: string): string {
+  let out = code.replace(/([*/])\s*10\s*\1\s*10(?![\w$.])/g, '$1 100');
+  for (const m of [...out.matchAll(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::\s*number\s*)?=\s*(?:100(?:\.0+)?|1e2|0\.01|1e-2)\s*;/g)]) {
+    out = renameUses(out, m[1], m[0].includes('0.01') || m[0].includes('1e-2') ? '0.01' : '100', (m.index ?? 0) + m[0].length);
+  }
+  for (const m of [...out.matchAll(/\b(?:const|let|var)\s*\{([^{}]*)\}\s*=/g)]) {
+    for (const entry of m[1].split(',')) {
+      const [key, alias] = entry.split(':').map((part) => part.trim().split(/\s*=/)[0]);
+      if (key && alias && /^[A-Za-z_$][\w$]*$/.test(alias) && isMoneyName(key) && !isMoneyName(alias)) {
+        out = renameUses(out, alias, key, (m.index ?? 0) + m[0].length);
+      }
+    }
+  }
+  for (const m of [...out.matchAll(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;\n]+)?=\s*([^;\n]+);/g)]) {
+    const [, name, init] = m;
+    if (isMoneyName(name) || /=>|\bfunction\b|\bnew\b/.test(init) || hasTopLevelArithmetic(init.replace(/\?\?|\?\.|\?|:/g, ' '))) continue;
+    const value = valueName(init);
+    if (value && isMoneyName(value)) out = renameUses(out, name, value, (m.index ?? 0) + m[0].length);
+  }
+  return out;
+}
+
 /** Every second conversion in one source text (1-based lines, trimmed source line text). See KNOWN_LIMITS. */
 export function findConversionsInSource(src: string): ConversionHit[] {
-  const masked = maskSource(src);
+  const masked = resolveBindings(maskSource(src));
   const lines = src.split('\n');
   const hits: ConversionHit[] = [];
   const seen = new Set<number>();
@@ -613,5 +672,33 @@ export function findCopyHits(src: string, pattern: RegExp): ConversionHit[] {
     if (pattern.test(line)) hits.push({ line: i + 1, text: (lines[i] ?? '').trim() });
   });
   pattern.lastIndex = 0;
+  return hits;
+}
+
+/**
+ * MON-1 definition scan: a constant of the money model's vocabulary — a markup, the
+ * credit rate, the included-credit ratio, an allowance, a starter grant, a pack, a
+ * per-consumer cap default, a top-up bound — whose initializer carries a numeric
+ * literal. Outside money-model.ts that is a second statement of the money model; a
+ * constant DERIVED from money-model (`centsFromCredits(DEFAULT_SEAT_ALLOWANCE_CREDITS)`)
+ * has no literal and passes. Comments and string contents are masked first, so an env
+ * var name or prose never counts.
+ */
+export const MONEY_MODEL_VOCABULARY =
+  /MARKUP|CREDITS_PER_DOLLAR|CREDIT_RATIO|ALLOWANCE|STARTER_CREDITS|CREDIT_PACK|CONSUMER_CAP|CAP_CREDITS|TOPUP_(?:MIN|MAX)_CREDITS/;
+
+const CONST_DECLARATION = /\b(?:const|let|var)\s+([A-Z][A-Z0-9_]*)\b[^=;]*=([^;]{0,400})/g;
+const NUMERIC_LITERAL = /(?<![\w.$])\d/;
+
+/** Declarations in `src` that state a money-model figure (see {@link MONEY_MODEL_VOCABULARY}). */
+export function findMoneyModelDefinitions(src: string): ConversionHit[] {
+  const masked = maskSource(src);
+  const hits: ConversionHit[] = [];
+  for (const match of masked.matchAll(CONST_DECLARATION)) {
+    const [, name, initializer] = match;
+    if (!MONEY_MODEL_VOCABULARY.test(name) || !NUMERIC_LITERAL.test(initializer)) continue;
+    const line = masked.slice(0, match.index).split('\n').length;
+    hits.push({ line, text: `${name} = ${initializer.trim().split('\n')[0]}` });
+  }
   return hits;
 }

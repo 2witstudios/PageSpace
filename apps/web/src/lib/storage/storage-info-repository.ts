@@ -1,8 +1,8 @@
 /**
  * DB access for GET /api/storage/info (#2155). Fetches the same `files` rows
- * that the charge/reconcile basis uses — createdBy = userId and personally
- * attributed (no drive, or a drive with no org; an org drive's files bill the
- * org, WAL-9) — each joined to
+ * that the charge/reconcile basis uses — the files billed to the user (WAL-9:
+ * every file in a personal drive they OWN, whoever uploaded it, and their own
+ * drive-less attachments; an org drive's files bill the org) — each joined to
  * one representative page (most recently created FILE page linking that
  * blob, if any) for display — the file itself, not the page, is the unit of
  * storage.
@@ -41,8 +41,8 @@ export async function findUserFileRows(userId: string): Promise<UserFileRow[]> {
       LIMIT 1
     ) p ON true
     LEFT JOIN drives d ON d.id = f."driveId"
-    WHERE f."createdBy" = ${userId}
-      AND (f."driveId" IS NULL OR d."orgId" IS NULL)
+    WHERE (f."driveId" IS NOT NULL AND d."ownerId" = ${userId} AND d."orgId" IS NULL)
+       OR (f."driveId" IS NULL AND f."createdBy" = ${userId})
   `);
 
   return result.rows.map((row) => ({

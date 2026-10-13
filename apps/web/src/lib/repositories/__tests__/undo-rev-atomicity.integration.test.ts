@@ -62,6 +62,7 @@ import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { broadcastAiUndoApplied } from '@/lib/websocket/socket-utils';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 let dbAvailable = false;
 
@@ -131,8 +132,8 @@ describe('undo rev atomicity', () => {
     const thread = await seedThread();
     const revBefore = await revOf(thread.conversationId);
 
-    const preview = await previewAiUndo(thread.ids[2], thread.ownerId);
-    const result = await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only', preview!);
+    const preview = await previewAiUndo(thread.ids[2], credentialActor(thread.ownerId, null));
+    const result = await executeAiUndo(thread.ids[2], credentialActor(thread.ownerId, null), 'messages_only', preview!);
     expect(result.success).toBe(true);
 
     // The write landed…
@@ -152,8 +153,8 @@ describe('undo rev atomicity', () => {
     vi.mocked(broadcastAiUndoApplied).mockRejectedValueOnce(new Error('realtime unreachable'));
     vi.mocked(conversationEvents.undoApplied).mockRejectedValueOnce(new Error('realtime unreachable'));
 
-    const preview = await previewAiUndo(thread.ids[2], thread.ownerId);
-    const result = await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only', preview!);
+    const preview = await previewAiUndo(thread.ids[2], credentialActor(thread.ownerId, null));
+    const result = await executeAiUndo(thread.ids[2], credentialActor(thread.ownerId, null), 'messages_only', preview!);
 
     // The undo itself still succeeds — a broadcast is not part of the write's
     // success condition.
@@ -195,14 +196,14 @@ describe('undo rev atomicity', () => {
     if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
     const thread = await seedThread();
 
-    const preview = await previewAiUndo(thread.ids[2], thread.ownerId);
-    await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only', preview!);
+    const preview = await previewAiUndo(thread.ids[2], credentialActor(thread.ownerId, null));
+    await executeAiUndo(thread.ids[2], credentialActor(thread.ownerId, null), 'messages_only', preview!);
     const revAfterFirst = await revOf(thread.conversationId);
 
     // The already-inactive short-circuit returns success with zero counts; it
     // must not spend a rev on a no-op, or every double-click would invalidate
     // every watching pane for nothing.
-    const again = await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only');
+    const again = await executeAiUndo(thread.ids[2], credentialActor(thread.ownerId, null), 'messages_only');
     expect(again.success).toBe(true);
     expect(await revOf(thread.conversationId)).toBe(revAfterFirst);
   });

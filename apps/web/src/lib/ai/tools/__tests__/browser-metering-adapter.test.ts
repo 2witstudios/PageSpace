@@ -6,13 +6,13 @@ vi.mock('@pagespace/lib/services/sandbox/sandbox-billing', () => ({
 vi.mock('@pagespace/lib/billing/compute-gate', () => ({ computeSettleWalletId: vi.fn() }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: vi.fn() } }));
 
-import { createBrowserMeter } from '../browser-metering-adapter';
+import { BROWSER_PAYER_UNRESOLVED, createBrowserMeter } from '../browser-metering-adapter';
 import { ORG_COMPUTE_REFUSAL_MESSAGES, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
 type MeterPrimitives = NonNullable<Parameters<typeof createBrowserMeter>[0]>;
 type GateAnswer = Awaited<ReturnType<MeterPrimitives['gate']>>;
 
-function primitives(charge: ComputeCharge, gateAnswer: GateAnswer = { allowed: true, holdId: 'hold-1' }, settleWalletId: string | null | undefined = undefined) {
+function primitives(charge: ComputeCharge | null, gateAnswer: GateAnswer = { allowed: true, holdId: 'hold-1' }, settleWalletId: string | null | undefined = undefined) {
   const gate = vi.fn(async () => gateAnswer);
   const releaseHold = vi.fn(async () => {});
   const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
@@ -22,7 +22,7 @@ function primitives(charge: ComputeCharge, gateAnswer: GateAnswer = { allowed: t
   return { deps, resolveCharge, gate, releaseHold, trackUsage, settle };
 }
 
-const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', actorId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1' };
+const billing = { driveId: 'drive-1', ownerId: 'session-owner-1', actorId: 'session-owner-1', agentPageId: null, conversationId: 'conv-1', automationRef: null };
 const shape = { cpus: 2, memoryGB: 2 };
 const orgCharge: ComputeCharge = { kind: 'org', orgId: 'org-northwind', userId: 'session-owner-1' };
 
@@ -58,7 +58,29 @@ describe('createBrowserMeter.open', () => {
   });
 });
 
+describe('createBrowserMeter.open — no payer', () => {
+  it('WAL-9 (partial) a browser whose drive cannot be resolved has no payer: refused by name before any hold, never billed to a person', async () => {
+    const p = primitives(null);
+    const meter = createBrowserMeter(p.deps);
+
+    const opened = await meter.open(billing);
+
+    expect(opened).toEqual({ ok: false, reason: BROWSER_PAYER_UNRESOLVED });
+    expect(p.gate).not.toHaveBeenCalled();
+    expect(p.trackUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('createBrowserMeter.close', () => {
+  it('SPEND-10 (partial) a browser an automation opened settles as that automation', async () => {
+    const p = primitives(orgCharge, undefined, 'pool-wallet-1');
+    const meter = createBrowserMeter(p.deps);
+
+    await meter.close({ billing: { ...billing, automationRef: 'wf-digest' }, hold: { holdId: 'hold-1', charge: orgCharge }, activeSeconds: 60, shape, substrate: 'sprites' });
+
+    expect(p.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ automationRef: 'wf-digest' }));
+  });
+
   it('WAL-9 (partial) settles an org-drive browser against the org pool wallet, recorded under the session owner', async () => {
     const p = primitives(orgCharge, undefined, 'pool-wallet-1');
     const meter = createBrowserMeter(p.deps);

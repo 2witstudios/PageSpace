@@ -1,14 +1,22 @@
+import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
-import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { loadUserDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
+import { reattributeDriveOwnerStorageInTx } from '@pagespace/lib/services/storage-limits';
+
+const handleDriveBodySchema = z.object({
+  driveId: z.string().optional(),
+  action: z.string().optional(),
+  newOwnerId: z.string().optional(),
+});
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -20,8 +28,12 @@ export async function POST(req: Request) {
   const userId = auth.userId;
 
   try {
-    const body = await req.json();
-    const { driveId, action, newOwnerId } = body;
+    // Typed at the boundary: `newOwnerId` reaches a membership lookup, so an untyped body never does (D-OW-45).
+    const parsed = handleDriveBodySchema.safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return Response.json({ error: 'Drive ID and action are required' }, { status: 400 });
+    }
+    const { driveId, action, newOwnerId } = parsed.data;
 
     // Validate inputs
     if (!driveId || !action) {
@@ -72,12 +84,13 @@ export async function POST(req: Request) {
       return Response.json({ error: homeDriveActionError(drive, 'transfer') }, { status: 403 });
     }
 
-    if (action === 'transfer') {
+    if (action === 'transfer' && newOwnerId) {
       // Verify the new owner is an *accepted* admin in the drive. A pending
       // admin (acceptedAt IS NULL) must not receive ownership — they have
       // never authenticated to the drive and cannot consent. Closes Review C2.
       // The org-aware membership reads ACCEPTED rows only; only an effective ADMIN qualifies.
-      const newOwner = await loadDriveRelationship(newOwnerId, drive);
+      // A THIRD-PARTY membership fact (the new owner is not the caller): no credential of theirs is involved.
+      const newOwner = (await loadUserDriveRelationships(newOwnerId, [drive])).get(drive.id) ?? { isOwner: false, membership: null };
 
       if (newOwner.membership?.role !== 'ADMIN') {
         return Response.json(
@@ -86,11 +99,28 @@ export async function POST(req: Request) {
         );
       }
 
-      // Transfer ownership
-      await db
-        .update(drives)
-        .set({ ownerId: newOwnerId })
-        .where(eq(drives.id, driveId));
+      // Transfer ownership. A personal drive's stored bytes bill its owner (WAL-9), so they move
+      // to the new owner's quota in the same transaction as drives.ownerId.
+      // The drive row is LOCKED and re-read inside the transaction (D-OW-64): a concurrent move into
+      // an org (or another hand-over) between the check above and this write would otherwise move an
+      // org drive's bytes onto a person, or hand over a drive this caller no longer leads.
+      const transferred = await db.transaction(async (tx) => {
+        const [locked] = await tx
+          .select({ ownerId: drives.ownerId, orgId: drives.orgId })
+          .from(drives)
+          .where(eq(drives.id, driveId))
+          .for('update');
+        if (!locked || locked.orgId !== null || !isDriveLead(userId, locked)) return false;
+        await tx
+          .update(drives)
+          .set({ ownerId: newOwnerId })
+          .where(eq(drives.id, driveId));
+        await reattributeDriveOwnerStorageInTx(tx, { driveId, fromUserId: locked.ownerId, toUserId: newOwnerId });
+        return true;
+      });
+      if (!transferred) {
+        return Response.json({ error: 'This drive changed while the transfer was being made. Reload and try again.' }, { status: 409 });
+      }
 
       // Log activity for audit trail
       const actorInfo = await getActorInfo(userId);

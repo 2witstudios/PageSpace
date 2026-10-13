@@ -150,7 +150,8 @@ import {
   type DriveBillingFacts,
   type LookupDriveBillingFacts,
 } from '../../billing/sandbox-payer';
-import { computeChargeFor, type ComputeCharge } from '../../billing/compute-charge';
+import { capAccrualCostDollars, computeChargeFor, type ComputeCharge } from '../../billing/compute-charge';
+import type { OrgPoolAccrualReservation } from '../../billing/credit-gate';
 import { orgBacklogStart } from '../../billing/org-compute-epoch-core';
 import { chargeMillicents } from '../../billing/credit-core';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
@@ -393,8 +394,21 @@ export interface ReconcileSandboxStorageDeps {
    */
   lookupDriveBillingFacts: LookupDriveBillingFacts;
   /**
-   * Charges the payer for this subject's accrued storage cost. Not hold-gated —
-   * a background reconcile charge, mirroring reconcile-ai-cost. `driveId` is
+   * WAL-9: hold the ORG POOL for one org row's accrual before it is charged, so a background
+   * storage charge can never put a pool into debt: a paused pool or one with nothing spendable is
+   * forgiven, and one that covers only part is held (and charged) for that part. The production
+   * composition binds `reserveOrgPoolAccrual` (credit-gate). A personal row is not asked.
+   */
+  reserveOrgAccrual: (input: {
+    charge: Extract<ComputeCharge, { kind: 'org' }>;
+    chargeMillicents: number;
+  }) => Promise<OrgPoolAccrualReservation>;
+  /** Frees an org accrual hold whose charge did not go ahead (a throw before it settled). */
+  releaseAccrualHold: (holdId: string) => Promise<void>;
+  /**
+   * Charges the payer for this subject's accrued storage cost. A personal row is a background
+   * reconcile charge, mirroring reconcile-ai-cost; an org row settles on the pool hold
+   * `reserveOrgAccrual` placed (`hold`), never past it. `driveId` is
    * omitted only for a global-assistant agent-session (no drive to attribute
    * usage-breakdown to); an env always has one.
    *
@@ -411,6 +425,8 @@ export interface ReconcileSandboxStorageDeps {
     subjectId: string;
     costDollars: number;
     gbMonths: number;
+    /** The org pool hold this charge settles on (WAL-9); absent for a personal row and where billing is off. */
+    hold?: { holdId: string; walletId: string };
   }) => Promise<UsageTrackingOutcome>;
   /**
    * Persists the new watermark for an `agent_workspaces` Sprite, on the ROW
@@ -579,6 +595,17 @@ export interface ReconcileSandboxStorageResult {
    * to the tick (the span is forgiven, not deferred), so a re-subscribe bills from then on only.
    */
   orgLapsedForgiven: number;
+  /**
+   * WAL-9: org-drive rows NOT charged this tick because the org's pool is PAUSED or has nothing
+   * spendable. The pool is never put into debt by a background accrual: the window closes
+   * uncharged (forgiven, not deferred), logged by name.
+   */
+  orgPoolForgiven: number;
+  /**
+   * WAL-9: org-drive rows charged only PART of their accrual because the pool could cover no more.
+   * The charge stops at what the pool had; the rest is forgiven, never debt.
+   */
+  orgPoolCapped: number;
   /**
    * Rows that had something to charge this tick — a positive accrual, before any
    * attempt to resolve a payer or move money.
@@ -893,6 +920,8 @@ export async function reconcileSandboxStorage(
   let watermarkSuperseded = 0;
   let orgBacklogForgiven = 0;
   let orgLapsedForgiven = 0;
+  let orgPoolForgiven = 0;
+  let orgPoolCapped = 0;
   const orgLapsedThisTick = new Map<string, Promise<boolean>>();
   const orgLapsedOnce = (orgId: string): Promise<boolean> => {
     let known = orgLapsedThisTick.get(orgId);
@@ -1002,16 +1031,12 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // Deliberately NOT the charge-time fallback (billing/sandbox-payer.ts's
-      // `resolveSessionPayer` falls back to the session owner when the lookup
-      // fails, which is right at CHARGE time — someone must pay for compute
-      // already consumed — and wrong here). A failed lookup during a storage
-      // sweep usually means a stale read of a drive mid-delete; billing it to an
-      // owner who may not be the drive owner would be a misattributed money
-      // movement we cannot take back, whereas skipping costs one cycle of
-      // accrual and self-corrects on the next tick. For an ENV there is not even
-      // a fallback available (`resolveEnvPayer`) — the skip is the only
-      // honest answer.
+      // The same rule as charge time (billing/sandbox-payer.ts's `resolveSessionPayer`
+      // has no payer for a drive it cannot resolve, WAL-9). A failed lookup during a
+      // storage sweep usually means a stale read of a drive mid-delete; billing it to an
+      // owner who may not be the drive owner would be a misattributed money movement we
+      // cannot take back, whereas skipping costs one cycle of accrual and self-corrects
+      // on the next tick.
       const charge = await subject.resolveCharge();
       if (!charge) {
         // Can't resolve who to bill (e.g. the drive vanished). Leave the
@@ -1103,6 +1128,58 @@ export async function reconcileSandboxStorage(
     // Last check before the money moves. Never between the charge and its watermark advance
     // below: skipping that write after a charge is exactly what re-bills a window.
     if (stopOnLockLoss(subjects.length - index)) break;
+    // WAL-9: an org row is charged only on a hold the pool can cover. A paused or empty pool's
+    // accrual is forgiven (the window closes uncharged, never debt); a pool that covers part is
+    // held, and charged, for that part alone.
+    let hold: { holdId: string; walletId: string } | undefined;
+    if (resolved.charge.kind === 'org') {
+      let reservation: OrgPoolAccrualReservation;
+      try {
+        reservation = await deps.reserveOrgAccrual({
+          charge: resolved.charge,
+          chargeMillicents: chargeMillicents(resolved.costDollars, MACHINE_MARKUP_BPS),
+        });
+      } catch (error) {
+        billingByKind[subject.kind].failed += 1;
+        loggers.ai.error(
+          'Sandbox storage reconcile: the org pool hold could not be placed — the window is left open for the next run',
+          error instanceof Error ? error : new Error(String(error)),
+          { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+        );
+        continue;
+      }
+      if (reservation.kind === 'forgive') {
+        orgPoolForgiven += 1;
+        billingByKind[subject.kind].billable -= 1;
+        loggers.ai.info('Sandbox storage: org pool is paused or has nothing spendable — storage not charged (WAL-9)', {
+          driveId: attributionDriveId,
+          subjectKind: subject.kind,
+          subjectId: subject.subjectId,
+          orgId: resolved.charge.orgId,
+          reason: reservation.reason,
+        });
+        if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
+        continue;
+      }
+      if (reservation.kind === 'held') {
+        hold = { holdId: reservation.holdId, walletId: reservation.walletId };
+        const capped = capAccrualCostDollars({ costDollars: resolved.costDollars, markupBps: MACHINE_MARKUP_BPS, capMillicents: reservation.chargeMillicents });
+        if (capped < resolved.costDollars) {
+          orgPoolCapped += 1;
+          loggers.ai.warn('Sandbox storage: org pool covers only part of this accrual — charged what it covers, the rest forgiven (WAL-9)', {
+            driveId: attributionDriveId,
+            subjectKind: subject.kind,
+            subjectId: subject.subjectId,
+            orgId: resolved.charge.orgId,
+            accruedCostDollars: resolved.costDollars,
+            chargedCostDollars: capped,
+          });
+          resolved = { ...resolved, costDollars: capped };
+        }
+      }
+      // `unavailable` (no pool) and `unmetered` (billing off) charge as before: the former settles
+      // nothing and leaves the window open, the latter moves no money.
+    }
     let settle: UsageTrackingOutcome;
     try {
       settle = await deps.chargeStorage({
@@ -1112,8 +1189,10 @@ export async function reconcileSandboxStorage(
         subjectId: subject.subjectId,
         costDollars: resolved.costDollars,
         gbMonths: resolved.gbMonths,
+        ...(hold ? { hold } : {}),
       });
     } catch (error) {
+      if (hold) await deps.releaseAccrualHold(hold.holdId).catch(() => {});
       // Isolated per-row: one subject's charge failure must not drop every
       // other subject in this run from being billed. Nothing was moved, so
       // this is a genuine failure — the accrual is retried next run.
@@ -1217,6 +1296,8 @@ export async function reconcileSandboxStorage(
     watermarkSuperseded,
     orgBacklogForgiven,
     orgLapsedForgiven,
+    orgPoolForgiven,
+    orgPoolCapped,
     spanClamped,
     billableRows: sumBilling((of) => of.billable),
     billingByKind,

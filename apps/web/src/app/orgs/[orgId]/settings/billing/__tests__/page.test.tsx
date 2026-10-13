@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   seats: { data: undefined as unknown, error: undefined as unknown },
   reads: {} as Record<string, unknown>,
   setOrgSeatAutoAdd: vi.fn(),
+  setOrgPoolPaused: vi.fn(),
   openOrgBillingPortal: vi.fn(),
   assign: vi.fn(),
   useOrgWalletRealtime: vi.fn(),
@@ -33,6 +34,7 @@ vi.mock('@/hooks/useOrgs', () => ({
 vi.mock('@/lib/orgs/org-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/orgs/org-api')>()),
   setOrgSeatAutoAdd: mocks.setOrgSeatAutoAdd,
+  setOrgPoolPaused: mocks.setOrgPoolPaused,
   openOrgBillingPortal: mocks.openOrgBillingPortal,
 }));
 
@@ -45,7 +47,7 @@ beforeEach(() => {
   mocks.seats = { data: { seats: { members: 12, pendingInvites: 2, held: 14, included: 5, purchasedExtra: 10, purchased: 15, autoAdd: true, hasSubscription: true, currentPeriodEnd: '2026-10-01T00:00:00Z' } }, error: undefined };
   mocks.reads = {
     '/api/orgs/org_nw/pool': {
-      walletId: 'w_pool', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
+      walletId: 'w_pool', status: 'active', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
       seats: { memberCount: 12, allowanceCents: 150, allocatedCents: 1_800, spentCents: 1_152 },
       driveWallets: [
         { driveId: 'd_eng', driveName: 'Engineering', walletId: 'w_e', allocationCents: 900, spentCents: 1_233, status: 'over' },
@@ -77,6 +79,21 @@ describe('Plan & seats', () => {
     expect(document.body.textContent).not.toMatch(/\$[\d,]+ credits/);
   });
 
+  it('WAL-7 (partial): an Admin pauses the whole credits pool (its kill switch), and a paused pool says it funds nothing', async () => {
+    mocks.role = 'ADMIN';
+    mocks.setOrgPoolPaused.mockResolvedValue({ walletId: 'w_pool', status: 'paused' });
+    const { unmount } = render(<OrgBillingPage />);
+    const pause = screen.getByRole('switch', { name: 'Pause the credits pool' });
+    expect(pause.getAttribute('aria-checked')).toBe('false');
+    await userEvent.click(pause);
+    await waitFor(() => expect(mocks.setOrgPoolPaused).toHaveBeenCalledWith('org_nw', true));
+    unmount();
+    (mocks.reads['/api/orgs/org_nw/pool'] as { status: string }).status = 'paused';
+    render(<OrgBillingPage />);
+    expect(screen.getByRole('switch', { name: 'Pause the credits pool' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('org-pool-pause').textContent).toContain('no seat and no drive wallet can spend');
+  });
+
   it('X-4 (partial): subscribes to wallet:changed for the drives whose wallets it shows', () => {
     render(<OrgBillingPage />);
     expect(mocks.useOrgWalletRealtime).toHaveBeenCalledWith('org_nw', ['d_eng', 'd_cr', 'd_prod']);
@@ -102,11 +119,11 @@ describe('Plan & seats', () => {
     expect(mocks.openOrgBillingPortal).toHaveBeenCalledWith('org_nw');
   });
 
-  it('SEAT-9 (partial): a lapsed org shows Lapsed and the reactivate banner', () => {
+  it('SEAT-9 (partial): a lapsed org shows Lapsed and a way to reactivate (the banner itself is the app shell\'s, OrgSurfaceBanner)', () => {
     mocks.notice = { kind: 'reactivate', reason: 'canceled', canManageBilling: true };
     render(<OrgBillingPage />);
     expect(screen.getByText('Lapsed')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Reactivate' })).toBeTruthy();
+    expect(screen.queryByText('Northwind Labs is unpaid and read-only')).toBeNull();
   });
 
   it('billing off on this deployment says so', () => {

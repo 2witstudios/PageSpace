@@ -522,6 +522,8 @@ describe('reconcileSandboxStorageSerialized', () => {
       advancePublishedAppWatermark: vi.fn(async () => 'advanced' as const),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       orgComputeBillingEpoch: vi.fn(async (tickStart: Date) => tickStart),
+      reserveOrgAccrual: vi.fn(async ({ chargeMillicents }) => ({ kind: 'held' as const, holdId: 'hold-pool', walletId: 'pool', chargeMillicents })),
+      releaseAccrualHold: vi.fn(async () => {}),
       ...overrides,
     };
   }

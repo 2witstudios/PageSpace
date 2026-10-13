@@ -42,6 +42,7 @@ vi.mock('@pagespace/lib/auth/verification-utils', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserSharePage: vi.fn().mockResolvedValue(true),
 }));
 

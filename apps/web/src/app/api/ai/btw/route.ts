@@ -1,4 +1,4 @@
-import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -26,6 +26,7 @@ import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
 import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
@@ -55,13 +56,13 @@ export async function POST(request: Request) {
     const { conversationId, question } = body;
     if (typeof conversationId !== 'string' || typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION_CHARS) return NextResponse.json({ error: 'Invalid side question' }, { status: 400 });
     const [conversation] = await db.select({ userId: conversations.userId, isShared: conversations.isShared, type: conversations.type, contextId: conversations.contextId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    if (!conversation || !(await canAccessConversation(userId, conversation))) {
+    if (!conversation || !(await canAccessConversation(actorFromAuth(auth), conversation))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'conversation_not_accessible', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), conversation?.userId === userId ? conversation.contextId : null, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
     }
 
     const trimmedQuestion = question.trim();
-    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, userId))?.title ?? null });
+    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, actorFromAuth(auth)))?.title ?? null });
 
     // Same admission as a chat turn, keyed off the provider that will ACTUALLY run
     // (resolveProviderModel is what createAIProvider resolves too).
@@ -73,26 +74,13 @@ export async function POST(request: Request) {
     // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).
     const sessionDriveId = await conversationSessionDriveId(conversation);
     const spend = conversationSpend(sessionDriveId, conversationId);
-    // Entitlement exactly as a chat turn decides it: an admin-only provider is a
-    // role block, a paid-tier model is a tier block (a downgraded user's stored
-    // model must not keep running here) — for the tier of whoever funds the call (WAL-8).
-    const admission = resolveGenerationAdmission({
-      provider: effectiveProvider,
-      model: effectiveModel,
-      subscriptionTier: await resolveEntitlementTier(userId, consumerTier, spend),
-      isAdmin: user?.role === 'admin',
-      requiresProSubscription,
-    });
-    if (!admission.allowed) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
-      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
-    }
     // The reservation for this call. Also the ceiling on what an aborted run's
     // estimate may charge (see priceInterruptedStep).
     const holdCents = estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) });
     // Prepaid credit gate BEFORE the provider is built: out_of_credits -> 402, the
     // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
     // so they skip the gate (no hold) exactly as the chat pipeline does.
+    let entitlementTier: SubscriptionTier | undefined;
     if (!isMeteringExempt(effectiveProvider)) {
       const gate = await canConsumeAI(userId, consumerTier, {
         spend,
@@ -106,6 +94,24 @@ export async function POST(request: Request) {
       holdId = gate.holdId;
       walletId = gate.walletId;
       spendFallback = spendFallbackNotice(gate);
+      entitlementTier = gate.entitlementTier;
+    }
+
+    // Entitlement exactly as a chat turn decides it, AFTER the gate: an admin-only provider is a
+    // role block, a paid-tier model a tier block (a downgraded user's stored model must not keep
+    // running here) — for the tier of whoever funds the source the gate just HELD (WAL-8), never a
+    // separate pre-read that could judge a different source. A metering-exempt provider takes no
+    // hold, so its funder is read without one. A refusal frees the hold in the finally below.
+    const admission = resolveGenerationAdmission({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      subscriptionTier: entitlementTier ?? await resolveEntitlementTier(userId, consumerTier, spend),
+      isAdmin: user?.role === 'admin',
+      requiresProSubscription,
+    });
+    if (!admission.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
+      return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
     }
 
     const provider = await createAIProvider(userId, {}, { user: user ?? null, driveId: sessionDriveId });

@@ -65,11 +65,11 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 - WAL-1 One table. A wallet has: owner (user or org), optional subject (drive or agent page), optional parent wallet, monthly allocation, spent, top-up remainder (never expires), UTC period, status (active, paused, over). The existing per-user credit balance becomes the personal root wallet.
 - WAL-2 An org pool is a wallet owned by the org with no subject and no parent. A seat allowance is the per-consumer monthly cap on the pool's own leg (D17.4), not a separate row. A drive wallet has a drive subject; its parent is the org pool for org drives or the owner's personal wallet for personal drives.
 - WAL-3 An allocation is a budget drawn against the parent as spend happens; unspent allocation never leaves the parent. A top-up moves funds into the wallet and lasts until spent.
-- WAL-4 Donations: any authenticated user can add funds to a drive wallet they can see, from their own balance, as a one-off amount. A donation is a funder leg on that wallet, recorded with the donor, and the drive lead can turn donations off for the drive. Supersedes D20.1 owner-only funding.
+- WAL-4 Donations: any authenticated user can add funds to a drive wallet they can see, from their own balance, as a one-off amount. A donation is a funder leg on that wallet, recorded with the donor, never refundable (D-OW-13), and the drive lead can turn donations off for the drive. A donation is the donor's whole leg: it never pays the wallet's debt, which stays the funder's to net from the next allocation (WAL-6c/d). Supersedes D20.1 owner-only funding.
 - WAL-5 Every AI usage row records the wallet charged. Holds are per wallet. Ledger, reconciliation, and monthly reset are keyed on wallet.
 - WAL-6 Overages carry over today's rules rather than inventing new ones. (a) The gate reserves an estimate against the chosen wallet before the call and refuses when the reservation is not covered, so a wallet is never spent past zero by design; only actual-cost overshoot on a covered reservation can exceed it (existing hold and settle path, unchanged). (b) Overshoot never lands on the consumer unless they chose their own credits. (c) Where it lands is set by the wallet's funder: absorb into the parent's debt (the org pool or the owner's balance, D20.2, default) or carry as wallet debt netted from the next allocation. (d) Parent debt is forgiven at renewal exactly as personal debt is today; wallet debt clears when the next allocation lands. (e) A wallet with debt shows the "over" state and the funder is notified once per period. (f) Per-consumer caps and the kill switch (WAL-7) remain the only preventive controls.
 
-- WAL-7 Per-consumer caps (daily and monthly, UTC) exist on every wallet leg; unset means unlimited within the wallet. Defaults on enable: 10 credits a day, 100 credits a month (D20.5, restated in credits). Alerts to the funder at 80% and 100% (D20.6). A kill switch pauses a wallet.
+- WAL-7 Per-consumer caps (daily and monthly, UTC) exist on every wallet leg; unset means unlimited within the wallet. Defaults on enable: 50 credits a day, 1,000 credits a month (D-OW-31, replacing D20.5's 10/100, which sat below one image or uncatalogued model's hold). A guest who may spend a drive wallet is always capped: each window without a cap takes its default (D-OW-4). Alerts to the funder at 80% and 100% (D20.6). A kill switch pauses a wallet; pausing an org pool stops every seat and drive wallet it funds.
 
 - WAL-8 Tier entitlement follows the wallet's root owner: the org's tier inside org drives, the funder's tier on a personal-drive wallet leg, the consumer's own tier on a self-funded leg (D17.3).
 - WAL-9 Storage, sandbox runtime, environments, and published apps in an org drive bill the org: the payer seam answers "org if drives.orgId, else owner". Wallets do not change compute billing.
@@ -113,8 +113,8 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 
 ### SEC — Security
 - SEC-1 Verified email domains (DNS or email verification) with auto-join for new signups on a verified domain, subject to seats.
-- SEC-2 Require two-step sign-in for org members; enforcement blocks org drive access, not the account.
-- SEC-3 Session maximum age for org members.
+- SEC-2 Require two-step sign-in for org members: a user-verified passkey ceremony (D-OW-45). Enforcement blocks org drive access for every credential that opens an org drive, members and guests alike, not the account.
+- SEC-3 Session maximum age for org members: a credential older than the org's limit since its sign-in ceremony is refused org drive access until the person signs in again (D-OW-45).
 - SEC-4 SSO and SCIM are out of scope and named as such in the org Security page.
 
 ### AUD — Audit log
@@ -142,7 +142,7 @@ Each line must be true for the epic to be complete. IDs are stable for task list
 ### X — Cross-cutting
 - X-1 CLI and MCP expose orgs, members, drives, policies, and wallets where the web does.
 - X-2 GDPR export and account deletion account for org membership, wallets, and donations.
-- X-3 Backups and restore preserve orgId, visibility, and wallet rows.
+- X-3 Tenant export/import carries orgId, visibility, org membership and wallet rows (D-OW-46). In-product drive backups record a drive's orgId and visibility in the snapshot, but restore never re-applies them (a drive stays in the org it is in now) and leaves wallet rows untouched.
 - X-4 Realtime events for membership, visibility, and wallet state so sidebar, picker, and chip update without refresh.
 - X-5 Migration: credit_balances BECOMES the wallets table — each existing per-user balance row is migrated in place into that user's personal root wallet in one backfill (decided by Jono at Standup 0, 2026-09-16). There is never a second balance store and no dual-read aliasing; ledger and holds gain walletId in the same migration. The backfill is idempotent, has a dry-run, and is verified by a row-count equality test plus a sum-of-balances equality test before and after.
 

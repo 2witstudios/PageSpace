@@ -2,7 +2,8 @@
  * The /api/storage/info breakdown's rows — REAL Postgres (Spec WAL-9 (partial), #2719 review P2-1).
  *
  * A file uploaded into an org drive bills the org (its usage is derived from its drives), so it
- * is not on the uploader's personal quota. The breakdown must list exactly the files the
+ * is not on the uploader's personal quota; a file in a personal drive bills the drive's OWNER,
+ * whoever uploaded it (the payer seam). The breakdown must list exactly the files the
  * personal quota counts, or the user sees bytes that are not the ones that block their upload
  * (storage-info-core.ts). This runs the actual SQL and holds it to the charge basis,
  * calculateActualStorageUsage.
@@ -25,17 +26,18 @@ import { findUserFileRows } from '../storage-info-repository';
 
 const run = createId().slice(0, 8);
 const lena = createId();
+const marcus = createId();
 const northwind = createId();
 
 let dbAvailable = false;
 
-async function seedDrive(orgId: string | null) {
+async function seedDrive(orgId: string | null, ownerId: string = lena) {
   const id = createId();
   await db.insert(drives).values({
     id,
     name: orgId ? 'Northwind Product' : 'Lena personal',
     slug: `drive-${run}-${id.slice(0, 6)}`,
-    ownerId: lena,
+    ownerId,
     orgId,
     publishSubdomain: `drive-${id}`,
     updatedAt: new Date(),
@@ -43,19 +45,19 @@ async function seedDrive(orgId: string | null) {
   return id;
 }
 
-async function seedFile(driveId: string | null, sizeBytes: number) {
+async function seedFile(driveId: string | null, sizeBytes: number, createdBy: string = lena) {
   const id = createId();
-  await db.insert(files).values({ id, driveId, createdBy: lena, sizeBytes, storagePath: id });
+  await db.insert(files).values({ id, driveId, createdBy, sizeBytes, storagePath: id });
   return id;
 }
 
 /** Deletes only the rows this file creates, children first. */
 async function cleanup() {
-  await db.delete(files).where(eq(files.createdBy, lena));
-  const owned = await db.select({ id: drives.id }).from(drives).where(eq(drives.ownerId, lena));
+  await db.delete(files).where(inArray(files.createdBy, [lena, marcus]));
+  const owned = await db.select({ id: drives.id }).from(drives).where(inArray(drives.ownerId, [lena, marcus]));
   if (owned.length > 0) await db.delete(drives).where(inArray(drives.id, owned.map((d) => d.id)));
   await db.delete(organizations).where(eq(organizations.id, northwind));
-  await db.delete(users).where(eq(users.id, lena));
+  await db.delete(users).where(inArray(users.id, [lena, marcus]));
 }
 
 describe('WAL-9 (partial) the storage-info breakdown lists only personally attributed files', () => {
@@ -72,7 +74,10 @@ describe('WAL-9 (partial) the storage-info breakdown lists only personally attri
   beforeEach(async () => {
     if (!dbAvailable) return;
     await cleanup();
-    await db.insert(users).values({ id: lena, email: `lena-${run}@northwind.test`, name: 'Lena Schulz', updatedAt: new Date() });
+    await db.insert(users).values([
+      { id: lena, email: `lena-${run}@northwind.test`, name: 'Lena Schulz', updatedAt: new Date() },
+      { id: marcus, email: `marcus-${run}@northwind.test`, name: 'Marcus Oyelaran', updatedAt: new Date() },
+    ]);
     await db.insert(organizations).values({ id: northwind, name: 'Northwind Labs', slug: `northwind-${run}`, ownerId: lena });
   });
 
@@ -108,5 +113,20 @@ describe('WAL-9 (partial) the storage-info breakdown lists only personally attri
 
     expect(breakdownBytes).toBe(1_030);
     expect(breakdownBytes).toBe(await calculateActualStorageUsage(lena));
+  });
+
+  it('lists a file a member uploaded into your personal drive, and not one you uploaded into someone else\'s — the drive owner pays', async () => {
+    if (!dbAvailable) return;
+    const lenaDrive = await seedDrive(null);
+    const marcusDrive = await seedDrive(null, marcus);
+    const byMarcusInLenas = await seedFile(lenaDrive, 400, marcus);
+    const byLenaInMarcuss = await seedFile(marcusDrive, 9_000);
+
+    const ids = (await findUserFileRows(lena)).map((r) => r.fileId);
+
+    expect(ids).toContain(byMarcusInLenas);
+    expect(ids).not.toContain(byLenaInMarcuss);
+    expect((await findUserFileRows(marcus)).map((r) => r.fileId)).toEqual([byLenaInMarcuss]);
+    expect(await calculateActualStorageUsage(lena)).toBe(400);
   });
 });

@@ -46,6 +46,7 @@ import { grantPagePermission } from '../permission-mutations';
 import { getUserAccessLevel } from '../permissions';
 import { claimPendingGuestApproval, listSuspendedOrgGuests } from '../guest-holds';
 import { completeApprovedPageGrant } from '../page-grant-admission';
+import { credentialActor } from '../access-actor';
 
 const run = createId().slice(0, 8);
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
@@ -122,7 +123,7 @@ function ctxFor(userId: string): EnforcedAuthContext {
   return EnforcedAuthContext.fromSession(claims);
 }
 
-const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests } });
+const setGuests = (guests: 'off' | 'approve' | 'on') => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch: { guests } });
 const VIEW = { canView: true, canEdit: false, canShare: false, canDelete: false };
 const EDIT = { canView: true, canEdit: true, canShare: false, canDelete: false };
 const grant = (targetUserId: string, permissions = VIEW, pageId = w.page, actor = w.owner) =>
@@ -136,7 +137,7 @@ describe('grantPagePermission asks the guests policy', () => {
     const result = await grant(w.outsider);
     expect(result).toMatchObject({ ok: false, error: { code: 'GUEST_POLICY_OFF' } });
     expect(await grantsOf(w.outsider)).toEqual([]);
-    expect(await getUserAccessLevel(w.outsider, w.page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.page)).toBeNull();
   });
 
   it('POL-2 (partial) guests APPROVE: the grant is queued with exactly what was asked, NOTHING is granted, and the request is audited', async () => {
@@ -238,7 +239,7 @@ describe('guests off parks page-grant-only outsiders', () => {
     if (!off.ok) throw new Error('expected ok');
 
     expect(await grantsOf(w.outsider)).toEqual([]);
-    expect(await getUserAccessLevel(w.outsider, w.page)).toBeNull();
+    expect(await getUserAccessLevel(credentialActor(w.outsider, null), w.page)).toBeNull();
     const [hold] = await holdsOf('suspended');
     expect(hold).toMatchObject({ driveId: w.orgDrive, userId: w.outsider, origin: 'page_grant' });
     expect(hold.parked?.member).toBeNull();

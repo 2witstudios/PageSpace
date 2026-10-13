@@ -34,9 +34,8 @@ describe('planMissedGrantReconcile (pure core)', () => {
     expect(plan.allowanceCents).toBe(allowanceCentsForPaidCents(5000, 'business'));
   });
 
-  it('MON-2 (partial) WAL-5 (partial) with the money model ACTIVE a paid missed grant is paid × the tier ratio (60%), not the whole payment (the active seam)', () => {
-    const plan = planMissedGrantReconcile({ id: 'led_6', userId: 'u6', paidCents: 1500 }, 'pro', true);
+  it('MON-2 (partial) WAL-5 (partial) a paid missed grant is paid × the tier ratio (60%), not the whole payment', () => {
+    const plan = planMissedGrantReconcile({ id: 'led_6', userId: 'u6', paidCents: 1500 }, 'pro');
     expect(plan).toMatchObject({ action: 'grant', allowanceCents: 900 });
-    expect(planMissedGrantReconcile({ id: 'led_7', userId: 'u7', paidCents: 1500 }, 'pro', false)).toMatchObject({ allowanceCents: 1500 });
   });
 });

@@ -41,37 +41,6 @@ export function routeBillingOwner(input: {
   return { kind: 'person' };
 }
 
-/** Structural subset of a Stripe invoice line read for the seat count. */
-export interface OrgInvoiceSeatLine {
-  quantity?: number | null;
-  pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
-}
-
-/**
- * The extra seats an org invoice billed: the quantity on its extra-seat price line — a
- * COUNT, never an amount (amounts come only from the money model). Sizes the pool of a
- * gift at list price ([D-OW-23]; there is no org trial, [D-OW-30]) from the invoice itself, so an invoice.paid
- * that beats the provisioning commit still funds the seats it billed. With several
- * lines for the seat price (prorations), the largest positive quantity is the period's
- * count. Null when the invoice has no seat line or the seat price is not configured.
- */
-export function orgInvoiceExtraSeats(
-  lines: ReadonlyArray<OrgInvoiceSeatLine | null | undefined>,
-  seatPriceId: string,
-): number | null {
-  if (!seatPriceId) return null;
-  let seats: number | null = null;
-  for (const line of lines) {
-    const price = line?.pricing?.price_details?.price;
-    const priceId = typeof price === 'string' ? price : price?.id ?? null;
-    if (priceId !== seatPriceId) continue;
-    const quantity = line?.quantity;
-    if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 0) continue;
-    seats = seats === null ? quantity : Math.max(seats, quantity);
-  }
-  return seats;
-}
-
 export type OrgSubscriptionMirrorPlan = 'apply' | 'ignore_other_subscription' | 'no_row';
 
 /**

@@ -17,9 +17,9 @@ import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
 import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 
 // SEAT-2 P2: an ordinary user gift can only ever be a PERSONAL tier — Business
-// is the organization plan and buying it creates an org, which does not exist
-// for a gifted subscription. Excluded until org gifting is built, not just
-// hidden from a UI; this is the schema that actually validates the request.
+// is the organization plan, gifted ON the org's own subscription through
+// POST /api/admin/orgs/[orgId]/gift-subscription (SEAT-8), never to a person.
+// This is the schema that actually validates the request.
 const GIFTABLE_TIERS = personalTiers().filter((tier) => tier !== 'free');
 
 type RouteContext = { params: Promise<{ userId: string }> };

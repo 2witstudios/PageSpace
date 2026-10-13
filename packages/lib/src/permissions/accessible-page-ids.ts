@@ -1,21 +1,13 @@
 import { db } from '@pagespace/db/db';
-import { sql, type SQL } from '@pagespace/db/operators';
-import { ORGS_ENABLED } from '../organizations/orgs-enabled';
+import { sql } from '@pagespace/db/operators';
 import type { OrgRole } from '@pagespace/db/schema/organizations';
 import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
+import { accessiblePageIdsSource } from './accessible-page-ids-source';
+import type { AccessActor } from './access-actor';
+import { dropWithheldDerivedPages, filterDrivesForActor } from './actor-authentication';
 
 /**
- * The canonical page-visibility set as a FROM-able SQL fragment, for every query that reads it
- * (accessiblePageIds, page payloads, breadcrumbs). The org rules (org Owner/Admin power, implicit
- * Open-drive membership with the POL-6 floor, stale org rows counting for nothing) switch on with
- * ORGS_ENABLED, exactly as they do in getUserAccessLevel; dark, the function is the pre-org decision.
- */
-export function accessiblePageIdsSource(userId: string): SQL {
-  return sql`accessible_page_ids_for_user(${userId}, ${ORGS_ENABLED})`;
-}
-
-/**
- * Returns the set of page IDs the given user can view, computed via the
+ * Returns the set of page IDs the actor can view, computed via the
  * canonical `accessible_page_ids_for_user` Postgres function.
  *
  * The function is the SQL twin of `getUserAccessLevel`'s canView decision —
@@ -26,14 +18,24 @@ export function accessiblePageIdsSource(userId: string): SQL {
  * accessible-page-ids-agreement.integration.test.ts holds the two together.
  * Trashed pages and pages in trashed drives are excluded; expired explicit
  * grants (compared in UTC) are excluded.
+ *
+ * SEC-2/3 (D-OW-45): the function knows nothing of the credential, so the pages of every org drive
+ * whose sign-in policy the actor's credential fails are dropped here, as getUserAccessLevel drops them, and so are
+ * pages restating org-derived content (memory pages, D-OW-62) a contributing org withholds from the credential.
+ * Org power is audited only for the pages that survive.
  */
-export async function accessiblePageIds(userId: string): Promise<string[]> {
-  if (!userId) return [];
-  const result = await db.execute<OrgPowerRow & { page_id: string }>(
-    sql`SELECT page_id, org_power_drive_id, org_power_org_id, org_power_role FROM ${accessiblePageIdsSource(userId)}`,
+export async function accessiblePageIds(actor: AccessActor): Promise<string[]> {
+  if (!actor.userId) return [];
+  const result = await db.execute<OrgPowerRow & { page_id: string; drive_id: string }>(
+    sql`SELECT a.page_id, p."driveId" AS drive_id, a.org_power_drive_id, a.org_power_org_id, a.org_power_role
+        FROM ${accessiblePageIdsSource(actor.userId)} a
+        JOIN pages p ON p.id = a.page_id`,
   );
-  auditOrgPowerAccess(userId, result.rows);
-  return result.rows.map((row) => row.page_id);
+  const allowedDrives = await filterDrivesForActor(actor, [...new Set(result.rows.map((row) => row.drive_id))]);
+  const rows = result.rows.filter((row) => allowedDrives.has(row.drive_id));
+  auditOrgPowerAccess(actor.userId, rows);
+  // D-OW-62: a page restating org-derived content (a memory page) is withheld from a credential its orgs refuse.
+  return dropWithheldDerivedPages(actor, rows.map((row) => row.page_id));
 }
 
 /** The function's ORG-4 columns: set only when org Owner/Admin power opened a PRIVATE drive's page. */

@@ -60,7 +60,7 @@ describe('wallets', () => {
 
   it('WAL-1 (partial): carries owner, optional subject, optional parent, allocation, spent, top-up, debt, UTC period, status', () => {
     expect(Object.keys(columns).sort()).toEqual([
-      'alwaysOwnCredits', 'createdAt', 'debtCents', 'defaultSpendSource', 'donationsEnabled', 'fallbackRule', 'id', 'monthlyAllowanceCents',
+      'alwaysOwnCredits', 'createdAt', 'debtCents', 'defaultSpendSource', 'donationsEnabled', 'fallbackRule', 'guestSpendEnabled', 'id', 'monthlyAllowanceCents',
       'monthlyPeriodEnd', 'monthlyPeriodStart', 'monthlyRemainingCents', 'orgId', 'overshootChoice', 'ownerType',
       'parentWalletId', 'pendingMillicents', 'spentCents', 'status', 'subjectId', 'subjectType',
       'topupRemainingCents', 'updatedAt', 'userId',
@@ -84,6 +84,7 @@ describe('wallets', () => {
       'wallets_debt_cents_nonneg',
       'wallets_default_spend_source_valid',
       'wallets_fallback_rule_valid',
+      'wallets_guest_spend_subject_wallet',
       'wallets_monthly_allowance_nonneg',
       'wallets_monthly_remaining_nonneg',
       'wallets_not_own_parent',

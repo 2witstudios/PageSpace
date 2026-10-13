@@ -7,7 +7,7 @@ import {
   listPendingDriveJoinRequests,
   requestToJoinDrive,
 } from '@pagespace/lib/services/drive-join-request-service';
-import { authenticateOrgRequest, ORG_READ_AUTH, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authenticateOrgRequest, refuseDriveCredential, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
 import { safeParseBody } from '@/lib/validation/parse-body';
 
@@ -17,7 +17,9 @@ import { safeParseBody } from '@/lib/validation/parse-body';
  * GET  the pending requests, for the drive lead or an org Owner/Admin.
  * POST ask to join; idempotent while a request is open. A request grants nothing until approved.
  *
- * Session only: CLI and MCP parity is Wave G (X-1). Dark while ORGS_ENABLED is false.
+ * A session or an unscoped MCP key (X-1: `drives.listJoinRequests`, `drives.requestToJoin`); the drive's
+ * org sign-in policy applies to the credential. Authority is the service's, through requireOrgRole
+ * (ORG-5). Dark while ORGS_ENABLED is false.
  */
 
 const requestSchema = z.object({
@@ -28,10 +30,12 @@ type RouteContext = { params: Promise<{ driveId: string }> };
 
 export async function GET(request: Request, context: RouteContext) {
   const { driveId } = await context.params;
-  const gate = await authenticateOrgRequest(request, ORG_READ_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
+  const refused = await refuseDriveCredential(request, gate, driveId);
+  if (refused) return refused;
   try {
-    const result = await listPendingDriveJoinRequests(gate.userId, driveId);
+    const result = await listPendingDriveJoinRequests(gate.actor, driveId);
     if (!result.ok) return orgRefusalResponse(result);
     auditRequest(request, {
       eventType: 'data.read',
@@ -49,8 +53,10 @@ export async function GET(request: Request, context: RouteContext) {
 
 export async function POST(request: Request, context: RouteContext) {
   const { driveId } = await context.params;
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
+  const refused = await refuseDriveCredential(request, gate, driveId);
+  if (refused) return refused;
 
   const parsed = await safeParseBody(request, requestSchema);
   if (!parsed.success) return parsed.response;

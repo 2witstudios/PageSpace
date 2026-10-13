@@ -7,7 +7,7 @@ import { TIER_PLAN_LIMITS } from '../subscription-tiers';
 
 describe('orgPlanQuote', () => {
   it('UI-6 (partial): 13 seats on Business is $50 + 8 extra seats × $10 = $130 a month', () => {
-    const quote = orgPlanQuote(13, true);
+    const quote = orgPlanQuote(13);
     expect(quote).toMatchObject({
       seats: 13,
       includedSeats: 5,
@@ -20,25 +20,23 @@ describe('orgPlanQuote', () => {
   });
 
   it('UI-6 (partial): the included credits are the money-model ratio of the price (7,800 credits for $130 at 60%)', () => {
-    expect(orgPlanQuote(13, true).includedCreditCents).toBe(7_800);
-    expect(orgPlanQuote(15, true).includedCreditCents).toBe(9_000);
+    expect(orgPlanQuote(13).includedCreditCents).toBe(7_800);
+    expect(orgPlanQuote(15).includedCreditCents).toBe(9_000);
   });
 
-  it('follows the money-model switch rather than a hard-coded ratio', () => {
-    for (const active of [true, false]) {
-      const quote = orgPlanQuote(9, active);
-      expect(quote.includedCreditCents).toBe(allowanceCentsForPaidCents(quote.totalCents, 'business', active));
-    }
+  it('derives the included credits from the money-model ratio rather than a hard-coded figure', () => {
+    const quote = orgPlanQuote(9);
+    expect(quote.includedCreditCents).toBe(allowanceCentsForPaidCents(quote.totalCents, 'business'));
   });
 
   it('never quotes fewer than the included seats: 1 seat still pays the $50 base', () => {
-    expect(orgPlanQuote(1, true)).toMatchObject({ seats: 1, extraSeats: 0, extraSeatsCents: 0, totalCents: 5_000 });
-    expect(orgPlanQuote(0, true).totalCents).toBe(5_000);
+    expect(orgPlanQuote(1)).toMatchObject({ seats: 1, extraSeats: 0, extraSeatsCents: 0, totalCents: 5_000 });
+    expect(orgPlanQuote(0).totalCents).toBe(5_000);
   });
 
   it('reads the base price, included seats and seat price from the tier table', () => {
     const business = TIER_PLAN_LIMITS.business;
-    const quote = orgPlanQuote(business.includedSeats + 2, true);
+    const quote = orgPlanQuote(business.includedSeats + 2);
     expect(quote.basePriceCents).toBe(business.priceMonthlyUsd * 100);
     expect(quote.extraSeatPriceCents).toBe(business.extraSeatUsd * 100);
     expect(quote.includedSeats).toBe(business.includedSeats);
@@ -56,8 +54,8 @@ describe('one source for the org list price and the extra-seat quantity', () => 
 
   it('a gifted pool is the ratio of the same list price the quote shows', () => {
     for (const extra of [0, 1, 10]) {
-      expect(orgPoolListPriceGrantCents(extra, true)).toBe(allowanceCentsForPaidCents(orgListPriceCents(extra), 'business', true));
-      expect(orgPlanQuote(5 + extra, true).includedCreditCents).toBe(orgPoolListPriceGrantCents(extra, true));
+      expect(orgPoolListPriceGrantCents(extra)).toBe(allowanceCentsForPaidCents(orgListPriceCents(extra), 'business'));
+      expect(orgPlanQuote(5 + extra).includedCreditCents).toBe(orgPoolListPriceGrantCents(extra));
     }
   });
 });

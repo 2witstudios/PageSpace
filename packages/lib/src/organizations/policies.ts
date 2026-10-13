@@ -30,6 +30,14 @@ import type { OpenRoleFloor } from './policies-core';
 import { kickSuspendedGuests } from '../permissions/guest-holds';
 import { isOrgActive } from './status';
 import { ORG_LAPSED_CODE, ORG_LAPSED_MESSAGE } from './status-core';
+import type { VerifiedAuthentication } from '../auth/authentication-evidence';
+import {
+  decideSignInPolicyChange,
+  signInPolicyTightened,
+  type OrgAuthenticationDenialCode,
+  type OrgAuthenticationPolicy,
+} from './authentication-policy-core';
+import { countOrgSignInBlocked, type SignInBlockedCounts } from './sign-in-blocked';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -51,6 +59,8 @@ export type UpdateOrgPoliciesResult =
       restored: PolicySuspensionItem[];
       /** What the change newly forbids that is blocked where it is used rather than suspended (counts, a bounded list). */
       blocked: PolicyBlockedItems;
+      /** POL-1 for the sign-in keys: who a tightened sign-in policy now refuses (counts only); null when it did not tighten. */
+      signInBlocked: SignInBlockedCounts | null;
     }
   | { ok: false; reason: 'not_found' }
   /**
@@ -62,9 +72,24 @@ export type UpdateOrgPoliciesResult =
    * POL-6: raising the Open-drive role floor while some Open drive's default role is below it would leave those
    * drives' members under the floor; refused, nothing stored, and the drives named (bounded) so they can be fixed.
    */
-  | { ok: false; reason: 'open_role_floor'; floor: OpenRoleFloor; drives: Array<{ id: string; name: string }> };
+  | { ok: false; reason: 'open_role_floor'; floor: OpenRoleFloor; drives: Array<{ id: string; name: string }> }
+  /**
+   * D-OW-45: loosening a sign-in policy needs the acting credential to satisfy the policy in force (judged under the
+   * org row's lock, against the stored value). Nothing is stored; the code says which ceremony would satisfy it.
+   */
+  | { ok: false; reason: OrgAuthenticationDenialCode }
+  /**
+   * D-OW-47: tightening it needs the acting credential to satisfy the RESULTING policy, or the Admin would lock
+   * themselves out of the org's admin routes. Nothing is stored; `requires` names the ceremony that would.
+   */
+  | { ok: false; reason: 'org_policy_would_lock_out_actor'; requires: OrgAuthenticationDenialCode };
 
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+const signInPolicy = (p: OrgPolicies): OrgAuthenticationPolicy => ({
+  requireStrongSignIn: p.requireStrongSignIn,
+  maximumSessionAgeMinutes: p.maximumSessionAgeMinutes,
+});
 
 /** Ids listed inline on an audit row; the full set is always available from the list endpoint. */
 export const AUDIT_LISTED_IDS = 200;
@@ -90,8 +115,11 @@ export function policyChangeAuditEvents(input: {
   suspended: readonly PolicySuspensionItem[];
   restored: readonly PolicySuspensionItem[];
   blocked: PolicyBlockedItems;
+  /** Who a tightened sign-in policy now refuses (counts only, no identities); null or absent when it did not tighten. */
+  signInBlocked?: SignInBlockedCounts | null;
 }): OrgAuditEvent[] {
   const { orgId, actorId, changes, suspended, restored, blocked } = input;
+  const signInBlocked = input.signInBlocked ?? null;
   if (changes.length === 0) return [];
   const base = { orgId, actorId, resourceType: 'organization', resourceId: orgId } as const;
   const events: OrgAuditEvent[] = [{ ...base, eventType: 'org.policy.changed', details: { changes: changes.map((c) => ({ key: c.key, from: c.from, to: c.to })) } }];
@@ -99,11 +127,17 @@ export function policyChangeAuditEvents(input: {
     if (items.length === 0) continue;
     events.push({ ...base, eventType, details: { counts: countsByKind(items), total: items.length, listed: listed(items), truncated: items.length > AUDIT_LISTED_IDS } });
   }
-  if (blocked.total > 0) {
+  if (blocked.total > 0 || (signInBlocked && (signInBlocked.members > 0 || signInBlocked.credentials > 0))) {
     events.push({
       ...base,
       eventType: 'org.policy.blocked',
-      details: { counts: blocked.counts, total: blocked.total, listed: listed(blocked.items), truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS },
+      details: {
+        counts: blocked.counts,
+        total: blocked.total,
+        listed: listed(blocked.items),
+        truncated: blocked.items.length < blocked.total || blocked.items.length > AUDIT_LISTED_IDS,
+        ...(signInBlocked ? { signIn: signInBlocked } : {}),
+      },
     });
   }
   return events;
@@ -114,8 +148,14 @@ export function policyChangeAuditEvents(input: {
  * ONE transaction, so there is no moment where the policy says off and an existing link is still live
  * for lack of a marker. Its audit events are staged in that same transaction (AUD-1) and published after commit.
  */
-export async function updateOrgPolicies(input: { orgId: string; actorId: string; patch: OrgPoliciesPatch }): Promise<UpdateOrgPoliciesResult> {
-  const { orgId, actorId, patch } = input;
+export async function updateOrgPolicies(input: {
+  orgId: string;
+  actorId: string;
+  /** The acting credential's server-verified evidence (D-OW-45): required, so a caller cannot forget it. */
+  actorAuthentication: VerifiedAuthentication | null;
+  patch: OrgPoliciesPatch;
+}): Promise<UpdateOrgPoliciesResult> {
+  const { orgId, actorId, actorAuthentication, patch } = input;
   // A policy change can be chosen as a deadlock victim by a concurrent multi-step write (re-verify N6); it rolls back
   // whole, so it is simply run again.
   const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
@@ -126,32 +166,46 @@ export async function updateOrgPolicies(input: { orgId: string; actorId: string;
     const after = parseOrgPolicies(stored);
     // [D-OW-33] read under the org row's lock, so the change judged is the one stored.
     if (!policyChangeOnlyRestricts(before, after) && !(await isOrgActive(orgId, { executor: tx }))) return { lapsed: true as const };
+    const signIn = decideSignInPolicyChange({
+      before: signInPolicy(before), after: signInPolicy(after), authentication: actorAuthentication, nowMs: Date.now(),
+    });
+    if (!signIn.allowed) return { lapsed: false as const, refused: false as const, signInRefused: signIn };
     if (after.openDriveRoleFloor !== before.openDriveRoleFloor) {
       const below = await openDrivesBelowFloor(tx, orgId, after.openDriveRoleFloor);
-      if (below.length > 0) return { lapsed: false as const, refused: true as const, floor: after.openDriveRoleFloor, drives: below };
+      if (below.length > 0) return { lapsed: false as const, refused: true as const, signInRefused: null, floor: after.openDriveRoleFloor, drives: below };
     }
     const kinds = suspensionKindsChanged(before, after);
     const outcome = await applySuspension(tx, orgId, after, kinds);
     // Read in the same snapshot as the change: the existing items a newly forbidden, non-suspendable kind reaches.
     const blocked = await listPolicyBlockedItems(tx, orgId, after, newlyBlockedKinds(before, after), AUDIT_LISTED_IDS);
+    const signInBlocked = signInPolicyTightened(signInPolicy(before), signInPolicy(after))
+      ? await countOrgSignInBlocked(tx, orgId, signInPolicy(after))
+      : null;
     await tx.update(organizations).set({ policies: stored }).where(eq(organizations.id, orgId));
     const changes: PolicyChange[] = ORG_POLICY_KEYS.filter((k) => !same(before[k], after[k])).map((key) => ({ key, from: before[key], to: after[key] }));
-    // AUD-1: the change's events commit with it (the outbox), listing what it suspended, restored and blocked.
-    const staged = await stageOrgAuditEvents(tx, policyChangeAuditEvents({ orgId, actorId, changes, suspended: outcome.suspended, restored: outcome.restored, blocked }));
-    return { lapsed: false as const, refused: false as const, after, changes, outcome, blocked, staged };
+    // AUD-1: the change's events commit with it (the outbox), listing what it suspended, restored and blocked —
+    // and, for the sign-in keys (POL-1), who a tightened sign-in policy now refuses, by count.
+    const staged = await stageOrgAuditEvents(tx, policyChangeAuditEvents({ orgId, actorId, changes, suspended: outcome.suspended, restored: outcome.restored, blocked, signInBlocked }));
+    return { lapsed: false as const, refused: false as const, signInRefused: null, after, changes, outcome, blocked, signInBlocked, staged };
   }));
   if (!done) return { ok: false, reason: 'not_found' };
   if (done.lapsed) return { ok: false, reason: ORG_LAPSED_CODE, message: ORG_LAPSED_MESSAGE };
+  if (done.signInRefused) {
+    const refusal = done.signInRefused;
+    return refusal.code === 'org_policy_would_lock_out_actor'
+      ? { ok: false, reason: refusal.code, requires: refusal.requires }
+      : { ok: false, reason: refusal.code };
+  }
   if (done.refused) return { ok: false, reason: 'open_role_floor', floor: done.floor, drives: done.drives };
 
-  const { after, changes, outcome, blocked, staged } = done;
+  const { after, changes, outcome, blocked, signInBlocked, staged } = done;
   // Realtime: a parked guest must stop receiving events in the drive's rooms now, not at their next reconnect.
   // Best effort and never throws; the per-event permission recheck is the enforcement either way.
   await kickSuspendedGuests(
     outcome.suspended.filter((i) => i.kind === 'guests' && i.userId).map((i) => ({ holdId: i.id, driveId: i.driveId, userId: i.userId ?? null, email: null, origin: 'invite' as const, createdAt: new Date() })),
   );
   await publishOrgAuditEvents(staged);
-  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked };
+  return { ok: true, policies: after, changes, suspended: outcome.suspended, restored: outcome.restored, blocked, signInBlocked };
 }
 
 export type { SuspensionKind };

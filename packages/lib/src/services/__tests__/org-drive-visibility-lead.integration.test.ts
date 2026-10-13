@@ -29,6 +29,7 @@ import type { AffectedUser } from '../org-membership-sync-core';
 import { getDriveRecipientUserIds } from '../drive-member-service';
 import { listAccessibleDrives } from '../drive-service';
 import { getUserDriveAccess } from '../../permissions/permissions';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -101,7 +102,7 @@ async function rowsBySource(driveId: string) {
 }
 
 async function resolvesFor(driveId: string, people: string[]) {
-  return Object.fromEntries(await Promise.all(people.map(async (u) => [u, await getUserDriveAccess(u, driveId)] as const)));
+  return Object.fromEntries(await Promise.all(people.map(async (u) => [u, await getUserDriveAccess(credentialActor(u, null), driveId)] as const)));
 }
 
 const sorted = (ids: string[]) => [...ids].sort();
@@ -145,7 +146,7 @@ describe('changeDriveVisibility', () => {
   });
 
   it('DRV-6 (partial) a Restricted drive leaves the plain member\'s picker and sidebar; turning it Open again brings it back', async () => {
-    const listed = async () => (await listAccessibleDrives(lena)).some((d) => d.id === product);
+    const listed = async () => (await listAccessibleDrives(credentialActor(lena, null))).some((d) => d.id === product);
     expect(await listed()).toBe(true);
 
     await changeDriveVisibility(marcus, product, { orgVisibility: 'RESTRICTED' }, orgDriveServiceDeps);
@@ -159,8 +160,8 @@ describe('changeDriveVisibility', () => {
     await changeDriveVisibility(jono, product, { orgVisibility: 'PRIVATE' }, orgDriveServiceDeps);
 
     expect(await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, product), eq(driveMembers.userId, lena)))).toEqual([]);
-    expect(await getUserDriveAccess(lena, product)).toBe(false);
-    expect(await getUserDriveAccess(eve, product)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(lena, null), product)).toBe(false);
+    expect(await getUserDriveAccess(credentialActor(eve, null), product)).toBe(true);
   });
 
   it('DRV-4 (partial) a plain org member and an outsider are refused and nothing changes', async () => {
@@ -202,7 +203,7 @@ describe('changeOrgDriveLead', () => {
     const rows = await rowsBySource(product);
     // The new lead holds no row; the former lead now has the org row every member of an Open drive has.
     expect(rows.org).toEqual(sorted([jono, priya, marcus, nina]));
-    expect(await getUserDriveAccess(marcus, product)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(marcus, null), product)).toBe(true);
     const [event] = await db.select().from(activityLogs)
       .where(and(eq(activityLogs.resourceId, product), eq(activityLogs.operation, 'ownership_transfer')));
     expect(event).toMatchObject({ userId: marcus, previousValues: { ownerId: marcus }, newValues: { ownerId: lena } });
@@ -215,8 +216,8 @@ describe('changeOrgDriveLead', () => {
     expect(await changeOrgDriveLead(priya, research, { newLeadId: lena }, orgDriveServiceDeps)).toMatchObject({ ok: true, changed: true });
 
     expect(await ownerRowsOf(research, marcus)).toEqual([]);
-    expect(await getUserDriveAccess(marcus, research)).toBe(false);
-    expect(await getUserDriveAccess(lena, research)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(marcus, null), research)).toBe(false);
+    expect(await getUserDriveAccess(credentialActor(lena, null), research)).toBe(true);
   });
 
   it('DRV-1 (partial) an org Admin may set the lead; a plain member may not, and nothing moves', async () => {

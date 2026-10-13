@@ -175,7 +175,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveRoles with driveId', async () => {

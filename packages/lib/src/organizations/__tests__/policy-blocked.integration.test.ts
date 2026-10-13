@@ -144,7 +144,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-const change = (patch: Parameters<typeof updateOrgPolicies>[0]['patch']) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch });
+const change = (patch: Parameters<typeof updateOrgPolicies>[0]['patch']) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch });
 const blockedEvent = () => audit.events.find((e) => e.eventType === 'org.policy.blocked');
 type Listed = { kind: string; type: string; id: string; driveId: string };
 

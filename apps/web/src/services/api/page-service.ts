@@ -31,6 +31,7 @@ import {
 } from '@pagespace/lib/memory/memory-pages';
 import { OrgLapsedError, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -409,29 +410,29 @@ export const pageService = {
   /**
    * Check if user can view a page
    */
-  async canUserView(userId: string, pageId: string): Promise<boolean> {
-    return canUserViewPage(userId, pageId);
+  async canUserView(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserViewPage(actor, pageId);
   },
 
   /**
    * Check if user can edit a page
    */
-  async canUserEdit(userId: string, pageId: string): Promise<boolean> {
-    return canUserEditPage(userId, pageId);
+  async canUserEdit(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserEditPage(actor, pageId);
   },
 
   /**
    * Check if user can delete a page
    */
-  async canUserDelete(userId: string, pageId: string): Promise<boolean> {
-    return canUserDeletePage(userId, pageId);
+  async canUserDelete(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserDeletePage(actor, pageId);
   },
 
   /**
    * Check if user is drive owner or admin
    */
-  async isDriveOwnerOrAdmin(userId: string, driveId: string): Promise<boolean> {
-    return isDriveOwnerOrAdmin(userId, driveId);
+  async isDriveOwnerOrAdmin(actor: AccessActor, driveId: string): Promise<boolean> {
+    return isDriveOwnerOrAdmin(actor, driveId);
   },
 
   /**
@@ -446,12 +447,12 @@ export const pageService = {
    */
   async getPage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     options?: { authorizeView?: (pageId: string) => Promise<boolean> },
   ): Promise<GetPageResult> {
     // Check authorization — routes serving scoped MCP tokens inject
     // canPrincipalViewPage so the token's own role decides (see CreatePageOptions.authorizeEdit).
-    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(userId, id));
+    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(actor, id));
     const canView = await authorizeView(pageId);
     if (!canView) {
       return { success: false, error: 'You do not have permission to view this page', status: 403 };
@@ -506,13 +507,14 @@ export const pageService = {
    */
   async updatePage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     updates: UpdatePageParams,
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
+    const userId = actor.userId;
     // Check authorization (can be skipped by callers that have already verified a sufficient permission)
     if (!options?.skipPermissionCheck) {
-      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(userId, id));
+      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(actor, id));
       const canEdit = await authorizeEdit(pageId);
       if (!canEdit) {
         return { success: false, error: 'You need edit permission to modify this page', status: 403 };
@@ -652,11 +654,12 @@ export const pageService = {
    */
   async trashPage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     options: { trashChildren: boolean; metadata?: Record<string, unknown>; authorizeDelete?: (pageId: string) => Promise<boolean> },
   ): Promise<TrashPageResult> {
+    const userId = actor.userId;
     // Check authorization — injectable for scoped MCP tokens (canPrincipalDeletePage).
-    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(userId, id));
+    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(actor, id));
     const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
@@ -750,7 +753,8 @@ export const pageService = {
   /**
    * Create a new page
    */
-  async createPage(userId: string, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+  async createPage(actor: AccessActor, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+    const userId = actor.userId;
     // Validate required fields
     if (!params.title || !params.type || !params.driveId) {
       return { success: false, error: 'Missing required fields', status: 400 };
@@ -767,7 +771,7 @@ export const pageService = {
 
     // Check authorization — nested pages require edit permission on the parent;
     // root-level pages treat the drive as the root parent and require canEdit on the drive.
-    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(userId, targetId));
+    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(actor, targetId));
     if (params.parentId) {
       const parentPage = await db.query.pages.findFirst({
         where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),

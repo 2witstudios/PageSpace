@@ -26,7 +26,7 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -52,6 +52,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -132,6 +133,7 @@ import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
 import { createId } from '@paralleldrive/cuid2';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const { txInsert, txInsertValues, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
   txInsert: ReturnType<typeof vi.fn>;
@@ -219,8 +221,8 @@ const setRelationship = (rel: DriveRelationship) => { nonLead = rel; };
 
 function setupSuccessScenario() {
   nonLead = NONE;
-  vi.mocked(loadDriveRelationship).mockImplementation(async (userId, drive) =>
-    drive.ownerId === userId ? { isOwner: true, membership: null } : nonLead);
+  vi.mocked(loadDriveRelationship).mockImplementation(async (actor, drive) =>
+    drive.ownerId === actor.userId ? { isOwner: true, membership: null } : nonLead);
 
   // Auth
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
@@ -403,7 +405,7 @@ describe('POST /api/pages/bulk-copy', () => {
       const response = await POST(createRequest(validBody));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
     });
 
     it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members', async () => {

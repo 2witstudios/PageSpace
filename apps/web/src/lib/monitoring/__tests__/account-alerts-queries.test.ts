@@ -66,6 +66,9 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((col: unknown, vals: unknown[]) => ({ type: 'inArray', col, vals })),
 }));
 
+const mockWalletDriftAlerts = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/wallet-reconcile', () => ({ walletDriftAlerts: mockWalletDriftAlerts }));
+
 import { getBalanceDriftAlerts, getNegativeMarginAccounts } from '../monitoring-queries';
 
 function resetQueue(...sets: unknown[][]) {
@@ -81,44 +84,26 @@ beforeEach(() => {
 });
 
 describe('getBalanceDriftAlerts', () => {
-  it('returns only flagged accounts, worst drift first, with expected/drift computed', async () => {
-    resetQueue([
-      // drift 0 → not flagged
-      { userId: 'a', userName: null, userEmail: 'a@x', materializedSpendableCents: 700, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-      // drift +100 → flagged
-      { userId: 'b', userName: null, userEmail: 'b@x', materializedSpendableCents: 800, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-      // drift -50 → flagged
-      { userId: 'c', userName: null, userEmail: 'c@x', materializedSpendableCents: 650, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
+  it('WAL-5 (partial) reads every drifted WALLET through the one lib reader and names the person behind a personal one', async () => {
+    mockWalletDriftAlerts.mockResolvedValueOnce([
+      { walletId: 'w-root', kind: 'personal_root', ownerType: 'user', userId: 'u1', orgId: null, subjectType: null, subjectId: null, expectedNetCents: 700, materializedNetCents: 800, driftCents: 100, debtCents: 0 },
+      { walletId: 'w-pool', kind: 'org_pool', ownerType: 'org', userId: null, orgId: 'o1', subjectType: null, subjectId: null, expectedNetCents: 5000, materializedNetCents: 4950, driftCents: -50, debtCents: 0 },
     ]);
+    resetQueue([{ userId: 'u1', userName: 'Una', userEmail: 'u1@x' }]);
 
-    const rows = await getBalanceDriftAlerts(10);
+    const rows = await getBalanceDriftAlerts(10, 20);
 
-    expect(rows.map((r) => r.userId)).toEqual(['b', 'c']); // sorted by |drift| desc
-    expect(rows[0]).toMatchObject({ userId: 'b', expectedSpendableCents: 700, driftCents: 100 });
-    expect(rows[1]).toMatchObject({ userId: 'c', driftCents: -50 });
-    // The flagged helper field is stripped from the returned shape.
-    expect('flagged' in rows[0]).toBe(false);
+    expect(mockWalletDriftAlerts).toHaveBeenCalledWith({ toleranceCents: 10, limit: 20 });
+    expect(rows).toEqual([
+      { walletId: 'w-root', walletKind: 'personal_root', userId: 'u1', userName: 'Una', userEmail: 'u1@x', orgId: null, subjectId: null, expectedNetCents: 700, materializedNetCents: 800, driftCents: 100, debtCents: 0 },
+      { walletId: 'w-pool', walletKind: 'org_pool', userId: null, userName: null, userEmail: null, orgId: 'o1', subjectId: null, expectedNetCents: 5000, materializedNetCents: 4950, driftCents: -50, debtCents: 0 },
+    ]);
   });
 
-  it('returns nothing when every account is within tolerance', async () => {
-    resetQueue([
-      { userId: 'a', userName: null, userEmail: null, materializedSpendableCents: 705, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-    ]);
+  it('reads no people when no wallet drifted', async () => {
+    mockWalletDriftAlerts.mockResolvedValueOnce([]);
     expect(await getBalanceDriftAlerts(10)).toEqual([]);
-  });
-});
-
-describe('getBalanceDriftAlerts query shape', () => {
-  it('WAL-5 (partial): compares each personal root wallet against the ledger rows keyed on THAT wallet', async () => {
-    resetQueue([]);
-    await getBalanceDriftAlerts();
-
-    // Ledger joined by walletId, not userId: a drive wallet's ledger rows must never
-    // count toward its owner's personal balance.
-    expect(chainCalls).toContainEqual(['leftJoin', expect.anything(), { type: 'eq', col: 'CL_WALLET', val: 'W_ID' }]);
-    expect(chainCalls).not.toContainEqual(['leftJoin', expect.anything(), { type: 'eq', col: 'CL_USER', val: 'CB_USER' }]);
-    // Only personal root wallets are checked — the former credit_balances rows.
-    expect(chainCalls).toContainEqual(['where', PERSONAL_ROOT]);
+    expect(mockSelect).not.toHaveBeenCalled();
   });
 });
 

@@ -422,7 +422,7 @@ const makeRequest = (extraBody: Record<string, unknown> = {}) =>
     }),
   });
 
-/** A drive id only the CLIENT claims — from the legacy, unchecked locationContext. */
+/** A drive only the CLIENT claims, in the removed client-computed locationContext body field. */
 const CLIENT_CLAIMED_DRIVE = { currentDrive: { id: 'drive-client-claimed', name: 'Not mine', slug: 'not-mine' } };
 
 const makeContext = () => ({ params: Promise.resolve({ id: 'conv-1' }) });
@@ -501,29 +501,34 @@ describe('POST /api/ai/global/[id]/messages — prepaid credit gate', () => {
     expect(resolveOrCreateConversation).not.toHaveBeenCalled();
   });
 
-  it('POL-8 (partial) the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all for a client-claimed one', async () => {
+  it('POL-8 (partial) the provider factory is named the SERVER-resolved drive with a contextRef, and no drive at all without one', async () => {
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
-    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }), makeContext());
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
     expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-server-resolved' });
 
-    await POST(makeRequest({ locationContext: CLIENT_CLAIMED_DRIVE }), makeContext());
+    await POST(makeRequest(), makeContext());
     expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: null });
   });
 
-  it('SPEND-7 (partial) a client-supplied locationContext drive (legacy body, no contextRef) never becomes the spend drive: the call spends personal', async () => {
-    await POST(makeRequest({ locationContext: CLIENT_CLAIMED_DRIVE }), makeContext());
+  it('SPEND-8 (partial) a request carrying the removed client-computed locationContext is refused (400) before any gate or spend: it never runs on personal credits inside a drive the server did not resolve', async () => {
+    for (const extra of [{ locationContext: CLIENT_CLAIMED_DRIVE }, { contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }]) {
+      const response = await POST(makeRequest(extra), makeContext());
+      expect(response.status).toBe(400);
+    }
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(streamText).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) a global-assistant turn with no drive (no contextRef) spends personal credits', async () => {
+    await POST(makeRequest(), makeContext());
 
     expect(resolveRequestContext).not.toHaveBeenCalled();
     expect(canConsumeAI).toHaveBeenCalledTimes(1);
-    // No stored choice is read against a client-supplied drive either: the target is plain personal.
     expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(PERSONAL_SPEND);
   });
 
   it('SPEND-7 (partial) SPEND-3 (partial) with a contextRef the spend drive is the server-resolved drive, never the one the client claims, and the turn names its conversation', async () => {
-    await POST(
-      makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' }, locationContext: CLIENT_CLAIMED_DRIVE }),
-      makeContext(),
-    );
+    await POST(makeRequest({ contextRef: { routeType: 'drive', driveId: 'drive-client-claimed' } }), makeContext());
 
     expect(resolveRequestContext).toHaveBeenCalledTimes(1);
     expect(vi.mocked(canConsumeAI).mock.calls[0][2].spend).toEqual(conversationSpend('drive-server-resolved', 'conv-1'));

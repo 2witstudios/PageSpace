@@ -241,6 +241,8 @@ restricted to app administrators.`,
           openrouterGenerationIds: args.generationIds,
           holdId,
           walletId,
+          // SPEND-10: an image an automation run generates is that automation's spend.
+          automationRef: context?.creditSpend?.automationRef,
           success: true,
           source: 'image_generation',
           conversationId: context?.conversationId,

@@ -12,6 +12,7 @@ import {
   renderDriveWallet,
   renderMyWallets,
   walletsDriveHandler,
+  walletsDriveSourceHandler,
   walletsListHandler,
   walletsSourceHandler,
 } from '@pagespace/cli';
@@ -211,10 +212,36 @@ describe('pagespace wallets source', () => {
   });
 });
 
+describe('pagespace wallets drive-source', () => {
+  it('SPEND-2 (partial) X-1 (partial) passes the drive through and prints what a new conversation there would spend', async () => {
+    const { conversationId: _c, chosenWalletId: _w, ...body } = SOURCE;
+    const getDriveSource = vi.fn(async () => body);
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ sdk: fakeSdk({ wallets: { getDriveSource } }), stdout });
+    expect(await walletsDriveSourceHandler(ctx, commandIntent(['d1']))).toBe(EXIT_SUCCESS);
+    expect(getDriveSource).toHaveBeenCalledWith({ driveId: 'd1' });
+    expect(stdout.lines.join('')).toContain('Drive d1');
+    expect(stdout.lines.join('')).toContain('a new conversation: spends from');
+  });
+
+  it('X-1 (partial) refuses a missing drive', async () => {
+    const getDriveSource = vi.fn();
+    const ctx = createFakeContext({ sdk: fakeSdk({ wallets: { getDriveSource } }) });
+    expect(await walletsDriveSourceHandler(ctx, commandIntent([]))).toBe(EXIT_USAGE_ERROR);
+    expect(getDriveSource).not.toHaveBeenCalled();
+  });
+});
+
 describe('pagespace mcp — wallet tools', () => {
-  it('X-1 (partial) serves the three wallet reads and no wallet write', () => {
+  it('X-1 (partial) serves the five wallet reads and no wallet write', () => {
     const walletOps = listOperations(buildOperationRegistry()).filter((op) => op.name.startsWith('wallets.'));
-    expect(walletOps.map((op) => op.name).sort()).toEqual(['wallets.getConversationSource', 'wallets.getDriveWallet', 'wallets.list']);
+    expect(walletOps.map((op) => op.name).sort()).toEqual([
+      'wallets.getAlwaysOwnCredits',
+      'wallets.getConversationSource',
+      'wallets.getDriveSource',
+      'wallets.getDriveWallet',
+      'wallets.list',
+    ]);
     expect(walletOps.every((op) => op.method === 'GET')).toBe(true);
   });
 });

@@ -9,17 +9,15 @@ const orgSlug = z
   .trim()
   .toLowerCase()
   .regex(ORG_SLUG_PATTERN, 'Use 1-48 lowercase letters, digits or hyphens');
-// https only: the avatar is rendered as an image source, so no javascript:, data: or plain http.
-const avatarUrl = z.url({ protocol: /^https$/, hostname: z.regexes.domain }).max(2048).nullable();
-
-export const orgCreateSchema = z.object({
+// ORG-1: no avatar here. An org avatar is an image uploaded to POST /api/orgs/[orgId]/avatar and
+// served by PageSpace, never a URL. Strict, so a client still sending `avatarUrl` is refused, not ignored.
+export const orgCreateSchema = z.strictObject({
   name: orgName,
   slug: orgSlug,
-  avatarUrl: avatarUrl.optional(),
 });
 
 export const orgUpdateSchema = z
-  .object({ name: orgName.optional(), slug: orgSlug.optional(), avatarUrl: avatarUrl.optional() })
+  .strictObject({ name: orgName.optional(), slug: orgSlug.optional() })
   .refine((body) => Object.keys(body).length > 0, 'Nothing to update');
 
 // The Owner role is never granted by invite or role change; only by transfer.

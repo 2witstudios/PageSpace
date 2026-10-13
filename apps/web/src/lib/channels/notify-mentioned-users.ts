@@ -1,5 +1,5 @@
 import { expandMentionsToUserIds } from './expand-group-mentions';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -18,9 +18,9 @@ export async function notifyMentionedUsers(opts: {
     const candidates = mentionedIds.filter((id) => id !== triggeredByUserId);
     if (candidates.length === 0) return;
 
-    const viewChecks = await Promise.all(
-      candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, pageId) }))
-    );
+    // Who may be notified is an audience question about third parties, not an access decision for a caller.
+    const viewers = await getUsersWhoCanViewPage(pageId, candidates);
+    const viewChecks = candidates.map((id) => ({ id, canView: viewers.has(id) }));
 
     await Promise.all(
       viewChecks

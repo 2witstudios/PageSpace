@@ -25,15 +25,19 @@ import {
   cappedConsumerLeg,
   spendChoiceLabel,
   chooseSource,
+  sourceToPin,
   effectiveDefaultSpendSource,
   sourceOfWallet,
+  driveWalletConsumerRemainingCents,
   NO_STORED_CHOICE,
   PERSONAL_ROOT_NOT_YET_CREATED,
   ORG_ENTITLEMENT_TIER,
   orgEntitlementTier,
   type CallSpendInput,
   type WalletBalanceFacts,
+  agentCallSpend,
 } from '../spend-target';
+import type { SpendLeg } from '../wallet-core';
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits under
 // the 9,000-credit pool; Marcus is a member on the free tier, Chris Rowe a guest.
@@ -73,6 +77,29 @@ describe('orgEntitlementTier — the org tier follows its billing status', () =>
     expect(orgEntitlementTier(false)).toBe(ORG_ENTITLEMENT_TIER);
     expect(ORG_ENTITLEMENT_TIER).toBe('business');
     expect(orgEntitlementTier(true)).toBe('free');
+  });
+});
+
+describe('agentCallSpend — where an agent called from outside a turn (consult, /v1) spends', () => {
+  it('SPEND-7 (partial) a call named from a session in drive A spends in A, never in drive B where the agent page lives; the agent-page conversation (drive B) carries no stored source into A', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: 'd-a' }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null });
+  });
+
+  it('SPEND-7 (partial) an API client thread is its own session: it spends in the thread\'s drive with its stored source, and a named drive cannot move it', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: 'd-a', namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null, conversationId: 'c-1' });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: 'd-a', namedSessionDriveId: 'd-c' }))
+      .toEqual({ kind: 'drive', driveId: 'd-a', chosen: null, conversationId: 'c-1' });
+  });
+
+  it('SPEND-7 (partial) with no other session named, the agent-page conversation the call writes to is the session: the agent\'s drive, with that conversation\'s stored source', () => {
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null, conversationId: 'c-1' });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: null, clientThreadDriveId: null, namedSessionDriveId: null }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null });
+    expect(agentCallSpend({ agentDriveId: 'd-b', conversationId: 'c-1', clientThreadDriveId: null, namedSessionDriveId: 'd-b' }))
+      .toEqual({ kind: 'drive', driveId: 'd-b', chosen: null, conversationId: 'c-1' });
   });
 });
 
@@ -360,42 +387,46 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
       .toEqual({ kind: 'none' });
   });
 
-  it('SPEND-3 (partial) the out-of-box default is a source spendable NOW: a healthy drive wallet is preselected', () => {
-    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null }))).toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
-  });
-
-  it('SPEND-3 (partial) a PAUSED drive wallet (the kill switch, or a lapsed org leg) is skipped out of the box: own credits are preselected', () => {
-    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: walletLeg('w-product', 'paused', c(1200)) })))
-      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
-  });
-
-  it('SPEND-3 (partial) a drive wallet at the person\'s CAP is skipped out of the box: own credits are preselected', () => {
+  it('SPEND-4 the out-of-box default preselects the drive\'s wallet by KIND, whatever it holds: paused, capped or empty, the call refuses naming it with the remaining options and charges nothing — never a silent move to own credits', () => {
     const capped = { ...walletLeg('w-product', 'active', 0), capReached: true };
-    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: capped })))
-      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
-  });
-
-  it('SPEND-3 (partial) a drive wallet that cannot cover this call (EMPTY, or less than the reservation) is skipped out of the box', () => {
-    for (const spendable of [0, c(5) - 1]) {
-      expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: walletLeg('w-product', 'active', spendable) })))
-        .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+    const cases: Array<[SpendLeg, string]> = [
+      [walletLeg('w-product', 'paused', c(1200)), 'source_paused'],
+      [capped, 'source_cap_reached'],
+      [walletLeg('w-product', 'active', 0), 'source_empty'],
+      [walletLeg('w-product', 'active', c(5) - 1), 'source_empty'],
+    ];
+    for (const [driveWallet, reason] of cases) {
+      for (const saved of [NO_STORED_CHOICE, stored({ personalDefault: 'drive_wallet' })]) {
+        expect(chooseSource(null, saved, input({ chosen: null, driveWallet }))).toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
+        const decision = decideCallSpend(input({ chosen: null, stored: saved, driveWallet }));
+        expect(decision).toEqual({
+          kind: 'refuse',
+          source: 'drive_wallet',
+          reason,
+          options: [{ source: 'seat_allowance', walletId: 'w-northwind-pool' }, { source: 'own_credits', walletId: 'w-marcus' }],
+          chargeCents: 0,
+        });
+      }
     }
   });
 
-  it('SPEND-3 (partial) SPEND-4 (partial) when neither the drive wallet nor own credits can pay now, nothing is preselected: the person is asked to choose, never put on a source that refuses', () => {
-    const legs = input({ chosen: null, driveWallet: walletLeg('w-product', 'paused', c(1200)), personal: walletLeg('w-marcus', 'active', 0) });
-    expect(chooseSource(null, NO_STORED_CHOICE, legs)).toEqual({ kind: 'none' });
-    expect(decideCallSpend({ ...legs, stored: NO_STORED_CHOICE })).toMatchObject({ kind: 'refuse', source: null, reason: 'no_source_chosen', chargeCents: 0 });
-  });
-
-  it('SPEND-3 (partial) out of the box a paused drive wallet never makes the call refuse or fall back: it spends own credits with no fallback notice', () => {
+  it('SPEND-4 a preselected drive wallet that cannot pay moves only where the drive\'s rule allows it, and the move is reported as a fallback (fallbackApplied, from, the wallet moved off)', () => {
     const decision = decideCallSpend(input({
       chosen: null,
       stored: NO_STORED_CHOICE,
-      driveWallet: walletLeg('w-product', 'paused', c(1200)),
+      driveWallet: walletLeg('w-product', 'active', 0),
       driveRule: { fallback: 'own_credits', guestsMaySpendDriveWallet: false },
     }));
-    expect(decision).toMatchObject({ kind: 'spend', source: 'own_credits', walletId: 'w-marcus', fallbackApplied: false });
+    expect(decision).toMatchObject({ kind: 'spend', source: 'own_credits', walletId: 'w-marcus', fallbackApplied: true, fallbackFrom: 'drive_wallet', fallbackFromWalletId: 'w-product' });
+    // A drive default preselection is held to the same rule.
+    expect(decideCallSpend(input({ chosen: null, stored: stored({ driveDefault: 'drive_wallet' }), driveWallet: walletLeg('w-product', 'active', 0) })))
+      .toMatchObject({ kind: 'refuse', source: 'drive_wallet', reason: 'source_empty', chargeCents: 0 });
+  });
+
+  it('SPEND-3 (partial) the out-of-box default lands on own credits only where the drive has no wallet this person may spend; with nothing spendable nothing is preselected', () => {
+    expect(chooseSource(null, stored({ personalDefault: 'drive_wallet' }), input({ chosen: null, driveWallet: null })))
+      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+    expect(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet: null, personal: null }))).toEqual({ kind: 'none' });
   });
 
   it('SPEND-3 (partial) a default the person SET is honoured, never overridden by the out-of-box choice', () => {
@@ -403,36 +434,28 @@ describe('spend-target: the stored choice (conversations.chosenWalletId, wallets
       .toEqual({ kind: 'source', source: 'seat_allowance', via: 'personal_default' });
   });
 
-  it('SPEND-3 (partial) out of the box a new conversation in a drive with a wallet spends that wallet without asking', () => {
+  it('SPEND-3 (partial) out of the box a new conversation in a drive with a funded wallet spends that wallet without asking', () => {
     expect(decideCallSpend(input({ chosen: null, stored: NO_STORED_CHOICE }))).toMatchObject({ kind: 'spend', source: 'drive_wallet', fallbackApplied: false });
   });
 
-  it('SPEND-3 (partial) a saved "drive\'s wallet" default is the out-of-box default: in a drive with no wallet it lands on the person\'s own credits, not a refusal', () => {
-    expect(chooseSource(null, stored({ personalDefault: 'drive_wallet' }), input({ chosen: null, driveWallet: null })))
-      .toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
+  it('SPEND-3 (partial) the source a conversation\'s first call preselects is the one it pins: its wallet, by kind, whatever that wallet holds', () => {
+    // Out of the box: the drive wallet, even empty (the call refuses by name; the conversation stays on it).
+    expect(sourceToPin(input({ chosen: null, stored: NO_STORED_CHOICE }))).toBe('drive_wallet');
+    expect(sourceToPin(input({ chosen: null, stored: NO_STORED_CHOICE, driveWallet: walletLeg('w-product', 'active', 0) }))).toBe('drive_wallet');
+    // The drive's default, then the person's.
+    expect(sourceToPin(input({ chosen: null, stored: stored({ driveDefault: 'seat_allowance', personalDefault: 'own_credits' }) }))).toBe('seat_allowance');
+    expect(sourceToPin(input({ chosen: null, stored: stored({ personalDefault: 'own_credits' }) }))).toBe('own_credits');
+    // A sole source (a guest with only own credits) is pinned too.
+    expect(sourceToPin(input({ actor: chris, chosen: null, stored: NO_STORED_CHOICE }))).toBe('own_credits');
   });
 
-  it('SPEND-3 (partial) a SAVED "drive\'s wallet" default takes the same path as no default: a healthy drive wallet; paused, capped or empty → own credits; neither → nothing preselected', () => {
-    const saved = stored({ personalDefault: 'drive_wallet' });
-    const capped = { ...walletLeg('w-product', 'active', 0), capReached: true };
-    expect(chooseSource(null, saved, input({ chosen: null }))).toEqual({ kind: 'source', source: 'drive_wallet', via: 'out_of_box' });
-    for (const driveWallet of [walletLeg('w-product', 'paused', c(1200)), capped, walletLeg('w-product', 'active', 0)]) {
-      expect(chooseSource(null, saved, input({ chosen: null, driveWallet }))).toEqual({ kind: 'source', source: 'own_credits', via: 'out_of_box' });
-      // Exactly what an unset default does with the same legs.
-      expect(chooseSource(null, saved, input({ chosen: null, driveWallet }))).toEqual(chooseSource(null, NO_STORED_CHOICE, input({ chosen: null, driveWallet })));
-    }
-    expect(chooseSource(null, saved, input({ chosen: null, driveWallet: walletLeg('w-product', 'paused', c(1200)), personal: walletLeg('w-marcus', 'active', 0) })))
-      .toEqual({ kind: 'none' });
-  });
-
-  it('SPEND-3 (partial) SPEND-4 (partial) with a saved "drive\'s wallet" default and a paused drive wallet the call spends own credits: no refusal, no fallback nobody chose', () => {
-    const decision = decideCallSpend(input({
-      chosen: null,
-      stored: stored({ personalDefault: 'drive_wallet' }),
-      driveWallet: walletLeg('w-product', 'paused', c(1200)),
-      driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: false },
-    }));
-    expect(decision).toMatchObject({ kind: 'spend', source: 'own_credits', walletId: 'w-marcus', fallbackApplied: false });
+  it('SPEND-3 (partial) nothing is pinned where something is already stored or nothing was preselected: a stored choice, a stale one, a follow-on, the override, an automation, no source', () => {
+    expect(sourceToPin(input({ chosen: null, stored: stored({ chosenWalletId: 'w-marcus' }) }))).toBeNull();
+    expect(sourceToPin(input({ chosen: null, stored: stored({ chosenWalletId: 'w-deleted' }) }))).toBeNull();
+    expect(sourceToPin(input({ chosen: 'drive_wallet', followOn: true, stored: NO_STORED_CHOICE }))).toBeNull();
+    expect(sourceToPin(input({ chosen: null, stored: NO_STORED_CHOICE, userOverride: { alwaysOwnCredits: true, alwaysOwnCreditsInDrive: false } }))).toBeNull();
+    expect(sourceToPin(automationSpendInput({ driveId: 'd-product', driveWallet: walletLeg('w-product', 'active', c(10)), walletOwnerTier: 'business', reservationCents: c(1), gatedAsGuest: false, guestsMaySpendDriveWallet: false }))).toBeNull();
+    expect(sourceToPin(input({ chosen: null, stored: stored({ personalDefault: 'seat_allowance' }), seatAllowance: null, driveWallet: null, personal: null }))).toBeNull();
   });
 
   it('SPEND-3 (partial) the default Settings shows as selected is the stored one, or the drive\'s wallet when none was set', () => {
@@ -513,6 +536,8 @@ describe('spend-target: automations', () => {
       driveWallet: walletLeg('w-product', 'active', c(1200)),
       walletOwnerTier: ORG_ENTITLEMENT_TIER,
       reservationCents: c(5),
+      gatedAsGuest: false,
+      guestsMaySpendDriveWallet: false,
       ...over,
     });
 
@@ -528,7 +553,7 @@ describe('spend-target: automations', () => {
 
   it('SPEND-6 (partial) an automation names its drive as the consumer, never a person', () => {
     expect(automationSpend('d-product')).toEqual({ kind: 'automation', driveId: 'd-product' });
-    expect(automation().actor).toEqual({ kind: 'automation', driveId: 'd-product' });
+    expect(automation().actor).toEqual({ kind: 'automation', driveId: 'd-product', gatedAsGuest: false });
   });
 
   it('SPEND-6 (partial) an automation offers the gate no personal leg and no seat to reach', () => {
@@ -582,6 +607,19 @@ describe('spend-target: automations', () => {
   ] as const)('SPEND-6 (partial) an automation whose drive wallet is %s skips and charges zero', (_label, driveWallet, expected) => {
     expect(decideCallSpend(automation({ driveWallet }))).toEqual(expected);
   });
+
+  it('SPEND-6 (partial) D-OW-4: a run gated as a guest (their @mention, their Run) skips while the drive keeps guests off its wallet, and spends it once the switch is on', () => {
+    expect(decideCallSpend(automation({ gatedAsGuest: true })))
+      .toEqual({ kind: 'skip', reason: 'guest_drive_wallet_off', walletId: 'w-product', chargeCents: 0 });
+    expect(decideCallSpend(automation({ gatedAsGuest: true, guestsMaySpendDriveWallet: true })))
+      .toMatchObject({ kind: 'spend', source: 'drive_wallet', walletId: 'w-product' });
+  });
+
+  it('SPEND-6 (partial) a run whose person\'s cap is spent skips by name, so the lead is told why', () => {
+    const capped = cappedConsumerLeg(walletLeg('w-product', 'active', c(1200)), { dailyRemainingCents: 0, monthlyRemainingCents: null });
+    expect(decideCallSpend(automation({ driveWallet: capped })))
+      .toEqual({ kind: 'skip', reason: 'source_cap_reached', walletId: 'w-product', chargeCents: 0 });
+  });
 });
 
 describe('spend-target purity', () => {
@@ -607,6 +645,21 @@ describe('spend-target: a drive-wallet leg capped per consumer', () => {
   it('WAL-7 (partial) a spent cap refuses the drive wallet by name (source_cap_reached), and the fallback rule may then move the call', () => {
     const capped = cappedConsumerLeg(leg, { dailyRemainingCents: 0, monthlyRemainingCents: c(40) });
     expect(decideCallSpend(input({ driveWallet: capped }))).toMatchObject({ kind: 'refuse', source: 'drive_wallet', reason: 'source_cap_reached', chargeCents: 0 });
+  });
+});
+
+describe('spend-target: what a consumer sees of a drive wallet (SPEND-9)', () => {
+  // Product's wallet: 1,200 allocated, 200 spent, a 50 top-up — under a pool holding 30.
+  const product = wallet({ id: 'w-product', parentWalletId: 'w-pool', monthlyAllowanceCents: c(1200), spentCents: c(200), topupRemainingCents: c(50) });
+
+  it('SPEND-9 (partial) the remaining amount is the wallet\'s own (allocation left + top-ups − debt), never bounded by what the parent holds', () => {
+    expect(driveWalletConsumerRemainingCents(product, null)).toBe(c(1050));
+    expect(driveWalletConsumerRemainingCents({ ...product, debtCents: c(100) }, null)).toBe(c(950));
+  });
+
+  it('SPEND-9 (partial) a consumer\'s own remaining cap bounds what they see, and only that', () => {
+    expect(driveWalletConsumerRemainingCents(product, { dailyRemainingCents: c(7), monthlyRemainingCents: c(400) })).toBe(c(7));
+    expect(driveWalletConsumerRemainingCents(product, { dailyRemainingCents: null, monthlyRemainingCents: c(4000) })).toBe(c(1050));
   });
 });
 

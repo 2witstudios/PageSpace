@@ -43,6 +43,7 @@ import { conversations } from '@pagespace/db/schema/conversations';
 import { pages } from '@pagespace/db/schema/core';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { clipDescription } from '@pagespace/lib/commands/command-core';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * A page title is user-authored and lands verbatim in the system prompt, so it
@@ -91,12 +92,12 @@ export interface ActivePlan {
  */
 export async function getActivePlan(
   conversationId: string | undefined,
-  userId: string,
-  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(userId, pageId),
+  actor: AccessActor,
+  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(actor, pageId),
 ): Promise<ActivePlan | null> {
   if (!conversationId) return null;
   try {
-    return await resolveBoundPlan(conversationId, userId, canView);
+    return await resolveBoundPlan(conversationId, actor, canView);
   } catch {
     return null;
   }
@@ -120,8 +121,8 @@ export async function getActivePlan(
  */
 export async function resolveBoundPlan(
   conversationId: string,
-  userId: string,
-  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(userId, pageId),
+  actor: AccessActor,
+  canView: (pageId: string) => Promise<boolean> = (pageId) => canUserViewPage(actor, pageId),
 ): Promise<ActivePlan | null> {
   const [row] = await db
     .select({

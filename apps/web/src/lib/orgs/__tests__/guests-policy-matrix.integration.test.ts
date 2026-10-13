@@ -119,7 +119,7 @@ async function account(email = `p-${createId()}@outside.test`) {
 }
 
 const sessionFor = (userId: string) =>
-  sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 3_600_000 });
+  sessionService.createSession({ authentication: null, userId, type: 'user', scopes: ['*'], expiresInMs: 3_600_000 });
 
 beforeEach(async () => {
   if (!dbAvailable) return;

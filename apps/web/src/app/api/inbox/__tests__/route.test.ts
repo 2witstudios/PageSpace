@@ -39,6 +39,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn(),
 }));
 
@@ -386,7 +387,7 @@ describe('GET /api/inbox channel candidates (B7c)', () => {
     const res = await GET(new Request(url));
 
     expect(res.status).toBe(200);
-    expect(getMemberDriveIds).toHaveBeenCalledWith(mockUserId, { includeTrashed: true });
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrashed: true });
     const { __sqlText, __values } = channelSql();
     expect(__sqlText).not.toMatch(/drive_members/);
     expect(__sqlText).not.toMatch(/"ownerId"/);

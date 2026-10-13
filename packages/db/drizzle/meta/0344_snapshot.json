@@ -1,5 +1,5 @@
 {
-  "id": "c4c2b059-5fa8-437c-b9cd-c0e326a0efe5",
+  "id": "cb70c503-40c9-4253-9861-1889ff070d4e",
   "prevId": "276b096e-ea0e-4c62-a2c4-01c20f2170fe",
   "version": "7",
   "dialect": "postgresql",
@@ -4507,6 +4507,13 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
+        },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         },
         "aiProvider": {
           "name": "aiProvider",
@@ -12658,50 +12665,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "idx_security_audit_org_occurred_at": {
-          "name": "idx_security_audit_org_occurred_at",
-          "columns": [
-            {
-              "expression": "(\"details\" ->> 'orgId')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "(\"details\" ->> 'occurredAt')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "(\"security_audit_log\".\"details\" ->> 'orgId') IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_security_audit_outbox_id": {
-          "name": "idx_security_audit_outbox_id",
-          "columns": [
-            {
-              "expression": "(\"details\" ->> 'outboxId')",
-              "asc": true,
-              "isExpression": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "chain_seq",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "(\"security_audit_log\".\"details\" ->> 'outboxId') IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -14028,6 +13991,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "orgIds": {
+          "name": "orgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
+        },
         "occurrences": {
           "name": "occurrences",
           "type": "integer",
@@ -14174,6 +14144,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "memoryOrgIds": {
+          "name": "memoryOrgIds",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "ARRAY[]::text[]"
         },
         "enabled": {
           "name": "enabled",
@@ -25480,123 +25457,6 @@
           "columns": [
             {
               "expression": "expiresAt",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.org_audit_outbox": {
-      "name": "org_audit_outbox",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "seq": {
-          "name": "seq",
-          "type": "bigserial",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "orgId": {
-          "name": "orgId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "eventType": {
-          "name": "eventType",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "actorId": {
-          "name": "actorId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "resourceType": {
-          "name": "resourceType",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "resourceId": {
-          "name": "resourceId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "driveId": {
-          "name": "driveId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "details": {
-          "name": "details",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "attempts": {
-          "name": "attempts",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "lastError": {
-          "name": "lastError",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "deadLetteredAt": {
-          "name": "deadLetteredAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "nextAttemptAt": {
-          "name": "nextAttemptAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(now() at time zone 'utc')"
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(now() at time zone 'utc')"
-        }
-      },
-      "indexes": {
-        "org_audit_outbox_next_attempt_idx": {
-          "name": "org_audit_outbox_next_attempt_idx",
-          "columns": [
-            {
-              "expression": "nextAttemptAt",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -64,6 +64,7 @@ import { createHttpRequestExecutor } from '../../executor/http-request-executor'
 import { sweepOrphanedRefs } from '../../executor/plane-orphan-sweep-worker';
 import { ORPHAN_GRACE_MS } from '../../executor/decide-orphaned-refs';
 import { createPlaneRequestHandler } from '../../executor/plane-http-adapter';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const INFISICAL_URL = process.env.INFISICAL_DEV_URL ?? 'http://localhost:8080';
 const ADMIN_TOKEN = process.env.INFISICAL_DEV_ADMIN_TOKEN;
@@ -195,6 +196,8 @@ const caller = (overrides: Partial<Parameters<AccountAuthority['requestOperation
   callerCeiling: { allowedDriveIds: [], originatingMcpTokenId: null },
   ...overrides,
 });
+/** The acting human's credential travels with the caller (D-OW-45): the authority reads their standing through it. */
+const asHuman = (c: ReturnType<typeof caller>) => ({ caller: c, actor: credentialActor(c.actingHumanUserId, null) });
 const get = (url: string): CanonicalRequestInput => ({ channel: 'http-executor', method: 'GET', url, headers: { accept: 'application/json' }, body: new Uint8Array(0) });
 const createInput = (allowGenericRequests: boolean) => ({ name: 'Weather', allowedOrigins: [origin], ownership: 'dedicated' as const, acknowledged: false, apiKey: CANARY, placement: { in: 'header' as const, name: 'X-Api-Key' }, allowGenericRequests });
 /** Every string a model could ever see from this slice, gathered for the canary sweep. */
@@ -241,12 +244,12 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given a dedicated api_key account on agent page A with generic requests allowed, should create → execute against the pin with the key attached → revoke, and the key never comes back', async () => {
     const authority = authorityOver(await startPlane());
-    const created = seen(await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) }));
+    const created = seen(await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) }));
     if (!created.ok) throw new Error(`create refused: ${created.reason}`);
-    const listed = seen(await authority.listAccounts({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A } }));
-    const result = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?city=Oslo`) }));
-    const revoked = seen(await authority.revokeAccount({ actorUserId: OWNER, accountId: created.account.id }));
-    const afterRevoke = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?city=Oslo`) }));
+    const listed = seen(await authority.listAccounts({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A } }));
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?city=Oslo`) }));
+    const revoked = seen(await authority.revokeAccount({ actor: credentialActor(OWNER, null), accountId: created.account.id }));
+    const afterRevoke = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?city=Oslo`) }));
 
     const actual = {
       created: { kind: created.account.kind, acknowledgment: created.account.acknowledgment, status: created.account.status },
@@ -267,9 +270,9 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given an upstream that reflects the key in body, headers and a cookie, should release none of it', async () => {
     const authority = authorityOver(await startPlane());
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
-    const result = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/echo`) }));
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/echo`) }));
     const actual = { ok: result.ok, redacted: result.ok ? result.response.redacted : null, leaked: JSON.stringify(result).includes(CANARY), b64Leaked: JSON.stringify(result).includes(Buffer.from(CANARY).toString('base64')), headerNames: result.ok ? result.response.headers.map(([name]) => name) : null };
     // `date` is allowlisted; the echoing `x-echo-key` and `set-cookie` are not.
     const expected = { ok: true, redacted: true, leaked: false, b64Leaked: false, headerNames: ['content-type', 'date'] };
@@ -278,10 +281,10 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given a redirect off the pin, should return the 3xx without its query and never follow it', async () => {
     const authority = authorityOver(await startPlane());
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const before = upstreamHits.length;
-    const result = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/redirect`) }));
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/redirect`) }));
     const actual = { status: result.ok ? result.response.status : result, location: result.ok ? result.response.headers.find(([name]) => name === 'location') : null, hits: upstreamHits.slice(before) };
     const expected = { status: 302, location: ['location', 'https://collector.evil.test/steal'], hits: ['/v1/redirect'] };
     expect(actual).toEqual(expected);
@@ -289,12 +292,12 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given another port on the pinned host or another host, should deny before any upstream I/O', async () => {
     const authority = authorityOver(await startPlane());
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const before = upstreamHits.length;
     const actual = {
-      otherPort: seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`https://${HOST}:${upstreamPort + 1}/v1/weather`) })),
-      otherHost: seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`https://collector.evil.test/v1/weather`) })),
+      otherPort: seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`https://${HOST}:${upstreamPort + 1}/v1/weather`) })),
+      otherHost: seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`https://collector.evil.test/v1/weather`) })),
       hits: upstreamHits.length - before,
     };
     const expected = { otherPort: { ok: false, reason: 'destination_denied', rule: 'origin_not_allowed' }, otherHost: { ok: false, reason: 'destination_denied', rule: 'origin_not_allowed' }, hits: 0 };
@@ -304,7 +307,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   it('given cross-agent substitution — page B naming page A\'s account, a view-only user, or page A\'s grant replayed under page B\'s run or twice — should refuse every one with no upstream I/O', async () => {
     const plane = await startPlane();
     const authority = authorityOver(plane);
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const row = await createAgentAccountRepository({ db }).find(created.account.id);
     const verdict = authorize({
@@ -328,8 +331,8 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const runOf = (agentPageId: AgentPageId) => ({ human: verdict.grant.human, agentPageId, conversationId: verdict.grant.conversationId, runId: verdict.grant.runId });
 
     const before = upstreamHits.length;
-    const pageB = seen(await authority.requestOperation({ caller: caller({ agentPageId: PAGE_B }), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
-    const viewer = seen(await authority.requestOperation({ caller: caller({ actorUserId: VIEWER, actingHumanUserId: VIEWER }), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
+    const pageB = seen(await authority.requestOperation({ ...asHuman(caller({ agentPageId: PAGE_B })), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
+    const viewer = seen(await authority.requestOperation({ ...asHuman(caller({ actorUserId: VIEWER, actingHumanUserId: VIEWER })), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
     const replayedUnderB = seen(await plane.execute({ grant: verdict.grant, signature, request: wire, run: runOf(PAGE_B) }));
     const hitsBeforeLegit = upstreamHits.length - before;
     const legit = seen(await plane.execute({ grant: verdict.grant, signature, request: wire, run: runOf(PAGE_A) }));
@@ -353,7 +356,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   it('given a main-DB row widened to another origin and a grant signed over the original bindings, should refuse — the plane checks its own stored origins', async () => {
     const plane = await startPlane();
     const authority = authorityOver(plane);
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const repo = createAgentAccountRepository({ db });
     const original = await repo.find(created.account.id);
@@ -395,10 +398,10 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given a plane whose network shell uses the real address classifier and a DNS answer on loopback (rebinding), should refuse before connecting', async () => {
     const authority = authorityOver(await startPlane({ isPublic: isPublicIp }));
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const before = upstreamHits.length;
-    const result = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
     const actual = { result, hits: upstreamHits.length - before };
     const expected = { result: { ok: false, reason: 'upstream_unreachable' }, hits: 0 };
     expect(actual).toEqual(expected);
@@ -407,7 +410,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   it('given a grant minted before the account was revoked, should be refused by the plane itself', async () => {
     const plane = await startPlane();
     const authority = authorityOver(plane);
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const row = await createAgentAccountRepository({ db }).find(created.account.id);
     const verdict = authorize({
@@ -427,7 +430,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     });
     if (!verdict.ok) throw new Error(verdict.reason);
     const signature = signGrant({ grant: verdict.grant, key: keyring.current });
-    await authority.revokeAccount({ actorUserId: OWNER, accountId: created.account.id });
+    await authority.revokeAccount({ actor: credentialActor(OWNER, null), accountId: created.account.id });
     const before = upstreamHits.length;
     const result = seen(await plane.execute({ grant: verdict.grant, signature, request: { method: 'GET', url: `${origin}/v1/weather`, headers: { accept: 'application/json' }, bodyBase64: '' }, run: { human: verdict.grant.human, agentPageId: PAGE_A, conversationId: verdict.grant.conversationId, runId: verdict.grant.runId } }));
     const actual = { result, hits: upstreamHits.length - before };
@@ -437,14 +440,14 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
 
   it('given an account with no standing policy, should require approval of the exact digest, execute once after it, and require it again', async () => {
     const authority = authorityOver(await startPlane());
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
     if (!created.ok) throw new Error(created.reason);
     const request = get(`${origin}/v1/weather?city=Bergen`);
-    const first = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request }));
+    const first = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request }));
     if (first.ok || first.reason !== 'approval_required') throw new Error(`expected approval_required, got ${JSON.stringify(first)}`);
-    const approval = await authority.approveRequest({ actorUserId: OWNER, sessionId: 'sess_e2e', accountId: created.account.id, requestDigest: first.digest });
-    const second = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request }));
-    const third = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request }));
+    const approval = await authority.approveRequest({ actor: credentialActor(OWNER, null), sessionId: 'sess_e2e', accountId: created.account.id, requestDigest: first.digest });
+    const second = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request }));
+    const third = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request }));
     const actual = { approved: approval.ok, second: second.ok ? second.response.status : second, third: third.ok ? 'executed again' : third.reason, subjectOrigin: first.subject.origin };
     const expected = { approved: true, second: 200, third: 'approval_required', subjectOrigin: `${origin}` };
     expect(actual).toEqual(expected);
@@ -463,10 +466,10 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
         }),
       }),
     );
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const before = upstreamHits.length;
-    const result = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather`) }));
     const actual = { result, ran: upstreamHits.length - before };
     const expected = { result: { ok: false, reason: 'outcome_unrecorded' }, ran: 1 };
     expect(actual).toEqual(expected);
@@ -479,7 +482,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const authority = authorityOver(plane);
     const erased = createId() as UserId;
     await db.insert(users).values({ id: erased, name: 'erased', email: `${erased}@example.test` });
-    const created = await authority.createAccount({ actorUserId: erased, owner: { kind: 'user' }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(erased, null), owner: { kind: 'user' }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const secretRows = () => metadataPool.query('SELECT 1 FROM agent_account_secret_versions WHERE account_id = $1', [created.account.id]).then((r) => r.rowCount);
     const before = await secretRows();
@@ -498,7 +501,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   // from its own stored scope and ledger — the 61st use in the hour is refused with nothing sent.
   it('given a standing permission already used 60 times this hour, should refuse the next request before any upstream I/O; at 59, should run it', async () => {
     const authority = authorityOver(await startPlane());
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const seed = async (count: number) => {
       await metadataPool.query('DELETE FROM agent_account_usage WHERE account_id = $1', [created.account.id]);
@@ -508,10 +511,10 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     };
     await seed(60);
     const before = upstreamHits.length;
-    const atCap = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?at=cap`) }));
+    const atCap = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?at=cap`) }));
     const hitsAtCap = upstreamHits.length - before;
     await seed(59);
-    const underCap = seen(await authority.requestOperation({ caller: caller(), accountId: created.account.id, request: get(`${origin}/v1/weather?at=59`) }));
+    const underCap = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?at=59`) }));
     const actual = { atCap, hitsAtCap, underCap: underCap.ok ? underCap.response.status : underCap };
     const expected = { atCap: { ok: false, reason: 'refused' }, hitsAtCap: 0, underCap: 200 };
     expect(actual).toEqual(expected);
@@ -522,7 +525,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   it('given a not-ready account whose material reached Infisical without a plane record, should erase it on revoke', async () => {
     const plane = await startPlane();
     const authority = authorityOver(plane);
-    const created = await authority.createAccount({ actorUserId: OWNER, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     await metadataPool.query('DELETE FROM agent_account_secret_versions WHERE account_id = $1', [created.account.id]);
     await metadataPool.query('DELETE FROM agent_account_plane_bindings WHERE account_id = $1', [created.account.id]);
@@ -532,7 +535,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const creds = tenant === null ? null : await provisioner.credentialsFor({ tenantId: `drive:${DRIVE}` as never, identityId: tenant.identityId });
     const vault = () => createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }).getSecret({ projectId: tenant!.projectId, credentials: creds!, secretKey: `${created.account.id}__api_key` });
     const before = (await vault()).ok;
-    const revoked = await authority.revokeAccount({ actorUserId: OWNER, accountId: created.account.id });
+    const revoked = await authority.revokeAccount({ actor: credentialActor(OWNER, null), accountId: created.account.id });
     const after = await vault();
     const actual = { before, revoked: revoked.ok, after: after.ok ? 'still present' : after.reason };
     const expected = { before: true, revoked: true, after: 'not_found' };

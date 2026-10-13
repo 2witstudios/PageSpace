@@ -1,6 +1,6 @@
 {
-  "id": "2676cb4f-b9dc-4ba5-83cf-2f75b39cee1f",
-  "prevId": "f672d03d-1b69-44b2-bcaa-86825e10b4e3",
+  "id": "f0870250-ac86-4297-b5c9-abec52e1e8e0",
+  "prevId": "66b2687f-b240-4f05-8968-480f15e3d585",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1293,6 +1293,18 @@
         },
         "drive_id": {
           "name": "drive_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "authenticated_at": {
+          "name": "authenticated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "authentication_assurance": {
+          "name": "authentication_assurance",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -25943,6 +25955,97 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.org_subscription_funding": {
+      "name": "org_subscription_funding",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "orgId": {
+          "name": "orgId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stripeSubscriptionId": {
+          "name": "stripeSubscriptionId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stripeInvoiceId": {
+          "name": "stripeInvoiceId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "basis": {
+          "name": "basis",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "paidCents": {
+          "name": "paidCents",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verifiedAt": {
+          "name": "verifiedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(now() at time zone 'utc')"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "org_subscription_funding_orgId_organizations_id_fk": {
+          "name": "org_subscription_funding_orgId_organizations_id_fk",
+          "tableFrom": "org_subscription_funding",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "orgId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "org_subscription_funding_stripeInvoiceId_unique": {
+          "name": "org_subscription_funding_stripeInvoiceId_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "stripeInvoiceId"
+          ]
+        },
+        "org_subscription_funding_org_subscription_key": {
+          "name": "org_subscription_funding_org_subscription_key",
+          "nullsNotDistinct": false,
+          "columns": [
+            "orgId",
+            "stripeSubscriptionId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "org_subscription_funding_evidence_check": {
+          "name": "org_subscription_funding_evidence_check",
+          "value": "(\"org_subscription_funding\".\"basis\" = 'paid' AND \"org_subscription_funding\".\"paidCents\" > 0) OR (\"org_subscription_funding\".\"basis\" = 'gift' AND \"org_subscription_funding\".\"paidCents\" >= 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.org_subscriptions": {
       "name": "org_subscriptions",
       "schema": "",
@@ -26015,12 +26118,11 @@
           "primaryKey": false,
           "notNull": false
         },
-        "collectionMethod": {
-          "name": "collectionMethod",
-          "type": "text",
+        "trialEnd": {
+          "name": "trialEnd",
+          "type": "timestamp",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'charge_automatically'"
+          "notNull": false
         },
         "currentPeriodStart": {
           "name": "currentPeriodStart",

@@ -26,6 +26,8 @@ import { canRunCode } from '../sandbox/can-run-code';
 import { loadEffectiveDriveMembership } from '../../permissions/org-drive-membership';
 import type { DriveMembership } from '../../agent-workspaces/decide-workspace-access';
 import { isDriveLead } from '../../permissions/drive-relationship';
+import type { AccessActor } from '../../permissions/access-actor';
+import { checkActorDriveAuthentication } from '../../permissions/actor-authentication';
 
 export type ResolveSessionTenantIdResult =
   | { ok: true; tenantId: string }
@@ -53,10 +55,10 @@ export async function resolveSessionTenantId(session: {
  * neither. The ONE membership read both access checks (main + end) share.
  */
 export async function resolveDriveMembership({
-  userId,
+  actor,
   driveId,
 }: {
-  userId: string;
+  actor: AccessActor;
   driveId: string;
 }): Promise<DriveMembership> {
   const drive = await db.query.drives.findFirst({
@@ -64,6 +66,9 @@ export async function resolveDriveMembership({
     columns: { ownerId: true, orgId: true, orgVisibility: true },
   });
   if (!drive) return 'none';
+  // SEC-2/3: a credential the drive's org refuses holds no relationship to it, lead or not.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) return 'none';
+  const { userId } = actor;
   if (isDriveLead(userId, drive)) return 'owner';
   // The shared org-aware membership (accepted rows, org Owner/Admin power, implicit Open membership).
   const membership = await loadEffectiveDriveMembership(userId, { id: driveId, ...drive });
@@ -76,14 +81,14 @@ export async function resolveDriveMembership({
 
 /** The centralized `canRunCode` capability check, reduced to the boolean the access decider consumes. */
 export async function canRunCodeForSession({
-  userId,
+  actor,
   driveId,
   ownerId,
 }: {
-  userId: string;
+  actor: AccessActor;
   driveId: string | null;
   ownerId: string;
 }): Promise<boolean> {
-  const result = await canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' });
+  const result = await canRunCode({ actor, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' });
   return result.ok;
 }

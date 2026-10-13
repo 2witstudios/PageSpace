@@ -168,10 +168,11 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.trackUsage).not.toHaveBeenCalled();
   });
 
-  it('WAL-8 (partial) the pro-model admission reads the tier of whoever funds the call, not the caller', async () => {
-    mocks.entitlement.mockResolvedValue('business');
+  it('WAL-8 (partial) the pro-model admission reads the tier of whoever funds the source the gate HELD — never a separate pre-read that could judge another source', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-product', entitlementTier: 'business' });
     await post();
     expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'business', false);
+    expect(mocks.entitlement).not.toHaveBeenCalled();
   });
 
   it('WAL-5 (partial) settles on the wallet the gate reserved on', async () => {
@@ -234,13 +235,15 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.releaseHold).not.toHaveBeenCalled();
   });
 
-  it('refuses a paid-tier model for a user whose tier does not include it, before the gate (chat admission)', async () => {
+  it('WAL-8 (partial) refuses a paid-tier model the held source\'s funder is not entitled to: judged after the gate, the hold freed, the model never built', async () => {
     mocks.requiresPro.mockReturnValue(true);
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-own', entitlementTier: 'free' });
     const response = await post();
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: 'Subscription required' });
     expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'free', false);
-    expect(mocks.gate).not.toHaveBeenCalled();
+    expect(mocks.releaseHold).toHaveBeenCalledWith('hold_1');
+    expect(mocks.provider).not.toHaveBeenCalled();
     expect(mocks.streamText).not.toHaveBeenCalled();
   });
 

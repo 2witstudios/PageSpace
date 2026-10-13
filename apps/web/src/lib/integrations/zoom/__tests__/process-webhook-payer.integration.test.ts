@@ -1,14 +1,15 @@
 /**
- * processZoomWebhook end to end against a real Postgres (Spec SPEND-6, point-guard ruling on
- * #2731): who pays for a transcript's AI enrichment, and that no refusal blocks the page.
+ * processZoomWebhook end to end against a real Postgres (Spec SPEND-6): who pays for a
+ * transcript's AI enrichment, and that no refusal blocks the page.
  *
  * apps/web loads @pagespace/lib from its built dist, whose ORGS_ENABLED is the shipped constant
- * (false): this suite proves the path production runs today. The org cases — an org destination's
- * wallet pays, and empty/paused/missing skips with the lead's notice and no fallback to the
- * connection owner — run with orgs ON through the same payer seam (destinationDriveSpend) in
- * packages/lib automation-spend.integration.test.ts, where the flag reaches the gate.
+ * (false): this suite proves the path production runs today. With orgs ON the enrichment is an
+ * automation on its destination drive (automationSpend) — its wallet pays, an org drive's or a
+ * personal drive's alike, and empty/paused/missing skips with the lead's notice and no fallback to
+ * anyone's own credits — proven in packages/lib automation-spend.integration.test.ts, where the
+ * flag reaches the gate.
  *
- *   (b) the connection owner's own personal drive: their own wallet pays both calls, as on master;
+ *   (b) while orgs are dark, an automation bills as before wallets: the connection owner's wallet;
  *   (c) a refusal, and a gate that cannot be checked, both create the page without enrichment and
  *       record why (#2729).
  *
@@ -209,7 +210,7 @@ describe('Zoom enrichment: the destination drive\'s payer pays (real Postgres)',
     world = null;
   });
 
-  it('SPEND-6 (partial) (b) the connection owner\'s own personal drive: their own wallet pays both calls, as on master', async () => {
+  it('SPEND-6 (partial) (b) while orgs are dark the enrichment bills as before wallets: the connection owner\'s own wallet pays both calls', async () => {
     world = await build({ allocationCents: 1_000 });
 
     await processZoomWebhook(event, connectionFor(world, world.marcusDriveId));

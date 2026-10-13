@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { gateSandboxToolCall, type SandboxToolGateDeps } from '../tool-gate';
+import { credentialActor } from '../../../permissions/access-actor';
 
 // A fully-permissive set of injected deps; each test overrides the one boundary
 // it exercises so a single denial is never masked by another check.
@@ -13,7 +14,7 @@ function allowDeps(overrides: Partial<SandboxToolGateDeps> = {}): SandboxToolGat
 }
 
 const input = {
-  userId: 'u1',
+  actor: credentialActor('u1', null),
   driveId: 'd1',
   tenantId: 't1',
   tier: 'pro' as const,
@@ -87,7 +88,7 @@ describe('gateSandboxToolCall', () => {
 
   it('given no driveId and kill switch on, authorized, not rate limited, should allow', async () => {
     const result = await gateSandboxToolCall({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       tier: 'pro',
       deps: allowDeps(),
     });
@@ -96,7 +97,7 @@ describe('gateSandboxToolCall', () => {
 
   it('given no driveId and kill switch off, should deny with kill_switch_off', async () => {
     const result = await gateSandboxToolCall({
-      userId: 'u1',
+      actor: credentialActor('u1', null),
       tier: 'pro',
       deps: allowDeps({ isEnabled: () => false }),
     });

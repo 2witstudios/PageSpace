@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { Building2, Folder, HandCoins, Sparkles } from 'lucide-react';
 import { spendFromRowCopy, spendMeterPercent } from '@pagespace/lib/billing/wallet-surface';
-import type { WalletStatus } from '@pagespace/lib/billing/wallet-core';
 import { effectiveDefaultSpendSource } from '@pagespace/lib/billing/spend-target';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -114,9 +113,9 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
             testId="usage-wallet-drive"
             icon={<Folder className="h-4 w-4" />}
             title={`${w.driveName ?? 'Drive'} wallet`}
-            detail={spendFromRowCopy({ status: w.status as WalletStatus, orgName: orgNameOfDrive(w.driveId), fundedByMe: fundedByMe.has(w.walletId) })}
+            detail={`${spendFromRowCopy({ status: w.status, orgName: orgNameOfDrive(w.driveId), fundedByMe: fundedByMe.has(w.walletId) })} · You spent ${w.mySpentCredits} credits this month`}
             amount={`${w.remainingCredits} credits left`}
-            badge={w.status === 'active' ? <Badge variant="outline">Drive wallet</Badge> : <WalletStatusBadge status={w.status as WalletStatus} />}
+            badge={w.status === 'active' ? <Badge variant="outline">Drive wallet</Badge> : <WalletStatusBadge status={w.status} />}
             href={`/dashboard/${w.driveId}/settings/wallet`}
           />
         ))}
@@ -173,7 +172,7 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
             title={`${w.driveName ?? 'Drive'} wallet`}
             detail="From your credits · set member caps and see spend in the drive's Wallet settings"
             amount={`${w.remainingCredits} credits left`}
-            badge={w.status === 'active' ? <Badge variant="outline">Drive wallet</Badge> : <WalletStatusBadge status={w.status as WalletStatus} />}
+            badge={w.status === 'active' ? <Badge variant="outline">Drive wallet</Badge> : <WalletStatusBadge status={w.status} />}
             href={`/dashboard/${w.driveId}/settings/wallet`}
           />
         ))}

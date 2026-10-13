@@ -35,6 +35,7 @@ import { getUserDriveAccess } from '../../permissions/permissions';
 import { isPrefixVisible } from '../published-visibility';
 import { defaultAppUnparkDeps } from '../../services/app-hosting/app-unpark';
 import { updateOrgPolicies } from '../policies';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -120,15 +121,15 @@ describe('a policy change', () => {
       subdomain: `app-${appId}`.toLowerCase(), machineId: `m-${appId}`, imageDigest: 'sha256:abc', status: 'stopped', tier: 'metered', updatedAt: new Date(),
     });
 
-    expect(await getUserDriveAccess(guest, drive.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(guest, null), drive.id)).toBe(true);
     expect(await isPrefixVisible(subdomain)).toBe(true);
     expect(await defaultAppUnparkDeps.publishedAppsAllowed(drive.id)).toBe(true);
 
-    const changed = await updateOrgPolicies({ orgId, actorId: owner, patch: { guests: 'off', publicShareLinks: false, publishWeb: false, publishedApps: false } });
+    const changed = await updateOrgPolicies({ actorAuthentication: null, orgId, actorId: owner, patch: { guests: 'off', publicShareLinks: false, publishWeb: false, publishedApps: false } });
     expect(changed.ok).toBe(true);
 
     // The very next request, through each real enforcement point, is refused: no restart, no cache to expire.
-    expect(await getUserDriveAccess(guest, drive.id)).toBe(false);
+    expect(await getUserDriveAccess(credentialActor(guest, null), drive.id)).toBe(false);
     expect(await redeemDriveShareLink(ctxFor(redeemer), link.token)).toEqual({ ok: false, error: 'NOT_FOUND' });
     expect(await isPrefixVisible(subdomain)).toBe(false);
     expect(await defaultAppUnparkDeps.publishedAppsAllowed(drive.id)).toBe(false);
@@ -149,9 +150,9 @@ describe('a policy change', () => {
     expect(await listedIn(orgId, 'org.policy.blocked')).toEqual([expect.objectContaining({ kind: 'publishedApps', type: 'published_app', id: appId })]);
 
     // Turning them back on restores exactly what was suspended, on the next request again.
-    const restored = await updateOrgPolicies({ orgId, actorId: owner, patch: { guests: 'on', publicShareLinks: true, publishWeb: true, publishedApps: true } });
+    const restored = await updateOrgPolicies({ actorAuthentication: null, orgId, actorId: owner, patch: { guests: 'on', publicShareLinks: true, publishWeb: true, publishedApps: true } });
     expect(restored.ok).toBe(true);
-    expect(await getUserDriveAccess(guest, drive.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(guest, null), drive.id)).toBe(true);
     expect(await isPrefixVisible(subdomain)).toBe(true);
     expect(await defaultAppUnparkDeps.publishedAppsAllowed(drive.id)).toBe(true);
     expect(await redeemDriveShareLink(ctxFor(redeemer), link.token)).toMatchObject({ ok: true });

@@ -57,14 +57,14 @@ const H = vi.hoisted(() => {
   const creditLedger = cols('creditLedger', [
     'id', 'userId', 'walletId', 'entryType', 'bucket', 'amountCents', 'appliedCents', 'chargeMillicents',
     'aiUsageLogId', 'realCostCents', 'markupBps', 'stripeRef', 'paidCents', 'consumeStatus',
-    'reconcileGenerationKey', 'spendKind', 'createdAt',
+    'reconcileGenerationKey', 'spendKind', 'fallbackFromWalletId', 'automationRef', 'createdAt',
   ]);
-  const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'estCents', 'aiUsageLogId', 'spendKind', 'createdAt', 'expiresAt']);
+  const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'fallbackFromWalletId', 'estCents', 'aiUsageLogId', 'spendKind', 'createdAt', 'expiresAt']);
   const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
-    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId',
-    'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt',
+    'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId', 'automationRef',
+    'metadata', 'reconcileStatus', 'reconcileAttempts', 'reconciledAt', 'unattributedAt',
   ]);
 
   // ── operators ───────────────────────────────────────────────────────────────
@@ -455,7 +455,7 @@ import {
 import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // The allowances the flow grants when no invoice sizes them (MON-2 derivation
-// from the list price at the money-model default, MONEY_MODEL_V2_ACTIVE = false).
+// from the list price at A-11's ratio).
 const TIER_MONTHLY_ALLOWANCE_CENTS = {
   free: tierAllowanceCents('free'),
   pro: tierAllowanceCents('pro'),
@@ -481,6 +481,11 @@ function seedUser(id: string, customer: string, tier: string) {
 /** A Stripe-backed subscription in a renewal-capable status — makes invoice.paid (not the gate) authoritative for this user's period roll. */
 function seedLiveSubscription(userId: string, status = 'active', gifted = false) {
   store.subscriptions.push({ id: `sub_${userId}`, userId, status, gifted });
+}
+
+/** The personal root's id: what a gated call's settle names (WAL-5); a settle naming no wallet charges nothing. */
+function rootWalletId(userId: string): string | undefined {
+  return (store.wallets.find((r) => r.userId === userId && r.subjectType == null && r.parentWalletId == null) as { id: string } | undefined)?.id;
 }
 
 function balanceOf(userId: string) {
@@ -516,6 +521,11 @@ function chargeMc(costDollars: number): number {
 // literals for a manual/parentless invoice (parent simply absent).
 const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_test_1' } };
 
+// A-11: what an invoice must pay for the ratio to grant a round figure the flow
+// arithmetic below is written in.
+const PAID_FOR_500_GRANT = 834; // floor(834 × 60%) = 500
+const PAID_FOR_1500_GRANT = 2500; // 2500 × 60% = 1500
+
 const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
   type: 'invoice.paid',
@@ -550,14 +560,8 @@ beforeEach(() => {
   H.isBillingEnabled.mockReturnValue(true);
 });
 
-// D-OW-17: MONEY_MODEL_V2_ACTIVE is a code constant (false in this PR), not an env
-// var — nothing in this file mutates process.env.MONEY_MODEL_V2 any more. The pure
-// ratio SELECTION is covered directly, with no shell, in money-model.test.ts and
-// invoice-grant.test.ts — but with the constant false the ratio is 100%, so a
-// shell-level test at the default flag alone cannot tell "grant = paid × ratio"
-// from "grant = paid" (both produce the same number). The dedicated active:true
-// test below closes that gap by proving the full webhook → funding → balance path
-// actually applies the ratio, not just amount_paid, end to end.
+// MON-2: the full webhook → funding → balance path applies A-11's ratio to what
+// the invoice paid; the pure ratio math is covered in money-model.test.ts.
 describe('credits flow — grants sized from the invoice paid', () => {
   it('MON-2 the ledger row records paidCents and the grant is amount_paid × the default ratio', async () => {
     seedUser('u1', 'cus_1', 'pro');
@@ -566,17 +570,6 @@ describe('credits flow — grants sized from the invoice paid', () => {
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
     expect(grant.paidCents).toBe(1500);
     expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
-    expect(grant.amountCents).toBe(1500);
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
-  });
-
-  it('D-OW-17 test seam: { active: true } through the full webhook → funding → balance path applies the 60% ratio, not a 100% pass-through', async () => {
-    seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_ratio', 'cus_1', PERIOD_START, PERIOD_END, 1500), { tier: 'pro', active: true });
-
-    const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_ratio')!;
-    expect(grant.paidCents).toBe(1500);
-    expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro', true));
     expect(grant.amountCents).toBe(900);
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
   });
@@ -603,7 +596,7 @@ describe('credits flow — grants sized from the invoice paid', () => {
     await applyStripeFunding(evt, { tier: 'pro' });
     await applyStripeFunding(evt, { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
 
@@ -618,16 +611,17 @@ describe('credits flow — grants sized from the invoice paid', () => {
     seedLiveSubscription('u1', 'active', true);
     await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'), { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
-    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500, paidCents: 0 });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
   });
 
-  it('MON-2 (a) a trial-created subscription ($0, subtotal 0, subscription_create) grants list × the default ratio', async () => {
+  it('D-OW-30 a $0 subscription_create invoice (subtotal 0) on a non-gifted subscription grants nothing: no trial is funded', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    seedLiveSubscription('u1', 'trialing');
-    await applyStripeFunding(withReason(invoicePaid('in_trial', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'), { tier: 'pro' });
+    seedLiveSubscription('u1', 'active');
+    await applyStripeFunding(withReason(invoicePaid('in_zero_create', 'cus_1', PERIOD_START, PERIOD_END, 0), 0, 'subscription_create'), { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+    expect(ledgerOf('u1')).toHaveLength(0);
+    expect(balanceOf('u1')).toBeUndefined();
   });
 
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing', async () => {
@@ -989,10 +983,11 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {
   it('funds $5/mo, draws monthly-first, accepts a top-up, then blocks at out_of_credits', async () => {
-    seedUser('u1', 'cus_1', 'pro'); // a $5 promo-priced Pro invoice → 500¢ (flag off: 100% of paid)
+    seedUser('u1', 'cus_1', 'pro'); // an $8.34 promo-priced Pro invoice → 500¢ (A-11: floor(834 × 60%))
 
-    // ── FUND: invoice.paid grants what the invoice paid and sets the period ──────
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500), { tier: 'pro' });
+    // ── FUND: invoice.paid grants the ratio of what the invoice paid and sets the period ──
+    expect(allowanceCentsForPaidCents(PAID_FOR_500_GRANT, 'pro')).toBe(500);
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_500_GRANT), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(500);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
@@ -1007,14 +1002,14 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     let g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g).toMatchObject({ allowed: true, reason: 'ok' });
     expect(g.holdId).toBeTruthy();
-    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 2, holdId: g.holdId }); // 300¢
+    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 2, holdId: g.holdId }); // 300¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(200);
     expect(store.creditHolds).toHaveLength(0); // hold released at settle
 
     // ── CALL 2: $1 real cost ────────────────────────────────────────────────────
     g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId }); // 150¢
+    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1, holdId: g.holdId }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(50);
 
     // ── GATE with 50¢ left → DENIED: reserving the 25¢ estimate would leave only
@@ -1031,14 +1026,14 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
     // ── CALL 3 across the bucket boundary: $0.50 spends the last 50¢ monthly + 25¢ top-up
     g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_3', userId: 'u1', costDollars: 0.5, holdId: g.holdId }); // 75¢
+    await consumeCredits({ aiUsageLogId: 'log_3', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 0.5, holdId: g.holdId }); // 75¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(975);
 
     // ── CALL 4 (DRAIN): a $6.50 call empties the top-up bucket exactly ───────────
     g = await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_4', userId: 'u1', costDollars: 6.5, holdId: g.holdId }); // 975¢
+    await consumeCredits({ aiUsageLogId: 'log_4', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 6.5, holdId: g.holdId }); // 975¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
 
@@ -1055,15 +1050,15 @@ describe('credits flow — happy path (fund → gate → consume → top-up → 
 
 describe('credits flow — negative balance (overage → debt → recover)', () => {
   it('overshoots into debt, blocks while net-negative, then a top-up pays the debt and unblocks', async () => {
-    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly granted
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_1500_GRANT), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
 
     // ── OVERSHOOT: gate allows (1500 spendable), but the call costs $12 -> 1800¢.
     // The 300¢ it can't cover becomes debt; the monthly bucket floors at 0. ─────────
     const g1 = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g1.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g1.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 12, holdId: g1.holdId });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.topupRemainingCents).toBe(0);
     expect(balanceOf('u1')!.debtCents).toBe(300); // the uncovered overage, now owed
@@ -1086,16 +1081,16 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
   it('nets outstanding debt against carry at renewal — debt absorbed, monthly reduced accordingly', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_1500_GRANT), { tier: 'pro' });
 
     const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
-    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', costDollars: 12, holdId: g.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_over', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 12, holdId: g.holdId });
     expect(balanceOf('u1')!.debtCents).toBe(300);
     expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(false); // blocked while in the red
 
     // ── RENEWAL: debt netted against carry before allowance added. ──
     // monthly = 0, debt = 300; netCarried = 0 − 300 = −300; monthly = −300 + 1500 = 1200.
-    await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    await applyStripeFunding(invoicePaid('in_2', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_1500_GRANT), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200); // 1500 − 300 debt absorbed
     expect(balanceOf('u1')!.debtCents).toBe(0); // absorbed into monthly balance
     expect((await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).allowed).toBe(true);
@@ -1103,11 +1098,11 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 
   it('a partial top-up (smaller than the debt) reduces debt but stays blocked until net-positive', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_1500_GRANT), { tier: 'pro' });
 
     const g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     // $20 call -> 3000¢; covers 1500 monthly, leaves 1500¢ debt.
-    await consumeCredits({ aiUsageLogId: 'log_big', userId: 'u1', costDollars: 20, holdId: g.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_big', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 20, holdId: g.holdId });
     expect(balanceOf('u1')!.debtCents).toBe(1500);
 
     // A $5 pack (500¢) only chips the debt down to 1000; top-up stays 0; still blocked.
@@ -1118,8 +1113,8 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
   });
 
   it('ACCUMULATES debt across two in-flight overages (settle adds to existing debt, never overwrites)', async () => {
-    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
+    seedUser('u1', 'cus_1', 'pro'); // 1500¢ monthly granted
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_1500_GRANT), { tier: 'pro' });
 
     // Two calls go in-flight TOGETHER: both clear the gate (net 1500 − two 25¢
     // reservations still above the floor) before either settles. This is the only
@@ -1133,14 +1128,14 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
     expect(store.creditHolds).toHaveLength(2); // both reservations live, nothing settled yet
 
     // ── SETTLE #1: $12 -> 1800¢. Spends the full 1500 monthly; 300¢ becomes debt. ──
-    await consumeCredits({ aiUsageLogId: 'log_a', userId: 'u1', costDollars: 12, holdId: g1.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_a', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 12, holdId: g1.holdId });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
     expect(balanceOf('u1')!.debtCents).toBe(300);
 
     // ── SETTLE #2: $4 -> 600¢. Buckets already empty, so the WHOLE 600¢ is shortfall
     // and must ADD to the existing 300 -> 900. (If the write overwrote rather than
     // incremented, debt would read 600 here.) ───────────────────────────────────────
-    await consumeCredits({ aiUsageLogId: 'log_b', userId: 'u1', costDollars: 4, holdId: g2.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_b', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 4, holdId: g2.holdId });
     expect(balanceOf('u1')!.debtCents).toBe(900); // 300 + 600, accumulated
 
     // Each overage left its own incurrence row; the two sum to the live debt counter.
@@ -1157,13 +1152,13 @@ describe('credits flow — negative balance (overage → debt → recover)', () 
 describe('credits flow — idempotency', () => {
   it('consuming the same aiUsageLogId twice debits exactly once', async () => {
     seedUser('u1', 'cus_1', 'pro');
-    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, 500), { tier: 'pro' }); // $5 paid → 500¢
+    await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END, PAID_FOR_500_GRANT), { tier: 'pro' }); // 500¢ granted
 
-    await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', costDollars: 1 }); // 150¢
+    await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1 }); // 150¢
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(350);
 
     // Redelivered/retried with the same usage id — the unique claim short-circuits.
-    await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'log_dup', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1 });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(350);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'usage' && r.aiUsageLogId === 'log_dup')).toHaveLength(1);
   });
@@ -1204,10 +1199,10 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
     });
 
     // (b) orphan usage row: consume never ran at all (no ledger entry).
-    store.aiUsageLogs.push({ id: 'log_orphan', userId: 'u1', cost: 1, timestamp: PAST(), success: true }); // 150¢
+    store.aiUsageLogs.push({ id: 'log_orphan', userId: 'u1', walletId: rootWalletId('u1'), cost: 1, timestamp: PAST(), success: true }); // 150¢
 
     // (c) errored-but-billable row: success:false but tokens were spent (cost > 0).
-    store.aiUsageLogs.push({ id: 'log_failed', userId: 'u1', cost: 0.5, timestamp: PAST(), success: false }); // 75¢
+    store.aiUsageLogs.push({ id: 'log_failed', userId: 'u1', walletId: rootWalletId('u1'), cost: 0.5, timestamp: PAST(), success: false }); // 75¢
 
     const result = await backfillCredits();
 
@@ -1240,7 +1235,7 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
     // 205 orphans > BATCH(200): the cron must loop a second pass to clear the tail.
     const N = 205;
     for (let i = 0; i < N; i++) {
-      store.aiUsageLogs.push({ id: `orphan_${i}`, userId: 'u1', cost: 0.01, timestamp: PAST(), success: true });
+      store.aiUsageLogs.push({ id: `orphan_${i}`, userId: 'u1', walletId: rootWalletId('u1'), cost: 0.01, timestamp: PAST(), success: true });
     }
 
     const result = await backfillCredits();
@@ -1265,7 +1260,7 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
       updatedAt: new Date(),
     });
     store.aiUsageLogs.push({
-      id: 'log_terminal_orphan', userId: 'u1', cost: 1, timestamp: PAST(), success: true, source: 'terminal',
+      id: 'log_terminal_orphan', userId: 'u1', walletId: rootWalletId('u1'), cost: 1, timestamp: PAST(), success: true, source: 'terminal',
     });
 
     const result = await backfillCredits();
@@ -1405,12 +1400,12 @@ describe('credits flow — monthly reset', () => {
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
 
     // Spend 150¢ ($1) from carry during the expiry gap — should draw monthly.
-    await consumeCredits({ aiUsageLogId: 'log_gap', userId: 'u4', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'log_gap', userId: 'u4', walletId: rootWalletId('u4'), costDollars: 1 });
     expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250); // 400 - 150 = 250 carry remaining
 
     // Renewal fires: adds full allowance to whatever remains.
     await applyStripeFunding(invoicePaid('in_4', 'cus_4', PERIOD_START, PERIOD_END), { tier: 'pro' });
-    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // 250 + 1500 = 1750
+    expect(balanceOf('u4')!.monthlyRemainingCents).toBe(250 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // carry + the new grant
   });
 
   it('lazy-inits a brand-new user with a period-stamped allowance, then a paid invoice rolls over (adds allowance to remaining)', async () => {
@@ -1423,11 +1418,12 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u2')!.monthlyPeriodEnd).not.toBeNull();
 
     // Spend some, then invoice.paid ADDS the allowance to the remaining balance (rollover).
-    await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', costDollars: 1 }); // 150¢
-    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350);
+    await consumeCredits({ aiUsageLogId: 'log_x', userId: 'u2', walletId: rootWalletId('u2'), costDollars: 1 }); // 150¢
+    const carry = TIER_MONTHLY_ALLOWANCE_CENTS.pro - 150;
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(carry);
 
     await applyStripeFunding(invoicePaid('in_2', 'cus_2', PERIOD_START, PERIOD_END), { tier: 'pro' });
-    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(1350 + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry 1350 + new 1500 = 2850
+    expect(balanceOf('u2')!.monthlyRemainingCents).toBe(carry + TIER_MONTHLY_ALLOWANCE_CENTS.pro); // rollover: carry + the new grant
     expect(balanceOf('u2')!.monthlyPeriodEnd!.getTime()).toBe(PERIOD_END * 1000);
   });
 });
@@ -1449,13 +1445,13 @@ describe('credits flow — sub-cent accrual', () => {
 
     // 3 calls → 1800 mc total → 1 whole cent debited, 800 mc carried.
     for (let i = 0; i < 3; i++) {
-      await consumeCredits({ aiUsageLogId: `sub_${i}`, userId: 'u1', costDollars: 0.004 });
+      await consumeCredits({ aiUsageLogId: `sub_${i}`, userId: 'u1', walletId: rootWalletId('u1'), costDollars: 0.004 });
     }
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(99); // exactly 1¢ so far
     expect(balanceOf('u1')!.pendingMillicents).toBe(800); // remainder carried, not lost
 
     // A 4th call crosses the next whole cent: 800 + 600 = 1400 → debit 1, carry 400.
-    await consumeCredits({ aiUsageLogId: 'sub_3', userId: 'u1', costDollars: 0.004 });
+    await consumeCredits({ aiUsageLogId: 'sub_3', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 0.004 });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(98);
     expect(balanceOf('u1')!.pendingMillicents).toBe(400);
 
@@ -1478,7 +1474,7 @@ describe('credits flow — shortfall / debt', () => {
     });
 
     // $1 of cost → 150¢ charge, but only 10¢ available → 140¢ uncovered.
-    await consumeCredits({ aiUsageLogId: 'log_debt', userId: 'u1', costDollars: 1 });
+    await consumeCredits({ aiUsageLogId: 'log_debt', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1 });
 
     // Balance floored at 0 (never negative — the DB CHECK invariant).
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0);
@@ -1506,11 +1502,11 @@ describe('credits flow — billing disabled (tenant/onprem)', () => {
 
     expect(await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
 
-    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 5 });
+    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 5 });
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     const result = await backfillCredits();
 
-    expect(result).toEqual({ retried: 0, orphans: 0, expiredHolds: 0 });
+    expect(result).toEqual({ retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 });
     expect(store.creditLedger).toHaveLength(0);
     expect(store.wallets).toHaveLength(0);
   });
@@ -1722,23 +1718,23 @@ describe('credits flow — per-user/day exposure cap (fund → consume past the 
 
   it('denies the next call once the day\'s charged spend would exceed the cap, while credits remain', async () => {
     process.env.DAILY_USER_EXPOSURE_CAP_CENTS = '200'; // 200¢/day ceiling
-    seedUser('u1', 'cus_1', 'pro'); // pro = 1500¢ monthly — far above the daily cap
+    seedUser('u1', 'cus_1', 'pro'); // pro = 900¢ monthly — far above the daily cap
     await applyStripeFunding(invoicePaid('in_1', 'cus_1', PERIOD_START, PERIOD_END), { tier: 'pro' });
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
 
     // CALL 1: $1 real → 150¢ charged. day total 0 + EST(25) < 200 → allowed.
     let g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g).toMatchObject({ allowed: true, reason: 'ok' });
-    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', costDollars: 1, holdId: g.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_1', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1, holdId: g.holdId });
 
     // CALL 2: day total 150¢ + EST(25) = 175 < 200 → still allowed.
     g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', costDollars: 1, holdId: g.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_2', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1, holdId: g.holdId });
 
     // CALL 3: day total now 300¢ — already over the 200¢ cap → denied by the backstop,
-    // NOT by credits (monthly still has 1200¢). No hold is reserved on the denial.
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1200);
+    // NOT by credits (monthly still has 600¢). No hold is reserved on the denial.
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro - 300);
     g = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
     expect(g).toEqual({ allowed: false, reason: 'daily_cap_exceeded' });
     expect(store.creditHolds).toHaveLength(0);
@@ -1755,7 +1751,7 @@ describe('credits flow — every row names the personal root wallet (WAL-5 (part
     expect(gate.allowed).toBe(true);
     const heldWallets = store.creditHolds.filter((h) => h.userId === 'u1').map((h) => h.walletId);
 
-    await consumeCredits({ aiUsageLogId: 'log_w5', userId: 'u1', costDollars: 1, holdId: gate.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_w5', userId: 'u1', walletId: rootWalletId('u1'), costDollars: 1, holdId: gate.holdId });
 
     const roots = store.wallets.filter((w) => w.userId === 'u1');
     expect(roots).toHaveLength(1);
@@ -1770,7 +1766,7 @@ describe('credits flow — every row names the personal root wallet (WAL-5 (part
     seedUser('u2', 'cus_2', 'free');
     const gate = await canConsumeAI('u2', 'free', { spend: PERSONAL_SPEND });
     expect(gate.allowed).toBe(true);
-    await consumeCredits({ aiUsageLogId: 'log_w5_first', userId: 'u2', costDollars: 0.01, holdId: gate.holdId });
+    await consumeCredits({ aiUsageLogId: 'log_w5_first', userId: 'u2', walletId: rootWalletId('u2'), costDollars: 0.01, holdId: gate.holdId });
 
     const roots = store.wallets.filter((w) => w.userId === 'u2');
     expect(roots).toHaveLength(1);

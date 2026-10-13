@@ -1,4 +1,3 @@
-import { PERSONAL_SPEND, automationSpend, type SpendTarget } from './spend-target';
 import { driveAccrualChargeFor, type ComputeCharge } from './compute-charge';
 
 /**
@@ -19,56 +18,6 @@ export function payerForDrive(drive: DriveBillingFacts): BillingPayer {
   return drive.orgId !== null ? { kind: 'org', orgId: drive.orgId } : { kind: 'user', userId: drive.ownerId };
 }
 
-/**
- * Who pays for a person-less AI run whose output lands in a drive (SPEND-6; point-guard ruling on
- * #2731, first for a Zoom transcript's enrichment): the payer seam on that DESTINATION drive, never
- * the person who set the automation up as such.
- *
- * - An org drive: its drive wallet (automationSpend). Empty, paused or missing, the gate skips,
- *   logs and tells the lead once a period — no fallback to any person. The run is recorded
- *   against `recordedUserId` (who set it up), as every automation records its runs.
- * - A personal drive: its owner's own wallet (PERSONAL_SPEND, gated and recorded as the owner).
- *
- * Returns the person to gate and record the usage as, and the target to name to the gate.
- */
-export function destinationDriveSpend(
-  drive: DriveBillingFacts,
-  driveId: string,
-  recordedUserId: string,
-): { userId: string; spend: SpendTarget } {
-  const payer = payerForDrive(drive);
-  return payer.kind === 'org'
-    ? { userId: recordedUserId, spend: automationSpend(driveId) }
-    : { userId: payer.userId, spend: PERSONAL_SPEND };
-}
-
-/**
- * The refusal for an org payer at the ONE charge site that still cannot bill an org: dedicated
- * published-app hosting, which is a Stripe subscription item on the payer's card, not a wallet
- * debit. Every WALLET compute site (sandbox runtime, terminal, browsers, environments,
- * published-app awake time, machine storage) charges the org pool through `compute-gate.ts`
- * (WAL-9) and no longer uses this. A dedicated purchase for an org drive is refused by name;
- * it never commits the lead's card for the org's app.
- */
-export const ORG_BILLING_PENDING = 'org_billing_pending' as const;
-
-export interface OrgBillingPendingRefusal {
-  code: typeof ORG_BILLING_PENDING;
-  orgId: string;
-  message: string;
-}
-
-export const ORG_BILLING_PENDING_MESSAGE =
-  "This drive belongs to an organization, and dedicated hosting can't be billed to an organization yet.";
-
-export type UserPayerResult = { ok: true; userId: string } | { ok: false; refusal: OrgBillingPendingRefusal };
-
-/** A person to charge, or the named interim refusal for an org payer. Never a substitute. */
-export function requireUserPayer(payer: BillingPayer): UserPayerResult {
-  if (payer.kind === 'user') return { ok: true, userId: payer.userId };
-  return { ok: false, refusal: { code: ORG_BILLING_PENDING, orgId: payer.orgId, message: ORG_BILLING_PENDING_MESSAGE } };
-}
-
 /** Resolves a drive's billing facts; null when it can't be resolved (e.g. a stale read mid-delete). */
 export type LookupDriveBillingFacts = (driveId: string) => Promise<DriveBillingFacts | null>;
 
@@ -80,10 +29,12 @@ export type LookupDriveBillingFacts = (driveId: string) => Promise<DriveBillingF
  * payer (WAL-9: the org for an org drive, else the drive's owner), or on the session's own
  * `ownerId` for a user-scoped global-assistant session (`driveId` null) — the SAME attribution
  * rule `storageBillingTarget` (`services/sandbox/sandbox-storage-attribution.ts`) decides for
- * storage. This is the charge-time twin of that rule: where the storage reconcile SKIPS a row
- * whose drive can't be resolved (a stale read mid-delete, self-corrects next run), a live
- * runtime charge has already happened and needs a payer NOW, so it falls back to the session's
- * own `ownerId` instead.
+ * storage.
+ *
+ * A DRIVE session whose drive cannot be resolved (a stale read mid-delete) has NO payer: null.
+ * It never falls back to the session's owner — the drive may be an org's, and a person is never
+ * billed for an org drive's session (WAL-9). Callers refuse the run (nothing starts, nothing is
+ * charged) or skip the accrual, exactly as an environment's unresolvable drive is skipped.
  *
  * Deliberately keyed on the session's OWN `driveId`/`ownerId`, never on the caller's surface
  * drive or the conversation's agent page — a session hosts MANY conversations (possibly with
@@ -96,21 +47,22 @@ export type LookupDriveBillingFacts = (driveId: string) => Promise<DriveBillingF
 export interface ResolveSessionPayerInput {
   /** The session's own drive; null for a user-scoped global-assistant session. */
   driveId: string | null;
-  /** The session's own owner — the fallback payer, and the ONLY payer when `driveId` is null. */
+  /** The session's own owner — the payer ONLY when `driveId` is null. */
   ownerId: string;
   lookupDriveBillingFacts: LookupDriveBillingFacts;
 }
 
-export async function resolveSessionPayer(input: ResolveSessionPayerInput): Promise<BillingPayer> {
+/** The session's payer, or null when its drive cannot be resolved — callers refuse or skip, never substitute a person. */
+export async function resolveSessionPayer(input: ResolveSessionPayerInput): Promise<BillingPayer | null> {
   if (!input.driveId) return { kind: 'user', userId: input.ownerId };
   const facts = await input.lookupDriveBillingFacts(input.driveId);
-  return facts ? payerForDrive(facts) : { kind: 'user', userId: input.ownerId };
+  return facts ? payerForDrive(facts) : null;
 }
 
 /**
  * Real DB-backed drive → billing facts lookup — the ONE place this read is written for billing.
- * Null when the drive cannot be found (a stale read mid-delete — callers fall back to the
- * session's own owner, or skip, per their own policy).
+ * Null when the drive cannot be found (a stale read mid-delete — callers refuse or skip; none
+ * substitutes another payer).
  */
 export async function lookupDriveBillingFacts(driveId: string): Promise<DriveBillingFacts | null> {
   const { db } = await import('@pagespace/db/db');
@@ -135,10 +87,8 @@ export async function lookupDriveBillingFacts(driveId: string): Promise<DriveBil
  * deliberately NOT to the substrate underneath it. Billing language stays substrate-agnostic so
  * the two can move independently.
  *
- * **Deliberate divergence from `resolveSessionPayer`: there is NO `ownerId` fallback here, and
- * there is no `ownerId` to fall back TO.** A session has an owner — it is a user's working
- * context, so a failed drive lookup can still land the bill on the person who opened it. An env
- * has none: `drive_envs.createdBy` is AUDIT ONLY (nullable, `set null` on user delete) and
+ * **There is NO `ownerId` fallback here, as there is none for a drive session, and there is no
+ * `ownerId` to fall back TO.** An env has none: `drive_envs.createdBy` is AUDIT ONLY (nullable, `set null` on user delete) and
  * resolves neither payment nor lifecycle, because an env is DRIVE-owned and drive-shared. So the
  * drive's payer (WAL-9: the org for an org drive, else the owner) is the only honest payer, and
  * an unresolvable drive means this cycle is SKIPPED rather than misattributed: a money movement

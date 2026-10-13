@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { CallSpendDecision as LibCallSpendDecision } from '@pagespace/lib/billing/spend-target';
 import type { SpendSourceKind as LibSpendSourceKind, WalletStatus as LibWalletStatus } from '@pagespace/lib/billing/wallet-core';
-import { CONSUMER_WALLET_VIEW_KEYS, type CallSpendDecision, type ConsumerWalletView } from '../wallets.js';
+import { CONSUMER_WALLET_VIEW_KEYS, DRIVE_WALLET_LIST_ENTRY_KEYS, type CallSpendDecision, type ConsumerWalletView } from '../wallets.js';
 
 type AssertExact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
@@ -26,12 +26,13 @@ const statusIdentical: AssertExact<ConsumerWalletView['status'], LibWalletStatus
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WALLET_VIEWS_SOURCE = resolve(__dirname, '../../../../lib/src/billing/wallet-views.ts');
 
-function libConsumerWalletFields(): string[] {
+function libFieldList(name: string): string[] {
   const source = readFileSync(WALLET_VIEWS_SOURCE, 'utf-8');
-  const match = /export const CONSUMER_WALLET_FIELDS = \[([^\]]*)\] as const;/.exec(source);
-  if (!match) throw new Error('CONSUMER_WALLET_FIELDS not found in lib wallet-views.ts');
+  const match = new RegExp(`export const ${name} = \\[([^\\]]*)\\] as const;`).exec(source);
+  if (!match) throw new Error(`${name} not found in lib wallet-views.ts`);
   return [...match[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
 }
+const libConsumerWalletFields = () => libFieldList('CONSUMER_WALLET_FIELDS');
 
 describe('operations/wallets.ts — drift guard vs @pagespace/lib canonical shapes', () => {
   it('X-1 (partial) CallSpendDecision, SpendSourceKind and WalletStatus match lib (enforced at compile time above)', () => {
@@ -42,5 +43,11 @@ describe('operations/wallets.ts — drift guard vs @pagespace/lib canonical shap
     const libFields = libConsumerWalletFields();
     expect(libFields.length).toBeGreaterThan(0);
     expect([...CONSUMER_WALLET_VIEW_KEYS].sort()).toEqual([...libFields].sort());
+  });
+
+  it("X-1 (partial) UI-10 (partial) a listed drive wallet's keys, mySpentCents included, are exactly lib's DRIVE_WALLET_LIST_FIELDS", () => {
+    const libFields = libFieldList('DRIVE_WALLET_LIST_FIELDS');
+    expect(libFields).toContain('mySpentCents');
+    expect([...DRIVE_WALLET_LIST_ENTRY_KEYS].sort()).toEqual([...libFields].sort());
   });
 });

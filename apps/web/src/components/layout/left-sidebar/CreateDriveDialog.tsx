@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { post } from '@/lib/auth/auth-fetch';
 import { Drive } from '@pagespace/lib/types';
 import {
@@ -15,13 +16,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDriveStore } from "@/hooks/useDrive";
+import { useMyOrganizations } from "@/hooks/useMyOrganizations";
+import { creatableOrgs, defaultDriveOwner, driveOrgContext } from "@/lib/drives/drive-owner-choice";
+
 interface CreateDriveDialogProps {
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
+  /** DRV-3: the org the dialog was opened for (an org header); otherwise the current drive's org is the context. */
+  contextOrgId?: string | null;
 }
 
-export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDialogProps) {
+const PERSONAL = "personal";
+
+export default function CreateDriveDialog({ isOpen, setIsOpen, contextOrgId }: CreateDriveDialogProps) {
   const [driveName, setDriveName] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -29,6 +38,19 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
   const addDrive = useDriveStore(state => state.addDrive);
   const setCurrentDrive = useDriveStore(state => state.setCurrentDrive);
   const fetchDrives = useDriveStore(state => state.fetchDrives);
+  const drives = useDriveStore(state => state.drives);
+  const currentDriveId = useDriveStore(state => state.currentDriveId);
+
+  // DRV-3: Personal, or one of the person's orgs that lets them create drives. Someone with no such
+  // org sees no owner choice at all (ORG-2: no org UI).
+  const { organizations } = useMyOrganizations();
+  const offered = useMemo(() => creatableOrgs(organizations), [organizations]);
+  const contextOrg = driveOrgContext({ explicitOrgId: contextOrgId, currentDriveId, drives });
+  const initialOwner = defaultDriveOwner(contextOrg, offered) ?? PERSONAL;
+  const [owner, setOwner] = useState(initialOwner);
+  useEffect(() => {
+    if (isOpen) setOwner(initialOwner);
+  }, [isOpen, initialOwner]);
 
   const router = useRouter();
 
@@ -37,7 +59,8 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
     if (!driveName.trim() || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const newDrive = await post<Drive>("/api/drives", { name: driveName });
+      const body = owner === PERSONAL ? { name: driveName } : { name: driveName, orgId: owner };
+      const newDrive = await post<Drive>("/api/drives", body);
       // Add the drive with correct ownership flag
       addDrive(newDrive);
       setCurrentDrive(newDrive.id);
@@ -47,7 +70,8 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
       setDriveName("");
       setIsOpen(false);
     } catch (error) {
-      console.error(error);
+      // The server's refusal (who may create drives in the org, a lapsed org) is written for people.
+      toast.error(error instanceof Error && error.message ? error.message : "The drive could not be created.");
     } finally {
       setIsSubmitting(false);
     }
@@ -76,6 +100,22 @@ export default function CreateDriveDialog({ isOpen, setIsOpen }: CreateDriveDial
                 autoFocus
               />
             </div>
+            {offered.length > 0 ? (
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label className="text-right">Owner</Label>
+                <Select value={owner} onValueChange={setOwner}>
+                  <SelectTrigger aria-label="Owner" className="col-span-3">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={PERSONAL}>Personal</SelectItem>
+                    {offered.map((org) => (
+                      <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button type="submit" disabled={isSubmitting}>

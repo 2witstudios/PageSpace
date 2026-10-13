@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -36,6 +45,7 @@ vi.mock('../permissions', () => ({
 import { canUserAccessFile } from '../file-access';
 import { db } from '@pagespace/db/db';
 import { canUserViewPage, isUserDriveMember } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -89,21 +99,21 @@ describe('canUserAccessFile', () => {
         .mockResolvedValueOnce(false)
         .mockResolvedValueOnce(true);
 
-      expect(await canUserAccessFile('user-1', 'file-1', 'drive-1')).toBe(true);
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1')).toBe(true);
     });
 
     it('denies when user cannot view any linked page (and no conv linkage)', async () => {
       setupLinkages({ pages: [{ pageId: 'page-1' }, { pageId: 'page-2' }] });
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
-      expect(await canUserAccessFile('user-1', 'file-1', 'drive-1')).toBe(false);
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1')).toBe(false);
     });
 
     it('short-circuits on first accessible page', async () => {
       setupLinkages({ pages: [{ pageId: 'page-1' }, { pageId: 'page-2' }] });
       vi.mocked(canUserViewPage).mockResolvedValueOnce(true);
 
-      expect(await canUserAccessFile('user-1', 'file-1', 'drive-1')).toBe(true);
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1')).toBe(true);
       expect(canUserViewPage).toHaveBeenCalledTimes(1);
     });
 
@@ -111,7 +121,7 @@ describe('canUserAccessFile', () => {
       setupLinkages({ pages: [{ pageId: 'page-1' }] });
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
-      await canUserAccessFile('user-1', 'file-1', 'drive-1');
+      await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1');
       expect(isUserDriveMember).not.toHaveBeenCalled();
     });
   });
@@ -122,7 +132,7 @@ describe('canUserAccessFile', () => {
         conversations: [{ participant1Id: 'alice', participant2Id: 'bob' }],
       });
 
-      expect(await canUserAccessFile('alice', 'file-1', null)).toBe(true);
+      expect(await canUserAccessFile(credentialActor('alice', null), 'file-1', null)).toBe(true);
     });
 
     it('grants when user is participant2 of a linked conversation', async () => {
@@ -130,7 +140,7 @@ describe('canUserAccessFile', () => {
         conversations: [{ participant1Id: 'alice', participant2Id: 'bob' }],
       });
 
-      expect(await canUserAccessFile('bob', 'file-1', null)).toBe(true);
+      expect(await canUserAccessFile(credentialActor('bob', null), 'file-1', null)).toBe(true);
     });
 
     it('denies a non-participant', async () => {
@@ -138,7 +148,7 @@ describe('canUserAccessFile', () => {
         conversations: [{ participant1Id: 'alice', participant2Id: 'bob' }],
       });
 
-      expect(await canUserAccessFile('carol', 'file-1', null)).toBe(false);
+      expect(await canUserAccessFile(credentialActor('carol', null), 'file-1', null)).toBe(false);
     });
 
     it('does not call isUserDriveMember when conv linkages exist', async () => {
@@ -146,7 +156,7 @@ describe('canUserAccessFile', () => {
         conversations: [{ participant1Id: 'alice', participant2Id: 'bob' }],
       });
 
-      await canUserAccessFile('carol', 'file-1', 'drive-1');
+      await canUserAccessFile(credentialActor('carol', null), 'file-1', 'drive-1');
       expect(isUserDriveMember).not.toHaveBeenCalled();
     });
   });
@@ -159,7 +169,7 @@ describe('canUserAccessFile', () => {
       });
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
-      expect(await canUserAccessFile('alice', 'file-1', 'drive-1')).toBe(true);
+      expect(await canUserAccessFile(credentialActor('alice', null), 'file-1', 'drive-1')).toBe(true);
     });
 
     it('grants via the page path even when user is not a conv participant', async () => {
@@ -169,7 +179,7 @@ describe('canUserAccessFile', () => {
       });
       vi.mocked(canUserViewPage).mockResolvedValueOnce(true);
 
-      expect(await canUserAccessFile('carol', 'file-1', 'drive-1')).toBe(true);
+      expect(await canUserAccessFile(credentialActor('carol', null), 'file-1', 'drive-1')).toBe(true);
     });
 
     it('denies when user fails both branches independently', async () => {
@@ -179,7 +189,7 @@ describe('canUserAccessFile', () => {
       });
       vi.mocked(canUserViewPage).mockResolvedValue(false);
 
-      expect(await canUserAccessFile('carol', 'file-1', 'drive-1')).toBe(false);
+      expect(await canUserAccessFile(credentialActor('carol', null), 'file-1', 'drive-1')).toBe(false);
     });
   });
 
@@ -188,21 +198,21 @@ describe('canUserAccessFile', () => {
       setupLinkages({});
       vi.mocked(isUserDriveMember).mockResolvedValue(true);
 
-      expect(await canUserAccessFile('user-1', 'file-1', 'drive-1')).toBe(true);
-      expect(isUserDriveMember).toHaveBeenCalledWith('user-1', 'drive-1');
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1')).toBe(true);
+      expect(isUserDriveMember).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
     });
 
     it('denies when user is not a drive member', async () => {
       setupLinkages({});
       vi.mocked(isUserDriveMember).mockResolvedValue(false);
 
-      expect(await canUserAccessFile('user-1', 'file-1', 'drive-1')).toBe(false);
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1')).toBe(false);
     });
 
     it('denies when no linkages and driveId is null (no anyone-can-see fallthrough)', async () => {
       setupLinkages({});
 
-      expect(await canUserAccessFile('user-1', 'file-1', null)).toBe(false);
+      expect(await canUserAccessFile(credentialActor('user-1', null), 'file-1', null)).toBe(false);
       expect(isUserDriveMember).not.toHaveBeenCalled();
     });
 
@@ -210,7 +220,7 @@ describe('canUserAccessFile', () => {
       setupLinkages({});
       vi.mocked(isUserDriveMember).mockResolvedValue(false);
 
-      await canUserAccessFile('user-1', 'file-1', 'drive-1');
+      await canUserAccessFile(credentialActor('user-1', null), 'file-1', 'drive-1');
       expect(canUserViewPage).not.toHaveBeenCalled();
     });
   });

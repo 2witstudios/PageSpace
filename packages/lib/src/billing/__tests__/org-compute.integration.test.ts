@@ -46,6 +46,14 @@ import {
 import { ORG_COMPUTE_EPOCH_KEY, stampOrgComputeBillingEpoch } from '../org-compute-epoch';
 import { consumeCredits } from '../credit-consume';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { files } from '@pagespace/db/schema/storage';
+import { publishedAppSubscriptions } from '@pagespace/db/schema/published-app-subscriptions';
+import { lookupDriveBillingFacts, payerForDrive, resolveSessionPayer } from '../sandbox-payer';
+import { chargeStorageForStore, resolveUploadQuotaTarget } from '../../services/storage-limits';
+import { decideDedicatedPurchaser } from '../../services/app-hosting/dedicated-tier';
+import { recordDedicatedSubscription } from '../../services/app-hosting/dedicated-tier-service';
+import { requireOrgRole } from '../../organizations/authorize';
+import { isOrgActive } from '../../organizations/status';
 
 const originalMode = process.env.DEPLOYMENT_MODE;
 let dbAvailable = false;
@@ -653,17 +661,162 @@ describe('a payer change while an app is awake', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('settling an org compute charge', () => {
-  it('WAL-9 (partial) a charge that names the org pool and compute lands there, marked compute — and a personal default stays ai', async () => {
+  it('WAL-9 (partial) a charge that names the org pool and compute lands there, marked compute — and one naming the member\'s own wallet stays ai', async () => {
     const w = (world = await build({ poolCents: FUNDED }));
     const [orgLog] = await db.insert(aiUsageLogs).values({ id: createId(), userId: w.leadId, provider: 'fly', model: 'x', cost: 0.5, source: 'terminal', timestamp: new Date() }).returning();
     const [aiLog] = await db.insert(aiUsageLogs).values({ id: createId(), userId: w.memberId, provider: 'openrouter', model: 'y', cost: 0.5, source: 'chat', timestamp: new Date() }).returning();
 
     await consumeCredits({ aiUsageLogId: orgLog.id, userId: w.leadId, costDollars: 0.5, walletId: w.poolId, spendKind: 'compute' });
-    await consumeCredits({ aiUsageLogId: aiLog.id, userId: w.memberId, costDollars: 0.5 });
+    await consumeCredits({ aiUsageLogId: aiLog.id, userId: w.memberId, walletId: w.memberWalletId, costDollars: 0.5 });
 
     const [orgRow] = await db.select().from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, orgLog.id), eq(creditLedger.entryType, 'usage')));
     const [aiRow] = await db.select().from(creditLedger).where(and(eq(creditLedger.aiUsageLogId, aiLog.id), eq(creditLedger.entryType, 'usage')));
     expect(orgRow).toMatchObject({ walletId: w.poolId, spendKind: 'compute' });
     expect(aiRow).toMatchObject({ walletId: w.memberWalletId, spendKind: 'ai' });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// WAL-9: the payer seam, end to end — every charge in an org drive bills the org, a personal
+// drive's bills its owner, and wallets do not change compute billing
+// ---------------------------------------------------------------------------------------------
+
+/** A funded DRIVE wallet on the org drive: compute must never draw it (wallets do not change compute billing). */
+async function fundDriveWallet(w: World, cents: number): Promise<string> {
+  const [driveWallet] = await db.insert(wallets).values({
+    ownerType: 'org',
+    orgId: w.orgId,
+    subjectType: 'drive',
+    subjectId: w.orgDriveId,
+    parentWalletId: w.poolId,
+    monthlyAllowanceCents: cents,
+  }).returning();
+  return driveWallet.id;
+}
+
+const poolDebt = async (poolId: string) => (await walletRow(poolId)).debtCents;
+
+describe('WAL-9 the payer seam: an org drive bills the org, a personal drive its owner', () => {
+  it('WAL-9 sandbox runtime in an org drive charges the ORG POOL — never its funded drive wallet, never a person — and a personal drive\'s run charges its owner', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    const driveWalletId = await fundDriveWallet(w, 2_000);
+    const people = await personalSnapshot(w);
+
+    expect(await meteredRun({ driveId: w.orgDriveId, ownerId: w.memberId, activeMs: 3_600_000 }).exec()).toMatchObject({ success: true });
+    expect(await meteredRun({ driveId: w.soloDriveId, ownerId: w.soloId, activeMs: 3_600_000 }).exec()).toMatchObject({ success: true });
+
+    expect((await ledgerOnWallet(w.poolId)).filter((r) => r.entryType === 'usage')).toEqual([expect.objectContaining({ userId: w.memberId, spendKind: 'compute' })]);
+    expect(await ledgerOnWallet(driveWalletId)).toEqual([]);
+    expect((await ledgerOnWallet(w.soloWalletId)).filter((r) => r.entryType === 'usage')).toHaveLength(1);
+    expect(await personalSnapshot(w)).toEqual(people);
+    await db.delete(wallets).where(eq(wallets.id, driveWalletId));
+  });
+
+  it('WAL-9 an org environment\'s machine storage is held and settled on the ORG POOL, never past it: a funded pool pays in full, a low pool pays only what it has (no debt), a paused pool pays nothing', async () => {
+    const now = new Date('2026-09-28T12:00:00.000Z');
+    await stampOrgComputeBillingEpoch(new Date('2026-09-27T00:00:00.000Z'));
+
+    const funded = (world = await build({ poolCents: FUNDED }));
+    await seedEnv(funded, funded.orgDriveId, new Date(now.getTime() - MAX_BILLABLE_SPAN_MS));
+    const fullRun = await reconcileSandboxStorage(storageDeps(funded, () => now));
+    const fullCharge = (await ledgerOnWallet(funded.poolId)).filter((r) => r.entryType === 'usage')[0]?.chargeMillicents ?? 0;
+    expect(fullRun).toMatchObject({ charged: 1, orgPoolCapped: 0, orgPoolForgiven: 0 });
+    expect(fullCharge).toBeGreaterThan(1_000);
+    expect(await holdsOnWallet(funded.poolId)).toEqual([]);
+    await teardown(funded);
+
+    const low = (world = await build({ poolCents: 1 }));
+    const lowEnv = await seedEnv(low, low.orgDriveId, new Date(now.getTime() - MAX_BILLABLE_SPAN_MS));
+    const lowRun = await reconcileSandboxStorage(storageDeps(low, () => now));
+    const lowPool = await walletRow(low.poolId);
+    expect(lowRun).toMatchObject({ charged: 1, orgPoolCapped: 1 });
+    expect(lowPool.debtCents).toBe(0);
+    expect(lowPool.monthlyRemainingCents).toBeGreaterThanOrEqual(0);
+    expect((await ledgerOnWallet(low.poolId)).filter((r) => r.entryType === 'usage')[0]?.chargeMillicents).toBeLessThanOrEqual(1_000);
+    expect(await envWatermark(lowEnv)).toEqual(now);
+    await teardown(low);
+
+    const paused = (world = await build({ poolCents: FUNDED, poolStatus: 'paused' }));
+    const pausedEnv = await seedEnv(paused, paused.orgDriveId, new Date(now.getTime() - MAX_BILLABLE_SPAN_MS));
+    const people = await personalSnapshot(paused);
+    const pausedRun = await reconcileSandboxStorage(storageDeps(paused, () => now));
+    expect(pausedRun).toMatchObject({ charged: 0, orgPoolForgiven: 1 });
+    expect(await ledgerOnWallet(paused.poolId)).toEqual([]);
+    expect(await poolDebt(paused.poolId)).toBe(0);
+    expect(await envWatermark(pausedEnv)).toEqual(now);
+    expect(await personalSnapshot(paused)).toEqual(people);
+  });
+
+  it('WAL-9 a drive session whose drive no longer exists has NO payer — never the session\'s owner — while a global session (no drive) is its owner\'s', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    expect(await resolveSessionPayer({ driveId: createId(), ownerId: w.memberId, lookupDriveBillingFacts })).toBeNull();
+    expect(await resolveSessionPayer({ driveId: null, ownerId: w.memberId, lookupDriveBillingFacts })).toEqual({ kind: 'user', userId: w.memberId });
+    expect(await resolveSessionPayer({ driveId: w.orgDriveId, ownerId: w.memberId, lookupDriveBillingFacts })).toEqual({ kind: 'org', orgId: w.orgId });
+    expect(await resolveSessionPayer({ driveId: w.soloDriveId, ownerId: w.memberId, lookupDriveBillingFacts })).toEqual({ kind: 'user', userId: w.soloId });
+  });
+
+  it('WAL-9 file storage: an upload into the org drive is the ORG\'s (its quota, no personal counter), and a member\'s upload into someone\'s personal drive bills that drive\'s OWNER', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    const counter = async (userId: string) => Math.round((await db.select({ used: users.storageUsedBytes }).from(users).where(eq(users.id, userId)))[0]?.used ?? 0);
+
+    expect((await resolveUploadQuotaTarget(w.memberId, w.orgDriveId))?.payer).toEqual({ kind: 'org', orgId: w.orgId });
+    expect(await chargeStorageForStore(w.memberId, w.orgDriveId, 4_000, { eventType: 'upload' })).toEqual({ kind: 'org', orgId: w.orgId });
+    expect(await counter(w.memberId)).toBe(0);
+    expect(await counter(w.leadId)).toBe(0);
+
+    expect((await resolveUploadQuotaTarget(w.memberId, w.soloDriveId))?.payer).toEqual({ kind: 'user', userId: w.soloId });
+    expect(await chargeStorageForStore(w.memberId, w.soloDriveId, 300, { eventType: 'upload' })).toEqual({ kind: 'user', userId: w.soloId });
+    expect(await counter(w.soloId)).toBe(300);
+    expect(await counter(w.memberId)).toBe(0);
+    await db.delete(files).where(inArray(files.createdBy, w.userIds));
+  });
+
+  it('WAL-9 dedicated hosting for an org drive\'s app is bought for the ORG by its Owner (on the org\'s customer), refused to the drive\'s plain members, and its mirror keeps the org when the buyer is gone', async () => {
+    const w = (world = await build({ poolCents: FUNDED }));
+    await db.update(organizations).set({ stripeCustomerId: `cus_${w.orgId}` }).where(eq(organizations.id, w.orgId));
+    const facts = await lookupDriveBillingFacts(w.orgDriveId);
+    if (!facts) throw new Error('org drive facts missing');
+    const decide = async (callerId: string) => {
+      const role = await requireOrgRole(callerId, w.orgId, 'MEMBER');
+      return decideDedicatedPurchaser({
+        payer: payerForDrive(facts),
+        callerId,
+        callerOrgRole: role.ok ? role.role : null,
+        action: 'buy',
+        orgActive: await isOrgActive(w.orgId),
+        orgHasStripeCustomer: true,
+      });
+    };
+
+    expect(await decide(w.leadId)).toEqual({ ok: true, purchaser: { kind: 'org', orgId: w.orgId, buyerUserId: w.leadId } });
+    expect(await decide(w.memberId)).toEqual({ ok: false, reason: 'not_found' });
+
+    // The mirror records the org billed and the buyer; the buyer's account going away keeps the org.
+    const originalHosting = process.env.APP_HOSTING_ENABLED;
+    process.env.APP_HOSTING_ENABLED = 'true';
+    try {
+      const appId = await seedStoppedApp(w, w.orgDriveId);
+      const buyer = await factories.createUser({ name: 'Short-lived admin' });
+      const recorded = await recordDedicatedSubscription({
+        publishedAppId: appId,
+        userId: buyer.id,
+        orgId: w.orgId,
+        stripeSubscriptionId: `sub_${appId}`,
+        stripePriceId: 'price_small',
+        guestPreset: 'shared-cpu-1x-512',
+        status: 'active',
+        currentPeriodStart: new Date(),
+        currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+        cancelAtPeriodEnd: false,
+        stripeEventCreated: null,
+      });
+      expect(recorded.row).toMatchObject({ orgId: w.orgId, userId: buyer.id });
+      await db.delete(users).where(eq(users.id, buyer.id));
+      const [mirror] = await db.select().from(publishedAppSubscriptions).where(eq(publishedAppSubscriptions.publishedAppId, appId));
+      expect(mirror).toMatchObject({ orgId: w.orgId, userId: null, stripeSubscriptionId: `sub_${appId}` });
+      await db.delete(publishedAppSubscriptions).where(eq(publishedAppSubscriptions.publishedAppId, appId));
+    } finally {
+      process.env.APP_HOSTING_ENABLED = originalHosting;
+    }
   });
 });

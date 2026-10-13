@@ -23,6 +23,7 @@ import { leaveOrganization, reassignLedOrgDrives, LeaveOrganizationRefusedError 
 import { accountRepository } from '../../repositories/account-repository';
 import { getUserDriveAccess } from '../../permissions/permissions';
 import { updateDriveLastAccessed } from '../../services/drive-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
@@ -179,7 +180,7 @@ describe('leave and delete cascades (Postgres)', () => {
 
     expect(result).toMatchObject({ ok: true, revoked: { orgMembershipRows: 0 } });
     expect(await db.select().from(driveMembers).where(eq(driveMembers.id, invite.id))).toHaveLength(1);
-    expect(await getUserDriveAccess(leaver.id, privateOrgDrive.id)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(leaver.id, null), privateOrgDrive.id)).toBe(true);
   });
 
   it('O-7 leaving an org reassigns the drives the leaver leads to the org Owner with an audit event', async () => {

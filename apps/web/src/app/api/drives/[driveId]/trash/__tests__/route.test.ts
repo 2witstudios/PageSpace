@@ -224,7 +224,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
       const response = await GET(request, createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
     });
 
     it('ORG-4 (partial) an org Admin with no drive_members row views an org drive\'s trash, because the org-aware relationship makes them ADMIN', async () => {
@@ -239,7 +239,7 @@ describe('GET /api/drives/[driveId]/trash', () => {
       const response = await GET(new Request(`https://example.com/api/drives/${mockDriveId}/trash`), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
-      expect(loadDriveRelationship).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
     });
 
     it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members, the relationship refuses', async () => {

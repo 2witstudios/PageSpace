@@ -5,11 +5,13 @@
  * No caching, by design: every call reads the row, so a change applies immediately in every process.
  */
 import { db } from '@pagespace/db/db';
-import { asc, eq, inArray, or, sql } from '@pagespace/db/operators';
+import { and, asc, eq, inArray, or, sql } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { organizations } from '@pagespace/db/schema/organizations';
+import { userPersonalization } from '@pagespace/db/schema/personalization';
 import type { SpendPolicy } from '../billing/wallet-core';
 import { orgPolicySpendPolicy, parseOrgPolicies, type OpenRoleFloor, type OrgPolicies } from './policies-core';
+import { strictestAuthenticationPolicy, type OrgAuthenticationPolicy } from './authentication-policy-core';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Executor = typeof db | Tx;
@@ -48,7 +50,7 @@ export interface ReadLock {
  * many orgs) at once: one read per chunk of orgs, never one per drive or page. Every id asked for gets an answer,
  * parsed as getOrgPolicies parses it (unset: the default, damaged: view, the value that adds nothing).
  */
-export async function getOpenDriveRoleFloors(orgIds: readonly string[], executor: Executor = db): Promise<Map<string, OpenRoleFloor>> {
+export async function getOpenDriveRoleFloors(orgIds: readonly string[], executor: Pick<typeof db, 'select'> = db): Promise<Map<string, OpenRoleFloor>> {
   const unique = [...new Set(orgIds)];
   const stored = new Map<string, unknown>();
   for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
@@ -116,4 +118,127 @@ export async function lockOrgsOfDrivesForShare(executor: Tx, input: { driveIds: 
   const orgIds = [...new Set((await executor.select({ orgId: drives.orgId }).from(drives).where(inArray(drives.id, [...driveIds]))).flatMap((d) => (d.orgId ? [d.orgId] : [])))].sort();
   if (orgIds.length === 0) return;
   await executor.select({ id: organizations.id }).from(organizations).where(inArray(organizations.id, orgIds)).orderBy(asc(organizations.id)).for('share');
+}
+
+/**
+ * SEC-2/3: the sign-in policy governing each drive, for many drives in one read per chunk: null for a drive no org
+ * governs (a personal drive) and for an id that is no drive (the caller's own not-found handling stands). Every id
+ * asked for gets an answer. The keys parse as getOrgPolicies parses them, so a damaged value reads as its strictest.
+ */
+export async function getDriveAuthenticationPolicies(
+  driveIds: readonly string[],
+  executor: Executor = db,
+): Promise<Map<string, OrgAuthenticationPolicy | null>> {
+  const unique = [...new Set(driveIds)];
+  const out = new Map<string, OrgAuthenticationPolicy | null>(unique.map((id) => [id, null]));
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const rows = await executor
+      .select({ driveId: drives.id, orgId: drives.orgId, policies: organizations.policies })
+      .from(drives)
+      .leftJoin(organizations, eq(organizations.id, drives.orgId))
+      .where(inArray(drives.id, unique.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) {
+      if (!row.orgId) continue;
+      const { requireStrongSignIn, maximumSessionAgeMinutes } = parseOrgPolicies(row.policies);
+      out.set(row.driveId, { requireStrongSignIn, maximumSessionAgeMinutes });
+    }
+  }
+  return out;
+}
+
+/**
+ * The drive each permission resource lives in: a page's drive, or the id itself when it is no page (the permission
+ * APIs accept a drive id as the root resource). One read per chunk.
+ */
+export async function getResourceDriveIds(resourceIds: readonly string[], executor: Executor = db): Promise<Map<string, string>> {
+  const unique = [...new Set(resourceIds)];
+  const out = new Map<string, string>(unique.map((id) => [id, id]));
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const rows = await executor
+      .select({ id: pages.id, driveId: pages.driveId })
+      .from(pages)
+      .where(inArray(pages.id, unique.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.driveId);
+  }
+  return out;
+}
+
+/**
+ * The pages of `pageIds` that restate content DERIVED from org drives, with the orgs it came from (D-OW-62): today the
+ * memory pages (About You, Communication, Rules) of a user whose distilled memory drew on org content
+ * (user_personalization.memoryOrgIds). A page absent from the map restates nothing derived. One read per chunk.
+ */
+export async function getDerivedPageOrgIds(pageIds: readonly string[], executor: Executor = db): Promise<Map<string, string[]>> {
+  const unique = [...new Set(pageIds)];
+  const out = new Map<string, string[]>();
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const chunk = unique.slice(i, i + ORG_ID_CHUNK);
+    const rows = await executor
+      .select({
+        bioPageId: userPersonalization.bioPageId,
+        writingStylePageId: userPersonalization.writingStylePageId,
+        rulesPageId: userPersonalization.rulesPageId,
+        memoryOrgIds: userPersonalization.memoryOrgIds,
+      })
+      .from(userPersonalization)
+      .where(and(
+        sql`cardinality(${userPersonalization.memoryOrgIds}) > 0`,
+        or(
+          inArray(userPersonalization.bioPageId, chunk),
+          inArray(userPersonalization.writingStylePageId, chunk),
+          inArray(userPersonalization.rulesPageId, chunk),
+        ),
+      ));
+    const requested = new Set(chunk);
+    for (const row of rows) {
+      for (const id of [row.bioPageId, row.writingStylePageId, row.rulesPageId]) {
+        if (id && requested.has(id)) out.set(id, [...row.memoryOrgIds].sort());
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The sign-in policy governing each page or drive id, read live (null where no org governs): the policy of the org whose
+ * drive holds it, and, for a page restating org-derived content (a memory page, D-OW-62), every contributing org's too,
+ * folded into the strictest one. For long-lived holders (a socket's rooms) that re-decide what they hold.
+ */
+export async function getResourceAuthenticationPolicies(
+  resourceIds: readonly string[],
+  executor: Executor = db,
+): Promise<Map<string, OrgAuthenticationPolicy | null>> {
+  const driveOf = await getResourceDriveIds(resourceIds, executor);
+  const drivePolicies = await getDriveAuthenticationPolicies([...new Set(driveOf.values())], executor);
+  const derived = await getDerivedPageOrgIds(resourceIds, executor);
+  const derivedOrgIds = [...new Set([...derived.values()].flat())];
+  const orgPolicies = new Map<string, OrgAuthenticationPolicy>();
+  for (let i = 0; i < derivedOrgIds.length; i += ORG_ID_CHUNK) {
+    const rows = await executor
+      .select({ id: organizations.id, policies: organizations.policies })
+      .from(organizations)
+      .where(inArray(organizations.id, derivedOrgIds.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) {
+      const { requireStrongSignIn, maximumSessionAgeMinutes } = parseOrgPolicies(row.policies);
+      orgPolicies.set(row.id, { requireStrongSignIn, maximumSessionAgeMinutes });
+    }
+  }
+  return new Map(resourceIds.map((id) => {
+    const governing = [
+      drivePolicies.get(driveOf.get(id) ?? id) ?? null,
+      ...(derived.get(id) ?? []).map((orgId) => orgPolicies.get(orgId) ?? null),
+    ].filter((policy): policy is OrgAuthenticationPolicy => policy !== null);
+    return [id, strictestAuthenticationPolicy(governing)];
+  }));
+}
+
+/** The distinct orgs governing `driveIds`, sorted (a personal drive governs none). One read per chunk. */
+export async function listOrgIdsOfDrives(driveIds: readonly string[], executor: Executor = db): Promise<string[]> {
+  const unique = [...new Set(driveIds)];
+  const orgIds = new Set<string>();
+  for (let i = 0; i < unique.length; i += ORG_ID_CHUNK) {
+    const rows = await executor.select({ orgId: drives.orgId }).from(drives).where(inArray(drives.id, unique.slice(i, i + ORG_ID_CHUNK)));
+    for (const row of rows) if (row.orgId) orgIds.add(row.orgId);
+  }
+  return [...orgIds].sort();
 }

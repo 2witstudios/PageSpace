@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { removeOrgDomain } from '@pagespace/lib/organizations/domains';
-import { authorizeOrgRequest, ORG_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string; domainId: string }> };
 
@@ -12,7 +12,7 @@ type Context = { params: Promise<{ orgId: string; domainId: string }> };
  */
 export async function DELETE(request: Request, context: Context) {
   const { orgId, domainId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_WRITE_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const removed = await removeOrgDomain({ orgId, domainId, actorId: gate.userId });

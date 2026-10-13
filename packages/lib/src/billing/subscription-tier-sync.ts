@@ -8,7 +8,7 @@
  *
  *   - pure core: {@link deriveTierFromSubscriptions} resolves a tier from a
  *     user's subscription rows; {@link computeTierDrift} compares it against
- *     the cached column (modeled on computeBalanceDrift in credit-core). The Stripe
+ *     the cached column (modeled on computeWalletDrift in wallet-ledger-core). The Stripe
  *     webhook (apps/web .../stripe/webhook/route.ts) calls
  *     deriveTierFromSubscriptions with the single row from the event it just
  *     received and writes the result through — the same function the
@@ -78,7 +78,7 @@ export interface TierDriftResult {
 
 /**
  * Compare the cached users.subscriptionTier against what the subscriptions
- * rows imply. Pure; modeled on computeBalanceDrift. This is ONLY the
+ * rows imply. Pure; modeled on computeWalletDrift. This is ONLY the
  * comparison; the reconciler applies it with a compare-and-set guard.
  */
 export function computeTierDrift(input: { storedTier: string; derived: DerivedTier }): TierDriftResult {

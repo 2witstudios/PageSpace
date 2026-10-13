@@ -64,7 +64,11 @@ export type OrgStripeOperation =
   | 'customer.update'
   | 'subscription.create'
   | 'subscription.cancel'
-  | 'seat-quantity.update';
+  | 'seat-quantity.update'
+  | 'gift.coupon.create'
+  | 'gift.subscription.update'
+  | 'gift.subscription.revoke'
+  | 'gift.invoice.void';
 
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -297,13 +301,13 @@ export const ORG_FUNDING_PENDING_WINDOW_SECONDS = 30 * 60;
  */
 function orgFundingIsPending(
   subscription: OrgSubscriptionFacts,
-  ctx: { prices: OrgBusinessPrices; storedSubscriptionId: string | null; nowSeconds: number },
+  ctx: { prices: OrgBusinessPrices; storedSubscriptionId: string | null; storedGiftedExtraSeats: number | null; nowSeconds: number },
 ): boolean {
   const latest = subscription.latestInvoice;
   if (latest?.status !== 'paid' || latest.paidAtSeconds === null) return false;
   if (ctx.nowSeconds - latest.paidAtSeconds > ORG_FUNDING_PENDING_WINDOW_SECONDS) return false;
   if (latest.invoice.lines?.has_more !== false || orgInvoiceSubscriptionId(latest.invoice) !== subscription.id) return false;
-  const { input } = orgInvoiceFundingInput(latest.invoice, { prices: ctx.prices, storedSubscriptionId: ctx.storedSubscriptionId });
+  const { input } = orgInvoiceFundingInput(latest.invoice, { prices: ctx.prices, storedSubscriptionId: ctx.storedSubscriptionId, giftedExtraSeats: ctx.storedGiftedExtraSeats });
   return orgSubscriptionFundingBasis(input) !== null;
 }
 
@@ -372,6 +376,8 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   orgId: string;
   prices: OrgBusinessPrices;
   storedSubscriptionId: string | null;
+  /** D-OW-54: the stored subscription's admin-pinned gifted extra seats (org_subscriptions.giftedExtraSeats), null when none: a gift funds only with its pin. */
+  storedGiftedExtraSeats?: number | null;
   subscriptions: ReadonlyArray<S>;
   /** The org's subscriptions with a verified funding proof (org_subscription_funding). */
   fundedSubscriptionIds: ReadonlySet<string>;
@@ -393,7 +399,7 @@ export function planOrgReactivation<S extends OrgSubscriptionFacts>(input: {
   const adopted = subscription.id !== input.storedSubscriptionId;
   if (subscription.status === 'active') {
     if (input.fundedSubscriptionIds.has(subscription.id)) return { kind: 'already_active', subscription, adopted, items };
-    return orgFundingIsPending(subscription, { prices: input.prices, storedSubscriptionId: input.storedSubscriptionId, nowSeconds: input.nowSeconds })
+    return orgFundingIsPending(subscription, { prices: input.prices, storedSubscriptionId: input.storedSubscriptionId, storedGiftedExtraSeats: input.storedGiftedExtraSeats ?? null, nowSeconds: input.nowSeconds })
       ? { kind: 'funding_pending', subscription, adopted, items }
       : { kind: 'requires_support', reason: 'unfunded_active' };
   }

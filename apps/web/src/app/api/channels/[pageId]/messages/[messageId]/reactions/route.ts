@@ -6,6 +6,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -25,10 +26,10 @@ export async function POST(req: Request, { params }: RouteParams) {
   // Check if user has view permission (reactions require at least view access)
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to react to messages',
       details: 'Contact the channel owner to request access'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const { emoji } = await req.json();
@@ -110,9 +111,9 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   // Check if user has view permission
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to manage reactions',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const { emoji } = await req.json();

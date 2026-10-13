@@ -3,7 +3,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listPolicySuspensions } from '@pagespace/lib/organizations/policy-suspension';
 import { nameSuspensions } from '@pagespace/lib/organizations/policy-suspension-names';
-import { authorizeOrgRequest, ORG_READ_AUTH } from '@/lib/orgs/org-route-auth';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH } from '@/lib/orgs/org-route-auth';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -15,7 +15,7 @@ type Context = { params: Promise<{ orgId: string }> };
  */
 export async function GET(request: Request, context: Context) {
   const { orgId } = await context.params;
-  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_READ_AUTH);
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const suspended = await nameSuspensions(orgId, gate.userId, await listPolicySuspensions(orgId));

@@ -1,6 +1,7 @@
 import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { offeredModels } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -42,7 +43,8 @@ export async function GET(request: Request) {
 
     const driveId = new URL(request.url).searchParams.get('driveId');
     if (driveId && !(await getPrincipalDriveAccess(auth, driveId))) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     const user = await aiSettingsRepository.getUserSettings(userId);

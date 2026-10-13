@@ -8,10 +8,10 @@ vi.mock('../storage-repository', () => ({
     findStorageDriftCandidates: vi.fn(),
     findLastFileCreatedAtForUser: vi.fn().mockResolvedValue(null),
     findUserDriveIds: vi.fn(),
-    findFilesByCreator: vi.fn(),
+    findFilesBilledToUser: vi.fn(),
     userReferencesContentHash: vi.fn(),
     countFiles: vi.fn(),
-    findDriveOrgId: vi.fn(),
+    findDriveBillingFacts: vi.fn(),
     sumOrgFileBytes: vi.fn(),
     findOrgDriveIds: vi.fn(),
     updateStorageInTx: vi.fn(),
@@ -325,16 +325,16 @@ describe('storage-limits', () => {
 
   describe('calculateActualStorageUsage (H4 — reconcile basis = files.createdBy)', () => {
     it('returns 0 when the user created no files', async () => {
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([]);
 
       const result = await calculateActualStorageUsage('user-1');
 
       expect(result).toBe(0);
-      expect(storageRepository.findFilesByCreator).toHaveBeenCalledWith('user-1');
+      expect(storageRepository.findFilesBilledToUser).toHaveBeenCalledWith('user-1');
     });
 
     it('sums the byte sizes of every file the user created (the charge population)', async () => {
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([
         { sizeBytes: 1024 },
         { sizeBytes: 2048 },
       ]);
@@ -345,7 +345,7 @@ describe('storage-limits', () => {
     });
 
     it('does NOT scope to owned drives (cross-drive uploads are still the uploader\'s bytes)', async () => {
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 500 }]);
 
       await calculateActualStorageUsage('user-1');
 
@@ -425,7 +425,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1500 }]);
       vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
       vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
 
@@ -447,7 +447,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockImplementation(async () => {
+      vi.mocked(storageRepository.findFilesBilledToUser).mockImplementation(async () => {
         lockClient.emit('error', new Error('terminating connection due to administrator command'));
         return [{ sizeBytes: 1500 }];
       });
@@ -463,7 +463,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1500 }]);
       vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
       vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
 
@@ -488,7 +488,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1500 }]);
       vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
       vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1550 });
 
@@ -502,7 +502,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1000 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1000 }]);
 
       const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
 
@@ -520,7 +520,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1500 }]);
       vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date());
 
       const result = await reconcileStorageUsage('user-1', makeFakeLockPool().pool);
@@ -533,7 +533,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 1000, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 1500 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 1500 }]);
       vi.mocked(storageRepository.findLastFileCreatedAtForUser).mockResolvedValue(new Date(Date.now() - 3600_000));
       vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
       vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 1500 });
@@ -564,7 +564,7 @@ describe('storage-limits', () => {
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({
         id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free',
       });
-      vi.mocked(storageRepository.findFilesByCreator).mockResolvedValue([{ sizeBytes: 100 }]);
+      vi.mocked(storageRepository.findFilesBilledToUser).mockResolvedValue([{ sizeBytes: 100 }]);
       vi.mocked(storageRepository.runTransaction).mockImplementation(async (fn) => fn({} as never));
       vi.mocked(storageRepository.updateStorageInTx).mockResolvedValue({ newUsage: 100 });
 
@@ -674,10 +674,10 @@ describe('storage-limits', () => {
     });
   });
 
-  describe('computeStorageCreditOnUnlink (M8 — credit once, to the uploader)', () => {
-    const base = { createdBy: 'u1', driveOrgId: null, sizeBytes: 2048, deletedByThisCall: true, hadPhysicalBlob: true };
+  describe('computeStorageCreditOnUnlink (M8 — credit once, to the payer)', () => {
+    const base = { createdBy: 'u1', drive: null, sizeBytes: 2048, deletedByThisCall: true, hadPhysicalBlob: true };
 
-    it('credits the uploader the negative byte delta when this call deleted the row', () => {
+    it('credits a drive-less attachment\'s uploader the negative byte delta when this call deleted the row', () => {
       expect(computeStorageCreditOnUnlink(base)).toEqual({ userId: 'u1', deltaBytes: -2048 });
     });
 
@@ -693,7 +693,7 @@ describe('storage-limits', () => {
       expect(computeStorageCreditOnUnlink({ ...base, hadPhysicalBlob: false })).toBeNull();
     });
 
-    it('returns null when createdBy was nulled by a user-delete cascade', () => {
+    it('returns null when a drive-less attachment\'s createdBy was nulled by a user-delete cascade', () => {
       expect(computeStorageCreditOnUnlink({ ...base, createdBy: null })).toBeNull();
     });
 
@@ -708,7 +708,7 @@ describe('storage-limits', () => {
     const MB = 1024 * 1024;
 
     it('resolves an org drive to the org payer and the org quota with one usage read', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'lead-1', orgId: 'org-1' });
       vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(10 * MB);
 
       const target = await resolveUploadQuotaTarget('user-1', 'drive-org');
@@ -720,7 +720,7 @@ describe('storage-limits', () => {
     });
 
     it('resolves a personal drive to the uploader and their personal quota', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'user-1', orgId: null });
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free' });
 
       const target = await resolveUploadQuotaTarget('user-1', 'drive-own');
@@ -730,15 +730,33 @@ describe('storage-limits', () => {
       expect(storageRepository.sumOrgFileBytes).not.toHaveBeenCalled();
     });
 
+    it('resolves a member\'s upload into someone else\'s personal drive to the drive OWNER and the owner\'s quota — never the uploader\'s', async () => {
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'owner-9', orgId: null });
+      vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'owner-9', storageUsedBytes: 0, subscriptionTier: 'pro' });
+
+      const target = await resolveUploadQuotaTarget('member-1', 'drive-theirs');
+
+      expect(target?.payer).toEqual({ kind: 'user', userId: 'owner-9' });
+      expect(target?.quota).toMatchObject({ userId: 'owner-9', tier: 'pro' });
+      expect(storageRepository.findUserForStorage).toHaveBeenCalledWith('owner-9');
+    });
+
+    it('is null for a drive that does not exist: no payer is substituted', async () => {
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue(undefined);
+
+      expect(await resolveUploadQuotaTarget('user-1', 'drive-gone')).toBeNull();
+      expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
+    });
+
     it('is null when the uploader of a personal upload does not exist', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'user-1', orgId: null });
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue(undefined);
 
       expect(await resolveUploadQuotaTarget('ghost', 'drive-own')).toBeNull();
     });
 
     it('checks an org target against the org without re-reading the payer or the org usage', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'lead-1', orgId: 'org-1' });
       vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(10 * MB);
       vi.mocked(storageRepository.findOrgDriveIds).mockResolvedValue(['drive-org']);
       vi.mocked(storageRepository.countFiles).mockResolvedValue(3);
@@ -751,13 +769,13 @@ describe('storage-limits', () => {
 
       expect(result.allowed).toBe(true);
       expect(storageRepository.sumOrgFileBytes).not.toHaveBeenCalled();
-      expect(storageRepository.findDriveOrgId).not.toHaveBeenCalled();
+      expect(storageRepository.findDriveBillingFacts).not.toHaveBeenCalled();
       expect(storageRepository.findUserForStorage).not.toHaveBeenCalled();
       expect(storageRepository.findOrgDriveIds).toHaveBeenCalledWith('org-1');
     });
 
     it('refuses an org target whose remaining bytes cannot hold the file, before counting files', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue('org-1');
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'lead-1', orgId: 'org-1' });
       vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValue(50 * 1024 * MB);
       const target = await resolveUploadQuotaTarget('user-1', 'drive-org');
 
@@ -769,7 +787,7 @@ describe('storage-limits', () => {
     });
 
     it('checks a personal target against the uploader with no second quota read', async () => {
-      vi.mocked(storageRepository.findDriveOrgId).mockResolvedValue(null);
+      vi.mocked(storageRepository.findDriveBillingFacts).mockResolvedValue({ ownerId: 'user-1', orgId: null });
       vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 500 * MB, subscriptionTier: 'free' });
       const target = await resolveUploadQuotaTarget('user-1', 'drive-own');
       vi.clearAllMocks();

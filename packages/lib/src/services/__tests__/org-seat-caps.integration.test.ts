@@ -22,6 +22,7 @@ import { loadSeatCapFacts, loadSeatCapFactsForUsers } from '../../billing/seat-a
 import { listSpendChoices } from '../../billing/spend-resolution';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -118,7 +119,7 @@ describe.skipIf(!ok)('org seat caps read model (real Postgres)', () => {
     const read = await listOrgSeatCaps(w.orgId);
     for (const userId of w.userIds) {
       const row = read.seats.find((s) => s.userId === userId);
-      const mine = (await listMyWallets(userId, 'session')).seats.find((s) => s.orgId === w.orgId);
+      const mine = (await listMyWallets(credentialActor(userId, null), 'session')).seats.find((s) => s.orgId === w.orgId);
       assert(row && mine, JSON.stringify({ userId, row, mine }));
       expect(mine.allowanceCents).toBe(row.monthlyLimitCents);
       expect(mine.remainingCents).toBe(Math.min(row.monthlyRemainingCents, row.dailyRemainingCents ?? row.monthlyRemainingCents));

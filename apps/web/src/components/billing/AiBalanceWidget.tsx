@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { ORGS_ENABLED } from '@pagespace/lib/organizations/orgs-enabled';
 import { spendChipModel } from '@pagespace/lib/billing/spend-surface';
-import { useConversationSpend } from '@/hooks/useConversationSpend';
+import { useConversationSpend, useDriveSpend } from '@/hooks/useConversationSpend';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 import { useSpendContextStore, type SpendContext } from '@/stores/useSpendContextStore';
 import { SpendSourcePopover } from '@/components/wallets/SpendSourcePopover';
 import { CreditBalance } from './CreditBalance';
@@ -11,7 +12,9 @@ import { CreditBalance } from './CreditBalance';
 /**
  * The header's credit chip. Where the conversation in view can spend from more than one source,
  * the spending-from chip replaces the personal-credits chip (Spec SPEND-2, D20.8); everywhere
- * else, and while organizations are dark, it is the personal chip as before.
+ * else, and while organizations are dark, it is the personal chip as before. Inside a drive with
+ * no conversation in view (a document, a folder), the chip follows the DRIVE: what a new
+ * conversation there would spend, read only — a source is switched per conversation (SPEND-3).
  *
  * While its popover is open the chip is PINNED to the conversation it opened on: a background
  * surface changing its conversation, or focus moving, cannot retarget the open list; if that
@@ -23,10 +26,14 @@ export function AiBalanceWidget() {
   const entries = useSpendContextStore((state) => state.entries);
   const [pinned, setPinned] = useState<SpendContext | null>(null);
   const target = pinned ?? active;
-  const { spend, choose } = useConversationSpend(target?.conversationId ?? null, {
+  const { spend: conversationSpend, choose } = useConversationSpend(target?.conversationId ?? null, {
     driveId: target?.driveId ?? null,
     isGlobal: target?.isGlobal ?? false,
   });
+  // No conversation surface mounted: the drive the person is in (none outside a drive).
+  const currentDriveId = focusDriveId(useFocus()) ?? null;
+  const { spend: driveSpend } = useDriveSpend(target ? null : currentDriveId);
+  const [driveOpen, setDriveOpen] = useState(false);
 
   // The pinned conversation's surface unmounted (or moved to another conversation): close.
   const pinnedStillMounted = pinned !== null && entries.some((e) => e.conversationId === pinned.conversationId);
@@ -34,6 +41,22 @@ export function AiBalanceWidget() {
     if (pinned && !pinnedStillMounted) setPinned(null);
   }, [pinned, pinnedStillMounted]);
 
+  if (!target) {
+    const driveChip = driveSpend ? spendChipModel({ orgsEnabled: ORGS_ENABLED, options: driveSpend.options, resolved: driveSpend.resolved }) : null;
+    if (!driveSpend || !driveChip) return <CreditBalance />;
+    return (
+      <SpendSourcePopover
+        chip={driveChip}
+        options={driveSpend.options}
+        selectedWalletId={driveSpend.resolved.kind === 'spend' ? driveSpend.resolved.walletId : null}
+        driveName={driveSpend.options.find((o) => o.driveName)?.driveName ?? null}
+        open={driveOpen}
+        onOpenChange={setDriveOpen}
+      />
+    );
+  }
+
+  const spend = conversationSpend;
   const chip = spend ? spendChipModel({ orgsEnabled: ORGS_ENABLED, options: spend.options, resolved: spend.resolved }) : null;
   if (!spend || !chip) return <CreditBalance />;
 

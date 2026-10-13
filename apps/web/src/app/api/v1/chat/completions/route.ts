@@ -18,6 +18,7 @@ import {
   isScopedMCPAuth,
   canPrincipalViewPage,
   canPrincipalEditPage,
+  isPrincipalDriveMember,
 } from '@/lib/auth';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { toolModelContext } from '@/lib/ai/core/tool-model-context';
@@ -43,7 +44,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { AIMonitoring, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
-import { conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
+import { agentCallSpend, resolvedSpend, spendDriveId } from '@pagespace/lib/billing/spend-target';
 import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
@@ -54,6 +55,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 export const maxDuration = 300;
 
@@ -83,7 +85,7 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: validation.error }, { status: validation.status });
   }
 
-  const { pageId, model: modelName, messages, driveContext: _driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
+  const { pageId, model: modelName, messages, driveContext, conversationId: incomingConversationId, clientTools: rawClientTools, disableServerTools, clientManagesHistory } = validation.data;
 
   // Build the caller's client-side tool set. Tools registered without `execute` are returned
   // to the caller as native tool_calls — the SDK pauses, the caller executes locally, and the
@@ -119,12 +121,12 @@ export async function POST(request: Request): Promise<Response> {
   const canView = await canPrincipalViewPage(authResult, pageId);
   if (!canView) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(authResult), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
   const canEdit = await canPrincipalEditPage(authResult, pageId);
   if (!canEdit) {
     auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: 'no_edit_permission', method: 'POST' }, riskScore: 0.5 });
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(authResult), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   // 5b. Image security gate — mirrors the in-app chat route
@@ -155,6 +157,8 @@ export async function POST(request: Request): Promise<Response> {
   // requests collide on the same new ID. We still 403 on wrong owner and 404 on inactive.
   // Fail-closed: private by default. Only shared conversations get mention notifications.
   let isConversationShared = false;
+  // SPEND-7: an API client thread (`type='client'`) is a session opened in its drive.
+  let clientThreadDriveId: string | null = null;
   if (incomingConversationId) {
     const conv = await conversationRepository.getConversation(incomingConversationId);
     if (clientManagesHistory) {
@@ -197,15 +201,41 @@ export async function POST(request: Request): Promise<Response> {
       // re-anchoring a thread whose permissions already follow the first page.
       if (conv?.type === 'client') {
         await conversationRepository.stampClientConversationPage(incomingConversationId, pageId);
+        clientThreadDriveId = conv.contextId;
       }
     }
   }
+
+  // 5d. SPEND-7: the call spends in the drive of the session it runs in — a client thread's own
+  // drive, else the drive the caller names as its session (`drive_context`, once its membership
+  // is checked: a drive it cannot use is refused, never swapped for the agent's), else its own
+  // conversation on the agent page, whose session is the agent's drive. A thread carries its
+  // stored source (SPEND-3) only in its own drive; the gate reads it only when the caller owns
+  // that conversation. A stateless call has none.
+  if (driveContext !== undefined && !(await isPrincipalDriveMember(authResult, driveContext))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: driveContext, details: { reason: 'session_drive_denied', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'drive_context names a drive you cannot use' }, { status: 403 });
+  }
+  // A client thread's drive is a claim made when the thread was minted; it is re-checked on every
+  // use exactly as drive_context is (D-OW-64), so membership lost since then names nothing.
+  if (clientThreadDriveId !== null && !(await isPrincipalDriveMember(authResult, clientThreadDriveId))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: clientThreadDriveId, details: { reason: 'thread_drive_denied', method: 'POST' }, riskScore: 0.5 });
+    return NextResponse.json({ error: 'conversation_id belongs to a drive you cannot use' }, { status: 403 });
+  }
+  let spend = agentCallSpend({
+    agentDriveId: page.driveId,
+    conversationId: incomingConversationId ?? null,
+    clientThreadDriveId,
+    namedSessionDriveId: driveContext ?? null,
+  });
+  // The drive the call runs in: its spend, usage attribution and org model policy (POL-8).
+  const sessionDriveId = spendDriveId(spend) ?? page.driveId;
 
   // 6. Create AI provider from agent page config
   const providerResult = await createAIProvider(authResult.userId, {
     selectedProvider: page.aiProvider ?? undefined,
     selectedModel: page.aiModel ?? undefined,
-  }, { driveId: page.driveId });
+  }, { driveId: sessionDriveId, contentDriveIds: [page.driveId] });
   if (isProviderError(providerResult)) {
     return NextResponse.json({ error: providerResult.error, ...(providerResult.code ? { code: providerResult.code, policy: providerResult.policy } : {}) }, { status: providerResult.status });
   }
@@ -235,10 +265,6 @@ export async function POST(request: Request): Promise<Response> {
     .where(eq(users.id, authResult.userId));
 
   const consumerTier = toPersonalSubscriptionTier(gateUser?.subscriptionTier);
-  // The call is a conversation on the agent page, so its session is the page's drive
-  // (SPEND-7). A thread (conversation_id) carries its stored source (SPEND-3); the gate reads
-  // it only when the caller owns that conversation. A stateless call has none.
-  let spend = conversationSpend(page.driveId, incomingConversationId ?? null);
 
   // The SHARED entitlement decision a chat turn applies (generation-admission.ts): an
   // admin-only provider (the unmetered Z.ai Coder Plan) is a role block, so no one able to
@@ -280,6 +306,22 @@ export async function POST(request: Request): Promise<Response> {
     walletId = creditGate.walletId;
     spend = resolvedSpend(spend, creditGate.spendSource, creditGate.fallbackFromWalletId);
     spendFallback = spendFallbackNotice(creditGate);
+    // WAL-8 (D-OW-64): the plan is judged again on the tier of the source the gate actually HELD;
+    // the pre-read can judge a source the gate then moved off. A refusal frees the hold at once.
+    if (creditGate.entitlementTier !== undefined) {
+      const held = resolveGenerationAdmission({
+        provider: effectiveProvider,
+        model: providerResult.modelName,
+        subscriptionTier: creditGate.entitlementTier,
+        isAdmin: gateUser?.role === 'admin',
+        requiresProSubscription,
+      });
+      if (!held.allowed) {
+        if (holdId) await releaseHold(holdId).catch(() => {});
+        auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'openai_inference', resourceId: pageId, details: { reason: held.reason, provider: effectiveProvider, method: 'POST', stage: 'held_source' }, riskScore: 0.5 });
+        return held.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
+      }
+    }
   }
 
   // Ownership of the hold transfers to the streaming lifecycle only once we return the
@@ -338,7 +380,7 @@ export async function POST(request: Request): Promise<Response> {
       // route. An unbound (or auto-generated) page conversation is not
       // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', actorFromAuth(authResult))
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays
@@ -380,7 +422,7 @@ export async function POST(request: Request): Promise<Response> {
       // route. An unbound (or auto-generated) page conversation is not
       // eligible (codex round 14): acquire answers no_session for it.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', authResult.userId)
+        ? await resolveSandboxToolEligibilityForConversation(incomingConversationId, 'page', actorFromAuth(authResult))
         : false;
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
       // Tier strips only COMPUTE tools; the chat-only session family stays
@@ -625,6 +667,8 @@ export async function POST(request: Request): Promise<Response> {
         conversationId,
         messageId: assistantId,
         pageId,
+        // SPEND-7: attributed to the drive of the session the call ran in.
+        driveId: sessionDriveId,
         success: !aborted && !errored,
         holdId,
         walletId,
@@ -648,6 +692,7 @@ export async function POST(request: Request): Promise<Response> {
       abortSignal: abortController.signal,
       experimental_context: {
         userId: authResult.userId,
+        accessActor: actorFromAuth(authResult),
         conversationId,
         timezone: userTimezone,
         // POL-8: the tools are judged by the model this run resolved (an agent with no model runs the default).

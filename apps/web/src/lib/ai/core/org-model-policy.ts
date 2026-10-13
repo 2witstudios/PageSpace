@@ -12,6 +12,7 @@ import { inArray } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import {
   agentModelSaveDecision,
   allowedModelCatalog,
@@ -67,10 +68,10 @@ export async function scopeReadableByModel(
  * call's replayed history both follow.
  */
 export async function memberDrivesReadableByModel(
-  userId: string,
+  actor: AccessActor,
   use: { provider: string; modelId: string },
 ): Promise<{ driveIds: string[]; allReadable: boolean }> {
-  const memberDriveIds = await getMemberDriveIds(userId, { includeTrashed: true });
+  const memberDriveIds = await getMemberDriveIds(actor, { includeTrashed: true });
   const { driveIds } = await scopeReadableByModel(use, { driveIds: memberDriveIds });
   return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
 }

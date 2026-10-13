@@ -3,29 +3,33 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createOrganization, listOrganizationsForUser } from '@pagespace/lib/organizations/repository';
 import { isOrgActive } from '@pagespace/lib/organizations/status';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { canCreateOrgDrive } from '@pagespace/lib/organizations/org-drive-ownership';
 import {
   authenticateOrgRequest,
-  refuseDriveScopedToken,
   ORG_TOKEN_READ_AUTH,
-  ORG_WRITE_AUTH,
+  ORG_MONEY_WRITE_AUTH,
 } from '@/lib/orgs/org-route-auth';
 import { orgCreateSchema } from '@/lib/orgs/org-schemas';
 import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
 
 /**
  * GET /api/orgs — the orgs the caller belongs to, with their role (ORG-2) and whether each is lapsed: the drive-side
- * screens disable what a lapsed org may not loosen ([D-OW-33]). Every member already sees that the org is read-only
+ * screens disable what a lapsed org may not loosen ([D-OW-33]), and whether the caller may create a drive in it (DRV-3). Every member already sees that the org is read-only
  * while lapsed (SEAT-6), so the flag tells them nothing new. Session or MCP token (X-1); a drive-scoped token is
  * refused, since the list is wider than any drive scope.
  */
 export async function GET(request: Request) {
   const gate = await authenticateOrgRequest(request, ORG_TOKEN_READ_AUTH);
   if (!gate.ok) return gate.response;
-  const scoped = refuseDriveScopedToken(gate);
-  if (scoped) return scoped;
   try {
     const organizations = await Promise.all(
-      (await listOrganizationsForUser(gate.userId)).map(async (org) => ({ ...org, lapsed: !(await isOrgActive(org.id)) })),
+      (await listOrganizationsForUser(gate.userId)).map(async (org) => {
+        const lapsed = !(await isOrgActive(org.id));
+        const { whoCanCreateDrives } = await getOrgPolicies(org.id);
+        // DRV-3: whether the create-drive dialog offers this org as the new drive's owner (createOrgDrive decides again).
+        return { ...org, lapsed, canCreateDrives: canCreateOrgDrive({ role: org.role, creationPolicy: whoCanCreateDrives, lapsed }) };
+      }),
     );
     auditRequest(request, {
       eventType: 'data.read',
@@ -50,7 +54,7 @@ export async function GET(request: Request) {
  * provisions it.
  */
 export async function POST(request: Request) {
-  const gate = await authenticateOrgRequest(request, ORG_WRITE_AUTH);
+  const gate = await authenticateOrgRequest(request, ORG_MONEY_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
     const parsed = orgCreateSchema.safeParse(await request.json().catch(() => null));

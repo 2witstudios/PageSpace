@@ -10,6 +10,8 @@ import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from 
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -72,6 +74,15 @@ export async function GET(
       }
     }
 
+    // SEC-2/3 (D-OW-45): an event in a drive is that drive's content: the drive's org sign-in policy is asked of the
+    // credential before the creator/attendee shortcuts below, and a refusal names the sign-in code.
+    if (event.driveId) {
+      const actor = actorFromAuth(auth);
+      if (!(await checkActorDriveAuthentication(actor, event.driveId)).allowed) {
+        return deniedResponse(actor, event.driveId, NextResponse.json({ error: 'Access denied - you do not have access to this event' }, { status: 403 }));
+      }
+    }
+
     const isCreator = event.createdById === userId;
 
     // PRIVATE events: only creator can access
@@ -112,7 +123,7 @@ export async function GET(
         });
 
         if (!isAttendee) {
-          const isMember = await isUserMemberOfAnyEventDrive(userId, event);
+          const isMember = await isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
           if (!isMember) {
             return NextResponse.json(
               { error: 'Access denied - you do not have access to this event' },

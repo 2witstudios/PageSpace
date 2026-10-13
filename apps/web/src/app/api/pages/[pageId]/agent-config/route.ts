@@ -12,6 +12,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -37,10 +38,10 @@ export async function GET(
     // Check if user has permission to view this page
     const canView = await canPrincipalEditPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
         { error: 'You do not have permission to view this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get page configuration
@@ -140,10 +141,10 @@ export async function PATCH(
     // Check if user has permission to edit this page
     const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Validate the page exists

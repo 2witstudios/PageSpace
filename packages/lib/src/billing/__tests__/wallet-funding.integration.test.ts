@@ -112,20 +112,20 @@ describe('wallet funding against Postgres', () => {
     await db.insert(orgSubscriptions).values({ orgId: org.id, stripeSubscriptionId: subscriptionId, stripeBasePriceId: PRICES.basePriceId, stripeBaseItemId: 'si_base', stripeSeatPriceId: PRICES.seatPriceId, stripeSeatItemId: 'si_seat', status: 'active' });
     expect(await isOrgActive(org.id)).toBe(false);
     const invoice = { id: `in_${createId()}`, customer: org.stripeCustomerId, amount_paid: paid, subtotal: 5000, billing_reason: 'subscription_create', parent: { subscription_details: { subscription: subscriptionId } }, lines: { has_more: false, data: [priced(PRICES.basePriceId, { amount: 5000, period: { start: PERIOD_START_S, end: PERIOD_END_S } })] } };
-    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    await applyOrgPoolRefill(invoice, PRICES);
     expect(await isOrgActive(org.id)).toBe(paid > 0);
     const receipts = await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
     expect(receipts).toHaveLength(paid > 0 ? 1 : 0);
     if (paid > 0) expect(receipts[0]).toMatchObject({ stripeSubscriptionId: subscriptionId, stripeInvoiceId: invoice.id, basis: 'paid', paidCents: paid });
     await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(eq(wallets.orgId, org.id));
     expect(await isOrgActive(org.id)).toBe(paid > 0);
-    await applyOrgPoolRefill(invoice, { ...PRICES, active: true });
+    await applyOrgPoolRefill(invoice, PRICES);
     expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toHaveLength(paid > 0 ? 1 : 0);
     if (paid === 5000) {
       // An existing historical grant can recover missing proof without refilling its spent balance.
       await db.delete(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id));
       const beforeReplay = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
-      expect((await applyOrgPoolRefill(invoice, { ...PRICES, active: true })).kind).toBe('duplicate');
+      expect((await applyOrgPoolRefill(invoice, PRICES)).kind).toBe('duplicate');
       expect(await isOrgActive(org.id)).toBe(true);
       expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual(beforeReplay);
     }
@@ -157,9 +157,9 @@ describe('wallet funding against Postgres', () => {
       },
     };
 
-    const first = await applyOrgPoolRefill(invoice, { active: true, ...PRICES });
+    const first = await applyOrgPoolRefill(invoice, PRICES);
     expect(first).toMatchObject({ kind: 'granted', orgId: org.id, allowanceCents: 4800 });
-    const replay = await applyOrgPoolRefill(invoice, { active: true, ...PRICES });
+    const replay = await applyOrgPoolRefill(invoice, PRICES);
     expect(replay).toEqual({ kind: 'duplicate', orgId: org.id });
 
     const pools = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
@@ -183,7 +183,7 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`,
       lines: { has_more: false, data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
     };
-    expect(await applyOrgPoolRefill(lateOld, { active: true, ...PRICES })).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
+    expect(await applyOrgPoolRefill(lateOld, PRICES)).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
     const [afterLate] = await db.select().from(wallets).where(eq(wallets.id, pools[0].id));
     expect(afterLate.monthlyRemainingCents).toBe(9600);
     expect(afterLate.monthlyPeriodStart?.getTime()).toBe(PERIOD_START_S * 1000);
@@ -219,7 +219,7 @@ describe('wallet funding against Postgres', () => {
       },
     };
 
-    await expect(applyOrgPoolRefill(invoice, { active: true, ...PRICES })).rejects.toThrow(/every line of invoice/);
+    await expect(applyOrgPoolRefill(invoice, PRICES)).rejects.toThrow(/every line of invoice/);
     expect(await db.select().from(wallets).where(eq(wallets.orgId, org.id))).toEqual([]);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id))).toEqual([]);
     expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.id))).toEqual([]);
@@ -252,7 +252,7 @@ describe('wallet funding against Postgres', () => {
       },
     };
 
-    expect(await applyOrgPoolRefill(invoice, { active: true, ...PRICES })).toMatchObject({
+    expect(await applyOrgPoolRefill(invoice, PRICES)).toMatchObject({
       kind: 'granted',
       orgId: org.id,
       allowanceCents: 4800,
@@ -295,7 +295,7 @@ describe('wallet funding against Postgres', () => {
         parent: { subscription_item_details: { subscription_item: itemId } },
       }] },
     };
-    expect(await applyOrgPoolRefill(invoice, { active: true, ...PRICES })).toMatchObject({ kind: 'nothing' });
+    expect(await applyOrgPoolRefill(invoice, PRICES)).toMatchObject({ kind: 'nothing' });
     expect(await walletRow(pool.id)).toEqual(pool);
     expect(await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id))).toEqual([]);
   });

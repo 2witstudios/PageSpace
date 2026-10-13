@@ -53,6 +53,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: {}, drives: {} }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveAgentMembers: {} }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   canUserDeletePage: vi.fn(),
@@ -113,6 +114,7 @@ vi.mock('../task-sync-service', () => ({
 }));
 
 import { pageService } from '../page-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('pageService.createPage — TASK_LIST seeding', () => {
   beforeEach(() => {
@@ -148,7 +150,7 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
       isPaginated: null,
     }]);
 
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'My Tasks',
       type: 'TASK_LIST',
       driveId: 'drive-1',
@@ -188,7 +190,7 @@ describe('pageService.createPage — TASK_LIST seeding', () => {
       isPaginated: null,
     }]);
 
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'My Doc',
       type: 'DOCUMENT',
       driveId: 'drive-1',
@@ -244,19 +246,19 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
 
   it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 and nothing is inserted; an unchosen model is not judged here', async () => {
     mockAgentModelSaveRefusal.mockResolvedValueOnce({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
-    const refused = await pageService.createPage('user-123', { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-6-sol' });
+    const refused = await pageService.createPage(credentialActor('user-123', null), { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-6-sol' });
 
     expect(refused).toMatchObject({ success: false, status: 403 });
     expect(mockAgentModelSaveRefusal).toHaveBeenCalledWith('drive-1', { provider: 'openai', modelId: 'openai/gpt-6-sol' });
     expect(mockTxInsertValues).not.toHaveBeenCalled();
 
     mockAgentModelSaveRefusal.mockClear();
-    await pageService.createPage('user-123', { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1' });
+    await pageService.createPage(credentialActor('user-123', null), { title: 'Analyst', type: 'AI_CHAT', driveId: 'drive-1' });
     expect(mockAgentModelSaveRefusal).not.toHaveBeenCalled();
   });
 
   it('stores the switch on an AI_CHAT page', async () => {
-    const result = await pageService.createPage('user-123', {
+    const result = await pageService.createPage(credentialActor('user-123', null), {
       title: 'Scraper Runner',
       type: 'AI_CHAT',
       driveId: 'drive-1',
@@ -271,7 +273,7 @@ describe('pageService.createPage — the per-agent sandbox switch', () => {
   });
 
   it('leaves it to the column default when the caller says nothing', async () => {
-    await pageService.createPage('user-123', {
+    await pageService.createPage(credentialActor('user-123', null), {
       title: 'Scraper Runner',
       type: 'AI_CHAT',
       driveId: 'drive-1',

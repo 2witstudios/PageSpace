@@ -33,7 +33,7 @@ const MAY_BE_NO_DRIVE: Record<string, string> = {
   'app/api/pulse/cron/route.ts': "the person's own pulse digest: no drive; it reads only drives whose org allows the model",
   'lib/ai/chat-pipeline/global-chat-turn.ts': 'the global assistant: the server-resolved contextRef drive, or none without one; its tools cannot read org content the model is not allowed',
   'app/api/ai/btw/route.ts': "a side question runs in its conversation's session drive (SPEND-7), none for a global conversation",
-  'app/api/ai/page-agents/consult/route.ts': "the consulted agent's own drive, passed in as a variable (never null for an agent page)",
+  'app/api/v1/chat/completions/route.ts': "the session the completion runs in (its spend drive, else the agent page's drive: never null), and the agent page's drive is always named as a content drive (D-OW-64)",
   'lib/ai/core/compaction/compaction-service.ts': "conversation compaction runs in its turn's spend drive (spendDriveId), none for personal spend",
   'lib/ai/tools/agent-communication-tools.ts': "ask_agent: the caller's spend drive (none for personal spend), and the consulted agent's drive is always named as a content drive",
   'lib/ai/tools/image-generation-tools.ts': "the turn's spend drive (none for personal spend), and the destination drive is named as a content drive",

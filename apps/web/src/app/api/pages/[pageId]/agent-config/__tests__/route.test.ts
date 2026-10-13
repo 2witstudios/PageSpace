@@ -109,6 +109,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
     getUserAccessiblePagesInDrive: (...args: unknown[]) => mockGetUserAccessiblePagesInDrive(...args),
 }));

@@ -1,5 +1,6 @@
 import { describe, it, vi, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
+import { HELD_DRIVES, automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Discovery Service Tests
@@ -9,10 +10,10 @@ import { assert } from './riteway';
  * can stage them for corroboration.
  */
 
-const mockGetMemberDriveIds = vi.fn(async (_userId: string, _options: { includeTrashed: boolean }) => ['drive-1']);
+const mockGetMemberDriveIds = vi.fn(async (_actor: AccessActor, _options: { includeTrashed: boolean }) => ['drive-1']);
 // The one member-drive set (org-aware; owned drives plus accepted rows while dark).
 vi.mock('@pagespace/lib/permissions/member-drives', () => ({
-  getMemberDriveIds: (userId: string, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(userId, options),
+  getMemberDriveIds: (actor: AccessActor, options: { includeTrashed: boolean }) => mockGetMemberDriveIds(actor, options),
 }));
 
 // POL-8: the drives whose org lets the discovery model read them. Default: every drive.
@@ -20,11 +21,15 @@ const mockScopeReadableByModel = vi.fn(async (_use: { provider: string; modelId:
 // memberDrivesReadableByModel is the shared rule (the person's member drives, judged by scopeReadableByModel, and
 // whether ALL passed), composed here from the two mocked reads so each stays observable.
 vi.mock('@/lib/ai/core/org-model-policy', () => ({
-  memberDrivesReadableByModel: async (userId: string, use: { provider: string; modelId: string }) => {
-    const memberDriveIds: string[] = await mockGetMemberDriveIds(userId, { includeTrashed: true });
+  memberDrivesReadableByModel: async (actor: AccessActor, use: { provider: string; modelId: string }) => {
+    const memberDriveIds: string[] = await mockGetMemberDriveIds(actor, { includeTrashed: true });
     const { driveIds } = await mockScopeReadableByModel(use, { driveIds: memberDriveIds });
     return { driveIds, allReadable: driveIds.length === memberDriveIds.length };
   },
+}));
+const mockOrgIdsOfDrives = vi.fn(async (_driveIds: readonly string[]) => [] as string[]);
+vi.mock('@pagespace/lib/permissions/org-derived-content', () => ({
+  orgIdsOfDrives: (driveIds: readonly string[]) => mockOrgIdsOfDrives(driveIds),
 }));
 
 const mockDbSelect = vi.fn();
@@ -182,7 +187,41 @@ describe('runDiscoveryPasses', () => {
       given: 'a user whose member drives come from the permissions layer',
       should: 'ask getMemberDriveIds (trash included, as before) for both the message and the activity scope',
       actual: mockGetMemberDriveIds.mock.calls,
-      expected: [['user-org-member', { includeTrashed: true }], ['user-org-member', { includeTrashed: true }]],
+      expected: [[automationActor('user-org-member', 'memory-discovery', HELD_DRIVES), { includeTrashed: true }], [automationActor('user-org-member', 'memory-discovery', HELD_DRIVES), { includeTrashed: true }]],
+    });
+  });
+
+  it('SEC-2 (partial) records as contributing orgs exactly the drives whose messages and activity the passes read', async () => {
+    // The three reads run concurrently, so each is told apart by its shape: activity joins nothing, global messages
+    // join conversations, page-agent messages also join pages.
+    const byJoins: unknown[][] = [
+      [{ operation: 'update', resourceType: 'page', resourceTitle: 'Roadmap', driveId: 'drive-other-org' }],
+      messages(2),
+      [{ content: 'From an org page', role: 'user', createdAt: new Date(Date.now() - 5000), driveId: 'drive-org' },
+       { content: 'From a personal page', role: 'user', createdAt: new Date(Date.now() - 6000), driveId: 'drive-personal' }],
+    ];
+    mockDbSelect.mockImplementation(() => {
+      let joins = 0;
+      const chain = {
+        from: () => chain,
+        innerJoin: () => { joins++; return chain; },
+        orderBy: () => chain,
+        limit: () => Promise.resolve(byJoins[joins] ?? []),
+        where: () => Object.assign(Promise.resolve([]), chain),
+      };
+      return chain;
+    });
+    mockOrgIdsOfDrives.mockResolvedValueOnce(['org-a', 'org-b']);
+    mockGenerateObject.mockResolvedValue({ object: { claims: [] }, usage: { inputTokens: 10, outputTokens: 5 } });
+
+    const { runDiscoveryPasses } = await import('../discovery-service');
+    const result = await runDiscoveryPasses('user-in-orgs');
+
+    assert({
+      given: 'a transcript with global and page-agent messages, and workspace activity',
+      should: 'resolve orgs from the page and activity drives only (global conversations belong to no drive) and return them',
+      actual: { asked: [...(mockOrgIdsOfDrives.mock.calls[0]?.[0] ?? [])].sort(), orgIds: result.orgIds },
+      expected: { asked: ['drive-org', 'drive-other-org', 'drive-personal'], orgIds: ['org-a', 'org-b'] },
     });
   });
 
@@ -420,7 +459,7 @@ describe('runDiscoveryPasses', () => {
         releases: mockReleaseMemoryHold.mock.calls.length,
       },
       expected: {
-        result: { claims: [], creditRefusal: 'out_of_credits' },
+        result: { claims: [], orgIds: [], creditRefusal: 'out_of_credits' },
         modelCalls: 0,
         charges: 0,
         releases: 0,
@@ -495,7 +534,7 @@ describe('runDiscoveryPasses — the credit gate', () => {
 
     const result = await runDiscoveryPasses('user-1');
 
-    expect(result).toEqual({ claims: [], creditRefusal: 'out_of_credits' });
+    expect(result).toEqual({ claims: [], orgIds: [], creditRefusal: 'out_of_credits' });
     expect(mockGenerateObject).not.toHaveBeenCalled();
     expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
   });

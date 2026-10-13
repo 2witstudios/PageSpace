@@ -1,6 +1,6 @@
 /**
  * Periodic reconciler for the users.subscriptionTier cache — the counterpart
- * of the credit balance's computeBalanceDrift sweep, for subscription tiers.
+ * of the wallet balance-drift sweep (wallet-reconcile), for subscription tiers.
  *
  * The cache is written only by the Stripe webhook, so a missed/failed webhook
  * leaves it stale indefinitely. This sweep walks every user, re-derives the

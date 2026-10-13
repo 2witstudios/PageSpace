@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getPageBreadcrumbTrail } from '@/lib/pages/get-page-breadcrumb-trail';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false } as const;
 
@@ -18,7 +19,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return new NextResponse("Forbidden", { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
   }
 
   const breadcrumbs = await getPageBreadcrumbTrail(pageId);

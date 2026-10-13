@@ -12,6 +12,7 @@ import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
@@ -113,10 +114,10 @@ export async function PUT(
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_edit_permission', method: 'PUT' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to update this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     const parsedEnabledTools = parseEnabledToolsInput(enabledTools);

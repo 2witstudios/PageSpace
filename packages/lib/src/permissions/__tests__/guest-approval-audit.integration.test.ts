@@ -43,6 +43,7 @@ import { drainOrgAuditOutbox } from '../../audit/org-audit';
 import { ORG_AUDIT_PENDING_HOLD_MS } from '../../audit/org-audit-outbox-core';
 import { updateOrgPolicies } from '../../organizations/policies';
 import { getUserDriveAccess } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 const created = { users: [] as string[], drives: [] as string[], orgs: [] as string[] };
 const ctxFor = (userId: string): EnforcedAuthContext => {
@@ -110,7 +111,7 @@ describe('the approval event is committed with the admission', () => {
     // The post-commit publish never reaches the chain: what a crash after the commit leaves behind.
     chain.refuse = true;
     expect(await completeApprovedLinkAdmission(claim, guestDecisionAuditEvent(claim, 'org.guest.approved', w.owner))).toMatchObject({ ok: true });
-    expect(await getUserDriveAccess(outsider, w.drive)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(outsider, null), w.drive)).toBe(true);
     expect(approvals()).toEqual([]);
     const [row] = await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.eventType, 'org.guest.approved')).then((rows) => rows.filter((r) => r.orgId === w.orgId));
     // Committed with the admission and queued (the refused publish counted one attempt), never a hold.
@@ -123,9 +124,9 @@ describe('the approval event is committed with the admission', () => {
 
   it('AUD-1 (partial) an admission that does not commit (guests turned off meanwhile) leaves no approval event at all', async () => {
     const { outsider, claim } = await approvedLinkRequest();
-    await updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } });
+    await updateOrgPolicies({ actorAuthentication: null, orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } });
     expect(await completeApprovedLinkAdmission(claim, guestDecisionAuditEvent(claim, 'org.guest.approved', w.owner))).toMatchObject({ ok: false });
-    expect(await getUserDriveAccess(outsider, w.drive)).toBe(false);
+    expect(await getUserDriveAccess(credentialActor(outsider, null), w.drive)).toBe(false);
     await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000) });
     expect(approvals()).toEqual([]);
     expect((await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.eventType, 'org.guest.approved'))).filter((r) => r.orgId === w.orgId)).toEqual([]);

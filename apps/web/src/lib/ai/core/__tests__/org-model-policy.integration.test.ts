@@ -89,6 +89,7 @@ import { skillTools } from '@/lib/ai/tools/skill-tools';
 import { planCommandExecutions } from '../command-resolver';
 import { commandsForModel } from '../command-model-policy';
 import { toolModelContext } from '../tool-model-context';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const created = { userIds: [] as string[], driveIds: [] as string[], orgIds: [] as string[] };
 let dbAvailable = false;
@@ -214,9 +215,9 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     expect(await orgModelRefusal([null], [realtime])).toBeNull();
     // A Global Assistant call's replayed history (it carries no drive) reaches the model only when EVERY org the person
     // is in allows it — the memory-discovery rule: the owner's org drive refuses, so not all are readable.
-    expect((await memberDrivesReadableByModel(w.owner, realtime)).allReadable).toBe(false);
+    expect((await memberDrivesReadableByModel(credentialActor(w.owner, null), realtime)).allReadable).toBe(false);
     await setPolicies({ providerAllowlist: ['openai'], modelAllowlist: [realtime.modelId] });
-    expect((await memberDrivesReadableByModel(w.owner, realtime)).allReadable).toBe(true);
+    expect((await memberDrivesReadableByModel(credentialActor(w.owner, null), realtime)).allReadable).toBe(true);
   });
 
   it('saving: an agent page\'s provider/model write to a model the org does not allow is refused and nothing is written; an allowed one is saved', async () => {
@@ -231,11 +232,11 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
 
   it('saving: an agent page created in an org drive with a model the org does not allow is refused 403 and not created', async () => {
     const before = await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, w.orgDrive));
-    const result = await pageService.createPage(w.owner, { title: 'Analyst', type: 'AI_CHAT', driveId: w.orgDrive, aiProvider: REFUSED.provider, aiModel: REFUSED.model });
+    const result = await pageService.createPage(credentialActor(w.owner, null), { title: 'Analyst', type: 'AI_CHAT', driveId: w.orgDrive, aiProvider: REFUSED.provider, aiModel: REFUSED.model });
 
     expect(result).toMatchObject({ success: false, status: 403 });
     expect(await db.select({ id: pages.id }).from(pages).where(eq(pages.driveId, w.orgDrive))).toHaveLength(before.length);
-    expect(await pageService.createPage(w.owner, { title: 'Analyst', type: 'AI_CHAT', driveId: w.orgDrive, aiProvider: ALLOWED.provider, aiModel: ALLOWED.model })).toMatchObject({ success: true });
+    expect(await pageService.createPage(credentialActor(w.owner, null), { title: 'Analyst', type: 'AI_CHAT', driveId: w.orgDrive, aiProvider: ALLOWED.provider, aiModel: ALLOWED.model })).toMatchObject({ success: true });
   });
 
   it('saving: copying an agent page into an org drive that does not allow its model is refused 403 and copies nothing; one it allows is copied', async () => {
@@ -312,8 +313,8 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     const ask = (context: ToolExecutionContext) => executeAskAgent({ agentPath: '/Analyst', agentId, question: 'What changed?' }, { experimental_context: context });
 
     generateText.mockClear();
-    const fromGlobal = await ask({ userId: w.owner } as ToolExecutionContext);
-    const fromOtherOrg = await ask({ userId: w.owner, creditSpend: { spend: driveSpend(otherOrgDrive) } } as ToolExecutionContext);
+    const fromGlobal = await ask({ userId: w.owner, accessActor: credentialActor(w.owner, null) } as ToolExecutionContext);
+    const fromOtherOrg = await ask({ userId: w.owner, accessActor: credentialActor(w.owner, null), creditSpend: { spend: driveSpend(otherOrgDrive) } } as ToolExecutionContext);
 
     for (const result of [fromGlobal, fromOtherOrg]) expect(JSON.stringify(result)).toContain("doesn't allow that AI model");
     expect(generateText).not.toHaveBeenCalled();
@@ -344,8 +345,8 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
       const ask = (context: ToolExecutionContext) => executeAskAgent({ agentPath: '/Analyst', agentId, question: 'What are the terms?' }, { experimental_context: context });
 
       // A caller running a model org B allows, and a caller naming no model (the global assistant's shape).
-      await ask({ userId: w.owner, aiProvider: REFUSED.provider, aiModel: REFUSED.model } as ToolExecutionContext);
-      await ask({ userId: w.owner } as ToolExecutionContext);
+      await ask({ userId: w.owner, accessActor: credentialActor(w.owner, null), aiProvider: REFUSED.provider, aiModel: REFUSED.model } as ToolExecutionContext);
+      await ask({ userId: w.owner, accessActor: credentialActor(w.owner, null) } as ToolExecutionContext);
 
       expect(toolRead.outcomes).toHaveLength(2);
       for (const outcome of toolRead.outcomes) {
@@ -367,13 +368,13 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     it('a context that runs a model but names no resolved model is refused (fail closed); a context that runs none is not judged', async () => {
       const { orgBDoc } = await crossDriveAgent();
 
-      expect(await canActorViewPage({ userId: w.owner, runsModel: true } as ToolExecutionContext, orgBDoc)).toBe(false);
-      expect(await canActorViewPage({ userId: w.owner } as ToolExecutionContext, orgBDoc)).toBe(true);
+      expect(await canActorViewPage({ userId: w.owner, accessActor: credentialActor(w.owner, null), runsModel: true } as ToolExecutionContext, orgBDoc)).toBe(false);
+      expect(await canActorViewPage({ userId: w.owner, accessActor: credentialActor(w.owner, null) } as ToolExecutionContext, orgBDoc)).toBe(true);
     });
   });
 
   it('tools reading org content: a chat\'s tools cannot read a page or drive of an org that does not allow the running model; with an allowed model they can', async () => {
-    const as = (pair: { provider: string; model: string }) => ({ userId: w.owner, aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext);
+    const as = (pair: { provider: string; model: string }) => ({ userId: w.owner, accessActor: credentialActor(w.owner, null), aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext);
 
     expect(await canActorViewPage(as(REFUSED), w.orgDocPage)).toBe(false);
     expect(await canActorAccessDrive(as(REFUSED), w.orgDrive)).toBe(false);
@@ -389,7 +390,7 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
 
   it('tools reading org content: the global assistant (no drive) reading an org page with read_page under a model the org does not allow is refused; under an allowed model it reads', async () => {
     const readPage = pageReadTools.read_page.execute!;
-    const asGlobal = (pair: { provider: string; model: string }) => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner, aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext });
+    const asGlobal = (pair: { provider: string; model: string }) => ({ toolCallId: 't', messages: [], experimental_context: { userId: w.owner, accessActor: credentialActor(w.owner, null), aiProvider: pair.provider, aiModel: pair.model } as ToolExecutionContext });
     await db.update(pages).set({ content: '<p>Q3 revenue plan</p>' }).where(eq(pages.id, w.orgDocPage));
 
     await expect(readPage({ title: 'Plan', pageId: w.orgDocPage }, asGlobal(REFUSED))).rejects.toThrow(/Insufficient permissions/);
@@ -410,7 +411,7 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
     it('load_skill: a command whose page\'s org does not allow the run\'s model is not loaded; under an allowed model it is', async () => {
       await orgCommand();
       const loadSkill = skillTools.load_skill.execute!;
-      const load = (pair: { provider: string; model: string }) => loadSkill({ name: 'release-plan' }, { toolCallId: 't', messages: [], experimental_context: { userId: w.owner, ...run(pair) } as ToolExecutionContext });
+      const load = (pair: { provider: string; model: string }) => loadSkill({ name: 'release-plan' }, { toolCallId: 't', messages: [], experimental_context: { userId: w.owner, accessActor: credentialActor(w.owner, null), ...run(pair) } as ToolExecutionContext });
 
       const refused = String(await load(REFUSED));
       expect(refused).not.toContain('Q3 release checklist');
@@ -422,7 +423,7 @@ describe('POL-8 the org model and provider allowlists govern every model use in 
 
     it('slash commands: a command chip whose page\'s org does not allow the turn\'s model is skipped, not injected; under an allowed model it is injected', async () => {
       const commandId = await orgCommand();
-      const planned = await planCommandExecutions(`/[release-plan](${commandId}:command) ship it`, w.owner, { driveId: w.orgDrive });
+      const planned = await planCommandExecutions(`/[release-plan](${commandId}:command) ship it`, credentialActor(w.owner, null), { driveId: w.orgDrive });
 
       const refused = await commandsForModel(planned, run(REFUSED));
       expect(refused.plans).toEqual([expect.objectContaining({ kind: 'skip', reason: 'no_access', commandId })]);

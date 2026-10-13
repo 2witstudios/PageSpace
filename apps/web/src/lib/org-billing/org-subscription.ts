@@ -409,7 +409,7 @@ export async function provisionOrgSubscription(
     const refreshed = stored && storedNow ? await refreshStored(tx, stored, storedNow, prices) : stored;
 
     const nowSeconds = Math.floor((deps.now?.() ?? new Date()).getTime() / 1000);
-    let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, subscriptions, fundedSubscriptionIds: funded, nowSeconds });
+    let plan = planOrgReactivation({ orgId, prices, storedSubscriptionId, storedGiftedExtraSeats: stored?.giftedExtraSeats ?? null, subscriptions, fundedSubscriptionIds: funded, nowSeconds });
     let created = false;
     if (plan.kind === 'new_checkout') {
       const params = orgBusinessSubscriptionParams({ orgId, customerId, seats: await deps.countSeats(orgId), prices });

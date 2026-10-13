@@ -70,11 +70,13 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
   pageReadableByModel: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isUserDriveMember: vi.fn(),
 }));
@@ -121,6 +123,7 @@ import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/p
 import { executeAskAgent } from '@/lib/ai/tools/agent-communication-tools';
 import { channelTools } from '@/lib/ai/tools/channel-tools';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -174,7 +177,7 @@ function commandRow(overrides: Record<string, unknown> = {}) {
 }
 
 const params = {
-  userId: SENDER,
+  sender: credentialActor(SENDER, null),
   channelId: 'channel-1',
   channelTitle: 'General',
   sourceMessageId: 'msg-1',

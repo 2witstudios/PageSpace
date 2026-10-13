@@ -443,7 +443,9 @@ describe('verified email domains (real Postgres)', () => {
       const marcus = await person(`marcus@${domain}`);
       const result = await autoJoinVerifiedDomainOrg({ userId: marcus.id, now: new Date() });
       expect(result).toMatchObject({ kind: 'refused', orgId: org.id, reason: 'seats_full' });
-      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).toMatch(/All 5 seats in this organization are taken/);
+      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).toMatch(/Every seat in this organization is taken/);
+      // The person signing in is not an Owner or Admin: never told the seat count (SEAT-6).
+      expect(result.kind === 'refused' && result.reason === 'seats_full' && result.message).not.toMatch(/\d/);
       expect(await membership(org.id, marcus.id)).toBeNull();
       expect(await countOrgSeats(org.id)).toBe(5);
       expect(audit.events[audit.events.length - 1]).toMatchObject({ orgId: org.id, eventType: 'org.member.auto_join_refused', details: { reason: 'seats_full' } });
@@ -534,8 +536,8 @@ describe('verified email domains (real Postgres)', () => {
 
       if (join === 'invitation') {
         const tokens: string[] = [];
-        const invited = await createOrRotateInvitation({
-          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, actorRole: 'OWNER', now: new Date(),
+        const invited = await createOrRotateInvitation({ credential: 'session',
+          orgId: org.id, email, role: 'MEMBER', invitedBy: jono.id, now: new Date(),
           deliver: async (_i, token) => { tokens.push(token); },
         });
         if (!invited.ok) throw new Error(`invite: ${invited.reason}`);

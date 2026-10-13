@@ -116,7 +116,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-const set = (patch: Record<string, unknown>) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, patch });
+const set = (patch: Record<string, unknown>) => updateOrgPolicies({ orgId: w.orgId, actorId: w.owner, actorAuthentication: null, patch });
 const publicKeys = (prefix: string) => [...w.store.objects.keys()].filter((k) => k.startsWith(`published/${prefix}/`));
 const parkedKeys = (prefix: string) => [...w.store.objects.keys()].filter((k) => k.startsWith(`suspended/${prefix}/`));
 

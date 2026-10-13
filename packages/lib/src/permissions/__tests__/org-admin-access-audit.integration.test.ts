@@ -28,6 +28,7 @@ import { getDriveAccess } from '../../services/drive-service';
 import { loadPagePayload } from '../../services/page-payload-service';
 import { accessiblePageIds } from '../accessible-page-ids';
 import { cleanupNorthwind, northwind } from './fixtures/northwind-org-drives';
+import { credentialActor } from '../access-actor';
 
 const flags = vi.hoisted(() => ({ orgsEnabled: true }));
 vi.mock('../../organizations/orgs-enabled', () => ({
@@ -103,19 +104,19 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     // Five resolver calls: a page view (getUserAccessLevel, also what realtime per-event auth
     // re-runs for every sensitive event), an AI tool check (canUserViewPage), a drive room join
     // (getUserDriveAccess), the drive route (getDriveAccess) and a batch check.
-    expect(await getUserAccessLevel(priya.id, salaries)).toMatchObject({ canView: true });
-    expect(await canUserViewPage(priya.id, salaries)).toBe(true);
-    expect(await getUserDriveAccess(priya.id, finance)).toBe(true);
-    expect(await getDriveAccess(finance, priya.id)).toMatchObject({ isAdmin: true });
-    expect((await getBatchPagePermissions(priya.id, [salaries, f.pages.financePage.id])).get(salaries)?.canView).toBe(true);
+    expect(await getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
+    expect(await canUserViewPage(credentialActor(priya.id, null), salaries)).toBe(true);
+    expect(await getUserDriveAccess(credentialActor(priya.id, null), finance)).toBe(true);
+    expect(await getDriveAccess(finance, credentialActor(priya.id, null))).toMatchObject({ isAdmin: true });
+    expect((await getBatchPagePermissions(credentialActor(priya.id, null), [salaries, f.pages.financePage.id])).get(salaries)?.canView).toBe(true);
     expect(await settledCount(priya.id, finance, 1)).toBe(1);
 
     // Search: the drive gate, then one resolution per hit.
-    expect(await checkDriveAccessForSearch(finance, priya.id)).toMatchObject({ hasAccess: true });
-    const hits = await globSearchPages(finance, priya.id, '*', null);
+    expect(await checkDriveAccessForSearch(finance, credentialActor(priya.id, null))).toMatchObject({ hasAccess: true });
+    const hits = await globSearchPages(finance, credentialActor(priya.id, null), '*', null);
     expect(hits.results.map((r) => r.pageId).sort()).toEqual([f.pages.financePage.id, salaries].sort());
     // Concurrent calls in one process race past the memo to the guarded insert; one wins.
-    await Promise.all(Array.from({ length: 5 }, () => getUserAccessLevel(priya.id, salaries)));
+    await Promise.all(Array.from({ length: 5 }, () => getUserAccessLevel(credentialActor(priya.id, null), salaries)));
     expect(await settledCount(priya.id, finance, 1)).toBe(1);
 
     // A second process (web and realtime each hold their own memo) re-resolves in the same window:
@@ -125,8 +126,8 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     const secondProcess = await import('../permissions');
     const secondPool = (await import('@pagespace/db/db')).pool;
     try {
-      expect(await secondProcess.getUserAccessLevel(priya.id, salaries)).toMatchObject({ canView: true });
-      await Promise.all(Array.from({ length: 4 }, () => secondProcess.getUserDriveAccess(priya.id, finance)));
+      expect(await secondProcess.getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
+      await Promise.all(Array.from({ length: 4 }, () => secondProcess.getUserDriveAccess(credentialActor(priya.id, null), finance)));
       expect(await settledCount(priya.id, finance, 1)).toBe(1);
     } finally {
       await secondPool.end();
@@ -134,12 +135,12 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
 
     // 09:14:59.999 is still the 09:00 window.
     vi.setSystemTime(new Date('2031-03-04T09:14:59.999Z'));
-    await getUserAccessLevel(priya.id, salaries);
+    await getUserAccessLevel(credentialActor(priya.id, null), salaries);
     expect(await settledCount(priya.id, finance, 1)).toBe(1);
 
     // The next UTC window is a new access.
     vi.setSystemTime(new Date('2031-03-04T09:15:00.000Z'));
-    await getUserAccessLevel(priya.id, salaries);
+    await getUserAccessLevel(credentialActor(priya.id, null), salaries);
     expect(await settledCount(priya.id, finance, 2)).toBe(2);
 
     // Deciding who else can see a page (the channel fan-out) is an audience, not an access by Jono.
@@ -148,10 +149,10 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     expect(await accessRows(f.people.jono.id, finance)).toEqual([]);
 
     // Another admin in the same window is their own access; org power on OPEN or through a row is none.
-    await getUserAccessLevel(f.people.jono.id, salaries);
+    await getUserAccessLevel(credentialActor(f.people.jono.id, null), salaries);
     expect(await settledCount(f.people.jono.id, finance, 1)).toBe(1);
-    await getUserAccessLevel(priya.id, f.pages.productPrivatePage.id);
-    await getUserAccessLevel(f.people.omar.id, salaries);
+    await getUserAccessLevel(credentialActor(priya.id, null), f.pages.productPrivatePage.id);
+    await getUserAccessLevel(credentialActor(f.people.omar.id, null), salaries);
     expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
     expect(await accessRows(f.people.omar.id, finance)).toEqual([]);
   }, 60_000);
@@ -164,17 +165,17 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
 
     // A page payload on its own is an access: Jono (org Owner; his leftover OWNER row on Finance counts for
     // nothing) opens Salaries through org power, and the payload alone writes the event.
-    expect((await loadPagePayload(jono.id, salaries)).page.id).toBe(salaries);
+    expect((await loadPagePayload(credentialActor(jono.id, null), salaries)).page.id).toBe(salaries);
     expect(await settledCount(jono.id, finance, 1)).toBe(1);
 
     // Priya (org Admin, no valid Finance row) reaches the PRIVATE Finance drive through org power in SQL too.
-    expect(await accessiblePageIds(priya.id)).toEqual(expect.arrayContaining([salaries, f.pages.financePage.id, f.pages.productPage.id]));
+    expect(await accessiblePageIds(credentialActor(priya.id, null))).toEqual(expect.arrayContaining([salaries, f.pages.financePage.id, f.pages.productPage.id]));
     expect(await settledCount(priya.id, finance, 1)).toBe(1);
     // A page payload in the same window is the same access: still one row.
-    expect((await loadPagePayload(priya.id, salaries)).page.id).toBe(salaries);
+    expect((await loadPagePayload(credentialActor(priya.id, null), salaries)).page.id).toBe(salaries);
     expect(await settledCount(priya.id, finance, 1)).toBe(1);
     // Omar's own invited ADMIN row opens Finance: org power was not used, so nothing is owed; nor on OPEN Product.
-    expect(await accessiblePageIds(omar.id)).toContain(salaries);
+    expect(await accessiblePageIds(credentialActor(omar.id, null))).toContain(salaries);
     await new Promise((resolve) => setTimeout(resolve, 750));
     expect(await accessRows(omar.id, finance)).toEqual([]);
     expect(await accessRows(priya.id, f.drives.product.id)).toEqual([]);
@@ -189,7 +190,7 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
     vi.setSystemTime(new Date('2031-03-05T09:01:00.000Z'));
     const failOnce = vi.spyOn(securityAudit, 'logEvent').mockRejectedValueOnce(new Error('audit store down'));
     try {
-      expect(await getUserAccessLevel(priya.id, salaries)).toMatchObject({ canView: true });
+      expect(await getUserAccessLevel(credentialActor(priya.id, null), salaries)).toMatchObject({ canView: true });
       const claim = orgAdminAuditClaim({ userId: priya.id, driveId: finance, orgId: f.org.id, orgRole: 'ADMIN' }, new Date());
       await vi.waitFor(async () => {
         expect(failOnce).toHaveBeenCalledTimes(1);
@@ -198,7 +199,7 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
       expect(await accessRows(priya.id, finance)).toEqual([]);
       // The record is durable, so the window is not reopened: a second access writes nothing new.
       expect(await claimRow(claim)).toHaveLength(1);
-      await getUserAccessLevel(priya.id, salaries);
+      await getUserAccessLevel(credentialActor(priya.id, null), salaries);
       expect(await queued(finance)).toHaveLength(1);
 
       await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });

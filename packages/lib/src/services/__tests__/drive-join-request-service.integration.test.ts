@@ -36,6 +36,7 @@ import { changeDriveVisibility, changeOrgDriveLead, moveDriveOutOfOrg } from '..
 import { orgDriveServiceDeps } from '../org-drive-service-deps';
 import { leaveOrganization } from '../../organizations/leave';
 import { deleteOrganization } from '../../organizations/deletion';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -110,8 +111,8 @@ async function requestAs(userId: string, message?: string) {
 async function membershipFootprint(userId: string) {
   return {
     rows: (await rowsOf(userId)).length,
-    resolves: await getUserDriveAccess(userId, research),
-    listed: (await listAccessibleDrives(userId)).some((d) => d.id === research),
+    resolves: await getUserDriveAccess(credentialActor(userId, null), research),
+    listed: (await listAccessibleDrives(credentialActor(userId, null))).some((d) => d.id === research),
     recipient: (await getDriveRecipientUserIds(research)).includes(userId),
     sharesDriveWithLead: await usersShareDrive(userId, marcus),
   };
@@ -148,6 +149,30 @@ describe('requestToJoinDrive', () => {
   });
 });
 
+describe('the org sign-in policy governs answering join requests, as it governs the org admin routes (review #2866 B)', () => {
+  const passkey = () => credentialActor(marcus, { authenticatedAtMs: Date.now() - 1000, assurance: 'user_verified_passkey' });
+  const emailLink = (userId: string) => credentialActor(userId, { authenticatedAtMs: Date.now() - 1000, assurance: 'single_factor' });
+
+  it('SEC-2 (partial) under requireStrongSignIn a lead or Admin on a single-factor credential can neither list nor answer; the request stays pending; a passkey answers it', async () => {
+    await db.update(organizations).set({ policies: { requireStrongSignIn: true } }).where(eq(organizations.id, northwind));
+    const { request } = await requestAs(lena, 'please');
+
+    expect(await listPendingDriveJoinRequests(emailLink(marcus), research)).toMatchObject({ ok: false, status: 403, code: 'org_strong_sign_in_required' });
+    expect(await listPendingDriveJoinRequests(emailLink(priya), research)).toMatchObject({ ok: false, status: 403, code: 'org_strong_sign_in_required' });
+    expect(await answerDriveJoinRequest(emailLink(marcus), research, request.id, 'approve')).toMatchObject({ ok: false, status: 403, code: 'org_strong_sign_in_required' });
+    expect(await answerDriveJoinRequest(emailLink(priya), research, request.id, 'deny')).toMatchObject({ ok: false, status: 403, code: 'org_strong_sign_in_required' });
+    const [still] = await db.select({ status: driveJoinRequests.status }).from(driveJoinRequests).where(eq(driveJoinRequests.id, request.id));
+    expect(still.status).toBe('pending');
+    expect(await rowsOf(lena)).toHaveLength(0);
+
+    // Role first: someone who may not answer learns nothing about the policy.
+    expect(await answerDriveJoinRequest(emailLink(nina), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_APPROVER' });
+
+    expect(await listPendingDriveJoinRequests(passkey(), research)).toMatchObject({ ok: true });
+    expect(await answerDriveJoinRequest(passkey(), research, request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
+  });
+});
+
 describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership for a join request', () => {
   it('its holder is not ALREADY_MEMBER: they may request, the row grants nothing meanwhile, and approval upgrades that row in place; a real member is ALREADY_MEMBER', async () => {
     await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'GUEST', source: 'invite', acceptedAt: new Date() });
@@ -158,7 +183,7 @@ describe('D-OW-24 a GUEST row (a redeemed page share link) is no membership for 
     if (!asked.ok) throw new Error('expected the request to open');
     expect(await membershipFootprint(lena)).toEqual({ ...NOTHING, rows: 1 });
 
-    const answered = await answerDriveJoinRequest(marcus, research, asked.request.id, 'approve');
+    const answered = await answerDriveJoinRequest(credentialActor(marcus, null), research, asked.request.id, 'approve');
     expect(answered).toMatchObject({ ok: true, action: 'approve', admitted: true });
     const rows = await rowsOf(lena);
     expect(rows).toHaveLength(1);
@@ -174,7 +199,7 @@ describe('answerDriveJoinRequest', () => {
   it('DRV-6 (partial) the lead approves: the requester gets an accepted direct row with the drive default role, resolves, is listed and is a recipient', async () => {
     const { request } = await requestAs(lena);
 
-    const result = await answerDriveJoinRequest(marcus, research, request.id, 'approve');
+    const result = await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve');
 
     expect(result).toMatchObject({ ok: true, action: 'approve', admitted: true, request: { status: 'approved', decidedBy: marcus } });
     const [row] = await rowsOf(lena);
@@ -186,28 +211,28 @@ describe('answerDriveJoinRequest', () => {
   it('DRV-6 (partial) an org Admin approves; a plain member cannot, and their attempt writes nothing', async () => {
     const { request } = await requestAs(lena);
 
-    expect(await answerDriveJoinRequest(nina, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_APPROVER', status: 403 });
+    expect(await answerDriveJoinRequest(credentialActor(nina, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_APPROVER', status: 403 });
     expect(await membershipFootprint(lena)).toEqual(NOTHING);
     const [stillPending] = await db.select().from(driveJoinRequests).where(eq(driveJoinRequests.id, request.id));
     expect(stillPending.status).toBe('pending');
 
-    expect(await answerDriveJoinRequest(priya, research, request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
+    expect(await answerDriveJoinRequest(credentialActor(priya, null), research, request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
     expect((await membershipFootprint(lena)).resolves).toBe(true);
   });
 
   it('DRV-6 (partial) a member cannot approve their own request, even as an org Admin', async () => {
     const { request } = await requestAs(priya);
 
-    expect(await answerDriveJoinRequest(priya, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'SELF_DECISION', status: 403 });
+    expect(await answerDriveJoinRequest(credentialActor(priya, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'SELF_DECISION', status: 403 });
     expect(await rowsOf(priya)).toHaveLength(0);
   });
 
   it('DRV-6 (partial) a refused request writes no row and can be asked again', async () => {
     const { request } = await requestAs(lena);
 
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'deny')).toMatchObject({ ok: true, action: 'deny', admitted: false, request: { status: 'denied' } });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'deny')).toMatchObject({ ok: true, action: 'deny', admitted: false, request: { status: 'denied' } });
     expect(await membershipFootprint(lena)).toEqual(NOTHING);
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
     expect(await rowsOf(lena)).toHaveLength(0);
 
     const again = await requestAs(lena);
@@ -220,7 +245,7 @@ describe('answerDriveJoinRequest', () => {
 
     expect(await withdrawDriveJoinRequest(nina, research, request.id)).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
     expect(await withdrawDriveJoinRequest(lena, research, request.id)).toMatchObject({ ok: true, request: { status: 'withdrawn' } });
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
     expect(await rowsOf(lena)).toHaveLength(0);
     expect((await requestAs(lena)).created).toBe(true);
   });
@@ -229,7 +254,7 @@ describe('answerDriveJoinRequest', () => {
     const { request } = await requestAs(lena);
     await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, research));
 
-    expect(await answerDriveJoinRequest(priya, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_RESTRICTED' });
+    expect(await answerDriveJoinRequest(credentialActor(priya, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_RESTRICTED' });
     expect(await rowsOf(lena)).toHaveLength(0);
     const [row] = await db.select().from(driveJoinRequests).where(eq(driveJoinRequests.id, request.id));
     expect(row.status).toBe('pending');
@@ -239,7 +264,7 @@ describe('answerDriveJoinRequest', () => {
     const { request } = await requestAs(lena);
     await db.delete(orgMembers).where(and(eq(orgMembers.orgId, northwind), eq(orgMembers.userId, lena)));
 
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'REQUESTER_NOT_ORG_MEMBER' });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'REQUESTER_NOT_ORG_MEMBER' });
     expect(await rowsOf(lena)).toHaveLength(0);
   });
 
@@ -247,7 +272,7 @@ describe('answerDriveJoinRequest', () => {
     const { request } = await requestAs(lena);
     await db.insert(driveMembers).values({ driveId: research, userId: lena, role: 'ADMIN', invitedBy: marcus });
 
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'PENDING_INVITE' });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'PENDING_INVITE' });
     const [row] = await rowsOf(lena);
     expect(row).toMatchObject({ role: 'ADMIN', acceptedAt: null });
   });
@@ -257,7 +282,7 @@ describe('answerDriveJoinRequest', () => {
     const other = createId();
     await db.insert(drives).values({ id: other, name: 'Other', slug: `other-${run}`, ownerId: priya, orgId: northwind, orgVisibility: 'RESTRICTED', updatedAt: new Date() });
 
-    expect(await answerDriveJoinRequest(priya, other, request.id, 'approve')).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
+    expect(await answerDriveJoinRequest(credentialActor(priya, null), other, request.id, 'approve')).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
     expect(await rowsOf(lena)).toHaveLength(0);
   });
 });
@@ -280,9 +305,9 @@ describe('approval is the only path from a request to membership', () => {
     const ninaRequest = (await requestAs(nina)).request;
     const before = await db.select().from(driveMembers).where(eq(driveMembers.driveId, research));
 
-    await answerDriveJoinRequest(marcus, research, lenaRequest.id, 'deny');
+    await answerDriveJoinRequest(credentialActor(marcus, null), research, lenaRequest.id, 'deny');
     await withdrawDriveJoinRequest(nina, research, ninaRequest.id);
-    await answerDriveJoinRequest(nina, research, lenaRequest.id, 'approve');
+    await answerDriveJoinRequest(credentialActor(nina, null), research, lenaRequest.id, 'approve');
 
     expect(await db.select().from(driveMembers).where(eq(driveMembers.driveId, research))).toEqual(before);
   });
@@ -292,14 +317,14 @@ describe('listPendingDriveJoinRequests', () => {
   it('DRV-6 (partial) the lead and org Admins see pending requests with who asked; a plain member and an outsider do not', async () => {
     await requestAs(lena, 'please');
     const denied = (await requestAs(nina)).request;
-    await answerDriveJoinRequest(marcus, research, denied.id, 'deny');
+    await answerDriveJoinRequest(credentialActor(marcus, null), research, denied.id, 'deny');
 
-    const forLead = await listPendingDriveJoinRequests(marcus, research);
+    const forLead = await listPendingDriveJoinRequests(credentialActor(marcus, null), research);
     expect(forLead).toMatchObject({ ok: true, requests: [{ userId: lena, message: 'please', email: `lena-${run}@northwind.test` }] });
     expect(forLead.ok && forLead.requests).toHaveLength(1);
-    expect(await listPendingDriveJoinRequests(priya, research)).toMatchObject({ ok: true });
-    expect(await listPendingDriveJoinRequests(nina, research)).toMatchObject({ ok: false, code: 'NOT_APPROVER' });
-    expect(await listPendingDriveJoinRequests(chris, research)).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
+    expect(await listPendingDriveJoinRequests(credentialActor(priya, null), research)).toMatchObject({ ok: true });
+    expect(await listPendingDriveJoinRequests(credentialActor(nina, null), research)).toMatchObject({ ok: false, code: 'NOT_APPROVER' });
+    expect(await listPendingDriveJoinRequests(credentialActor(chris, null), research)).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND' });
   });
 });
 
@@ -309,7 +334,7 @@ describe('a pending request closes when what it asked for is gone', () => {
     return row;
   };
   const pendingFor = async (approverId: string) => {
-    const listed = await listPendingDriveJoinRequests(approverId, research);
+    const listed = await listPendingDriveJoinRequests(credentialActor(approverId, null), research);
     return listed.ok ? listed.requests.map((r) => r.userId) : listed.code;
   };
   const expectClosed = async (requestId: string) => {
@@ -335,7 +360,7 @@ describe('a pending request closes when what it asked for is gone', () => {
     await changeDriveVisibility(priya, research, { orgVisibility: 'RESTRICTED' }, orgDriveServiceDeps);
 
     await expectClosed(request.id);
-    expect(await answerDriveJoinRequest(marcus, research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
+    expect(await answerDriveJoinRequest(credentialActor(marcus, null), research, request.id, 'approve')).toMatchObject({ ok: false, code: 'NOT_PENDING' });
     expect(await rowsOf(lena)).toHaveLength(0);
   });
 
@@ -366,7 +391,7 @@ describe('a pending request closes when what it asked for is gone', () => {
 
     await expectClosed(lenaRequest.id);
     expect((await statusOf(ninaRequest.id)).status).toBe('pending');
-    const forNewLead = await listPendingDriveJoinRequests(lena, research);
+    const forNewLead = await listPendingDriveJoinRequests(credentialActor(lena, null), research);
     expect(forNewLead.ok && forNewLead.requests.map((r) => r.userId)).toEqual([nina]);
   });
 
@@ -409,11 +434,11 @@ describe('the join-request approver list is no existence oracle for a Private dr
   it('DRV-7 (partial) a plain org member gets the same answer for a Private drive of their org as for a drive that does not exist', async () => {
     await db.update(drives).set({ orgVisibility: 'PRIVATE' }).where(eq(drives.id, research));
 
-    const forPrivate = await listPendingDriveJoinRequests(nina, research);
-    const forMissing = await listPendingDriveJoinRequests(nina, createId());
+    const forPrivate = await listPendingDriveJoinRequests(credentialActor(nina, null), research);
+    const forMissing = await listPendingDriveJoinRequests(credentialActor(nina, null), createId());
 
     expect(forPrivate).toEqual(forMissing);
     expect(forPrivate).toMatchObject({ ok: false, code: 'REQUEST_NOT_FOUND', status: 404 });
-    expect(await listPendingDriveJoinRequests(marcus, research)).toMatchObject({ ok: true });
+    expect(await listPendingDriveJoinRequests(credentialActor(marcus, null), research)).toMatchObject({ ok: true });
   });
 });

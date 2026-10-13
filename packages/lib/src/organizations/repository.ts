@@ -18,6 +18,7 @@ import {
   type OrgRole,
 } from '@pagespace/db/schema/organizations';
 import { decryptUserRows, userEmailMatch } from '../auth/user-repository';
+import { isOrgAvatarPath } from './org-avatar-core';
 import { decideOrgOwnerCandidate, loadOrgPrincipalKind } from './owner-candidate';
 import { transactionWithOrgAudit } from '../audit/org-audit';
 import { NEW_ORG_POLICIES } from './policies-core';
@@ -208,7 +209,6 @@ export type CreateOrganizationResult =
 export async function createOrganization(input: {
   name: string;
   slug: string;
-  avatarUrl?: string | null;
   ownerId: string;
 }): Promise<CreateOrganizationResult> {
   try {
@@ -217,7 +217,7 @@ export async function createOrganization(input: {
       if (!candidate.ok) return { ok: false, reason: candidate.reason };
       const [org] = await tx
         .insert(organizations)
-        .values({ name: input.name, slug: input.slug, avatarUrl: input.avatarUrl ?? null, ownerId: input.ownerId, policies: { ...NEW_ORG_POLICIES } })
+        .values({ name: input.name, slug: input.slug, ownerId: input.ownerId, policies: { ...NEW_ORG_POLICIES } })
         .returning(ORG_RECORD);
       await tx.insert(orgMembers).values({ orgId: org.id, userId: input.ownerId, role: 'OWNER' });
       await audit({ orgId: org.id, eventType: 'org.created', actorId: input.ownerId, resourceType: 'organization', resourceId: org.id, details: { slug: org.slug } });
@@ -235,7 +235,7 @@ export type UpdateOrganizationResult =
 
 export async function updateOrganization(
   orgId: string,
-  patch: { name?: string; slug?: string; avatarUrl?: string | null },
+  patch: { name?: string; slug?: string },
   actorId?: string,
 ): Promise<UpdateOrganizationResult> {
   try {
@@ -249,6 +249,43 @@ export async function updateOrganization(
     if (isUniqueViolation(error)) return { ok: false, reason: 'slug_taken' };
     throw error;
   }
+}
+
+export type SetOrganizationAvatarResult =
+  /** previousAvatarUrl: the path this call replaced (its file is now the caller's to delete), or null. */
+  | { ok: true; organization: OrgRecord; previousAvatarUrl: string | null }
+  | { ok: false; reason: 'not_found' | 'invalid_avatar' };
+
+/**
+ * ORG-1: sets (or clears, with null) the org's avatar. Only this org's own PageSpace avatar path is
+ * accepted — the file the avatar route stored — never an outside URL; the database refuses anything
+ * else too (organizations_avatar_url_chk). The org row is locked while the old value is read and the
+ * new one written, so concurrent switches each replace a distinct path and the caller deletes exactly
+ * the file it replaced, never the stored one.
+ */
+export async function setOrganizationAvatar(
+  orgId: string,
+  avatarUrl: string | null,
+  actorId: string,
+): Promise<SetOrganizationAvatarResult> {
+  if (avatarUrl !== null && !isOrgAvatarPath(orgId, avatarUrl)) return { ok: false, reason: 'invalid_avatar' };
+  // AUD-1: the change's event commits with it (the outbox).
+  const switched = await transactionWithOrgAudit(async (tx, audit) => {
+    const [current] = await tx.select({ avatarUrl: organizations.avatarUrl }).from(organizations).where(eq(organizations.id, orgId)).for('update');
+    if (!current) return null;
+    const [organization] = await tx.update(organizations).set({ avatarUrl }).where(eq(organizations.id, orgId)).returning(ORG_RECORD);
+    await audit({
+      orgId,
+      eventType: 'org.updated',
+      actorId,
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { fields: ['avatar'], removed: avatarUrl === null },
+    });
+    return { organization, previousAvatarUrl: current.avatarUrl };
+  });
+  if (!switched) return { ok: false, reason: 'not_found' };
+  return { ok: true, ...switched };
 }
 
 /**

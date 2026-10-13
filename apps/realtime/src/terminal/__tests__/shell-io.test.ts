@@ -1,4 +1,5 @@
 import { describe, it } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { assert } from './riteway';
 import {
   handleShellReadRequest,
@@ -17,7 +18,7 @@ function makeSession(over: Partial<TerminalSession> = {}): TerminalSession {
     command: {} as TerminalSession['command'],
     sandboxId: 'sbx-1',
     sessionKey: 'key-1',
-    lastViewerUserId: 'user1',
+    lastViewerActor: credentialActor('user1', null),
     releaseSlot: () => {},
     viewers: new Map(),
     scrollback: [],
@@ -488,7 +489,7 @@ describe('shell IO — headless start', () => {
       // needed to trust it — unlike a plain send, which has established nothing.
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'creator';
+      session.lastViewerActor = credentialActor('creator', null);
       const start = starter(session);
 
       await handleShellSendRequest(
@@ -499,8 +500,32 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'a send that STARTS the session for a different user',
         should: 'track that user, since the start itself authorized them',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'starter-user',
+      });
+    });
+
+    it('WAL-2 (partial) given a start for someone other than the window\'s actor, should claim the window for them without a second re-auth', async () => {
+      const { session, written } = writableSession();
+      session.actorId = 'priya-owner';
+      const start = starter(session);
+      const claims: string[] = [];
+      const reauthorized: string[] = [];
+      await handleShellSendRequest(
+        {
+          ...deps(),
+          startSession: start.startSession,
+          reauthorizeViewer: async ({ actor }) => { reauthorized.push(actor.userId); return true; },
+          claimBillingWindow: async (_session, userId) => { claims.push(userId); return true; },
+        },
+        sendBody({ start: true, userId: 'ben' }),
+      );
+
+      assert({
+        given: 'a send that starts the session for Ben in a window Priya opened',
+        should: 'claim the window for Ben (the start authorized him) and deliver the input',
+        actual: { claims, reauthorized, written },
+        expected: { claims: ['ben'], reauthorized: [], written: ['ls\n'] },
       });
     });
 
@@ -519,7 +544,7 @@ describe('shell IO — headless start', () => {
         expected: {
           body: { success: true, live: true, delivered: true, started: true },
           written: ['ls\n'],
-          startedFor: [{ shellId: 'sh', userId: 'user-1' }],
+          startedFor: [{ shellId: 'sh', actor: credentialActor('user-1', null) }],
         },
       });
     });
@@ -655,7 +680,7 @@ describe('shell IO — headless start', () => {
       // established authorization for.
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'user-1';
+      session.lastViewerActor = credentialActor('user-1', null);
       await handleShellSendRequest(
         { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
         sendBody({ userId: 'user-2' }),
@@ -664,7 +689,7 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'a viewer-less session sent to by a different, re-authorized user',
         should: 'track the sender as the identity the re-auth tick checks',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'user-2',
       });
     });
@@ -672,7 +697,7 @@ describe('shell IO — headless start', () => {
     it('given a different user who FAILS re-authorization, should leave the identity alone', async () => {
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'user-1';
+      session.lastViewerActor = credentialActor('user-1', null);
       await handleShellSendRequest(
         { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => false },
         sendBody({ userId: 'attacker' }),
@@ -681,7 +706,7 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'a caller-supplied identity that does not re-authorize',
         should: 'keep the established identity so revocation still evicts the right user',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'user-1',
       });
     });
@@ -692,7 +717,7 @@ describe('shell IO — headless start', () => {
       // session alive, which is strictly worse than a spurious eviction.
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'user-1';
+      session.lastViewerActor = credentialActor('user-1', null);
       await handleShellSendRequest(
         { ...deps({ 'k:sh': session }) },
         sendBody({ userId: 'user-2' }),
@@ -701,7 +726,7 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'no reauthorizeViewer dep and a different caller-supplied userId',
         should: 'leave the tracked identity untouched',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'user-1',
       });
     });
@@ -709,7 +734,7 @@ describe('shell IO — headless start', () => {
     it('given delivered input with no userId at all, should leave the tracked identity alone', async () => {
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'user-1';
+      session.lastViewerActor = credentialActor('user-1', null);
       await handleShellSendRequest(
         { ...deps({ 'k:sh': session }) },
         sendBody(),
@@ -718,7 +743,7 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'a send with no userId in the payload',
         should: 'leave the existing tracked identity untouched rather than clearing it',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'user-1',
       });
     });
@@ -944,7 +969,7 @@ describe('shell IO — headless start', () => {
     it('given a deliberate read from a DIFFERENT, RE-AUTHORIZED user, should become the tracked identity', async () => {
       const { session } = writableSession();
       session.viewers.clear();
-      session.lastViewerUserId = 'user-1';
+      session.lastViewerActor = credentialActor('user-1', null);
       await handleShellReadRequest(
         { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
         readBody({ shellIds: ['sh'], start: true, userId: 'user-2' }),
@@ -953,7 +978,7 @@ describe('shell IO — headless start', () => {
       assert({
         given: 'a viewer-less session read by another user who re-authorizes',
         should: 'track the reader as the identity the detached re-auth tick checks',
-        actual: session.lastViewerUserId,
+        actual: session.lastViewerActor.userId,
         expected: 'user-2',
       });
     });
@@ -998,6 +1023,13 @@ describe('shell IO — headless start', () => {
 });
 
 describe('planSessionStart', () => {
+  it('refuses a start on a session that is not addressable, and starts only for a named user with a starter', () => {
+    expect(planSessionStart({ start: true, userId: 'u1' }, { addressable: false, hasStarter: true })).toEqual({ ok: false, error: 'Invalid start' });
+    expect(planSessionStart({ start: true }, { addressable: true, hasStarter: true })).toEqual({ ok: false, error: 'Missing or invalid userId' });
+    expect(planSessionStart({ start: true, userId: 'u1' }, { addressable: true, hasStarter: false })).toEqual({ ok: true, start: false });
+    expect(planSessionStart({ start: 'yes' }, { addressable: true, hasStarter: true })).toEqual({ ok: false, error: 'Invalid start' });
+  });
+
   it('given a malformed userId, should refuse even when no start was asked for', () => {
     // Validated on its own terms rather than only inside the start branch: a
     // field this endpoint uses to decide WHO a sandbox is billed to must never
@@ -1020,40 +1052,40 @@ describe('handleShellReadRequest — viewer identity re-authorization', () => {
   it('given a re-authorized reader, should adopt them as the tracked identity', async () => {
     const { session } = writableSession();
     session.viewers.clear();
-    session.lastViewerUserId = 'user-1';
+    session.lastViewerActor = credentialActor('user-1', null);
 
     await handleShellReadRequest(
       { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => true },
       JSON.stringify({ shellIds: ['sh'], start: true, userId: 'user-2' }),
     );
 
-    expect(session.lastViewerUserId).toBe('user-2');
+    expect(session.lastViewerActor.userId).toBe('user-2');
   });
 
   it('given a reader who fails re-authorization, should keep the established identity', async () => {
     const { session } = writableSession();
     session.viewers.clear();
-    session.lastViewerUserId = 'user-1';
+    session.lastViewerActor = credentialActor('user-1', null);
 
     await handleShellReadRequest(
       { ...deps({ 'k:sh': session }), reauthorizeViewer: async () => false },
       JSON.stringify({ shellIds: ['sh'], start: true, userId: 'attacker' }),
     );
 
-    expect(session.lastViewerUserId).toBe('user-1');
+    expect(session.lastViewerActor.userId).toBe('user-1');
   });
 
   it('given NO re-auth seam, should fail closed rather than trust the caller', async () => {
     const { session } = writableSession();
     session.viewers.clear();
-    session.lastViewerUserId = 'user-1';
+    session.lastViewerActor = credentialActor('user-1', null);
 
     await handleShellReadRequest(
       { ...deps({ 'k:sh': session }) },
       JSON.stringify({ shellIds: ['sh'], start: true, userId: 'user-2' }),
     );
 
-    expect(session.lastViewerUserId).toBe('user-1');
+    expect(session.lastViewerActor.userId).toBe('user-1');
   });
 });
 
@@ -1066,7 +1098,7 @@ describe('reauthorizeViewer failure handling', () => {
   it('given the re-auth check THROWS, should not reject the request', async () => {
     const { session, written } = writableSession();
     session.viewers.clear();
-    session.lastViewerUserId = 'user-1';
+    session.lastViewerActor = credentialActor('user-1', null);
 
     const result = await handleShellSendRequest(
       {
@@ -1081,13 +1113,13 @@ describe('reauthorizeViewer failure handling', () => {
     expect(result.status).toBe(200);
     expect(written).toEqual(['ls\n']);
     // Fails closed: the identity is left alone rather than trusted.
-    expect(session.lastViewerUserId).toBe('user-1');
+    expect(session.lastViewerActor.userId).toBe('user-1');
   });
 
   it('given the re-auth check throws on the READ path, should still answer', async () => {
     const { session } = writableSession();
     session.viewers.clear();
-    session.lastViewerUserId = 'user-1';
+    session.lastViewerActor = credentialActor('user-1', null);
 
     const result = await handleShellReadRequest(
       {
@@ -1098,6 +1130,6 @@ describe('reauthorizeViewer failure handling', () => {
     );
 
     expect(result.status).toBe(200);
-    expect(session.lastViewerUserId).toBe('user-1');
+    expect(session.lastViewerActor.userId).toBe('user-1');
   });
 });

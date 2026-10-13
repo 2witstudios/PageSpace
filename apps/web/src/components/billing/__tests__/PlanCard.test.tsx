@@ -64,17 +64,11 @@ describe('PlanCard', () => {
     // settings/plan/page.tsx, so it cannot detect that page dropping the call.
     // withCreditsCents itself is proven in isolation in plans.test.ts. What this
     // test DOES prove: PlanCard's DOM actually reflects a patched plan's numbers
-    // rather than some cached/memoized copy of the original. Under D-OW-17 the
-    // scenario the original #2643 thread reported — the client bundle and the
-    // server disagreeing on the included-credit figure — is no longer possible
-    // for ANY plan object: MONEY_MODEL_V2_ACTIVE is a compile-time constant
-    // embedded identically in every process, so there is no divergent number
-    // left for a dropped override to expose. withCreditsCents/withCreditOverrides
-    // remain correct and still exercised here, but are no longer load-bearing
-    // for that specific defect.
-    const patched = withCreditsCents(PLANS.pro, 900);
+    // rather than some cached/memoized copy of the original. 777 is not a figure
+    // PLANS.pro resolves to, so a dropped patch cannot pass vacuously.
+    const patched = withCreditsCents(PLANS.pro, 777);
     render(<PlanCard plan={patched} currentTier="free" />);
-    expect(screen.getByTestId('plan-included-credits').textContent).toBe('900 credits included each month');
+    expect(screen.getByTestId('plan-included-credits').textContent).toBe('777 credits included each month');
     // And an untouched plan is provably unaffected by the same call.
     render(<PlanCard plan={PLANS.free} currentTier="free" />);
     expect(screen.getAllByTestId('plan-included-credits')[1].textContent).toMatch(/^[0-9,]+ credits to start$/);

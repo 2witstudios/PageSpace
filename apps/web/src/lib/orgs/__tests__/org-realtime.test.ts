@@ -22,6 +22,16 @@ describe('orgChangeRefreshes', () => {
     expect(matches(undefined, 'policy', '/api/orgs')).toBe(false);
   });
 
+  it('X-4 (partial) a rename or a deleted org refreshes my org list, so the picker and crumb never show a stale or gone org', () => {
+    expect(matches(undefined, 'profile', '/api/orgs')).toBe(true);
+    expect(matches(undefined, 'deleted', '/api/orgs')).toBe(true);
+  });
+
+  it('X-4 (partial) a sent or revoked invitation refreshes the viewed org (pending invites), not my org list', () => {
+    expect(matches('o1', 'invitations', '/api/orgs/o1/invitations')).toBe(true);
+    expect(matches(undefined, 'invitations', '/api/orgs')).toBe(false);
+  });
+
   it('ignores non-string keys', () => {
     expect(matches('o1', 'policy', ['/api/orgs/o1'])).toBe(false);
   });

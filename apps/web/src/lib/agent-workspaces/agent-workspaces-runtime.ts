@@ -110,6 +110,7 @@ import {
   type ClaimConversationOutcome,
   type ClaimConversationInSessionDeps,
 } from '@/lib/agent-workspaces/claim-conversation-in-workspace';
+import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 export { isCodeExecutionEnabled };
 
@@ -175,10 +176,10 @@ function buildAccessDeps(): AgentSessionAccessDeps {
 }
 
 export async function checkSessionAccess(
-  requesterId: string,
+  requester: AccessActor,
   workspaceId: string,
 ): Promise<AgentSessionAccessCheck> {
-  return checkAgentSessionAccess({ requesterId, workspaceId, deps: buildAccessDeps() });
+  return checkAgentSessionAccess({ requester, workspaceId, deps: buildAccessDeps() });
 }
 
 /**
@@ -189,14 +190,15 @@ export async function checkSessionAccess(
  * hands them to `decideAgentSessionAccess`; no extra rule exists here.
  */
 export async function checkAccessForSubject(
-  requesterId: string,
+  requester: AccessActor,
   subject: { ownerId: string; driveId: string | null },
 ): Promise<AgentSessionAccessCheck> {
+  const requesterId = requester.userId;
   const deps = buildAccessDeps();
   const driveMembership =
     subject.driveId === null
       ? null
-      : await deps.resolveDriveMembership({ userId: requesterId, driveId: subject.driveId });
+      : await deps.resolveDriveMembership({ actor: requester, driveId: subject.driveId });
   return decideAgentSessionAccess({
     requesterId,
     session: subject,
@@ -205,11 +207,11 @@ export async function checkAccessForSubject(
 }
 
 export async function checkSessionEndAccess(
-  requesterId: string,
+  requester: AccessActor,
   workspaceId: string,
 ): Promise<AgentSessionAccessCheck> {
   return checkAgentSessionEndAccess({
-    requesterId,
+    requester,
     workspaceId,
     deps: buildAccessDeps(),
   });
@@ -254,8 +256,8 @@ export async function checkSessionEndAccess(
 async function admitConversationNode(input: {
   conversationId: string;
   workspaceId: string;
-  /** The acting HUMAN, for the binding gate inside the write. */
-  actingUserId: string;
+  /** The acting HUMAN's credential: a NEW binding is gated on their access (sign-in policy included). */
+  actor: AccessActor;
   excludeTargetId?: string;
   /**
    * WHERE the caller wants it, when a human picked a pane. Only a preference —
@@ -273,7 +275,7 @@ async function admitConversationNode(input: {
 }): Promise<AdmitConversationOutcome> {
   const result = await applyWorkspaceMembershipWrite({
     workspaceId: input.workspaceId,
-    actingUserId: input.actingUserId,
+    actor: input.actor,
     run: (nodes) =>
       admit(nodes, {
         target: { kind: 'chat', id: input.conversationId },
@@ -330,7 +332,7 @@ async function admitConversationNode(input: {
  * about to write, inside one locked transaction, so there is no longer a count
  * that could be read here and acted on a moment later.
  */
-function buildClaimDeps(actingUserId: string): ClaimConversationInSessionDeps<DbExecutor> {
+function buildClaimDeps(actor: AccessActor): ClaimConversationInSessionDeps<DbExecutor> {
   return {
     findConversation: async (conversationId) => {
       const row = await conversationRepository.getConversation(conversationId);
@@ -353,7 +355,7 @@ function buildClaimDeps(actingUserId: string): ClaimConversationInSessionDeps<Db
       const row = await findSessionRecord(workspaceId);
       return row ? { driveId: row.driveId, endedAt: row.endedAt } : null;
     },
-    admitConversation: (input) => admitConversationNode({ ...input, actingUserId }),
+    admitConversation: (input) => admitConversationNode({ ...input, actor }),
   };
 }
 
@@ -420,12 +422,14 @@ async function reopenEndedSessionListing(workspaceId: string): Promise<void> {
  */
 export async function claimConversationInSession(input: {
   conversationId: string;
-  userId: string;
+  /** The caller's credential; its user is the owner the pure decision checks. */
+  actor: AccessActor;
   workspaceId: string;
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<ClaimConversationOutcome> {
-  return claimConversationInSessionWith(buildClaimDeps(input.userId), input);
+  const { actor, ...rest } = input;
+  return claimConversationInSessionWith(buildClaimDeps(actor), { ...rest, userId: actor.userId });
 }
 
 /**
@@ -447,7 +451,8 @@ export async function claimConversationInSession(input: {
  */
 export async function createConversationInSession(input: {
   conversationId: string;
-  userId: string;
+  /** The caller's credential; its user owns the conversation created. */
+  actor: AccessActor;
   /** null = a global-assistant conversation. */
   agentPageId: string | null;
   workspaceId: string;
@@ -461,17 +466,25 @@ export async function createConversationInSession(input: {
   /** The pane a human picked into — see `AdmitConversationInput.activeNodeId`. */
   activeNodeId?: string;
 }): Promise<void> {
+  // The row is inserted inside the membership write's transaction, so its `created` event waits for that commit:
+  // emitted earlier, a sidebar re-reads the listing before the thread is in it and stays stale until its poll.
+  const afterCommit: Array<() => void> = [];
+  const queue = (emit: () => void) => {
+    afterCommit.push(emit);
+  };
   await createConversationInSessionWith<DbExecutor>(
     {
-      ...buildClaimDeps(input.userId),
+      ...buildClaimDeps(input.actor),
       createPageConversation: ({ conversationId, userId, agentPageId, title }, tx) =>
         conversationRepository.createConversation(conversationId, userId, agentPageId, {
           title: title ?? undefined,
           executor: tx,
+          afterCommit: queue,
         }),
       createGlobalConversation: async ({ conversationId, userId, title }, tx) => {
         await resolveOrCreateConversation(userId, conversationId, tx, {
           title: title ?? undefined,
+          afterCommit: queue,
         });
       },
       findConversationIn: async (conversationId, tx) => {
@@ -487,8 +500,9 @@ export async function createConversationInSession(input: {
         return row ?? null;
       },
     },
-    input,
+    { ...input, userId: input.actor.userId },
   );
+  for (const emit of afterCommit) emit();
 }
 
 /**
@@ -548,8 +562,8 @@ function conversationOwnerRead() {
  */
 export async function closeConversationInSession(input: {
   conversationId: string;
-  /** The CALLER. The pure decision refuses a conversation this user does not own. */
-  userId: string;
+  /** The CALLER's credential. The pure decision refuses a conversation its user does not own. */
+  actor: AccessActor;
   workspaceId: string;
 }): Promise<CloseConversationOutcome> {
   return closeConversationInSessionWith(
@@ -558,7 +572,7 @@ export async function closeConversationInSession(input: {
       dismissConversation: async ({ conversationId, workspaceId }) => {
         const result = await applyWorkspaceMembershipWrite({
           workspaceId,
-          actingUserId: input.userId,
+          actor: input.actor,
           run: (nodes) => expel(nodes, { target: { kind: 'chat', id: conversationId } }),
         });
         // POSITIVELY narrowed, in a pure function beside the type it produces
@@ -570,7 +584,7 @@ export async function closeConversationInSession(input: {
       // it. See `dismissConversation`'s doc in
       // `close-conversation-in-workspace.ts`.
     },
-    input,
+    { conversationId: input.conversationId, workspaceId: input.workspaceId, userId: input.actor.userId },
   );
 }
 
@@ -582,8 +596,8 @@ export async function closeConversationInSession(input: {
  */
 export async function reopenConversationInSession(input: {
   conversationId: string;
-  /** The CALLER. The pure decision refuses a conversation this user does not own. */
-  userId: string;
+  /** The CALLER's credential. The pure decision refuses a conversation its user does not own. */
+  actor: AccessActor;
   workspaceId: string;
 }): Promise<ReopenConversationOutcome> {
   return reopenConversationInSessionWith(
@@ -598,7 +612,7 @@ export async function reopenConversationInSession(input: {
         const result = await admitConversationNode({
           conversationId,
           workspaceId,
-          actingUserId: input.userId,
+          actor: input.actor,
         });
         switch (result) {
           case 'admitted':
@@ -618,7 +632,7 @@ export async function reopenConversationInSession(input: {
       },
       announceReopened: (row) => emitConversationLifecycle('reopened', row),
     },
-    input,
+    { conversationId: input.conversationId, workspaceId: input.workspaceId, userId: input.actor.userId },
   );
 }
 
@@ -683,11 +697,11 @@ export type ExpelConversationOutcome = 'expelled' | 'refused';
 export async function expelConversationFromSession(input: {
   conversationId: string;
   workspaceId: string;
-  actingUserId: string;
+  actor: AccessActor;
 }): Promise<ExpelConversationOutcome> {
   const result = await applyWorkspaceMembershipWrite({
     workspaceId: input.workspaceId,
-    actingUserId: input.actingUserId,
+    actor: input.actor,
     run: (nodes) => expel(nodes, { target: { kind: 'chat', id: input.conversationId } }),
   });
   if (result.status === 'ok') return 'expelled';
@@ -738,13 +752,13 @@ export async function expelConversationFromSession(input: {
  */
 export async function expelAfterDelete(input: {
   conversationId: string;
-  actingUserId: string;
+  actor: AccessActor;
 }): Promise<void> {
-  const { conversationId, actingUserId } = input;
+  const { conversationId, actor } = input;
   try {
     const workspaceId = await findWorkspaceOfConversation(conversationId);
     if (workspaceId === null) return;
-    await expelConversationFromSession({ conversationId, workspaceId, actingUserId });
+    await expelConversationFromSession({ conversationId, workspaceId, actor });
   } catch (error) {
     loggers.api.error('Post-delete expel failed; a pane may still be bound to a deleted thread', undefined, {
       conversationId,
@@ -771,7 +785,8 @@ export async function countOpenConversationsForSession(workspaceId: string): Pro
 }
 
 export async function spawnSession(input: {
-  userId: string;
+  /** The spawning caller, who owns the session. */
+  actor: AccessActor;
   driveId: string | null;
   /** The persistent environment to run inside, or null for the ordinary ephemeral session. */
   envId?: string | null;
@@ -779,7 +794,7 @@ export async function spawnSession(input: {
 }): Promise<SpawnAgentSessionResult> {
   const store = await getAgentSessionStore();
   return spawnAgentSession({
-    ownerId: input.userId,
+    owner: input.actor,
     driveId: input.driveId,
     envId: input.envId,
     name: input.name,
@@ -859,11 +874,11 @@ export type EnsureGlobalSandboxSessionResult =
  */
 export async function ensureGlobalSandboxSession(
   conversationId: string,
-  userId: string,
+  actor: AccessActor,
   /** Label to derive the workspace's name from; defaults to "Global Assistant". */
   baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, null, baseLabel);
+  return ensureConversationSession(conversationId, actor, null, baseLabel);
 }
 
 /**
@@ -875,20 +890,21 @@ export async function ensureGlobalSandboxSession(
  */
 export async function ensureDriveSessionForConversation(
   conversationId: string,
-  userId: string,
+  actor: AccessActor,
   driveId: string,
   /** Label to derive the workspace's name from — normally the agent's title. */
   baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
-  return ensureConversationSession(conversationId, userId, driveId, baseLabel);
+  return ensureConversationSession(conversationId, actor, driveId, baseLabel);
 }
 
 async function ensureConversationSession(
   conversationId: string,
-  userId: string,
+  actor: AccessActor,
   driveId: string | null,
   baseLabel?: string,
 ): Promise<EnsureGlobalSandboxSessionResult> {
+  const userId = actor.userId;
   // NAME IT. This is the THIRD minting path and by far the most travelled one:
   // it is what a plain `spawn_session` (no `workspace` argument) reaches, and
   // what the first `bash`/file tool call in a global chat reaches. The other
@@ -916,7 +932,7 @@ async function ensureConversationSession(
       return [] as string[];
     });
   const name = nextUniqueSessionName(fallbackLabel, existingNames);
-  const spawned = await spawnSession({ userId, driveId, name });
+  const spawned = await spawnSession({ actor, driveId, name });
   if (!spawned.ok) {
     // `session_limit_reached` is a distinct, actionable denial ("end an
     // existing session first") the caller already knows how to surface —
@@ -947,7 +963,7 @@ async function ensureConversationSession(
   try {
     claimed = await claimConversationInSession({
       conversationId,
-      userId,
+      actor,
       workspaceId: spawned.session.id,
     });
   } catch (error) {
@@ -1188,11 +1204,11 @@ export async function listSessionConversationsBulk(
 /**
  * Provision (or resume/adopt) a session row's sandbox — the ONE code path both
  * the web app and the realtime bridge use, per `agent-workspace-sprite.ts`'s CAS
- * doc. `requesterId` is who this provision authorizes as.
+ * doc. `requester` is who this provision authorizes as.
  */
 export async function provisionSessionSandbox(
   row: AgentSessionRecord,
-  requesterId: string,
+  requester: AccessActor,
 ): Promise<EnsureAgentSessionSandboxResult> {
   const [store, host, tenant] = await Promise.all([
     getAgentSessionStore(),
@@ -1210,7 +1226,7 @@ export async function provisionSessionSandbox(
   const result = await ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
-    actor: { userId: requesterId, tenantId: tenant.tenantId },
+    actor: { access: requester, tenantId: tenant.tenantId },
     deps: {
       store,
       host,
@@ -1239,7 +1255,7 @@ export async function provisionSessionSandbox(
       // is inside the shared `ensureAgentSessionSandbox`, so this seam is the
       // only thing this call site has to supply for it.
       ensureEnvSandbox: ({ envId, intent }) =>
-        ensureEnvSandboxForSession({ envId, intent, requesterId }),
+        ensureEnvSandboxForSession({ envId, intent, requester }),
       measureSessionStorage: async ({ workspaceId, handle }) => {
         await refreshSessionStorageMeasurement({
           handle,
@@ -1369,7 +1385,8 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
     // an admission that reopened this session between the stamp above and the
     // write below keeps its tree instead of having it wiped out from under it.
     // See the flag's own doc for the ghost that produces.
-    const destroyed = await destroyWorkspaceTree({ workspaceId, actingUserId: ownerId, requireEnded: true });
+    // Binds nothing, so no credential is judged: the owner, as the system teardown it is, reaching no drive.
+    const destroyed = await destroyWorkspaceTree({ workspaceId, actor: automationActor(ownerId, 'session-end-teardown', inDrives()), requireEnded: true });
     if (destroyed.status === 'refused' && destroyed.code === 'session_reopened') {
       // Not a failure: the session is live again because someone put work into
       // it, and the tree that work created is the one that should stand.

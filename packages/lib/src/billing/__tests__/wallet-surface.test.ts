@@ -7,6 +7,7 @@ import {
   fundedByCopy,
   spendMeterPercent,
   spendRowLabel,
+  spendRowDetail,
   spendFromRowCopy,
   orgDriveSummaryCopy,
 } from '../wallet-surface';
@@ -28,9 +29,11 @@ const facts: DriveWalletFacts = {
     donationsEnabled: true,
     defaultSpendSource: 'drive_wallet',
     overshootChoice: null,
+    guestSpendEnabled: false,
+    parentStatus: 'active',
   },
   myCap: { dailyCapCents: 2000, monthlyCapCents: null, spentTodayCents: 2000, spentThisMonthCents: 2000 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645 }],
+  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: 645, spentTodayCents: 0, viaAutomationsCents: 0, automations: [] }],
   pool: { walletId: 'w-pool', availableCents: 9000, outstandingChildAllocationsCents: 1200 },
 };
 
@@ -120,10 +123,17 @@ describe('walletPeriodCopy, fundedByCopy, spendMeterPercent, spendRowLabel', () 
     expect(spendMeterPercent(10, 0)).toBe(0);
   });
 
-  it('SPEND-10 (partial) a spend row is the person by name; the drive\'s own automations (before D-OW-34) read as automations', () => {
-    expect(spendRowLabel({ consumerKey: 'user:u1', displayName: 'Priya Nair' })).toBe('Priya Nair');
-    expect(spendRowLabel({ consumerKey: 'user:u1', displayName: null })).toBe('Former member');
-    expect(spendRowLabel({ consumerKey: 'drive:d1', displayName: null })).toBe('Automations');
+  it('SPEND-10 (partial) a spend row is the person by name, or a former member', () => {
+    expect(spendRowLabel({ kind: 'member', displayName: 'Priya Nair' })).toBe('Priya Nair');
+    expect(spendRowLabel({ kind: 'member', displayName: null })).toBe('Former member');
+  });
+
+  it('SPEND-10 (partial) an automation row is the workflow by name (or a deleted automation) and says who it runs as', () => {
+    expect(spendRowLabel({ kind: 'automation', displayName: 'Weekly digest' })).toBe('Weekly digest');
+    expect(spendRowLabel({ kind: 'automation', displayName: null })).toBe('Deleted automation');
+    expect(spendRowDetail({ kind: 'automation', creatorName: 'Priya Nair' })).toBe('Automation · runs as Priya Nair');
+    expect(spendRowDetail({ kind: 'automation', creatorName: null })).toBe('Automation');
+    expect(spendRowDetail({ kind: 'member' })).toBeNull();
   });
 });
 
@@ -131,10 +141,10 @@ describe('spendFromRowCopy: a drive wallet in Settings › Usage › Wallets', (
   it('UI-10 (partial) an over or paused wallet you spend from says what happens to your calls', () => {
     expect(spendFromRowCopy({ status: 'active', orgName: 'Northwind Labs' })).toBe('Northwind Labs');
     expect(spendFromRowCopy({ status: 'over', orgName: 'Northwind Labs' })).toBe("Northwind Labs · over budget, your calls follow the drive's fallback rule");
-    expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls move to the next source');
+    expect(spendFromRowCopy({ status: 'paused', orgName: 'Northwind Labs' })).toBe('Northwind Labs · paused by whoever funds it, your calls follow the drive\'s fallback rule');
     expect(spendFromRowCopy({ status: 'active', orgName: null })).toBe('Shared drive');
     expect(spendFromRowCopy({ status: 'active', orgName: null, fundedByMe: true })).toBe('From your credits');
-    expect(spendFromRowCopy({ status: 'paused', orgName: null, fundedByMe: true })).toBe('From your credits · paused by whoever funds it, your calls move to the next source');
+    expect(spendFromRowCopy({ status: 'paused', orgName: null, fundedByMe: true })).toBe('From your credits · paused by whoever funds it, your calls follow the drive\'s fallback rule');
   });
 });
 

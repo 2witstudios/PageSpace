@@ -26,6 +26,7 @@ import {
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
 import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const nativeAuthSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -197,7 +198,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple native');
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -217,6 +221,7 @@ export async function POST(req: Request) {
 
     // Create device token
     const { deviceToken } = await validateOrCreateDeviceToken({
+      authentication,
       providedDeviceToken: undefined,
       userId: user.id,
       deviceId,
@@ -287,7 +292,8 @@ export async function POST(req: Request) {
       invitedPageId: inviteResult.invitedPageId,
       invitedConnectionId: inviteResult.connectionId,
       ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
-      ...(returnUrl && { returnUrl }),
+      // ORG-3: an org invitation lands on the org hub once joined, or back on its invite page when refused.
+      ...((inviteResult.orgLandingPath ?? returnUrl) && { returnUrl: inviteResult.orgLandingPath ?? returnUrl }),
       user: {
         id: user.id,
         name: user.name,

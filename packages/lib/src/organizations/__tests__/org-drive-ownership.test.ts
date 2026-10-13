@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  canCreateOrgDrive,
   decideMoveDriveIntoOrg,
   decideMoveDriveOutOfOrg,
   decideCreateDriveInOrg,
@@ -159,6 +160,15 @@ describe('decideCreateDriveInOrg', () => {
       status: 403,
     });
     expect(decideCreateDriveInOrg({ actorOrgRole: 'ADMIN', creationPolicy: 'admins' })).toEqual({ ok: true });
+  });
+});
+
+describe('canCreateOrgDrive (what the create-drive dialog offers)', () => {
+  it('DRV-3 (partial) offers exactly the orgs decideCreateDriveInOrg admits, and none while the org is lapsed', () => {
+    expect(canCreateOrgDrive({ role: 'MEMBER', creationPolicy: 'members', lapsed: false })).toBe(true);
+    expect(canCreateOrgDrive({ role: 'MEMBER', creationPolicy: 'admins', lapsed: false })).toBe(false);
+    expect(canCreateOrgDrive({ role: 'ADMIN', creationPolicy: 'admins', lapsed: false })).toBe(true);
+    expect(canCreateOrgDrive({ role: 'OWNER', creationPolicy: 'members', lapsed: true })).toBe(false);
   });
 });
 

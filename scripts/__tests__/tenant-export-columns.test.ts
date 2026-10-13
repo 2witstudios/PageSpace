@@ -132,6 +132,31 @@ describe('tenant export column registry', () => {
     },
   );
 
+  it('inserts every table after the carried tables its carried foreign keys point at', () => {
+    // TABLE_IMPORT_ORDER is the INSERT sequence, inside one BEGIN/COMMIT whose
+    // FKs are not deferrable, so a forward reference aborts the whole import.
+    // Exempt: a table's references to itself (resolved at the end of its own
+    // multi-row INSERT) and `deferredColumns` (a trailing UPDATE).
+    const position = new Map<string, number>(TABLE_IMPORT_ORDER.map((t, i) => [t, i]));
+    const forward: string[] = [];
+    for (const table of TABLE_IMPORT_ORDER) {
+      const pgTable = TABLES.get(table);
+      if (!pgTable) continue;
+      const carried = new Set(exportColumns(table));
+      for (const fk of getTableConfig(pgTable).foreignKeys) {
+        const ref = fk.reference();
+        const target = getTableName(ref.foreignTable);
+        const targetAt = position.get(target);
+        if (target === table || targetAt === undefined) continue;
+        if (!ref.columns.some((c) => carried.has(c.name))) continue;
+        if (targetAt > (position.get(table) ?? 0)) {
+          forward.push(`${table}.${ref.columns.map((c) => c.name).join(',')} → ${target}`);
+        }
+      }
+    }
+    expect(forward, 'reorder TABLE_IMPORT_ORDER, or carry the column as deferredColumns').toEqual([]);
+  });
+
   it('states a reason for every deliberately excluded column', () => {
     for (const table of TABLE_IMPORT_ORDER) {
       for (const [column, reason] of Object.entries(TENANT_EXPORT_COLUMNS[table].excluded ?? {})) {
@@ -159,14 +184,14 @@ describe('tenant export column registry', () => {
     // fails with the column, not just a set difference.
     const pins: Partial<Record<ExportTableName, string[]>> = {
       users: ['emailBidx', 'imageGenerationModel', 'activeUploads'],
-      drives: ['publishSubdomain', 'homePageId', 'not_found_page_id', 'publish_default_og_image_url', 'publish_favicon_url'],
+      drives: ['publishSubdomain', 'homePageId', 'not_found_page_id', 'publish_default_og_image_url', 'publish_favicon_url', 'orgId'],
       pages: ['toolExposureMode', 'sandboxEnabled', 'userScopedAccess', 'description', 'isPrivate', 'createdBy'],
       channel_messages: ['editedAt', 'parentId', 'replyCount', 'lastReplyAt', 'mirroredFromId', 'quotedMessageId'],
       // `workspaceId` and `closedInWorkspaceAt` were pinned here too. Both
       // columns are dropped: a thread's workspace is an `agent_workspace_nodes`
       // row, so the pin moved off this table and the decision about the table
       // that replaced it is the one the registry now records as open.
-      conversations: ['rev', 'isShared', 'agentPageId'],
+      conversations: ['rev', 'isShared', 'agentPageId', 'chosenWalletId'],
       messages: ['sourceAgentId'],
       // The terminal half of a session. `coldTail` is the one carried column
       // that is irreplaceable user OUTPUT rather than configuration: it is

@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import type { UserId } from '@pagespace/lib/agent-accounts/grant';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import { approveAgentAccountRequestBody } from '@/lib/agent-accounts/account-request-schemas';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
 
   try {
-    const result = await authority.approveRequest({ actorUserId: auth.userId as UserId, sessionId: auth.sessionId, accountId: parsed.data.accountId, requestDigest: parsed.data.requestDigest });
+    const result = await authority.approveRequest({ actor: actorFromAuth(auth), sessionId: auth.sessionId, accountId: parsed.data.accountId, requestDigest: parsed.data.requestDigest });
     if (!result.ok) return NextResponse.json({ error: result.reason }, { status: 404 });
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'agent_account_approval', resourceId: result.approvalId });
     return NextResponse.json({ approvalId: result.approvalId, expiresAt: result.expiresAt }, { status: 201 });

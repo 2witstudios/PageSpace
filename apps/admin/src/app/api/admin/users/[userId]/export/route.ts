@@ -1,5 +1,6 @@
 import { withAdminAuth } from '@/lib/auth/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { OPERATOR_EXPORT_GATE } from '@pagespace/lib/compliance/export/export-sign-in-gate';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -20,6 +21,9 @@ export const GET = withAdminAuth<ExportRouteContext>(
       const data = await collectAllUserData(
         db as Parameters<typeof collectAllUserData>[0],
         userId,
+        // The operator fulfils a verified request with no subject credential: nothing is withheld under an org's
+        // sign-in policy, which governs how a person signs in (SEC-2/3).
+        OPERATOR_EXPORT_GATE,
       );
 
       if (!data) {

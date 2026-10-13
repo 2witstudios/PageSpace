@@ -319,6 +319,20 @@ export function computeMonthlyRefill(
   return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
 }
 
+/**
+ * The debt a refill FORGIVES (computeMonthlyRefill clamps `monthlyRemainingCents` at 0): what is
+ * left of the debt once the carried balance and the new allowance have absorbed what they can.
+ * Ledgered as its own row (debt_forgiven), so the wallet's books still balance (WAL-5).
+ */
+export function forgivenAtRefillCents(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): number {
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
+  return Math.max(0, Math.max(0, currentDebtCents) - currentRemainingCents - allowance);
+}
+
 export interface PaymentToDebtResult {
   /** Remaining debt after the payment (>= 0). */
   debtCents: number;
@@ -427,12 +441,14 @@ export interface OrphanUsageRow {
   source?: AIUsageSource | string | null;
   /**
    * The wallet the call was charged to, recorded on the usage row (WAL-5). Re-settled there,
-   * so an org pool's compute is never re-billed to the recorded person's own wallet. Null on
-   * rows that named none (they charge the personal root, as before wallets).
+   * so an org pool's compute is never re-billed to the recorded person's own wallet. A row that
+   * names none is never charged (WAL-6b fail closed): it is left unattributed for reconciliation.
    */
   walletId?: string | null;
   /** The usage row's metadata, whose explicit compute `spendKind` is carried to the re-settle. */
   metadata?: unknown;
+  /** SPEND-10: the automation the call ran for (aiUsageLogs.automation_ref), carried to the re-settle. */
+  automationRef?: string | null;
 }
 
 export type BackfillAction =
@@ -443,9 +459,61 @@ export type BackfillAction =
       userId: string;
       costDollars: number;
       markupBpsOverride?: number;
-      walletId?: string;
+      walletId: string;
       spendKind: SpendKind;
-    };
+      /** WAL-6b: the chosen wallet a drive rule moved the call off (usage metadata.fallbackFromWalletId). */
+      fallbackFromWalletId?: string;
+      /** SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it. */
+      automationRef?: string;
+    }
+  /**
+   * WAL-6b fail closed: a usage row that names no wallet. Nothing chose a wallet for it, so no
+   * wallet is charged (never the recorded person's own by default); it is logged and left for
+   * reconciliation.
+   */
+  | { kind: 'unattributed_orphan'; aiUsageLogId: string; userId: string; costDollars: number };
+
+/** The chosen wallet a fallback moved a call off, as its usage row's metadata records it (WAL-6b); else null. */
+export function orphanFallbackFromWalletId(metadata: unknown): string | null {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { fallbackFromWalletId?: unknown }).fallbackFromWalletId : undefined;
+  return typeof marked === 'string' && marked.length > 0 ? marked : null;
+}
+
+/** What a live hold says about its call: the wallet it reserves on and the fallback origin it records. */
+export interface HoldSettleFacts {
+  walletId: string;
+  fallbackFromWalletId: string | null;
+}
+
+export type SettleTarget =
+  | { kind: 'charge'; walletId: string; fallbackFromWalletId: string | null }
+  | { kind: 'mismatch'; holdWalletId: string; requestedWalletId: string }
+  | { kind: 'unattributed' };
+
+/**
+ * The wallet a settle charges (WAL-5, WAL-6b). A live hold names it; a caller naming another
+ * wallet than its hold is refused (neither is charged). With no live hold, the wallet the caller
+ * names. With neither, the settle FAILS CLOSED (`unattributed`): no wallet was chosen for this
+ * charge, so none is charged — never the person's own credits by default. The fallback origin
+ * comes from the hold, else from what the caller carried.
+ */
+export function decideSettleTarget(input: {
+  hold: HoldSettleFacts | null;
+  requestedWalletId: string | undefined;
+  carriedFallbackFromWalletId: string | null | undefined;
+}): SettleTarget {
+  const carried = input.carriedFallbackFromWalletId ?? null;
+  if (input.hold) {
+    if (input.requestedWalletId !== undefined && input.requestedWalletId !== input.hold.walletId) {
+      return { kind: 'mismatch', holdWalletId: input.hold.walletId, requestedWalletId: input.requestedWalletId };
+    }
+    return { kind: 'charge', walletId: input.hold.walletId, fallbackFromWalletId: input.hold.fallbackFromWalletId ?? carried };
+  }
+  if (typeof input.requestedWalletId === 'string' && input.requestedWalletId.length > 0) {
+    return { kind: 'charge', walletId: input.requestedWalletId, fallbackFromWalletId: carried };
+  }
+  return { kind: 'unattributed' };
+}
 
 /**
  * What an orphan usage row's spend was FOR, read from the EXPLICIT marker its writer stamped
@@ -481,17 +549,23 @@ export function computeBackfillActions(
   return [
     ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
     ...orphans.map((row): BackfillAction => {
+      if (typeof row.walletId !== 'string' || row.walletId.length === 0) {
+        return { kind: 'unattributed_orphan', aiUsageLogId: row.aiUsageLogId, userId: row.userId, costDollars: row.costDollars };
+      }
       const markupBpsOverride = row.source
         ? markupBpsOverridesBySource[row.source as AIUsageSource]
         : undefined;
+      const fallbackFromWalletId = orphanFallbackFromWalletId(row.metadata);
       return {
         kind: 'apply_orphan',
         aiUsageLogId: row.aiUsageLogId,
         userId: row.userId,
         costDollars: row.costDollars,
         ...(markupBpsOverride !== undefined ? { markupBpsOverride } : {}),
-        ...(typeof row.walletId === 'string' && row.walletId.length > 0 ? { walletId: row.walletId } : {}),
+        walletId: row.walletId,
         spendKind: orphanSpendKind(row.metadata),
+        ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
+        ...(row.automationRef ? { automationRef: row.automationRef } : {}),
       };
     }),
   ];
@@ -541,44 +615,6 @@ export function computeCostDrift(input: CostDriftInput, markupBps: number): Cost
     Math.sign(delta) * chargeMillicents(dollarsFromCents(Math.abs(delta)), markupBps);
 
   return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
-}
-
-export interface LedgerDerivedInput {
-  /** SUM(amountCents) of grant/purchase rows — credits added to buckets. */
-  grantCents: number;
-  /** SUM(|appliedCents|) of usage rows — what spend drew out of the buckets. */
-  appliedUsageCents: number;
-  /** SUM(appliedCents) of adjustment rows (signed): reconcile corrections that moved buckets. */
-  adjustmentCents: number;
-  /** The materialized personal-wallet buckets: monthlyRemaining + topupRemaining. */
-  materializedSpendableCents: number;
-  /** The materialized debt (reported alongside; not part of the bucket equation). */
-  debtCents: number;
-}
-
-export interface BalanceDriftResult {
-  /** Buckets implied by the ledger: grants − spend + applied corrections. */
-  expectedSpendableCents: number;
-  /** materialized − expected. Non-zero beyond tolerance flags a divergence. */
-  driftCents: number;
-  flagged: boolean;
-}
-
-/**
- * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
- * (grants − usage drawn from buckets + applied reconcile corrections). This is a
- * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: with rollover, monthly
- * credits carry forward with no ledger row at the boundary, and renewal debt-netting
- * absorbs debt into monthly — both legitimately break expected = materialized at period boundaries.
- * So the tolerance is generous and a flag means "look at this account", not "the books
- * are wrong". Pure; the shell supplies the SQL aggregates.
- */
-export function computeBalanceDrift(input: LedgerDerivedInput, toleranceCents: number): BalanceDriftResult {
-  const expectedSpendableCents =
-    Math.round(input.grantCents) - Math.round(input.appliedUsageCents) + Math.round(input.adjustmentCents);
-  const driftCents = Math.round(input.materializedSpendableCents) - expectedSpendableCents;
-  const flagged = Math.abs(driftCents) > Math.max(0, Math.round(toleranceCents));
-  return { expectedSpendableCents, driftCents, flagged };
 }
 
 /**

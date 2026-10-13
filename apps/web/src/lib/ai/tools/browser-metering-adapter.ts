@@ -2,8 +2,9 @@
  * Metering for browser sessions — billed to the paying principal exactly
  * like a sandbox (G6a requirement; S3 R14), through the same primitives:
  *
- *  - the payer is `resolveSessionPayer` (the drive's payer, else the session's
- *    owner — never the acting user of a shared agent), the rule the sandbox
+ *  - the payer is `resolveSessionPayer` (the drive's payer, or the session's
+ *    owner for a driveless context; a drive that cannot be resolved has none and
+ *    refuses — never the acting user of a shared agent), the rule the sandbox
  *    and storage charge streams share. An org drive's payer is the org: the
  *    browser is held and settled on the org POOL (WAL-9), recorded under the
  *    session's owner, and a missing, paused or empty pool refuses it by name;
@@ -35,6 +36,8 @@ export type BrowserBilling = {
   readonly actorId: string;
   readonly agentPageId: string | null;
   readonly conversationId: string;
+  /** SPEND-10: the automation a run with no person present opened this browser for; null otherwise. */
+  readonly automationRef: string | null;
 };
 
 type BillingPrimitives = Pick<typeof defaultSandboxBillingDeps, 'resolveCharge' | 'gate' | 'releaseHold'> & {
@@ -51,10 +54,15 @@ const realPrimitives: BillingPrimitives = {
   settleWalletId: computeSettleWalletId,
 };
 
+/** Said when the browser's drive cannot be resolved, so there is no one to bill. Nothing started. */
+export const BROWSER_PAYER_UNRESOLVED = "This drive could not be found, so there is no one to bill and the browser was not started.";
+
 export function createBrowserMeter(primitives: BillingPrimitives = realPrimitives): BrowserMeter<BrowserBilling> {
   return {
     open: async ({ driveId, ownerId, actorId }) => {
       const charge = await primitives.resolveCharge({ driveId, ownerId, actorId });
+      // WAL-9: a drive that cannot be resolved has no payer — refused, never billed to a person.
+      if (charge === null) return { ok: false, reason: BROWSER_PAYER_UNRESOLVED };
       const gated = await primitives.gate({ charge });
       if (!gated.allowed) {
         // WAL-9: a missing, paused or empty org pool is named — never a fallback to a person.
@@ -95,6 +103,7 @@ export function createBrowserMeter(primitives: BillingPrimitives = realPrimitive
         duration: Math.round(activeSeconds * 1000),
         success: true,
         holdId: hold.holdId ?? undefined,
+        automationRef: billing.automationRef ?? undefined,
         markupBpsOverride: MACHINE_MARKUP_BPS,
         costSource: 'list_price',
         metadata: { type: 'browser_machine', activeSeconds, cpus: shape.cpus, memoryGB: shape.memoryGB, conversationId: billing.conversationId },

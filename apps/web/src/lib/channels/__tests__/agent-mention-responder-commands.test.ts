@@ -45,11 +45,13 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
   pageReadableByModel: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/services/drive-agent-service', () => ({
@@ -106,6 +108,7 @@ import type { CommandExecutionPlan } from '@/lib/ai/core/command-processor';
 import { pageReadableByModel } from '@/lib/ai/tools/actor-permissions';
 import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { triggerMentionedAgentResponses } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -118,7 +121,7 @@ const mockSendChannelExecute = channelTools.send_channel_message.execute as unkn
 const CMD_ID = 'tz4a98xxat96iws9zmbrgj3a';
 
 const baseParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   sourceMessageId: 'msg-1',
@@ -168,7 +171,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   it("resolves the command with the SENDER's permissions and the channel's drive context", async () => {
     mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses({ ...baseParams, driveId: 'drive-1' });
-    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, expect.objectContaining({ via: 'credential', userId: 'user-1' }), {
       driveId: 'drive-1',
     });
   });
@@ -176,7 +179,7 @@ describe('triggerMentionedAgentResponses — universal commands', () => {
   it('resolves with a null drive context when the channel has none', async () => {
     mockPlanCommandExecutions.mockResolvedValue([injectPlan]);
     await triggerMentionedAgentResponses(baseParams);
-    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, 'user-1', {
+    expect(mockPlanCommandExecutions).toHaveBeenCalledWith(baseParams.content, expect.objectContaining({ via: 'credential', userId: 'user-1' }), {
       driveId: null,
     });
   });
@@ -315,7 +318,7 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
   it('answers from loadHelpAnswerText instead of calling the model', async () => {
     await triggerMentionedAgentResponses(soloHelpParams);
 
-    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', null);
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), null);
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
     const [sendInput] = mockSendChannelExecute.mock.calls[0] as [{ content: string }];
@@ -330,7 +333,7 @@ describe('triggerMentionedAgentResponses — solo /help mention', () => {
 
   it('resolves the answer against the channel drive context', async () => {
     await triggerMentionedAgentResponses({ ...soloHelpParams, driveId: 'drive-1' });
-    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(mockLoadHelpAnswerText).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'drive-1');
   });
 
   it('still carries the "used" command-execution pill, without resolving the command at all', async () => {

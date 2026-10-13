@@ -17,6 +17,12 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   },
 }));
 
+// No org sign-in policy holds the caller back here: a refusal stays the route's own (D-OW-45 is proven elsewhere).
+vi.mock('@pagespace/lib/permissions/permissions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/permissions')>()),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),

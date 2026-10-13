@@ -122,15 +122,16 @@ async function bumpAttempts(aiUsageLogId: string): Promise<void> {
  * backfill pending sweep, an absent one is billed by its orphan sweep).
  *
  * Returns the wallet that base charge was billed to (WAL-5: reconciliation is keyed on
- * the wallet), or null when there is no base charge yet.
+ * the wallet), the automation it ran for (SPEND-10, so the correction stays attributed) and the
+ * fallback origin its claim recorded (WAL-6b), or null when there is no base charge yet.
  */
-async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null> {
+async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationRef: string | null; fallbackFromWalletId: string | null } | null> {
   const rows = await db
-    .select({ walletId: creditLedger.walletId })
+    .select({ walletId: creditLedger.walletId, automationRef: creditLedger.automationRef, fallbackFromWalletId: creditLedger.fallbackFromWalletId })
     .from(creditLedger)
     .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
     .limit(1);
-  return rows[0]?.walletId ?? null;
+  return rows[0] ?? null;
 }
 
 /**
@@ -144,7 +145,9 @@ async function usageLedgerWalletId(aiUsageLogId: string): Promise<string | null>
  */
 async function applyCorrection(
   userId: string,
-  walletId: string,
+  // WAL-6b: `fallbackFromWalletId` is the chosen wallet the call fell back off, so an undercharge's overshoot lands
+  // where the original settle's would have — never on the consumer who did not choose own credits.
+  charge: { walletId: string; automationRef: string | null; fallbackFromWalletId: string | null },
   drift: ReturnType<typeof computeCostDrift>,
   aiUsageLogId: string,
   generationIds: string[],
@@ -153,6 +156,7 @@ async function applyCorrection(
   // Signed nominal cents for the adjustment row: positive delta = more spend = negative
   // amount; negative delta = refund = positive amount. `|| 0` avoids storing -0.
   const amountCents = -Math.round(drift.deltaChargeMillicents / 1000) || 0;
+  const { walletId, fallbackFromWalletId } = charge;
 
   return db.transaction(async (tx) => {
     const claimed = await tx
@@ -171,6 +175,7 @@ async function applyCorrection(
         reconcileGenerationKey: reconcileKey,
         markupBps: MARKUP_BPS,
         consumeStatus: 'applied',
+        automationRef: charge.automationRef,
       })
       .onConflictDoNothing({
         target: creditLedger.reconcileGenerationKey,
@@ -188,7 +193,7 @@ async function applyCorrection(
       // wallet, allocation from the parent, then the locked funding legs, then overshoot
       // per D20.2 — never a direct write of topupRemainingCents past the legs.
       // Rollover: carry balance is always spendable; no period-expiry exclusion here.
-      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId);
+      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId, { userId, spendKind: 'ai' }, fallbackFromWalletId);
       // No balance row to move (rare — reconcile runs on billed rows). Record the
       // correction row with no applied delta so a later run doesn't re-correct.
       if (!charged) {
@@ -196,6 +201,14 @@ async function applyCorrection(
         return false;
       }
       appliedCents = -charged.appliedCents || 0; // negative: decremented
+      // WAL-5: uncovered cost lands as debt (on this wallet or the one its funder chose); ledger it
+      // there, as the settle does, so every wallet still reconciles against its own rows.
+      if (charged.debt) {
+        await tx.insert(creditLedger).values({
+          userId, walletId: charged.debt.walletId, entryType: 'adjustment', bucket: 'monthly',
+          amountCents: -charged.debt.cents, aiUsageLogId, consumeStatus: 'applied', spendKind: 'ai',
+        });
+      }
       // WAL-2: an undercharge on a seat is charged like a settle, so it is capped like one.
       // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
       await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
@@ -204,7 +217,7 @@ async function applyCorrection(
       // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive
       // wallet, the call's recorded draws in the inverse order, legs included.
       const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
-      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId); // positive: credited back
+      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId, { userId, spendKind: 'ai' }); // positive: credited back
       // WAL-2: a refund on a seat gives back forgiveness that no longer applies, window by window.
       // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
       await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
@@ -225,11 +238,11 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
   }
 
   // Defer until the base usage charge exists: correcting drift before the base is billed
-  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerWalletId).
+  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerCharge).
   // Bump attempts so a row whose base never materializes eventually drops to 'unavailable'
   // rather than retrying forever. No /generation fetch is spent while deferred.
-  const walletId = await usageLedgerWalletId(row.id);
-  if (walletId === null) {
+  const charge = await usageLedgerCharge(row.id);
+  if (charge === null) {
     if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
       await markStatus(row.id, 'unavailable', now);
       return 'unavailable';
@@ -269,7 +282,7 @@ async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Da
     return 'reconciled';
   }
 
-  const applied = await applyCorrection(row.userId, walletId, drift, row.id, ids);
+  const applied = await applyCorrection(row.userId, charge, drift, row.id, ids);
   await markStatus(row.id, 'reconciled', now);
   if (applied) void emitCreditsUpdated(row.userId);
   return 'corrected';

@@ -38,6 +38,10 @@ import {
   type WalletFunds,
   debtNoticeFunder,
   debtNoticePeriodStartMs,
+  consumerCapsInForce,
+  walletOwnRemainingCents,
+  walletChainStatus,
+  driveWalletOpenTo,
 } from '../wallet-core';
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits,
@@ -64,7 +68,7 @@ const marcusPersonal = (spendable: number, status: SpendLeg['status'] = 'active'
 
 const marcus = { kind: 'person', userId: 'u-marcus', isGuest: false } as const;
 const chris = { kind: 'person', userId: 'u-chris', isGuest: true } as const;
-const weeklyDigest = { kind: 'automation', driveId: 'd-product' } as const;
+const weeklyDigest = { kind: 'automation', driveId: 'd-product', gatedAsGuest: false } as const;
 
 const base = (over: Partial<ResolveSpendSourceInput> = {}): ResolveSpendSourceInput => ({
   actor: marcus,
@@ -339,6 +343,67 @@ describe('resolveSpendSource — automations', () => {
   );
 });
 
+describe('resolveSpendSource — a run a guest is gated as (D-OW-4)', () => {
+  // Chris Rowe is a guest of Northwind's Product drive; he @mentions an agent in its channel.
+  const chrisMention = { kind: 'automation', driveId: 'd-product', gatedAsGuest: true } as const;
+
+  it('SPEND-6 (partial) a guest\'s mention or Run skips the drive wallet while the drive keeps guests off it, charging nothing', () => {
+    expect(resolveSpendSource(base({ actor: chrisMention, chosen: null }))).toEqual({
+      kind: 'skip', reason: 'guest_drive_wallet_off', walletId: 'w-product', chargeCents: 0,
+    });
+  });
+
+  it('SPEND-6 (partial) with the drive\'s guest switch on, a guest\'s mention spends the drive wallet like a member\'s', () => {
+    expect(resolveSpendSource(base({ actor: chrisMention, chosen: null, driveRule: { fallback: 'refuse', guestsMaySpendDriveWallet: true } })))
+      .toEqual(spend('drive_wallet', 'w-product'));
+  });
+
+  it('SPEND-6 (partial) a run whose person reached their cap skips by name (source_cap_reached), not as an empty wallet', () => {
+    const capped: SpendLeg = { ...productWallet(c(1)), capReached: true };
+    expect(resolveSpendSource(base({ actor: weeklyDigest, driveWallet: capped, chosen: null }))).toEqual({
+      kind: 'skip', reason: 'source_cap_reached', walletId: 'w-product', chargeCents: 0,
+    });
+  });
+});
+
+describe('driveWalletOpenTo — the per-drive guest switch (D-OW-4)', () => {
+  it.each([
+    [false, false, true],
+    [false, true, true],
+    [true, false, false],
+    [true, true, true],
+  ] as const)('SPEND-6 (partial) guest=%s, switch on=%s: may spend the drive wallet = %s', (isGuest, guestSpendEnabled, expected) => {
+    expect(driveWalletOpenTo({ isGuest, guestSpendEnabled })).toBe(expected);
+  });
+});
+
+describe('consumerCapsInForce — a guest is always capped (D-OW-4, D-OW-31)', () => {
+  it('WAL-7 (partial) a member with no cap row is unlimited within the wallet; their stored caps stand as set', () => {
+    expect(consumerCapsInForce(null, { isGuest: false })).toBeNull();
+    expect(consumerCapsInForce({ dailyCents: null, monthlyCents: c(10) }, { isGuest: false })).toEqual({ dailyCents: null, monthlyCents: c(10) });
+  });
+
+  it('WAL-7 (partial) a guest with no cap row is held to the D-OW-31 defaults; a window left unlimited takes its default; a stricter cap stands', () => {
+    expect(consumerCapsInForce(null, { isGuest: true })).toEqual(DEFAULT_CONSUMER_CAPS);
+    expect(consumerCapsInForce({ dailyCents: c(2), monthlyCents: null }, { isGuest: true }))
+      .toEqual({ dailyCents: c(2), monthlyCents: DEFAULT_CONSUMER_CAPS.monthlyCents });
+  });
+});
+
+describe('walletChainStatus — a paused parent stops its children (WAL-7)', () => {
+  it.each([
+    ['active', null, 'active'],
+    ['over', null, 'over'],
+    ['paused', 'active', 'paused'],
+    ['active', 'paused', 'paused'],
+    ['over', 'paused', 'paused'],
+    ['over', 'active', 'over'],
+    ['active', 'over', 'active'],
+  ] as const)('WAL-7 (partial) a wallet %s under a parent %s spends as %s', (own, parent, expected) => {
+    expect(walletChainStatus(own, parent)).toBe(expected);
+  });
+});
+
 describe('effectiveSpendPolicy', () => {
   const org = { seatAllowanceCents: c(100), fallback: 'seat_allowance' } as const;
 
@@ -415,6 +480,11 @@ describe('allocation math', () => {
       c(1325),
     ],
     ['wallet debt nets from what is spendable', productFunds({ allocationSpentCents: c(1200), debtCents: c(40) }), c(9000), 0],
+    // D-OW-60: debt nets against the allocation only, never against top-ups or donations.
+    ['D-OW-60 debt never nets against a donation: an over wallet\'s donation is spendable at once', productFunds({ allocationSpentCents: c(1200), debtCents: c(40), topupLegs: [{ legId: 'd1', funder: 'donation', donorUserId: 'u-ana', remainingCents: c(100) }] }), c(9000), c(100)],
+    ['D-OW-60 debt beyond the allocation left stays off the legs', productFunds({ allocationSpentCents: c(1170), debtCents: c(40), topupLegs: [{ legId: 'o1', funder: 'owner', donorUserId: null, remainingCents: c(100) }] }), c(9000), c(100)],
+    ['D-OW-60 debt within the allocation left nets from it', productFunds({ allocationSpentCents: c(1000), debtCents: c(40), topupLegs: [{ legId: 'o1', funder: 'owner', donorUserId: null, remainingCents: c(100) }] }), c(9000), c(260)],
+    ['D-OW-60 the parent bounds the allocation net of debt', productFunds({ allocationSpentCents: c(1000), debtCents: c(40) }), c(100), c(100)],
     ['a non-finite parent balance covers nothing from the allocation', productFunds(), Number.NaN, 0],
   ])('WAL-3 (partial) childSpendableCents: %s', (_label, funds, parentAvailable, expected) => {
     expect(childSpendableCents(funds, parentAvailable)).toBe(expected);
@@ -869,3 +939,21 @@ describe('the chosen source a fallback moved off, from its wallet row', () => {
   });
 });
 
+
+describe('D-OW-60: debt nets against the allocation, never against top-ups or donations', () => {
+  const funds = (over: Partial<WalletFunds>): WalletFunds => ({ allocationCents: c(1200), allocationSpentCents: c(1200), topupLegs: [{ legId: 'd1', funder: 'donation', donorUserId: 'u-ana', remainingCents: c(100) }], debtCents: c(40), ...over });
+
+  it('WAL-6 (partial) a wallet\'s own remaining is its legs plus what of the allocation the debt leaves', () => {
+    expect(walletOwnRemainingCents(funds({}))).toBe(c(100));
+    expect(walletOwnRemainingCents(funds({ allocationSpentCents: c(1000) }))).toBe(c(260));
+  });
+
+  it('WAL-6 (partial) a settle draws the allocation only as far as the debt leaves it, then the legs', () => {
+    const r = allocateWalletSpend({ parent: { monthlyCents: c(9000), topupCents: 0, debtCents: 0 }, wallet: funds({ allocationSpentCents: c(1170) }), amountCents: c(50) });
+    expect(r.allocationDrawCents).toBe(0);
+    expect(r.legDraws).toEqual([{ legId: 'd1', cents: c(50) }]);
+    const within = allocateWalletSpend({ parent: { monthlyCents: c(9000), topupCents: 0, debtCents: 0 }, wallet: funds({ allocationSpentCents: c(1000) }), amountCents: c(200) });
+    expect(within.allocationDrawCents).toBe(c(160));
+    expect(within.legDraws).toEqual([{ legId: 'd1', cents: c(40) }]);
+  });
+});

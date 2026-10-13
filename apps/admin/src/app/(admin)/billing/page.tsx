@@ -112,11 +112,15 @@ interface DebtRow {
 }
 
 interface BalanceDriftRow {
-  userId: string;
+  walletId: string;
+  walletKind: 'personal_root' | 'org_pool' | 'drive_wallet';
+  userId: string | null;
   userName: string | null;
   userEmail: string | null;
-  expectedSpendableCents: number;
-  materializedSpendableCents: number;
+  orgId: string | null;
+  subjectId: string | null;
+  expectedNetCents: number;
+  materializedNetCents: number;
   driftCents: number;
   debtCents: number;
 }
@@ -179,7 +183,7 @@ interface BillingResponse {
     orgPoolCount: number;
   };
   holds: { holdCount: number; heldCents: number };
-  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[] };
+  alerts: { balanceDrift: BalanceDriftRow[]; negativeMargin: NegativeMarginRow[]; unattributedUsage: { count: number; realCostCents: number } };
   tokens: { summary: TokenTotals; byModel: TokenModelRow[]; byPeriod: TokenPeriodRow[]; byUser: TokenUserRow[] };
 }
 
@@ -190,6 +194,13 @@ function marginClass(value: number | null): string {
 
 function userLabel(row: { userName: string | null; userEmail: string | null; userId: string }): string {
   return row.userEmail ?? row.userName ?? row.userId;
+}
+
+/** WAL-5: a drifted wallet by what it is — a person's credits, an org's pool, or a drive's wallet. */
+function walletLabel(row: BalanceDriftRow): string {
+  if (row.walletKind === 'org_pool') return `Org pool · ${row.orgId ?? row.walletId}`;
+  if (row.walletKind === 'drive_wallet') return `Drive wallet · ${row.subjectId ?? row.walletId}`;
+  return row.userId ? userLabel({ userName: row.userName, userEmail: row.userEmail, userId: row.userId }) : row.walletId;
 }
 
 function formatPeriodLabel(period: string, granularity: Granularity): string {
@@ -633,13 +644,16 @@ function UsersTab({ data }: { data: BillingResponse }) {
       <Card>
         <CardHeader>
           <CardTitle>Balance drift ({alerts.balanceDrift.length})</CardTitle>
-          <CardDescription>Accounts where the materialized balance disagrees with the ledger.</CardDescription>
+          <CardDescription>Wallets (personal credits, org pools, drive wallets) whose balance disagrees with their own ledger rows.</CardDescription>
+          <CardDescription data-testid="unattributed-usage">
+            Unattributed usage: {alerts.unattributedUsage.count} {alerts.unattributedUsage.count === 1 ? 'call' : 'calls'} ({usd(alerts.unattributedUsage.realCostCents)} provider cost) named no wallet and were not charged — reconcile by hand.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>User</TableHead>
+                <TableHead>Wallet</TableHead>
                 <TableHead className="text-right">Expected</TableHead>
                 <TableHead className="text-right">Materialized</TableHead>
                 <TableHead className="text-right">Drift</TableHead>
@@ -649,10 +663,10 @@ function UsersTab({ data }: { data: BillingResponse }) {
             <TableBody>
               {alerts.balanceDrift.length > 0 ? (
                 alerts.balanceDrift.map((row) => (
-                  <TableRow key={row.userId}>
-                    <TableCell className="max-w-[260px] truncate">{userLabel(row)}</TableCell>
-                    <TableCell className="text-right">{usd(row.expectedSpendableCents)}</TableCell>
-                    <TableCell className="text-right">{usd(row.materializedSpendableCents)}</TableCell>
+                  <TableRow key={row.walletId}>
+                    <TableCell className="max-w-[260px] truncate">{walletLabel(row)}</TableCell>
+                    <TableCell className="text-right">{usd(row.expectedNetCents)}</TableCell>
+                    <TableCell className="text-right">{usd(row.materializedNetCents)}</TableCell>
                     <TableCell className="text-right font-medium text-destructive">{usd(row.driftCents)}</TableCell>
                     <TableCell className="text-right">{usd(row.debtCents)}</TableCell>
                   </TableRow>

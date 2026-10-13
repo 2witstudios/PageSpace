@@ -18,7 +18,7 @@ export async function extractActionItems(
    * usage is recorded against and the wallet the enrichment's credit hold reserved (process-webhook's payer seam on
    * that drive, SPEND-6).
    */
-  billing: { driveId: string; userId: string; walletId?: string },
+  billing: { driveId: string; userId: string; walletId?: string; automationRef?: string },
 ): Promise<ActionItem[]> {
   try {
     const provider = await createAIProvider(userId, {}, { driveId: billing.driveId });
@@ -46,6 +46,7 @@ export async function extractActionItems(
         : undefined,
       success: true,
       walletId: billing.walletId,
+      automationRef: billing.automationRef,
       metadata: { feature: 'zoom_action_items' },
     }));
 

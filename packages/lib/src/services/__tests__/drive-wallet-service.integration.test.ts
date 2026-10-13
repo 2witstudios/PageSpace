@@ -15,17 +15,20 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db, pool } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { and, eq, inArray } from '@pagespace/db/operators';
+import { workflows } from '@pagespace/db/schema/workflows';
+import { consumeCredits } from '../../billing/credit-consume';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { wallets, walletFundingLegs, driveSpendOverrides, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { CONSUMER_WALLET_FIELDS } from '../../billing/wallet-views';
-import { DEFAULT_SEAT_ALLOWANCE_CENTS } from '../../billing/wallet-core';
+import { DEFAULT_SEAT_ALLOWANCE_CENTS, utcDayStartMs } from '../../billing/wallet-core';
 import {
   getDriveWallet,
   createDriveWallet,
@@ -39,7 +42,11 @@ import {
   getAlwaysOwnCredits,
   getConversationSpend,
   setConversationSpend,
+  getOrgPoolSplit,
+  getDriveSpend,
 } from '../drive-wallet-service';
+import { encodeAutomationRef } from '../../billing/automation-attribution';
+import { credentialActor } from '../../permissions/access-actor';
 
 vi.mock('../../organizations/orgs-enabled', () => ({ ORGS_ENABLED: true }));
 
@@ -118,6 +125,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(conversations).where(inArray(conversations.userId, w.userIds));
   await db.delete(creditHolds).where(inArray(creditHolds.userId, w.userIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, w.userIds));
+  await db.delete(aiUsageLogs).where(inArray(aiUsageLogs.userId, w.userIds));
   // Funding legs cascade with their wallet: deleting a leg first would leave its wallet's
   // top-up disagreeing with its legs, which the integration harness's invariant refuses.
   // Child wallets before their parent.
@@ -164,7 +172,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
 
   it('SPEND-9 (partial) X-6 (partial) a MEMBER sees the remaining amount and their own cap only — never the pool balance or another consumer\'s spend', async () => {
     if (!world) return;
-    const read = await getDriveWallet(world.ids.marcus, world.productId, 'session');
+    const read = await getDriveWallet(credentialActor(world.ids.marcus, null), world.productId, 'session');
     expect(read).toMatchObject({ ok: true, viewer: 'member', actions: ['view', 'donate'] });
     if (!read.ok || !read.wallet) throw new Error('expected a wallet');
     expect(Object.keys(read.wallet).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
@@ -178,7 +186,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
 
   it('SPEND-9 (partial) a GUEST gets the same consumer projection', async () => {
     if (!world) return;
-    const read = await getDriveWallet(world.ids.chris, world.productId, 'session');
+    const read = await getDriveWallet(credentialActor(world.ids.chris, null), world.productId, 'session');
     expect(read).toMatchObject({ ok: true, viewer: 'guest' });
     if (!read.ok || !read.wallet) throw new Error('expected a wallet');
     expect(Object.keys(read.wallet).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
@@ -187,20 +195,84 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
 
   it('SPEND-10 (partial) the drive LEAD sees spend by member for their drive, but never the pool', async () => {
     if (!world) return;
-    const read = await getDriveWallet(world.ids.dana, world.productId, 'session');
+    const read = await getDriveWallet(credentialActor(world.ids.dana, null), world.productId, 'session');
     expect(read).toMatchObject({ ok: true, viewer: 'lead' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     expect(read.wallet.spendByConsumer).toEqual([
-      { consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') },
-      { consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') },
+      expect.objectContaining({ consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') }),
+      expect.objectContaining({ consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') }),
     ]);
     expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
     expect('pool' in read.wallet).toBe(false);
   });
 
+  it("SPEND-10 the drive lead sees this period's spend by member, a creator's workflow spend inside their row as via automations and listed under it as the automation (D-OW-67); an org Owner/Admin also sees every org wallet, the pool and the unallocated balance", async () => {
+    if (!world) return;
+    const w = world;
+    // Marcus's scheduled "Weekly digest" spends the drive wallet on his behalf (D-OW-34), and he makes a
+    // call of his own; both settle for real on the Product wallet.
+    const [digest] = await db.insert(workflows).values({ driveId: w.productId, createdBy: w.ids.marcus, name: 'Weekly digest', prompt: 'digest' }).returning();
+    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.04, walletId: w.productWalletId, automationRef: encodeAutomationRef({ kind: 'workflow', workflowId: digest.id }) })).toBe('settled');
+    expect(await consumeCredits({ aiUsageLogId: createId(), userId: w.ids.marcus, costDollars: 0.02, walletId: w.productWalletId })).toBe('settled');
+    const charged = async (automation: boolean) => -(await db.select({ applied: creditLedger.appliedCents, wf: creditLedger.automationRef }).from(creditLedger)
+      .where(and(eq(creditLedger.walletId, w.productWalletId), eq(creditLedger.userId, w.ids.marcus), eq(creditLedger.entryType, 'usage'))))
+      .filter((r) => (r.wf !== null) === automation)
+      .reduce((sum, r) => sum + (r.applied ?? 0), 0);
+    const digestCents = await charged(true);
+    const marcusCents = await charged(false);
+    expect(digestCents).toBeGreaterThan(0);
+
+    const lead = await getDriveWallet(credentialActor(w.ids.dana, null), w.productId, 'session');
+    if (!lead.ok || !lead.wallet || lead.wallet.viewer !== 'lead') throw new Error('expected a lead view');
+    const rows = [...lead.wallet.spendByConsumer].sort((a, b) => a.displayName!.localeCompare(b.displayName!));
+    expect(rows.map((r) => ({ label: r.displayName, cents: r.spentCents, via: r.viaAutomationsCents, automations: r.automations.map((a) => [a.displayName, a.spentCents]) }))).toEqual([
+      { label: 'Lena Schulz', cents: LENA_SPEND, via: 0, automations: [] },
+      { label: 'Marcus Oyelaran', cents: marcusCents + digestCents, via: digestCents, automations: [['Weekly digest', digestCents]] },
+    ]);
+    expect(rows[1].automations[0]).toMatchObject({ automation: { kind: 'workflow', workflowId: digest.id }, creatorUserId: w.ids.marcus, creatorName: 'Marcus Oyelaran' });
+
+    // A consumer sees none of it (SPEND-9).
+    const member = await getDriveWallet(credentialActor(w.ids.lena, null), w.productId, 'session');
+    expect(JSON.stringify(member)).not.toContain('Weekly digest');
+
+    // The org admin sees the same list, the pool and its unallocated balance, and every org wallet.
+    const admin = await getDriveWallet(credentialActor(w.ids.priya, null), w.productId, 'session');
+    if (!admin.ok || !admin.wallet || admin.wallet.viewer !== 'org_admin') throw new Error('expected an admin view');
+    expect(admin.wallet.spendByConsumer).toEqual(lead.wallet.spendByConsumer);
+    expect(admin.wallet.pool).toMatchObject({ walletId: w.poolId });
+    expect(admin.wallet.pool!.unallocatedCents).toBe(admin.wallet.pool!.availableCents - ((120_000 - (await walletRow(w.productWalletId)).spentCents) + 60_000));
+    const split = await getOrgPoolSplit(w.orgId);
+    expect(split).toMatchObject({ walletId: w.poolId, availableCents: admin.wallet.pool!.availableCents, unallocatedCents: admin.wallet.pool!.unallocatedCents });
+    expect(split.driveWallets.map((d) => d.walletId).sort()).toEqual([w.productWalletId, w.researchWalletId].sort());
+  });
+
+  it('UI-9 (partial) the lead sees who spends with today\'s part and the part automations spent on their behalf: the ledger\'s automation reference, never the usage log\'s source (D-OW-67)', async () => {
+    if (!world) return;
+    // The fixture's rows land "now": move them to just before today's UTC start, still inside the
+    // period (which began a day ago), then add today's: one by hand, one by Marcus's workflow. The
+    // hand call's usage log says "workflow" as its source: the list reads the ledger's reference only.
+    await db.update(creditLedger).set({ createdAt: new Date(utcDayStartMs(Date.now()) - 1) }).where(eq(creditLedger.walletId, world.productWalletId));
+    const [digest] = await db.insert(workflows).values({ driveId: world.productId, createdBy: world.ids.marcus, name: 'Weekly digest', prompt: 'digest' }).returning();
+    const [handLog] = await db.insert(aiUsageLogs).values({ userId: world.ids.marcus, provider: 'openrouter', model: 'm', source: 'workflow' }).returning({ id: aiUsageLogs.id });
+    await db.insert(creditLedger).values([
+      { userId: world.ids.marcus, walletId: world.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -70, appliedCents: -70, consumeStatus: 'applied', automationRef: encodeAutomationRef({ kind: 'workflow', workflowId: digest.id }) },
+      { userId: world.ids.marcus, walletId: world.productWalletId, entryType: 'usage', bucket: 'monthly', amountCents: -11, appliedCents: -11, consumeStatus: 'applied', aiUsageLogId: handLog.id },
+    ]);
+    const read = await getDriveWallet(credentialActor(world.ids.dana, null), world.productId, 'session');
+    if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
+    const marcus = read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.marcus);
+    expect(marcus).toMatchObject({ spentCents: MARCUS_SPEND + 81, spentTodayCents: 81, viaAutomationsCents: 70, spentTodayCredits: '81', viaAutomationsCredits: '70' });
+    expect(marcus?.automations.map((a) => [a.displayName, a.spentCents, a.spentTodayCents])).toEqual([['Weekly digest', 70, 70]]);
+    expect(read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.lena)).toMatchObject({ spentCents: LENA_SPEND, spentTodayCents: 0, viaAutomationsCents: 0, automations: [] });
+
+    // A consumer never sees any of it (SPEND-9).
+    const member = await getDriveWallet(credentialActor(world.ids.marcus, null), world.productId, 'session');
+    expect(JSON.stringify(member)).not.toMatch(/spendByConsumer|viaAutomations|spentToday|Weekly digest/);
+  });
+
   it('SPEND-10 (partial) an ORG ADMIN sees every wallet field, the pool and the unallocated balance', async () => {
     if (!world) return;
-    const read = await getDriveWallet(world.ids.priya, world.productId, 'session');
+    const read = await getDriveWallet(credentialActor(world.ids.priya, null), world.productId, 'session');
     expect(read).toMatchObject({ ok: true, viewer: 'org_admin' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'org_admin') throw new Error('expected an admin view');
     const outstanding = (120_000 - LENA_SPEND - MARCUS_SPEND) + 60_000;
@@ -215,9 +287,9 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
 
   it('SPEND-9 (partial) X-6 (partial) a NON-MEMBER gets 404: an outsider on Product, an org member who has not joined a Restricted drive', async () => {
     if (!world) return;
-    expect(await getDriveWallet(world.ids.outsider, world.productId, 'session')).toMatchObject({ ok: false, status: 404 });
-    expect(await getDriveWallet(world.ids.tomas, world.researchId, 'session')).toMatchObject({ ok: false, status: 404 });
-    expect(await donateToDrive(world.ids.tomas, world.researchId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await getDriveWallet(credentialActor(world.ids.outsider, null), world.productId, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await getDriveWallet(credentialActor(world.ids.tomas, null), world.researchId, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await donateToDrive(credentialActor(world.ids.tomas, null), world.researchId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 404 });
   });
 
   // -------------------------------------------------------------------------
@@ -227,71 +299,71 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('UI-9 (partial) a member and a guest cannot change the wallet; the lead can pause and set rules but not move pool money', async () => {
     if (!world) return;
     for (const who of [world.ids.marcus, world.ids.chris]) {
-      expect(await updateDriveWallet(who, world.productId, { paused: true }, 'session')).toMatchObject({ ok: false, status: 403 });
-      expect(await updateDriveWallet(who, world.productId, { allocationCents: 1 }, 'session')).toMatchObject({ ok: false, status: 403 });
+      expect(await updateDriveWallet(credentialActor(who, null), world.productId, { paused: true }, 'session')).toMatchObject({ ok: false, status: 403 });
+      expect(await updateDriveWallet(credentialActor(who, null), world.productId, { allocationCents: 1 }, 'session')).toMatchObject({ ok: false, status: 403 });
     }
-    expect(await updateDriveWallet(world.ids.dana, world.productId, { allocationCents: 999_999 }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
+    expect(await updateDriveWallet(credentialActor(world.ids.dana, null), world.productId, { allocationCents: 999_999 }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
     // A mixed change is refused whole: nothing from it lands.
-    expect(await updateDriveWallet(world.ids.dana, world.productId, { paused: true, allocationCents: 1 }, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await updateDriveWallet(credentialActor(world.ids.dana, null), world.productId, { paused: true, allocationCents: 1 }, 'session')).toMatchObject({ ok: false, status: 403 });
     expect((await walletRow(world.productWalletId)).status).toBe('active');
 
-    const paused = await updateDriveWallet(world.ids.dana, world.productId, { paused: true, donationsEnabled: false, fallbackRule: 'own_credits', defaultSpendSource: 'drive_wallet' }, 'session');
+    const paused = await updateDriveWallet(credentialActor(world.ids.dana, null), world.productId, { paused: true, donationsEnabled: false, fallbackRule: 'own_credits', defaultSpendSource: 'drive_wallet' }, 'session');
     expect(paused).toMatchObject({ ok: true, wallet: { status: 'paused', donationsEnabled: false, fallbackRule: 'own_credits', defaultSpendSource: 'drive_wallet' } });
-    expect(await topUpDriveWallet(world.ids.dana, world.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await topUpDriveWallet(credentialActor(world.ids.dana, null), world.productId, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 403 });
   });
 
   it('WAL-6 (partial) where an org drive\'s overshoot lands is the FUNDER\'s choice: the lead cannot set it, an org admin can, and null restores the default', async () => {
     if (!world) return;
-    expect(await updateDriveWallet(world.ids.dana, world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
+    expect(await updateDriveWallet(credentialActor(world.ids.dana, null), world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: false, status: 403, code: 'insufficient_role' });
     expect((await walletRow(world.productWalletId)).overshootChoice).toBeNull();
 
-    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: 'wallet_debt' } });
+    expect(await updateDriveWallet(credentialActor(world.ids.priya, null), world.productId, { overshootChoice: 'wallet_debt' }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: 'wallet_debt' } });
     expect((await walletRow(world.productWalletId)).overshootChoice).toBe('wallet_debt');
     // A token may never move the funder's money decisions.
-    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: null }, 'mcp')).toMatchObject({ ok: false, status: 403 });
+    expect(await updateDriveWallet(credentialActor(world.ids.priya, null), world.productId, { overshootChoice: null }, 'mcp')).toMatchObject({ ok: false, status: 403 });
 
-    expect(await updateDriveWallet(world.ids.priya, world.productId, { overshootChoice: null }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: null } });
+    expect(await updateDriveWallet(credentialActor(world.ids.priya, null), world.productId, { overshootChoice: null }, 'session')).toMatchObject({ ok: true, wallet: { overshootChoice: null } });
     expect((await walletRow(world.productWalletId)).overshootChoice).toBeNull();
   });
 
   it('UI-9 (partial) WAL-3 (partial) an org admin allocates and tops up from the pool; the top-up is an owner leg and a ledger pair', async () => {
     if (!world) return;
-    expect(await updateDriveWallet(world.ids.priya, world.productId, { allocationCents: 150_000 }, 'session')).toMatchObject({ ok: true, wallet: { allocationCents: 150_000 } });
+    expect(await updateDriveWallet(credentialActor(world.ids.priya, null), world.productId, { allocationCents: 150_000 }, 'session')).toMatchObject({ ok: true, wallet: { allocationCents: 150_000 } });
     const key = createId();
-    const topUp = await topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 10_000, idempotencyKey: key }, 'session');
+    const topUp = await topUpDriveWallet(credentialActor(world.ids.priya, null), world.productId, { amountCents: 10_000, idempotencyKey: key }, 'session');
     expect(topUp).toMatchObject({ ok: true, amountCents: 10_000, duplicate: false });
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 10_000);
     expect((await walletRow(world.productWalletId)).topupRemainingCents).toBe(10_000);
     const legs = await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, world.productWalletId));
     expect(legs.map((l) => [l.funderKind, l.funderOrgId, l.originalCents, l.nonRefundable])).toEqual([['owner', world.orgId, 10_000, false]]);
     // Replaying the same key moves nothing.
-    expect(await topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 10_000, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: true });
+    expect(await topUpDriveWallet(credentialActor(world.ids.priya, null), world.productId, { amountCents: 10_000, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: true });
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(POOL_CENTS - 10_000);
   });
 
   it('WAL-3 (partial) a top-up the pool cannot cover is refused whole and moves nothing', async () => {
     if (!world) return;
-    expect(await topUpDriveWallet(world.ids.priya, world.productId, { amountCents: POOL_CENTS + 1, idempotencyKey: createId() }, 'session'))
+    expect(await topUpDriveWallet(credentialActor(world.ids.priya, null), world.productId, { amountCents: POOL_CENTS + 1, idempotencyKey: createId() }, 'session'))
       .toMatchObject({ ok: false, status: 402, code: 'insufficient_funds' });
     expect((await walletRow(world.poolId)).monthlyRemainingCents).toBe(POOL_CENTS);
   });
 
   it('WAL-4 (partial) a member donates from their own balance; the lead can turn donations off', async () => {
     if (!world) return;
-    expect(await donateToDrive(world.ids.marcus, world.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, amountCents: 1_000 });
-    await updateDriveWallet(world.ids.dana, world.productId, { donationsEnabled: false }, 'session');
-    expect(await donateToDrive(world.ids.marcus, world.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'donations_disabled' });
+    expect(await donateToDrive(credentialActor(world.ids.marcus, null), world.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true, amountCents: 1_000 });
+    await updateDriveWallet(credentialActor(world.ids.dana, null), world.productId, { donationsEnabled: false }, 'session');
+    expect(await donateToDrive(credentialActor(world.ids.marcus, null), world.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 409, code: 'donations_disabled' });
   });
 
   it('UI-9 (partial) a wallet that moved money is refused deletion with its blockers; an unused one deletes', async () => {
     if (!world) return;
-    expect(await deleteDriveWallet(world.ids.priya, world.productId, 'session')).toMatchObject({ ok: false, status: 409, blockers: ['has_money_history'] });
-    expect(await deleteDriveWallet(world.ids.dana, world.productId, 'session')).toMatchObject({ ok: false, status: 403 });
-    expect(await deleteDriveWallet(world.ids.jono, world.researchId, 'session')).toEqual({ ok: true });
-    expect(await getDriveWallet(world.ids.jono, world.researchId, 'session')).toMatchObject({ ok: true, wallet: null });
+    expect(await deleteDriveWallet(credentialActor(world.ids.priya, null), world.productId, 'session')).toMatchObject({ ok: false, status: 409, blockers: ['has_money_history'] });
+    expect(await deleteDriveWallet(credentialActor(world.ids.dana, null), world.productId, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await deleteDriveWallet(credentialActor(world.ids.jono, null), world.researchId, 'session')).toEqual({ ok: true });
+    expect(await getDriveWallet(credentialActor(world.ids.jono, null), world.researchId, 'session')).toMatchObject({ ok: true, wallet: null });
     // An org admin re-creates it under the pool.
-    expect(await createDriveWallet(world.ids.priya, world.researchId, { allocationCents: 5_000 }, 'session')).toMatchObject({ ok: true, wallet: { allocationCents: 5_000 } });
-    expect(await createDriveWallet(world.ids.priya, world.researchId, { allocationCents: 5_000 }, 'session')).toMatchObject({ ok: false, status: 409, code: 'wallet_exists' });
+    expect(await createDriveWallet(credentialActor(world.ids.priya, null), world.researchId, { allocationCents: 5_000 }, 'session')).toMatchObject({ ok: true, wallet: { allocationCents: 5_000 } });
+    expect(await createDriveWallet(credentialActor(world.ids.priya, null), world.researchId, { allocationCents: 5_000 }, 'session')).toMatchObject({ ok: false, status: 409, code: 'wallet_exists' });
     const [row] = await db.select().from(wallets).where(eq(wallets.subjectId, world.researchId));
     expect([row.ownerType, row.orgId, row.parentWalletId]).toEqual(['org', world.orgId, world.poolId]);
   });
@@ -302,13 +374,19 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
 
   it('UI-10 (partial) SPEND-9 (partial) a member lists what they spend from (drive wallets, their seat) with no pool balance; an admin also lists the pool they fund', async () => {
     if (!world) return;
-    const marcus = await listMyWallets(world.ids.marcus, 'session');
-    expect(marcus.driveWallets).toEqual([{ driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active', remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US') }]);
+    const marcus = await listMyWallets(credentialActor(world.ids.marcus, null), 'session');
+    expect(marcus.driveWallets).toEqual([{
+      driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active',
+      remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US'),
+      mySpentCents: MARCUS_SPEND, mySpentCredits: MARCUS_SPEND.toLocaleString('en-US'),
+    }]);
+    // His own spend only: Lena's never appears in his list (SPEND-9).
+    expect(JSON.stringify(marcus.driveWallets)).not.toContain(String(LENA_SPEND));
     expect(marcus.seats).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId })]);
     expect(marcus.funds.pools).toEqual([]);
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));
 
-    const priya = await listMyWallets(world.ids.priya, 'session');
+    const priya = await listMyWallets(credentialActor(world.ids.priya, null), 'session');
     expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId, availableCents: POOL_CENTS, availableCredits: POOL_CENTS.toLocaleString('en-US') })]);
     expect(JSON.stringify([marcus, priya])).not.toContain('$');
   });
@@ -318,7 +396,7 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     await db.insert(creditLedger).values({
       userId: world.ids.marcus, walletId: world.poolId, entryType: 'usage', bucket: 'monthly', amountCents: -30, appliedCents: -30, chargeMillicents: 30_000, consumeStatus: 'applied',
     });
-    const [seat] = (await listMyWallets(world.ids.marcus, 'session')).seats;
+    const [seat] = (await listMyWallets(credentialActor(world.ids.marcus, null), 'session')).seats;
     expect(seat).toEqual({
       orgId: world.orgId,
       orgName: 'Northwind Labs',
@@ -342,9 +420,9 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('SPEND-3 (partial) UI-10 (partial) the person sets and clears their own default source', async () => {
     if (!world) return;
     expect(await setPersonalDefaultSource(world.ids.marcus, 'seat_allowance', 'session')).toEqual({ ok: true, defaultSpendSource: 'seat_allowance' });
-    expect((await listMyWallets(world.ids.marcus, 'session')).personal.defaultSpendSource).toBe('seat_allowance');
+    expect((await listMyWallets(credentialActor(world.ids.marcus, null), 'session')).personal.defaultSpendSource).toBe('seat_allowance');
     await setPersonalDefaultSource(world.ids.marcus, null, 'session');
-    expect((await listMyWallets(world.ids.marcus, 'session')).personal.defaultSpendSource).toBeNull();
+    expect((await listMyWallets(credentialActor(world.ids.marcus, null), 'session')).personal.defaultSpendSource).toBeNull();
   });
 
   it('SPEND-5 (partial) the person turns "Always my own credits" on and off, globally and for one drive, and reads it back', async () => {
@@ -352,15 +430,15 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     const w = world;
     expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false });
 
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: true }, 'session')).toEqual({ ok: true, driveId: null, enabled: true });
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'session')).toEqual({ ok: true, driveId: w.productId, enabled: true });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: null, enabled: true }, 'session')).toEqual({ ok: true, driveId: null, enabled: true });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: w.productId, enabled: true }, 'session')).toEqual({ ok: true, driveId: w.productId, enabled: true });
     // Idempotent: turning an on switch on again changes nothing.
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'session')).toMatchObject({ ok: true });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: w.productId, enabled: true }, 'session')).toMatchObject({ ok: true });
     expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: true, alwaysOwnCreditsInDrive: true });
     expect((await db.select().from(wallets).where(personalRootWalletOf(w.ids.marcus)))[0]).toMatchObject({ alwaysOwnCredits: true });
 
-    await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: false }, 'session');
-    await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: false }, 'session');
+    await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: null, enabled: false }, 'session');
+    await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: w.productId, enabled: false }, 'session');
     expect(await getAlwaysOwnCredits(w.ids.marcus, w.productId)).toEqual({ ok: true, alwaysOwnCredits: false, alwaysOwnCreditsInDrive: false });
     expect(await db.select().from(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.ids.marcus))).toEqual([]);
   });
@@ -369,10 +447,10 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     if (!world) return;
     const w = world;
     // Customer Research is Restricted and Marcus has not joined it.
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.researchId, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: `drive_${createId()}`, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: null, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
-    expect(await setAlwaysOwnCredits(w.ids.marcus, { driveId: w.productId, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: w.researchId, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: `drive_${createId()}`, enabled: true }, 'session')).toMatchObject({ ok: false, status: 404 });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: null, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
+    expect(await setAlwaysOwnCredits(credentialActor(w.ids.marcus, null), { driveId: w.productId, enabled: true }, 'mcp')).toMatchObject({ ok: false, status: 403, code: 'mcp_token_cannot_change_spend_source' });
     expect(await db.select().from(driveSpendOverrides).where(eq(driveSpendOverrides.userId, w.ids.marcus))).toEqual([]);
     expect((await db.select().from(wallets).where(personalRootWalletOf(w.ids.marcus)))[0]?.alwaysOwnCredits ?? false).toBe(false);
   });
@@ -438,6 +516,23 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(inResearch.ok && inResearch.options.map((o) => o.source)).toEqual(['own_credits']);
     expect(await setConversationSpend(world.ids.marcus, globalConv.id, world.researchWalletId, 'session', world.researchId)).toMatchObject({ ok: false, status: 400 });
   });
+  it('SPEND-2 (partial) inside a drive with no conversation the chip reads the drive: its options and what a new conversation would spend, with nothing stored; one source for a person with no shared leg; a drive they cannot open is 404', async () => {
+    if (!world) return;
+    const convBefore = await db.select().from(conversations).where(eq(conversations.userId, world.ids.marcus));
+    const read = await getDriveSpend(credentialActor(world.ids.marcus, null), world.productId);
+    expect(read).toMatchObject({ ok: true, driveId: world.productId, resolved: { kind: 'spend', source: 'drive_wallet', walletId: world.productWalletId } });
+    expect(read.ok && read.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
+    // A read: no conversation is created or pinned, and nothing is reserved.
+    expect(await db.select().from(conversations).where(eq(conversations.userId, world.ids.marcus))).toEqual(convBefore);
+    expect(await db.select().from(creditHolds).where(eq(creditHolds.userId, world.ids.marcus))).toEqual([]);
+    // Chris is a guest of Product (no seat, no drive wallet by default): one source, so the personal chip stays.
+    const guest = await getDriveSpend(credentialActor(world.ids.chris, null), world.productId);
+    expect(guest.ok && guest.options.map((o) => o.source)).toEqual(['own_credits']);
+    // Marcus has not joined the Restricted drive; the outsider cannot open Product.
+    expect(await getDriveSpend(credentialActor(world.ids.marcus, null), world.researchId)).toMatchObject({ ok: false, status: 404 });
+    expect(await getDriveSpend(credentialActor(world.ids.outsider, null), world.productId)).toMatchObject({ ok: false, status: 404 });
+  });
+
   // -------------------------------------------------------------------------
   // [D-OW-26] a delegated MCP/CLI token never moves money or redirects spend
   // -------------------------------------------------------------------------
@@ -460,13 +555,13 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     const key = createId();
     // Priya is an org admin: every one of these would be allowed to her in a session.
     const writes: [string, () => Promise<unknown>, string][] = [
-      ['create', () => createDriveWallet(w.ids.priya, w.researchId, { allocationCents: 1 }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['allocate', () => updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 1 }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['pause', () => updateDriveWallet(w.ids.priya, w.productId, { paused: true }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['rules', () => updateDriveWallet(w.ids.priya, w.productId, { donationsEnabled: false }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['top-up', () => topUpDriveWallet(w.ids.priya, w.productId, { amountCents: 1_000, idempotencyKey: key }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['donate', () => donateToDrive(w.ids.marcus, w.productId, { amountCents: 1_000, idempotencyKey: key }, 'mcp'), 'mcp_token_cannot_move_money'],
-      ['delete', () => deleteDriveWallet(w.ids.jono, w.researchId, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['create', () => createDriveWallet(credentialActor(w.ids.priya, null), w.researchId, { allocationCents: 1 }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['allocate', () => updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 1 }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['pause', () => updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: true }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['rules', () => updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { donationsEnabled: false }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['top-up', () => topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 1_000, idempotencyKey: key }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['donate', () => donateToDrive(credentialActor(w.ids.marcus, null), w.productId, { amountCents: 1_000, idempotencyKey: key }, 'mcp'), 'mcp_token_cannot_move_money'],
+      ['delete', () => deleteDriveWallet(credentialActor(w.ids.jono, null), w.researchId, 'mcp'), 'mcp_token_cannot_move_money'],
       ['conversation source', () => setConversationSpend(w.ids.marcus, conv.id, w.poolId, 'mcp'), 'mcp_token_cannot_change_spend_source'],
       ['default source', () => setPersonalDefaultSource(w.ids.marcus, 'own_credits', 'mcp'), 'mcp_token_cannot_change_spend_source'],
     ];
@@ -477,12 +572,12 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     expect(await moneySnapshot(w)).toBe(before);
 
     // The session path still works for each.
-    expect(await updateDriveWallet(w.ids.priya, w.productId, { allocationCents: 130_000, paused: true, donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
-    await updateDriveWallet(w.ids.priya, w.productId, { paused: false, donationsEnabled: true }, 'session');
-    expect(await topUpDriveWallet(w.ids.priya, w.productId, { amountCents: 1_000, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: false });
-    expect(await donateToDrive(w.ids.marcus, w.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
-    expect(await deleteDriveWallet(w.ids.jono, w.researchId, 'session')).toEqual({ ok: true });
-    expect(await createDriveWallet(w.ids.priya, w.researchId, { allocationCents: 1 }, 'session')).toMatchObject({ ok: true });
+    expect(await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { allocationCents: 130_000, paused: true, donationsEnabled: false }, 'session')).toMatchObject({ ok: true });
+    await updateDriveWallet(credentialActor(w.ids.priya, null), w.productId, { paused: false, donationsEnabled: true }, 'session');
+    expect(await topUpDriveWallet(credentialActor(w.ids.priya, null), w.productId, { amountCents: 1_000, idempotencyKey: key }, 'session')).toMatchObject({ ok: true, duplicate: false });
+    expect(await donateToDrive(credentialActor(w.ids.marcus, null), w.productId, { amountCents: 1_000, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: true });
+    expect(await deleteDriveWallet(credentialActor(w.ids.jono, null), w.researchId, 'session')).toEqual({ ok: true });
+    expect(await createDriveWallet(credentialActor(w.ids.priya, null), w.researchId, { allocationCents: 1 }, 'session')).toMatchObject({ ok: true });
     expect(await setConversationSpend(w.ids.marcus, conv.id, w.poolId, 'session')).toMatchObject({ ok: true, chosenWalletId: w.poolId });
     expect(await setPersonalDefaultSource(w.ids.marcus, 'own_credits', 'session')).toEqual({ ok: true, defaultSpendSource: 'own_credits' });
     expect(await moneySnapshot(w)).not.toBe(before);
@@ -491,14 +586,14 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
   it('SPEND-9 (partial) [D-OW-26] read with a token, an org admin and a lead get exactly the consumer projection and no actions but view; my wallets drops pool balances', async () => {
     if (!world) return;
     for (const who of [world.ids.priya, world.ids.dana]) {
-      const read = await getDriveWallet(who, world.productId, 'mcp');
+      const read = await getDriveWallet(credentialActor(who, null), world.productId, 'mcp');
       expect(read).toMatchObject({ ok: true, viewer: 'member', actions: ['view'] });
       if (!read.ok || !read.wallet) throw new Error('expected a wallet');
       expect(Object.keys(read.wallet).sort()).toEqual([...CONSUMER_WALLET_FIELDS].sort());
       expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
       expect(JSON.stringify(read)).not.toContain(world.ids.lena);
     }
-    const priya = await listMyWallets(world.ids.priya, 'mcp');
+    const priya = await listMyWallets(credentialActor(world.ids.priya, null), 'mcp');
     expect(priya.funds.pools).toEqual([]);
     expect(JSON.stringify(priya)).not.toContain(String(POOL_CENTS));
   });
@@ -512,10 +607,10 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     }).returning();
     await db.insert(creditHolds).values({ userId: world.ids.dana, walletId: child.id, estCents: 600, expiresAt: new Date(Date.now() + 60_000) });
     try {
-      expect(await topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 500, idempotencyKey: createId() }, 'session'))
+      expect(await topUpDriveWallet(credentialActor(world.ids.dana, null), notes.id, { amountCents: 500, idempotencyKey: createId() }, 'session'))
         .toMatchObject({ ok: false, status: 402, code: 'insufficient_funds' });
       expect((await walletRow(root.id)).monthlyRemainingCents).toBe(1_000);
-      expect(await topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 400, idempotencyKey: createId() }, 'session'))
+      expect(await topUpDriveWallet(credentialActor(world.ids.dana, null), notes.id, { amountCents: 400, idempotencyKey: createId() }, 'session'))
         .toMatchObject({ ok: true, amountCents: 400 });
     } finally {
       await db.delete(creditHolds).where(eq(creditHolds.walletId, child.id));
@@ -548,9 +643,9 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
         await released;
       });
       await locked;
-      const donation = donateToDrive(world.ids.dana, notes.id, { amountCents: 200, idempotencyKey: createId() }, 'session');
+      const donation = donateToDrive(credentialActor(world.ids.dana, null), notes.id, { amountCents: 200, idempotencyKey: createId() }, 'session');
       await new Promise((resolve) => setTimeout(resolve, 300));
-      const topUp = topUpDriveWallet(world.ids.dana, notes.id, { amountCents: 300, idempotencyKey: createId() }, 'session');
+      const topUp = topUpDriveWallet(credentialActor(world.ids.dana, null), notes.id, { amountCents: 300, idempotencyKey: createId() }, 'session');
       await new Promise((resolve) => setTimeout(resolve, 300));
       release();
       await blocker;
@@ -570,8 +665,8 @@ describe('drive-wallet service (orgs on, real Postgres)', () => {
     if (!world) return;
     const key = createId();
     const [a, b] = await Promise.all([
-      topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
-      topUpDriveWallet(world.ids.priya, world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
+      topUpDriveWallet(credentialActor(world.ids.priya, null), world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
+      topUpDriveWallet(credentialActor(world.ids.priya, null), world.productId, { amountCents: 1_000, idempotencyKey: key }, 'session'),
     ]);
     expect([a, b].map((r) => r.ok)).toEqual([true, true]);
     expect([a, b].filter((r) => r.ok && r.duplicate)).toHaveLength(1);

@@ -9,6 +9,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Unified assignee type for task assignment
@@ -53,10 +54,10 @@ export async function GET(
 
     const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'You don\'t have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
 
     // Fetch members with their profiles

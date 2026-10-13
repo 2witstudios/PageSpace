@@ -15,6 +15,7 @@ import { mcpTokens } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
+import { ceremonyAuthentication } from '../../../packages/lib/src/auth/authentication-evidence';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
 
@@ -75,6 +76,8 @@ export async function seedUser(opts: SeedOptions = {}): Promise<SeededUser> {
   });
 
   const sessionToken = await sessionService.createSession({
+    // Test fixture: stands in for an emailed-link sign-in (D-OW-45).
+    authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()),
     userId: user.id,
     type: 'user',
     scopes: [],

@@ -458,7 +458,7 @@ export async function autoJoinVerifiedDomainOrg(
     }
 
     // The joiner takes a seat like an invite does; no inviter, so the refusal reads for a member.
-    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER' }, input.seatBilling);
+    const seat: SeatAdmission = await admitSeat(tx, { orgId, actorRole: 'MEMBER', credential: 'session' }, input.seatBilling);
     if (!seat.ok) {
       await refusedRejoin(orgId, 'seats_full');
       return { result: { kind: 'refused', orgId, reason: 'seats_full', message: seat.message }, sync: null, domain };

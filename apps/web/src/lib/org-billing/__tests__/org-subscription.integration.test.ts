@@ -204,7 +204,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
       const { result } = await provisionOrgSubscription(org.orgId, org.deps);
       const subscriptionId = result.linkage.stripeSubscriptionId;
       org.stripe.payLatestInvoice(subscriptionId);
-      if (opts.funded ?? true) await applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), { ...PRICES, active: true });
+      if (opts.funded ?? true) await applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
       await provisionOrgSubscription(org.orgId, org.deps);
       const sub = org.stripe.subscriptions.get(subscriptionId)!;
       return { ...org, sub, writes: () => ({ ...org.stripe.writes }) };
@@ -322,7 +322,7 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
 
     /** What the invoice.paid webhook does with the paid invoice: the real funding shell, recording the proof. */
     async function deliverInvoicePaid(org: { stripe: FakeOrgStripe }, subscriptionId: string) {
-      return applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), { ...PRICES, active: true });
+      return applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
     }
 
     it('SEAT-9 (partial) an active subscription with verified funding is existing: no invoice read, no write, no payment step', async () => {

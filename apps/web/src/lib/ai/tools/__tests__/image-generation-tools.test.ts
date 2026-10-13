@@ -85,6 +85,7 @@ import { ImageGenerationError } from '@/lib/ai/core/image-generation';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
 import { buildVoiceToolContext } from '@/lib/ai/realtime/tool-dispatch';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>) =>
   imageGenerationTools.generate_image.execute!(input as never, {
@@ -151,7 +152,7 @@ describe('generate_image destination', () => {
 
   it('SPEND-6 (partial) WAL-7 (partial) an image made inside a manual Run is gated and settled as the person who pressed Run, on the run\'s wallet, not as the workflow\'s creator (review #2817 P3-A)', async () => {
     okGeneration();
-    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work', userId: 'u-presser' } as ToolExecutionContext['creditSpend'];
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work', userId: 'u-presser' , accessActor: credentialActor('u-presser', null)} as ToolExecutionContext['creditSpend'];
 
     await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') });
 

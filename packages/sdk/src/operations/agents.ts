@@ -293,6 +293,13 @@ export const askAgent = defineOperation({
      * (`conversations.read`) instead of paid-for and lost.
      */
     newConversationId: z.string().min(1).optional(),
+    /**
+     * The drive of the session this consultation is called from, when the caller works in a
+     * drive other than the one the agent lives in (SPEND-7): the consultation's credits, usage
+     * and the org's model policy follow that drive. The caller must be able to use it (403
+     * otherwise). Omitted, the consultation's own conversation on the agent page is its session.
+     */
+    sessionDriveId: z.string().min(1).optional(),
   }),
   outputSchema: askAgentOutputSchema,
   requiredScope: 'drive',

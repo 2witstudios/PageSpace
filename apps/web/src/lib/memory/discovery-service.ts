@@ -13,6 +13,7 @@ import { db } from '@pagespace/db/db';
 import { and, desc, eq, gte, inArray, ne } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { orgIdsOfDrives } from '@pagespace/lib/permissions/org-derived-content';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
@@ -21,6 +22,7 @@ import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-
 import { memberDrivesReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { z } from 'zod';
+import { type AccessActor, HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * The drives the user is a member of, owned or joined (org-aware), whose org lets the discovery model read them
@@ -29,7 +31,7 @@ import { z } from 'zod';
  * global-assistant conversations: they carry no drive, so any of those orgs' content may be in them.
  */
 async function readableMemberDrives(userId: string): Promise<{ driveIds: string[]; allReadable: boolean }> {
-  return memberDrivesReadableByModel(userId, { provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL });
+  return memberDrivesReadableByModel(discoveryActor(userId), { provider: BACKGROUND_HEAVY_PROVIDER, modelId: BACKGROUND_HEAVY_MODEL });
 }
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
@@ -78,6 +80,11 @@ export interface DiscoveredClaim {
 
 export interface DiscoveryResult {
   claims: DiscoveredClaim[];
+  /**
+   * SEC-2/3 (D-OW-62): the orgs whose drives fed the transcript and activity every pass read (personal drives and
+   * global conversations feed none). All three passes share one context, so every claim carries all of them.
+   */
+  orgIds: string[];
   /** Set when the credit gate refused a pass: that pass ran no model and was not charged. */
   creditRefusal?: MemoryGateRefusal;
 }
@@ -89,6 +96,13 @@ interface ConversationMessage {
   role: string;
   content: string;
   createdAt: Date;
+  /** The drive of the page a page-agent message was written in; null for a global conversation. */
+  driveId: string | null;
+}
+
+interface ActivityLine {
+  line: string;
+  driveId: string | null;
 }
 
 // Zod schema for structured output — eliminates silent parse failures.
@@ -227,6 +241,7 @@ async function gatherRecentConversations(
       role: m.role,
       content: m.content,
       createdAt: m.createdAt,
+      driveId: null,
     }))
   );
 
@@ -238,6 +253,7 @@ async function gatherRecentConversations(
         content: messages.content,
         role: messages.role,
         createdAt: messages.createdAt,
+        driveId: pages.driveId,
       })
       .from(messages)
       .innerJoin(conversations, eq(conversations.id, messages.conversationId))
@@ -259,6 +275,7 @@ async function gatherRecentConversations(
         role: m.role,
         content: m.content || '',
         createdAt: m.createdAt,
+        driveId: m.driveId,
       }))
     );
   }
@@ -269,12 +286,20 @@ async function gatherRecentConversations(
 }
 
 /**
+ * Discovery is a cron pass with no one signing in: it reads as the user, an automation (D-OW-34) over every drive they
+ * hold, because what it distills is filtered per reader by the sign-in policy of each org it drew from (D-OW-62).
+ */
+function discoveryActor(userId: string): AccessActor {
+  return automationActor(userId, 'memory-discovery', HELD_DRIVES);
+}
+
+/**
  * Gather recent activity patterns.
  */
 async function gatherRecentActivity(
   userId: string,
   lookbackDays: number = LOOKBACK_DAYS
-): Promise<string[]> {
+): Promise<ActivityLine[]> {
   const lookbackDate = new Date();
   lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
 
@@ -287,6 +312,7 @@ async function gatherRecentActivity(
       operation: activityLogs.operation,
       resourceType: activityLogs.resourceType,
       resourceTitle: activityLogs.resourceTitle,
+      driveId: activityLogs.driveId,
     })
     .from(activityLogs)
     .where(
@@ -299,10 +325,10 @@ async function gatherRecentActivity(
     .orderBy(desc(activityLogs.timestamp))
     .limit(30); // was 50, reduced
 
-  return activities.map(
-    (a) =>
-      `${a.operation} ${a.resourceType}${a.resourceTitle ? `: "${a.resourceTitle}"` : ''}`
-  );
+  return activities.map((a) => ({
+    line: `${a.operation} ${a.resourceType}${a.resourceTitle ? `: "${a.resourceTitle}"` : ''}`,
+    driveId: a.driveId,
+  }));
 }
 
 /**
@@ -416,7 +442,7 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
       userId,
       messageCount: recentMessages.length,
     });
-    return { claims: [] };
+    return { claims: [], orgIds: [] };
   }
 
   // Format conversation context: 60 messages × 1500 chars (was 100 × 500).
@@ -438,10 +464,16 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
     .map((m, i) => `[${i} ${m.role}]: ${m.content.substring(0, 1500)}`)
     .join('\n\n');
 
+  const activityShown = recentActivity.slice(0, 20);
   const activityContext =
-    recentActivity.length > 0
-      ? `\n\nRecent workspace activity:\n${recentActivity.slice(0, 20).join('\n')}`
+    activityShown.length > 0
+      ? `\n\nRecent workspace activity:\n${activityShown.map((a) => a.line).join('\n')}`
       : '';
+
+  // Exactly the drives whose content the passes are about to read.
+  const orgIds = await orgIdsOfDrives(
+    [...windowed, ...activityShown].flatMap((source) => (source.driveId ? [source.driveId] : []))
+  );
 
   const fullContext = conversationContext + activityContext;
 
@@ -504,7 +536,7 @@ export async function runDiscoveryPasses(userId: string): Promise<DiscoveryResul
 
   if (creditRefusal) {
     loggers.api.info('Memory discovery: credit gate refused a pass', { userId, reason: creditRefusal });
-    return { claims: allClaims, creditRefusal };
+    return { claims: allClaims, orgIds, creditRefusal };
   }
-  return { claims: allClaims };
+  return { claims: allClaims, orgIds };
 }

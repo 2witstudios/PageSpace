@@ -50,6 +50,8 @@ import { getUserAccessLevel } from '../../permissions/permissions';
 import { addAgentToDrive, setAgentDriveIncludeContext } from '../../services/drive-agent-service';
 import { EnforcedAuthContext } from '../../permissions/enforced-context';
 import type { SessionClaims } from '../../auth/session-service';
+import { credentialActor } from '../../permissions/access-actor';
+import { tokenOwnerActor } from '../../permissions/__tests__/fixtures/token-owner-actor';
 
 type Name = 'jono' | 'priya' | 'dana' | 'marcus' | 'lena' | 'gita';
 
@@ -299,12 +301,12 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const asked = await requestToJoinDrive(w.ids.lena, w.product);
     if (!asked.ok) throw new Error(`setup: request refused ${asked.code}`);
     await lapse(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.product, asked.request.id, 'approve')).toEqual(ORG_LAPSED_REFUSAL);
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.product, asked.request.id, 'approve')).toEqual(ORG_LAPSED_REFUSAL);
     expect(await memberRow(w.product, w.ids.lena)).toBeNull();
     expect((await db.select({ status: driveJoinRequests.status }).from(driveJoinRequests).where(eq(driveJoinRequests.id, asked.request.id)))[0].status).toBe('pending');
 
     await pay(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.product, asked.request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.product, asked.request.id, 'approve')).toMatchObject({ ok: true, admitted: true });
     expect(await memberRow(w.product, w.ids.lena)).not.toBeNull();
 
     // Denying another request restricts nothing and still works while lapsed.
@@ -312,7 +314,7 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const second = await requestToJoinDrive(w.ids.marcus, w.ops);
     if (!second.ok) throw new Error(`setup: request refused ${second.code}`);
     await lapse(w);
-    expect(await answerDriveJoinRequest(w.ids.dana, w.ops, second.request.id, 'deny')).toMatchObject({ ok: true, action: 'deny' });
+    expect(await answerDriveJoinRequest(credentialActor(w.ids.dana, null), w.ops, second.request.id, 'deny')).toMatchObject({ ok: true, action: 'deny' });
   });
 
   it('SEAT-9 (partial) [D-OW-33] inventory #18 a lead change is refused while lapsed (the lead is unchanged); paid, it goes through', async () => {
@@ -364,19 +366,19 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     if (!world) return;
     const w = world;
     await lapse(w);
-    expect(await addAgentToDrive({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product }))
+    expect(await addAgentToDrive({ actor: credentialActor(w.ids.dana, null), agentPageId: w.agent, driveId: w.product }))
       .toEqual({ ok: false, status: 402, error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
     expect(await db.select().from(driveAgentMembers).where(eq(driveAgentMembers.driveId, w.product))).toHaveLength(0);
 
     await pay(w);
-    expect(await addAgentToDrive({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product })).toMatchObject({ ok: true });
+    expect(await addAgentToDrive({ actor: credentialActor(w.ids.dana, null), agentPageId: w.agent, driveId: w.product })).toMatchObject({ ok: true });
     await lapse(w);
-    expect(await setAgentDriveIncludeContext({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product, includeContext: true }))
+    expect(await setAgentDriveIncludeContext({ actor: credentialActor(w.ids.dana, null), agentPageId: w.agent, driveId: w.product, includeContext: true }))
       .toEqual({ ok: false, status: 402, error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
     await pay(w);
-    expect(await setAgentDriveIncludeContext({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product, includeContext: true })).toMatchObject({ ok: true });
+    expect(await setAgentDriveIncludeContext({ actor: credentialActor(w.ids.dana, null), agentPageId: w.agent, driveId: w.product, includeContext: true })).toMatchObject({ ok: true });
     await lapse(w);
-    expect(await setAgentDriveIncludeContext({ actingUserId: w.ids.dana, agentPageId: w.agent, driveId: w.product, includeContext: false })).toMatchObject({ ok: true });
+    expect(await setAgentDriveIncludeContext({ actor: credentialActor(w.ids.dana, null), agentPageId: w.agent, driveId: w.product, includeContext: false })).toMatchObject({ ok: true });
   });
 
   it('SEAT-9 (partial) [D-OW-33] inventory #19 ruling: while lapsed, ownership moves to an existing Admin (who already reaches every org drive); a transfer that would grant new access (a plain Member) is refused 402 and nothing moves; an outsider is refused as always; paid, a Member can take it', async () => {
@@ -487,20 +489,20 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
 
     for (const state of ['paid', 'lapsed'] as const) {
       if (state === 'lapsed') await lapse(w);
-      expect(await getUserAccessLevel(w.ids.marcus, secret.id)).toBeNull();
+      expect(await getUserAccessLevel(credentialActor(w.ids.marcus, null), secret.id)).toBeNull();
       // Mint / re-scope: the plain role and another custom role are refused; his own role passes.
-      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER' }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([w.product]);
-      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: w.readerRole }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([w.product]);
-      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: locked.id }], w.ids.marcus)).unauthorizedCustomRoles).toEqual([]);
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER' }], credentialActor(w.ids.marcus, null))).unauthorizedCustomRoles).toEqual([w.product]);
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: w.readerRole }], credentialActor(w.ids.marcus, null))).unauthorizedCustomRoles).toEqual([w.product]);
+      expect((await validateDriveScopeAccess([{ id: w.product, role: 'MEMBER', customRoleId: locked.id }], credentialActor(w.ids.marcus, null))).unauthorizedCustomRoles).toEqual([]);
       // Resolution: the existing key reads exactly what its owner reads, here nothing.
-      expect(await getAppAccessLevel(token.id, secret.id)).toBeNull();
-      expect((await getAppAccessiblePagesInDrive(token.id, w.product)).map((p) => p.id)).not.toContain(secret.id);
+      expect(await getAppAccessLevel(await tokenOwnerActor(token.id), token.id, secret.id)).toBeNull();
+      expect((await getAppAccessiblePagesInDrive(await tokenOwnerActor(token.id), token.id, w.product)).map((p) => p.id)).not.toContain(secret.id);
     }
 
     // The key never reads LESS than its role and the owner both allow: give Marcus a view grant, and the key sees it.
     await pay(w);
     await factories.createPagePermission(secret.id, w.ids.marcus, { canView: true });
-    expect(await getAppAccessLevel(token.id, secret.id)).toMatchObject({ canView: true, canEdit: false });
+    expect(await getAppAccessLevel(await tokenOwnerActor(token.id), token.id, secret.id)).toMatchObject({ canView: true, canEdit: false });
   });
 
   it('SEAT-9 (partial) [D-OW-33] review P3 (advisory lock): a role widened while unheld and a member moved onto that role, interleaved, cannot together loosen a lapsed drive; the member write waits on the drive lock and sees the wider role', async () => {
@@ -537,16 +539,16 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
     await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'ADMIN', customRoleId: null });
     const oauth = [{ driveId: w.product, role: 'ADMIN' as const, customRoleId: null }];
-    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('ADMIN');
-    expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('ADMIN');
+    expect((await getAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product))?.role).toBe('ADMIN');
+    expect((await getEffectiveScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product))?.role).toBe('ADMIN');
     await db.update(driveMembers).set({ role: 'MEMBER' }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
     for (const state of ['paid', 'lapsed'] as const) {
       if (state === 'lapsed') await lapse(w);
-      expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('MEMBER');
-      expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('MEMBER');
+      expect((await getAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product))?.role).toBe('MEMBER');
+      expect((await getEffectiveScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product))?.role).toBe('MEMBER');
     }
     await db.update(driveMembers).set({ role: 'ADMIN' }).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
-    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('ADMIN');
+    expect((await getAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product))?.role).toBe('ADMIN');
   });
 
   it('SEAT-9 (partial) [D-OW-33] review r3 P1-A: the calendar visibility guard (PATCH and the AI/MCP update tool) refuses widening an org-drive event while lapsed, allows narrowing, and allows widening when paid; a personal event is never refused', async () => {
@@ -572,12 +574,12 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const [event] = await db.insert(calendarEvents).values({ driveId: w.product, createdById: w.ids.dana, title: 'Launch', startAt: new Date(), endAt: new Date(Date.now() + 3_600_000), visibility: 'DRIVE', updatedAt: new Date() }).returning();
     const shares = async () => db.select({ driveId: calendarEventDrives.driveId }).from(calendarEventDrives).where(eq(calendarEventDrives.eventId, event.id));
     await lapse(w);
-    expect(await shareEventWithDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toEqual({ ok: false, status: 402, error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    expect(await shareEventWithDrive({ actor: credentialActor(w.ids.dana, null), eventId: event.id, driveId: w.ops })).toEqual({ ok: false, status: 402, error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
     expect(await shares()).toHaveLength(0);
     await pay(w);
-    expect(await shareEventWithDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true, status: 201 });
+    expect(await shareEventWithDrive({ actor: credentialActor(w.ids.dana, null), eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true, status: 201 });
     await lapse(w);
-    expect(await unshareEventFromDrive({ actingUserId: w.ids.dana, eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true });
+    expect(await unshareEventFromDrive({ actor: credentialActor(w.ids.dana, null), eventId: event.id, driveId: w.ops })).toMatchObject({ ok: true });
     expect(await shares()).toHaveLength(0);
   });
 
@@ -587,23 +589,23 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (orgs
     const [token] = await db.insert(mcpTokens).values({ userId: w.ids.marcus, tokenHash: `h_${createId()}`, tokenPrefix: 'mcp_', name: 'k' }).returning();
     await db.insert(mcpTokenDrives).values({ tokenId: token.id, driveId: w.product, role: 'MEMBER', customRoleId: null });
     const oauth = [{ driveId: w.product, role: 'MEMBER' as const, customRoleId: null }];
-    expect(await hasAppDriveMembership(token.id, w.product)).toBe(true);
-    expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(true);
+    expect(await hasAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product)).toBe(true);
+    expect(await hasScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product)).toBe(true);
     const [row] = await db.select().from(driveMembers).where(and(eq(driveMembers.driveId, w.product), eq(driveMembers.userId, w.ids.marcus)));
     await db.delete(driveMembers).where(eq(driveMembers.id, row.id));
     for (const state of ['paid', 'lapsed'] as const) {
       if (state === 'lapsed') await lapse(w);
-      expect(await hasAppDriveMembership(token.id, w.product)).toBe(false);
-      expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(false);
+      expect(await hasAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product)).toBe(false);
+      expect(await hasScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product)).toBe(false);
       // Review #2849 r6: the role readers answer null too, so no caller reads a dangling row's role as membership.
-      expect(await getAppDriveMembership(token.id, w.product)).toBeNull();
-      expect(await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBeNull();
+      expect(await getAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product)).toBeNull();
+      expect(await getEffectiveScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product)).toBeNull();
     }
     await db.insert(driveMembers).values(row);
-    expect(await hasAppDriveMembership(token.id, w.product)).toBe(true);
-    expect(await hasScopedDriveMembership(oauth, w.ids.marcus, w.product)).toBe(true);
-    expect((await getAppDriveMembership(token.id, w.product))?.role).toBe('MEMBER');
-    expect((await getEffectiveScopedDriveMembership(oauth, w.ids.marcus, w.product))?.role).toBe('MEMBER');
+    expect(await hasAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product)).toBe(true);
+    expect(await hasScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product)).toBe(true);
+    expect((await getAppDriveMembership(await tokenOwnerActor(token.id), token.id, w.product))?.role).toBe('MEMBER');
+    expect((await getEffectiveScopedDriveMembership(oauth, credentialActor(w.ids.marcus, null), w.product))?.role).toBe('MEMBER');
   });
 
   it('SEAT-9 (partial) [D-OW-33] review r4 P3: the calendar visibility guard holds the event row FOR UPDATE until its transaction ends (a concurrent locker cannot take it)', async () => {
