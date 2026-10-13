@@ -28,7 +28,6 @@
  * member or credit is deleted or moved, so leaving lapse restores everything.
  */
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
-import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
 import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { findOrgIdByStripeCustomerId } from '@pagespace/lib/organizations/repository';
