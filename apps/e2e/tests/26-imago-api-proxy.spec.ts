@@ -117,7 +117,7 @@ test.describe('imago dev /api proxy', () => {
 type Probed = HTMLElement & { __probe?: string };
 
 const railLink = (page: Page, name: string): Locator =>
-  page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name, exact: true });
+  page.getByRole('navigation', { name: 'Sections' }).getByRole('link', { name, exact: true });
 
 test.describe('imago under next dev in a browser', () => {
   let user: SeededUser;
@@ -158,7 +158,7 @@ test.describe('imago under next dev in a browser', () => {
 
       // Server-rendered markup is visible before hydration; the shell says when React has it.
       await expect(page.locator('[data-section][data-hydrated]')).toHaveCount(1, { timeout: 60_000 });
-      const rail = page.getByRole('navigation', { name: 'Primary' });
+      const rail = page.getByRole('navigation', { name: 'Sections' });
       await rail.evaluate((node) => {
         (node as Probed).__probe = 'rail';
       });
