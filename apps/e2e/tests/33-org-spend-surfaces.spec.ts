@@ -79,7 +79,8 @@ async function expectPersonalCharge(w: SpendWorld, before: Awaited<ReturnType<ty
   expect(personal).not.toBeNull();
   const initial = before.wallets.find((wallet) => wallet.id === personal!.id)!;
   await expect.poll(async () => (await getBalance(w.marcus.userId))!.monthlyRemainingCents, { timeout: 15_000 }).toBeLessThan(initial.monthlyRemainingCents);
-  const usage = await getLedger(w.marcus.userId, 'usage');
+  const priorLedgerIds = new Set(before.ledger.map(row => row.id));
+  const usage = (await getLedger(w.marcus.userId, 'usage')).filter(row => !priorLedgerIds.has(row.id));
   expect(usage).toHaveLength(1);
   expect(usage[0].walletId).toBe(personal!.id);
   expect(usage[0].appliedCents).toBeLessThan(0);
@@ -158,6 +159,7 @@ test.describe('UI-8 (partial) the spend surfaces for a member in an org drive', 
   test('SPEND-2 (partial) SPEND-3 (partial) a fresh global draft chooses its wallet before the first message, remains out of history until sent, and charges the chosen personal wallet', async ({ browser, baseURL, request }) => {
     const w = await seedSpendWorld();
     const page = await openAs(browser, w.marcus, baseURL!);
+    const pulseResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/pulse/generate' && response.request().method() === 'POST');
     await page.goto(`/dashboard/${w.productId}`);
     const globalChat = page.getByTestId('global-assistant-view');
     await expect(globalChat).toBeVisible();
@@ -166,7 +168,18 @@ test.describe('UI-8 (partial) the spend surfaces for a member in an org drive', 
     const draftId = await globalChat.evaluate((node) => node.closest('[data-spend-surface]')?.getAttribute('data-spend-surface'));
     expect(draftId).toBeTruthy();
     expect(await db.select().from(conversations).where(eq(conversations.id, draftId!))).toEqual([]);
+    // The global dashboard generates a personal Pulse before any chat send.
+    // Wait for its asynchronous billing too, so the choice has its own baseline.
+    expect((await pulseResponse).ok()).toBe(true);
+    await expect.poll(async () => {
+      const state = await financialState(w);
+      return { pulse: state.usage.filter(row => row.source === 'pulse').length, ledger: state.ledger.filter(row => row.entryType === 'usage').length, holds: state.holds.length };
+    }).toEqual({ pulse: 1, ledger: 1, holds: 0 });
+    expect(await mockCallCount(request)).toBe(1);
     const before = await financialState(w);
+    const callsBefore = await mockCallCount(request);
+    const callsUrl = `${process.env.E2E_MOCK_OPENROUTER_URL ?? 'http://127.0.0.1:4998'}/__calls`;
+    expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false, messageCount: 2 }] });
 
     await strip.getByRole('button', { name: 'Change' }).click();
     const choices = page.getByRole('dialog').filter({ hasText: 'Your credits' });
@@ -180,13 +193,14 @@ test.describe('UI-8 (partial) the spend surfaces for a member in an org drive', 
     const hiddenHistory = await page.request.get('/api/ai/global');
     expect(hiddenHistory.ok()).toBe(true);
     expect(((await hiddenHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(false);
-    expect(await mockCallCount(request)).toBe(0);
+    expect(await mockCallCount(request)).toBe(callsBefore);
     expect(await financialState(w)).toEqual(before);
     await captureOrgEvidence(page, 'fresh-global-draft-own-choice');
 
     await sendChatMessage(globalChat, 'Summarize the launch plan');
     await expect(globalChat.locator('[data-testid="chat-message"][data-role="assistant"]').first()).toBeVisible({ timeout: 60_000 });
-    expect(await mockCallCount(request)).toBe(1);
+    expect(await mockCallCount(request)).toBe(callsBefore + 1);
+    expect(await (await request.get(callsUrl)).json()).toMatchObject({ requests: [{ stream: false }, { stream: true }] });
     await expectPersonalCharge(w, before);
     const visibleHistory = await page.request.get('/api/ai/global');
     expect(((await visibleHistory.json()) as { id: string }[]).some((row) => row.id === draftId)).toBe(true);
