@@ -54,12 +54,12 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
     const failed = (conversationId ? conversationError : driveError) !== null && (conversationId ? conversationError : driveError) !== undefined;
     const retry = () => { if (conversationId) void refreshConversation(); else void refreshDrive(); };
     return (
-      <div className={spendStripClass} role="status" aria-label={failed ? 'Credit source could not be checked' : 'Resolving credit source'}>
+      <div data-testid={failed ? 'composer-spend-strip-error' : 'composer-spend-strip-pending'} className={spendStripClass} role="status" aria-label={failed ? 'Credit source could not be checked' : 'Resolving credit source'}>
         {renderIcon({ name: 'wallet', size: 13 })}
         <span className="min-w-0 flex-1 truncate">
           {failed ? 'Who pays could not be checked — sending is paused until the source is shown.' : 'Resolving who pays…'}
         </span>
-        {failed ? <button type="button" className="font-medium text-accent-deep hover:underline" onClick={retry}>Retry check</button> : null}
+        {failed ? <button type="button" data-testid="composer-spend-retry" className="font-medium text-accent-deep hover:underline" onClick={retry}>Retry check</button> : null}
       </div>
     );
   }

@@ -26,11 +26,41 @@ export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessa
   persistentBelowLg?: boolean;
   className?: string;
 }) {
-  const { spend, choose } = useConversationSpend(conversationId, { driveId, isGlobal });
+  const { spend, isPending, error, choose, refresh } = useConversationSpend(conversationId, { driveId, isGlobal });
   const [open, setOpen] = useState(false);
   const stayBelowLg = persistentBelowLg && hasMessages;
   const strip = spend ? composerStripModel({ options: spend.options, resolved: spend.resolved, hasMessages: hasMessages && !stayBelowLg }) : null;
-  if (!spend || !strip) return null;
+  // JOURNEYS-2: in a drive (multi-source) context an UNRESOLVED source is state the sender
+  // must see, not silence — a hidden strip used to leave Send enabled on an undisclosed
+  // wallet. Pending names what is being resolved; a failed preview offers the retry. The
+  // composer's readiness gate reads the same preview, so sending stays paused meanwhile.
+  if (!spend || !strip) {
+    if (!driveId) return null; // single-source context: nothing to disclose
+    if (error) {
+      return (
+        <div
+          data-testid="composer-spend-strip-error"
+          className={cn('flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200', stayBelowLg && 'lg:hidden', className)}
+        >
+          <span className="min-w-0 flex-1 truncate">Who pays could not be checked — sending is paused until the source is shown.</span>
+          <button type="button" data-testid="composer-spend-retry" onClick={() => void refresh()} className="shrink-0 font-medium text-primary hover:underline">
+            Retry check
+          </button>
+        </div>
+      );
+    }
+    if (isPending) {
+      return (
+        <div
+          data-testid="composer-spend-strip-pending"
+          className={cn('flex items-center gap-2 rounded-lg border bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground', stayBelowLg && 'lg:hidden', className)}
+        >
+          <span className="min-w-0 flex-1 truncate">Resolving who pays…</span>
+        </div>
+      );
+    }
+    return null;
+  }
 
   const resolvedWalletId = spend.resolved.kind === 'spend' ? spend.resolved.walletId : null;
   const selected = resolvedWalletId ? spend.options.find((o) => o.walletId === resolvedWalletId) ?? null : null;

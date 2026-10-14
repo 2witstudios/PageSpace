@@ -32,9 +32,12 @@ describe('actual conversation spend disclosure', () => {
     expect(markup()).toContain('Your Team allowance');
     expect(markup()).toContain('Design wallet cannot cover this');
   });
-  test('does not invent personal funding while a scoped wallet is still loading', () => {
+  test('does not invent personal funding while a scoped wallet is still loading — it names the resolution instead of silence', () => {
     state.spend = null;
-    expect(markup()).toBe('');
+    const result = markup();
+    expect(result).toContain('Resolving who pays');
+    expect(result).not.toContain('Your credits');
+    expect(result).not.toContain('Design wallet');
   });
 });
 

@@ -12,6 +12,12 @@ import type { SessionChatProps } from '@/retained/components/agents/chat/Session
 import type { ChatInputProps } from '@/retained/components/ai/chat/input/ChatInput';
 
 const boundary = vi.hoisted(() => ({ canEdit: true, session: null as SessionChatProps | null }));
+// JOURNEYS-2's first-send readiness reads the drive preview; the suites here test creation
+// mechanics, so hand them a resolved preview (the normal state).
+vi.mock('@/retained/hooks/useConversationSpend', () => ({
+  useConversationSpend: () => ({ spend: null, isPending: false, error: null, isLoading: false, choose: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined) }),
+  useDriveSpend: () => ({ spend: { driveId: 'drive-1', options: [], resolved: { kind: 'spend', source: 'drive_wallet', walletId: 'w-1' } }, isPending: false, error: null, isLoading: false, refresh: vi.fn(async () => undefined) }),
+}));
 vi.mock('@/retained/hooks/usePermissions', () => ({ usePermissions: () => ({ permissions: { canEdit: boundary.canEdit } }) }));
 vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({ ChatMessagesArea: () => <div data-empty-messages="" /> }));
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
