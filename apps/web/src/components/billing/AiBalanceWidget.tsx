@@ -25,15 +25,15 @@ export function AiBalanceWidget() {
   const entries = useSpendContextStore((state) => state.entries);
   const [pinned, setPinned] = useState<SpendContext | null>(null);
   const target = pinned ?? active;
-  const { spend: conversationSpend, isPending, choose } = useConversationSpend(target?.conversationId ?? null, {
+  const { spend: conversationSpend, isMissingDraft, choose } = useConversationSpend(target?.conversationId ?? null, {
     driveId: target?.driveId ?? null,
     isGlobal: target?.isGlobal ?? false,
   });
-  // A fresh local draft has no stored row until its first send. Its authoritative 404
-  // previews the mounted session drive; a stored conversation still loading keeps its choice.
+  // A confirmed missing draft may preview its mounted drive. Revalidating an existing
+  // conversation must not substitute the drive default for its unresolved chosen source.
   const currentDriveId = focusDriveId(useFocus()) ?? null;
   const previewDriveId = target ? target.driveId : currentDriveId;
-  const usePreview = !target || (isPending && !conversationSpend);
+  const usePreview = !target || (isMissingDraft && !conversationSpend);
   const { spend: driveSpend } = useDriveSpend(usePreview ? previewDriveId : null);
   const [driveOpen, setDriveOpen] = useState(false);
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import type { ReactNode } from 'react';
 
@@ -29,6 +29,12 @@ const driveSpend = { driveId: 'd-product', options: [], resolved: { kind: 'spend
 const found = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
 const wrapper = ({ children }: { children: ReactNode }) => <SWRConfig value={{ provider: () => new Map() }}>{children}</SWRConfig>;
 
+function useTestSpend(kind: 'conversation' | 'drive') {
+  const conversation = useConversationSpend(kind === 'conversation' ? 'c1' : null, { driveId: 'd-product', isGlobal: false });
+  const drive = useDriveSpend(kind === 'drive' ? 'd-product' : null);
+  return kind === 'conversation' ? conversation : drive;
+}
+
 beforeEach(() => {
   fetchWithAuth.mockReset();
   socketState.handlers.clear();
@@ -38,23 +44,58 @@ beforeEach(() => {
 // switch); window 2's displayed preview must refetch — the event is the invalidation.
 describe('a spend preference change in another window', () => {
   it('refetches the conversation preview of the same person', async () => {
-    fetchWithAuth.mockResolvedValue(found(spend));
+    fetchWithAuth.mockImplementation(async () => found(spend));
     const { result } = renderHook(() => useConversationSpend('c1', { driveId: 'd-product', isGlobal: false }), { wrapper });
     await waitFor(() => expect(result.current.spend).not.toBeNull());
     expect(fetchWithAuth).toHaveBeenCalledTimes(1);
 
-    socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.();
+    act(() => socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.());
     await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(result.current.spend).not.toBeNull());
   });
 
   it('refetches the drive preview shown while no conversation is in view', async () => {
-    fetchWithAuth.mockResolvedValue(found(driveSpend));
+    fetchWithAuth.mockImplementation(async () => found(driveSpend));
     const { result } = renderHook(() => useDriveSpend('d-product'), { wrapper });
     await waitFor(() => expect(result.current.spend).not.toBeNull());
     expect(fetchWithAuth).toHaveBeenCalledTimes(1);
 
-    socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.();
+    act(() => socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.());
     await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledTimes(2));
+  });
+});
+
+// A cached source is no longer sending authority after a preference invalidation.
+describe('invalidated spend previews', () => {
+  it.each(['conversation', 'drive'] as const)('withholds the cached %s source while a replacement read is in flight', async kind => {
+    const body = kind === 'conversation' ? spend : driveSpend;
+    let finishRead!: (response: Response) => void;
+    const replacement = new Promise<Response>(resolve => { finishRead = resolve; });
+    fetchWithAuth.mockResolvedValueOnce(found(body)).mockReturnValueOnce(replacement);
+    const { result } = renderHook(() => useTestSpend(kind), { wrapper });
+    await waitFor(() => expect(result.current.spend).not.toBeNull());
+    act(() => socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.());
+    await waitFor(() => expect(fetchWithAuth).toHaveBeenCalledTimes(2));
+    try {
+      expect(result.current.spend).toBeNull();
+      expect(result.current.isPending).toBe(true);
+    } finally {
+      await act(async () => finishRead(found({ ...body, resolved: { kind: 'spend', source: 'own_credits', walletId: 'w-personal' } })));
+    }
+    await waitFor(() => expect(result.current.spend?.resolved).toMatchObject({ walletId: 'w-personal' }));
+  });
+
+  it.each(['conversation', 'drive'] as const)('refuses a cached %s source after failed revalidation until a successful retry discloses the new payer', async kind => {
+    const body = kind === 'conversation' ? spend : driveSpend;
+    fetchWithAuth.mockResolvedValueOnce(found(body)).mockResolvedValueOnce(new Response('{}', { status: 503 }));
+    const { result } = renderHook(() => useTestSpend(kind), { wrapper });
+    await waitFor(() => expect(result.current.spend).not.toBeNull());
+    act(() => socketState.handlers.get(SPEND_PREFERENCES_EVENT)?.());
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect(result.current.spend).toBeNull();
+    fetchWithAuth.mockResolvedValueOnce(found({ ...body, resolved: { kind: 'spend', source: 'own_credits', walletId: 'w-personal' } }));
+    await act(async () => { await result.current.refresh(); });
+    await waitFor(() => expect(result.current.spend?.resolved).toMatchObject({ walletId: 'w-personal' }));
+    expect(result.current.error).toBeUndefined();
   });
 });

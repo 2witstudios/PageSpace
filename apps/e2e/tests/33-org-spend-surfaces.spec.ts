@@ -396,3 +396,52 @@ test('JOURNEYS-3 two independent windows show the persisted source change before
   await sendChatMessage(secondChat, 'Summarize the launch plan');
   await expectPersonalCharge(w, before);
 });
+
+test('JOURNEYS-2 JOURNEYS-3 a failed cross-window refresh withholds the cached payer and blocks sending until retry', async ({ browser, baseURL, request }) => {
+  const w = await seedSpendWorld();
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const first = await openAs(browser, w.marcus, baseURL!);
+  const previewRead = first.waitForResponse(response => response.request().method() === 'GET' && response.ok() && new URL(response.url()).pathname.startsWith('/api/wallets/conversations/') && !new URL(response.url()).searchParams.has('driveId'));
+  await gotoChatPage(first, w.productId, pageId);
+  const { conversationId } = await (await previewRead).json() as { conversationId: string };
+  const firstChat = first.getByTestId('session-chat');
+  await expect(firstChat.getByTestId('composer-spend-strip')).toContainText('Product wallet');
+  const second = await openAs(browser, w.marcus, baseURL!, true);
+  await second.goto(`/dashboard/${w.productId}/${pageId}?conversationId=${encodeURIComponent(conversationId)}`);
+  const secondChat = second.getByTestId('session-chat');
+  await expect(secondChat.getByTestId('composer-spend-strip')).toContainText('Product wallet');
+  let failPreview = true;
+  let refusedPreviews = 0;
+  await second.route('**/api/wallets/**', async route => {
+    if (failPreview && route.request().method() === 'GET') {
+      refusedPreviews += 1;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Preview unavailable"}' });
+    } else await route.continue();
+  });
+  await firstChat.getByTestId('composer-spend-strip').getByRole('button', { name: 'Change', exact: true }).click();
+  await first.getByRole('radiogroup', { name: 'Spending source', exact: true }).getByRole('radio', { name: /^Your credits/ }).click();
+  await expect(firstChat.getByTestId('composer-spend-strip')).toContainText('Your credits');
+  await expect(secondChat.getByTestId('composer-spend-strip-error')).toBeVisible({ timeout: 15_000 });
+  expect(refusedPreviews).toBeGreaterThan(0);
+  await expect(secondChat.getByTestId('composer-spend-strip')).toHaveCount(0);
+  const before = await financialState(w);
+  const callsBefore = await mockCallCount(request);
+  const textarea = secondChat.getByTestId('chat-textarea');
+  await textarea.fill('Do not charge an undisclosed replacement payer');
+  await expect(second.locator('header').getByTestId('spend-source-chip')).toHaveCount(0);
+  await expect(secondChat.getByTestId('chat-send')).toBeDisabled();
+  await textarea.press('Enter');
+  await expect(textarea).toHaveValue('Do not charge an undisclosed replacement payer');
+  expect(await financialState(w)).toEqual(before);
+  expect(await mockCallCount(request)).toBe(callsBefore);
+  await textarea.fill('/btw Do not bypass an unresolved payer');
+  await textarea.press('Enter');
+  await expect(textarea).toHaveValue('/btw Do not bypass an unresolved payer');
+  expect(await financialState(w)).toEqual(before);
+  expect(await mockCallCount(request)).toBe(callsBefore);
+  failPreview = false;
+  await secondChat.getByTestId('composer-spend-retry').click();
+  await expect(secondChat.getByTestId('composer-spend-strip')).toContainText('Your credits');
+  await sendChatMessage(secondChat, 'Summarize the launch plan');
+  await expectPersonalCharge(w, before);
+});

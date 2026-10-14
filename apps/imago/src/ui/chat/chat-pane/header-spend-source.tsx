@@ -19,8 +19,8 @@ export function HeaderSpendSource({ agentId, conversationId }: { agentId: string
   const [pinned, setPinned] = useState<SpendContext | null>(null);
   const [open, setOpen] = useState(false);
   const target = pinned ?? active ?? fallback;
-  const { spend: conversation, isPending, choose } = useConversationSpend(target?.conversationId ?? null, { driveId: target?.driveId ?? null, isGlobal: target?.isGlobal ?? false });
-  const preview = !target?.conversationId || (isPending && !conversation);
+  const { spend: conversation, isMissingDraft, choose } = useConversationSpend(target?.conversationId ?? null, { driveId: target?.driveId ?? null, isGlobal: target?.isGlobal ?? false });
+  const preview = !target?.conversationId || (isMissingDraft && !conversation);
   const { spend: drive } = useDriveSpend(preview ? target?.driveId ?? null : null);
   const spend = preview ? drive : conversation;
   const resolved = spend?.resolved;

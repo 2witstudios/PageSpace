@@ -6,11 +6,12 @@ import { useSpendContextStore } from '@/stores/useSpendContextStore';
 const state = vi.hoisted(() => ({
   conversation: null as unknown,
   pending: true,
+  missingDraft: true,
   driveRead: vi.fn(),
 }));
 vi.mock('@/lib/dashboard/focus', () => ({ useFocus: () => ({ kind: 'drive', driveId: 'route-drive' }), focusDriveId: () => 'route-drive' }));
 vi.mock('@/hooks/useConversationSpend', () => ({
-  useConversationSpend: () => ({ spend: state.conversation, isPending: state.pending, choose: vi.fn() }),
+  useConversationSpend: () => ({ spend: state.conversation, isPending: state.pending, isMissingDraft: state.missingDraft, choose: vi.fn() }),
   useDriveSpend: (driveId: string | null) => {
     state.driveRead(driveId);
     return { spend: driveId ? {
@@ -27,6 +28,7 @@ vi.mock('@/components/billing/CreditBalance', () => ({ CreditBalance: () => <div
 beforeEach(() => {
   state.conversation = null;
   state.pending = true;
+  state.missingDraft = true;
   state.driveRead.mockClear();
   useSpendContextStore.setState({ entries: [], active: null });
 });
@@ -58,6 +60,7 @@ describe('SPEND-2 (partial) fresh local conversations disclose their actual driv
 
   it('does not substitute the drive default while an existing conversation\'s chosen source is still loading', () => {
     state.pending = false;
+    state.missingDraft = false;
     useSpendContextStore.getState().register('stored', { conversationId: 'stored-global', driveId: 'product', isGlobal: true });
     render(<AiBalanceWidget />);
     expect(screen.queryByTestId('spend-source-chip')).toBeNull();
@@ -65,4 +68,14 @@ describe('SPEND-2 (partial) fresh local conversations disclose their actual driv
     expect(state.driveRead).toHaveBeenLastCalledWith(null);
   });
 
+});
+
+it('does not display a drive default during an existing source revalidation', () => {
+  state.pending = true;
+  state.missingDraft = false;
+  useSpendContextStore.getState().register('stored', { conversationId: 'stored-global', driveId: 'product', isGlobal: true });
+  render(<AiBalanceWidget />);
+  expect(screen.queryByTestId('spend-source-chip')).toBeNull();
+  expect(screen.queryByTestId('personal-credit-chip')).toBeNull();
+  expect(state.driveRead).toHaveBeenLastCalledWith(null);
 });

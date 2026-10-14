@@ -66,18 +66,21 @@ export function useConversationSpend(conversationId: string | null, options: { d
     misses.current = { key: url, count: read === null ? (misses.current.key === url ? misses.current.count : 0) + 1 : 0 };
     return read;
   }, []);
-  const { data, error, isLoading, mutate } = useSWR<ConversationSpend | null>(key, countingFetcher, {
+  const { data, error, isLoading, isValidating, mutate } = useSWR<ConversationSpend | null>(key, countingFetcher, {
     refreshInterval: (latest) => (latest === null && misses.current.key === key ? pendingConversationRetryMs(misses.current.count) : 0),
     dedupingInterval: PENDING_CONVERSATION_RETRY_MS / 2,
     revalidateOnFocus: false,
   });
-  const isPending = data === null && !error;
-  const { spend: preview } = useDriveSpend(isPending && options.isGlobal ? options.driveId : null);
-  const spend = data ?? (isPending && options.isGlobal && preview && conversationId
+  const isMissingDraft = data === null && !error;
+  const isPending = !error && (isMissingDraft || isLoading || isValidating);
+  const { spend: preview, error: previewError } = useDriveSpend(isMissingDraft && options.isGlobal ? options.driveId : null);
+  // SWR retains cached data after a failed refresh. A changed payer must be resolved again
+  // before that data can authorize a send or disclose the source in another window.
+  const spend = error || isValidating ? null : data ?? (isMissingDraft && options.isGlobal && preview && conversationId
     ? { ...preview, conversationId, chosenWalletId: null }
     : null);
   const socket = useSocketStore((state) => state.socket);
-  const spendDriveId = spend?.driveId ?? null;
+  const spendDriveId = data?.driveId ?? preview?.driveId ?? null;
 
   useEffect(() => {
     if (!socket || !key) return;
@@ -101,13 +104,13 @@ export function useConversationSpend(conversationId: string | null, options: { d
   const choose = useCallback(
     async (walletId: string | null) => {
       if (!key) return;
-      const next = await put<ConversationSpend>(key, { walletId, ...(isPending && options.isGlobal && { createGlobalDraft: true }) });
+      const next = await put<ConversationSpend>(key, { walletId, ...(isMissingDraft && options.isGlobal && { createGlobalDraft: true }) });
       await mutate(next, { revalidate: false });
     },
-    [key, mutate, isPending, options.isGlobal],
+    [key, mutate, isMissingDraft, options.isGlobal],
   );
 
-  return { spend, isPending, error, isLoading, choose, refresh: mutate };
+  return { spend, isPending, isMissingDraft, error: error ?? previewError, isLoading, choose, refresh: mutate };
 }
 
 /** `GET /api/wallets/drives/[driveId]` (Spec SPEND-2): a drive's options and what a new conversation there would spend. */
@@ -135,7 +138,7 @@ const driveFetcher = async (url: string): Promise<DriveSpend | null> => {
  */
 export function useDriveSpend(driveId: string | null) {
   const key = driveSpendKey(driveId);
-  const { data, error, isLoading, mutate } = useSWR<DriveSpend | null>(key, driveFetcher, { revalidateOnFocus: false });
+  const { data, error, isLoading, isValidating, mutate } = useSWR<DriveSpend | null>(key, driveFetcher, { revalidateOnFocus: false });
   const socket = useSocketStore((state) => state.socket);
 
   useEffect(() => {
@@ -156,5 +159,5 @@ export function useDriveSpend(driveId: string | null) {
   }, [socket, key, driveId, mutate]);
 
   // JOURNEYS-2: send readiness reads this preview too — it exposes its state and a retry.
-  return { spend: data ?? null, isPending: data === undefined && !error, error, isLoading, refresh: mutate };
+  return { spend: error || isValidating ? null : data ?? null, isPending: !error && (data === undefined || isValidating), error, isLoading, refresh: mutate };
 }
