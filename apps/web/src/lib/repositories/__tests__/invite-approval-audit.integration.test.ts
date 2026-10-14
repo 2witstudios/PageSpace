@@ -81,9 +81,9 @@ describe('an emailed invitation carries its approval event', () => {
     });
     expect(invite.approvalStaged).toHaveLength(1);
     // No publish: the process stopped. Within the hold the drainer leaves it alone (the email may still fail and undo it).
-    await audit.drainOrgAuditOutbox({ now: withinHold() });
+    await audit.drainOrgAuditOutbox({ now: withinHold(), limit: 10_000 });
     expect(approvals()).toEqual([]);
-    await audit.drainOrgAuditOutbox({ now: afterHold() });
+    await audit.drainOrgAuditOutbox({ now: afterHold(), limit: 10_000 });
     expect(approvals()).toEqual([expect.objectContaining({ via: 'drive_invite' })]);
   });
 
@@ -93,7 +93,7 @@ describe('an emailed invitation carries its approval event', () => {
       tokenHash: createId(), email: `y-${createId()}@guest.test`, pageId: w.page, permissions: ['VIEW'],
       invitedBy: w.owner, expiresAt: null, now: new Date(), approval: approval({ via: 'page_invite' }),
     });
-    await audit.drainOrgAuditOutbox({ now: afterHold() });
+    await audit.drainOrgAuditOutbox({ now: afterHold(), limit: 10_000 });
     expect(approvals()).toEqual([expect.objectContaining({ via: 'page_invite' })]);
     await db.delete(pendingPageInvites).where(eq(pendingPageInvites.id, invite.id));
   });
@@ -106,7 +106,7 @@ describe('an emailed invitation carries its approval event', () => {
     });
     await audit.discardStagedOrgAuditEvents(db, invite.approvalStaged);
     await driveInviteRepository.deletePendingInvite(invite.id);
-    await audit.drainOrgAuditOutbox({ now: afterHold() });
+    await audit.drainOrgAuditOutbox({ now: afterHold(), limit: 10_000 });
     expect(approvals()).toEqual([]);
   });
 });

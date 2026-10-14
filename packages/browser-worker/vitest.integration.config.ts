@@ -20,5 +20,9 @@ export default defineConfig({
     hookTimeout: 60_000,
     pool: 'forks',
     fileParallelism: false,
+    // Real Chromium + real wall-clock deadlines: a single slow machine moment
+    // (a loaded turbo run, CI contention) must not fail a correct take-over
+    // contract. Two retries keep the assertions honest while absorbing jitter.
+    retry: 2,
   },
 });

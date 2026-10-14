@@ -117,7 +117,7 @@ describe('the approval event is committed with the admission', () => {
     expect(row).toMatchObject({ attempts: 1 });
 
     chain.refuse = false;
-    await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000) });
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000), limit: 10_000 });
     expect(approvals()).toEqual([expect.objectContaining({ userId: w.owner, details: expect.objectContaining({ targetUserId: outsider, origin: 'drive_link' }) })]);
   });
 
@@ -126,7 +126,7 @@ describe('the approval event is committed with the admission', () => {
     await updateOrgPolicies({ actorAuthentication: null, orgId: w.orgId, actorId: w.owner, patch: { guests: 'off' } });
     expect(await completeApprovedLinkAdmission(claim, guestDecisionAuditEvent(claim, 'org.guest.approved', w.owner))).toMatchObject({ ok: false });
     expect(await getUserDriveAccess(credentialActor(outsider, null), w.drive)).toBe(false);
-    await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000) });
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + ORG_AUDIT_PENDING_HOLD_MS + 2 * 60 * 60_000), limit: 10_000 });
     expect(approvals()).toEqual([]);
     expect((await db.select().from(orgAuditOutbox).where(eq(orgAuditOutbox.eventType, 'org.guest.approved'))).filter((r) => r.orgId === w.orgId)).toEqual([]);
   });

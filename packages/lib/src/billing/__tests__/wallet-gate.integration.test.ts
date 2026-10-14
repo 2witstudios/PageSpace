@@ -699,7 +699,9 @@ describe('the wallet-aware credit gate (real Postgres)', () => {
     }
   }
 
-  it('WAL-2 (partial) calls in flight count against the seat allowance: concurrent reservations cannot pass the cap together', async () => {
+  // Concurrent reservations under a loaded runner: the 5 s default has tripped when the
+  // whole monorepo's coverage runs in parallel, so give the interleaving room to finish.
+  it('WAL-2 (partial) calls in flight count against the seat allowance: concurrent reservations cannot pass the cap together', { timeout: 30_000 }, async () => {
     if (!dbAvailable) return;
     world = await build({ productAllocationCents: 1_000, poolCents: 900_000 });
     const w = world;

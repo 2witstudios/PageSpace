@@ -315,7 +315,7 @@ describe('the audit trail of a change', () => {
 
     audit.failNext = false;
     // Past every backoff: the drainer appends what the chain refused, in order.
-    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000), limit: 10_000 });
     expect(audit.events.filter((e) => e.orgId === orgId).map((e) => e.eventType)).toEqual(['org.policy.changed', 'org.policy.suspended']);
   });
 });

@@ -1007,7 +1007,7 @@ describe('org subscription provisioning audit (real Postgres, in-memory Stripe)'
     expect(billingEvents(orgId)).toEqual([]);
     expect(await queued(orgId)).not.toEqual([]);
     chain.refuse = false;
-    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000), limit: 10_000 });
     expect(billingEvents(orgId)).toEqual([expect.objectContaining({ source: 'provisioning', kind: 'created' })]);
   });
 

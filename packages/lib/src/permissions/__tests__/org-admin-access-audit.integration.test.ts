@@ -196,7 +196,7 @@ describe('ORG-4 (partial) audit dedupe (integration)', () => {
       await getUserAccessLevel(credentialActor(priya.id, null), salaries);
       expect(await queued(finance)).toHaveLength(1);
 
-      await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000) });
+      await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000), limit: 10_000 });
       expect(await settledCount(priya.id, finance, 1)).toBe(1);
       expect(await queued(finance)).toEqual([]);
     } finally {
