@@ -93,6 +93,9 @@ vi.mock('@/stores/useEditingStore', () => ({
       clearAllSessions: () => {},
       clearStaleSessions: () => {},
     }),
+    // useOrgs defers org:changed refreshes while anything is editing and resubscribes
+    // when editing ends; the tests never edit, so subscribe only needs to unsubscribe.
+    subscribe: (_listener: (state: unknown) => void) => () => {},
   },
 }));
 // `usePathname`/`useParams` are here for the real `VoiceSessionBridge` that

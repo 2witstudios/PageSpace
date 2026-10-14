@@ -228,6 +228,9 @@ describe('SPEND-6 automations, triggers and scheduled workflows spend the drive 
       text: 'done',
       steps: [{ text: 'done', toolCalls: [] }],
       usage: { inputTokens: 20_000, outputTokens: 2_000 },
+      // The settle consumes a tool-loop step's AGGREGATE usage (HIST-03) — what the real
+      // AI SDK reports as totalUsage.
+      totalUsage: { inputTokens: 20_000, outputTokens: 2_000 },
       response: { messages: [] },
       finishReason: 'stop',
     });

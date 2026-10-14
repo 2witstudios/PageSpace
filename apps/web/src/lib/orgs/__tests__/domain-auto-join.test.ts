@@ -60,6 +60,10 @@ describe('the sign-in seam', () => {
   const SEAM_MARKERS = /provisionHomeDriveIfNeeded\(|markEmailVerified(ForAddress)?\(|createUser\(|insert\(users\)|createOrLinkOAuthUser\(|verifySignupRegistration\(|buildMagicLinkPorts\(/;
   const EXEMPT: Record<string, string> = {
     'auth/magic-link/send/route.ts': 'creates an UNVERIFIED account and emails the link; the join runs when the link is redeemed (auth/magic-link/verify)',
+    // Passkey authentication signs in an account that already exists and whose address was
+    // verified when the passkey was registered (auth/signup-passkey ran the join then); it
+    // provisions nothing new, so a verified-domain join has nothing to act on here.
+    'auth/passkey/authenticate/route.ts': 'authenticates an existing passkey account; the address was verified and the join ran at signup-passkey',
   };
 
   it('SEC-1 (partial) no route creates an account, provisions one or verifies an address without the seam (or a stated exemption)', () => {

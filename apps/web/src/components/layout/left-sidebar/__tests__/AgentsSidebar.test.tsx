@@ -1562,7 +1562,11 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Global Assistant')).toBeNull();
       expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
-      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      // The roster/palette fetch (the one that would populate a dead spawn chooser) never
+      // fires for a signed-out visitor; the shell's refused prefetches (orgs, favorites)
+      // may still run — they answer 401 and surface the refusal notice above.
+      const called = mockFetchWithAuth.mock.calls.map(([url]) => String(url));
+      expect(called.some((url) => url.includes('page-agents'))).toBe(false);
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {

@@ -490,7 +490,7 @@ function rootWalletId(userId: string): string | undefined {
 
 function balanceOf(userId: string) {
   return store.wallets.find((r) => r.userId === userId && r.subjectType == null && r.parentWalletId == null) as
-    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number; debtCents: number; monthlyPeriodEnd: Date | null }
+    | { monthlyRemainingCents: number; topupRemainingCents: number; pendingMillicents: number; debtCents: number; monthlyPeriodStart: Date | null; monthlyPeriodEnd: Date | null }
     | undefined;
 }
 

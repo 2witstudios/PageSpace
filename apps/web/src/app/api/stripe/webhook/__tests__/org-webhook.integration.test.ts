@@ -972,7 +972,7 @@ describe('Stripe webhook — org routing, idempotency, lapse (real Postgres, in-
     expect(await deliver(eventPayload('customer.subscription.updated', subscription))).toBe(200);
     const [mirror] = await db.select().from(subscriptions).where(eq(subscriptions.stripeSubscriptionId, subscription.id));
     expect(mirror.stripePriceId).toBe(extraItem ? '' : 'price_unknown_replacement');
-    await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice });
+    await reconcileSubscriptionTiers({ priceTier: getPersonalTierFromPrice, userIds: userIds });
     const [after] = await db.select().from(users).where(eq(users.id, person.id));
     expect(after.subscriptionTier).toBe('free');
   });

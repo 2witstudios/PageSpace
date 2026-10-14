@@ -24,7 +24,7 @@ import { drives } from '@pagespace/db/schema/core';
 import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { notifications } from '@pagespace/db/schema/notifications';
-import { organizations, orgMembers } from '@pagespace/db/schema/organizations';
+import { organizations, orgMembers, orgSubscriptions } from '@pagespace/db/schema/organizations';
 import { automationSkipNotices, wallets } from '@pagespace/db/schema/wallets';
 import type { ZoomConnection } from '@pagespace/db/schema/zoom';
 import { factories } from '@pagespace/db/test/factories';
@@ -89,6 +89,19 @@ async function build(product: { allocationCents: number; status?: 'active' | 'pa
   await factories.createDriveMember(productDrive.id, marcus.id, { source: 'org' });
   const marcusDrive = await factories.createDrive(marcus.id, { name: 'Marcus notes', slug: `marcus-${createId()}` });
 
+  // D-OW-44: an org without verified subscription facts reads as lapsed and its pool spends
+  // nothing. These worlds are paying orgs: seed the active subscription and its funding.
+  await db.insert(orgSubscriptions).values({
+    orgId: org.id,
+    stripeSubscriptionId: `sub_${createId()}`,
+    stripeBasePriceId: 'price_base_test',
+    stripeBaseItemId: `si_${createId()}`,
+    stripeSeatPriceId: 'price_seat_test',
+    stripeSeatItemId: `si_${createId()}`,
+    status: 'active',
+    collectionMethod: 'charge_automatically',
+  });
+  await factories.fundOrgSubscription(org.id);
   const [pool] = await db.insert(wallets).values({ ownerType: 'org', orgId: org.id, monthlyRemainingCents: 5_000 }).returning();
   const productWalletId = product === 'no-wallet'
     ? null
@@ -131,6 +144,7 @@ async function teardown(w: World): Promise<void> {
   await db.delete(wallets).where(eq(wallets.id, w.poolId));
   await db.delete(wallets).where(inArray(wallets.userId, w.userIds));
   await db.delete(drives).where(inArray(drives.id, [w.productId, w.marcusDriveId]));
+  await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, w.orgId));
   await db.delete(organizations).where(eq(organizations.id, w.orgId));
   await db.delete(users).where(inArray(users.id, w.userIds));
 }

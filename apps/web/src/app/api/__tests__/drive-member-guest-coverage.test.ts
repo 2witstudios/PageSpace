@@ -46,24 +46,24 @@ type Entry = { reads: number; decision: Decision; reason: string };
 const LEDGER = new Map<string, Entry>([
   // ── packages/lib/src ────────────────────────────────────────────────────
   ['packages/lib/src/permissions/permissions.ts', {
-    reads: 6, decision: 'excludes',
-    reason: 'getDriveIdsForUser (a GUEST row reaches the drive only through its page grants) in both its dark and org-aware forms (the latter through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',
+    reads: 5, decision: 'excludes',
+    reason: 'resolveDriveIdsForUser (a GUEST row reaches the drive only through its page grants; the org-aware form reads the row through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',
   }],
   ['packages/lib/src/permissions/org-lapse-guard.ts', {
     reads: 1, decision: 'neutral',
     reason: '[D-OW-33] snapshotDriveAccess compares a drive before and after a write; a GUEST row is compared as a GUEST (page grants only), so a guest made a member is a loosening and a member made a guest is not. It grants nothing.',
   }],
   ['packages/lib/src/permissions/membership-queries.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'getMemberCustomRoleId returns null for a guest (a guest carries no custom role); holdsAcceptedGuestRow is the one read that asks for the GUEST row itself, for the callers that also admit page collaborators (the page-tree gate, the agent-binding granter).',
+    reads: 1, decision: 'excludes',
+    reason: 'holdsAcceptedGuestRow is the one read that asks for the GUEST row itself, for the callers that also admit page collaborators (the page-tree gate, the agent-binding granter). getMemberCustomRoleId now reads drive_roles, not drive_members (the always-on cutover).',
   }],
   ['packages/lib/src/services/drive-member-service.ts', {
     reads: 3, decision: 'excludes',
     reason: 'The Members listing and member detail leave guests out; updateMemberRole is a writer. checkDriveAccess, member id lists, broadcast recipients, custom-role holders and isMemberOfDrive go through loadEffectiveDriveMembership / listDriveAudience, which read a GUEST row as none.',
   }],
   ['packages/lib/src/services/drive-service.ts', {
-    reads: 2, decision: 'excludes',
-    reason: 'listAccessibleDrives reaches a guest drive only as a page collaborator (not token-scopable, no drive-wide create): the dark form filters GUEST, the org-aware form reads each row through driveMembershipRow. getDriveAccess/getDriveAccessWithDrive go through loadEffectiveDriveMembership.',
+    reads: 1, decision: 'excludes',
+    reason: 'listAccessibleDrivesWithOrgs (the one org-aware form since the always-on cutover) reaches a guest drive only as a page collaborator (not token-scopable, no drive-wide create), reading each row through driveMembershipRow. getDriveAccess/getDriveAccessWithDrive go through loadEffectiveDriveMembership.',
   }],
   ['packages/lib/src/services/app-shell-service.ts', {
     reads: 2, decision: 'excludes',
@@ -83,8 +83,8 @@ const LEDGER = new Map<string, Entry>([
     reason: 'Every read goes through driveMembershipRow / driveMembershipRole (drive-member-role.ts), which classifies GUEST as no membership: the effective membership, explicit-scope authority, accepted rows for the relationship and spend-standing loaders, org-deletion member pairs, and the join-request row state.',
   }],
   ['packages/lib/src/permissions/member-drives.ts', {
-    reads: 4, decision: 'excludes',
-    reason: 'listMemberDrives, getAdministeredDriveIds and memberOfAnyDriveCondition read rows through driveMembershipRole or restrict to DRIVE_MEMBERSHIP_ROLES, so a GUEST drive is no member drive (commands, activity, discovery, pulse, visibility all use it).',
+    reads: 3, decision: 'excludes',
+    reason: 'listMemberDrivesOf, getAdministeredDriveIdsOf and memberOfAnyDriveCondition read rows through driveMembershipRole or restrict to DRIVE_MEMBERSHIP_ROLES, so a GUEST drive is no member drive (commands, activity, discovery, pulse, visibility all use it).',
   }],
   ['packages/lib/src/permissions/drive-audience.ts', {
     reads: 1, decision: 'excludes',

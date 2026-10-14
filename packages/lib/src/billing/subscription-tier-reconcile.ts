@@ -11,7 +11,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, gt, inArray } from '@pagespace/db/operators';
+import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { loggers } from '../logging/logger-config';
@@ -61,6 +61,12 @@ const MAX_DETAILS = 100;
 export async function reconcileSubscriptionTiers(options: {
   priceTier: PriceTierResolver;
   repair?: boolean;
+  /**
+   * Restrict the sweep to these users. The cron omits it and walks the whole
+   * table; tests in a shared database pass their fixtures so a sweep cannot
+   * "repair" users that belong to concurrently running suites.
+   */
+  userIds?: string[];
 }): Promise<TierReconcileResult> {
   const repair = options.repair ?? true;
   const result: TierReconcileResult = { scanned: 0, drifted: 0, repaired: 0, flaggedOnly: 0, details: [] };
@@ -71,7 +77,9 @@ export async function reconcileSubscriptionTiers(options: {
     const batch = await db
       .select({ id: users.id, subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(gt(users.id, cursor))
+      .where(options.userIds
+        ? and(inArray(users.id, options.userIds), gt(users.id, cursor))
+        : gt(users.id, cursor))
       .orderBy(users.id)
       .limit(BATCH_SIZE);
     if (batch.length === 0) break;
