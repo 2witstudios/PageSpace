@@ -15,5 +15,9 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.{test,spec}.{js,ts,tsx}'],
+    // Every meaningful test here renders a whole public page with react-dom/server;
+    // under coverage instrumentation and turbo's parallel load the 5 s default has
+    // tripped repeatedly, so render suites get a wide margin.
+    testTimeout: 30_000,
   },
 })

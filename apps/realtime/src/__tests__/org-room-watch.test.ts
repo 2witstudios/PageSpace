@@ -233,5 +233,63 @@ describe('org room watch', () => {
       expect(socket.leave).toHaveBeenCalledWith('drive:d');
       expect(socket.emit).toHaveBeenCalledWith(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code: 'org_strong_sign_in_required', resourceId: 'd' });
     });
+
+    it('a failed policy read keeps the last known policies and retries after the error backoff', async () => {
+      // An org whose policy would never expire this credential: only a broken read could hide
+      // a tightening, so the failure must retry rather than park the watch.
+      const reads = vi.fn()
+        .mockRejectedValueOnce(new Error('policy read failed'))
+        .mockResolvedValue(new Map([['d', { requireStrongSignIn: false, maximumSessionAgeMinutes: null }]]));
+      const onError = vi.fn();
+      const socket = {
+        data: { actor: credentialActor('user-1', { authenticatedAtMs: T0, assurance: 'single_factor' }) },
+        leave: vi.fn(),
+        emit: vi.fn(),
+      };
+      const watch = createOrgRoomWatch(socket, {
+        readPolicies: reads,
+        onLeft: vi.fn(), now: () => Date.now(),
+        setTimer: (run, delay) => setTimeout(run, delay),
+        clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        onError,
+      });
+      await watch.track('drive:d', 'd');
+      expect(onError).toHaveBeenCalled();
+
+      // The retry arms no later than the error backoff, and the retry succeeds quietly.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads).toHaveBeenCalledTimes(2);
+      expect(socket.leave).not.toHaveBeenCalled();
+      watch.dispose();
+    });
+
+    it('a watch disposed while a policy read is in flight writes nothing back afterwards', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const socket = {
+        data: { actor: credentialActor('user-1', { authenticatedAtMs: T0, assurance: 'single_factor' }) },
+        leave: vi.fn(),
+        emit: vi.fn(),
+      };
+      const watch = createOrgRoomWatch(socket, {
+        readPolicies: async () => {
+          await gate;
+          return new Map([['d', { requireStrongSignIn: true, maximumSessionAgeMinutes: null }]]);
+        },
+        onLeft: vi.fn(), now: () => Date.now(),
+        setTimer: (run, delay) => setTimeout(run, delay),
+        clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>), onError: vi.fn(),
+      });
+      const tracking = watch.track('drive:d', 'd');
+      watch.dispose();
+      release();
+      await tracking;
+
+      // The post-await disposal check wins: no eviction, no re-arm, no event.
+      expect(socket.leave).not.toHaveBeenCalled();
+      expect(socket.emit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(minutes(60));
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
   });
 });

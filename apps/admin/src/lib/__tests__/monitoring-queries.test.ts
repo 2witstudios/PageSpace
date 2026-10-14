@@ -250,8 +250,9 @@ describe('getCreditRevenue', () => {
     expect(result.includedCreditLiabilityCents).toBe(5700);
     expect(result.includedCreditLiabilityCents).not.toBe(result.monthlyGrantCents);
     expect(result.includedCreditLiabilityCents).not.toBe(result.topupCents);
-    // One read, over every wallet kind: no personal-root filter narrows it (Review 2).
-    expect(mockReadCreditLiability).toHaveBeenCalledWith();
+    // One read, over every wallet kind: the no-range overload (undefined, unscoped) and no
+    // personal-root filter narrows it (Review 2).
+    expect(mockReadCreditLiability).toHaveBeenCalledWith(undefined);
     expect(whereCalls).not.toContainEqual({ personalRoot: true });
   });
 

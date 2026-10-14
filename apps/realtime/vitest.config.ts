@@ -20,6 +20,13 @@ export default defineConfig({
         '**/test/**',
         '**/drizzle/**',
         '**/node_modules/**',
+        // Sentry bootstrap: must be the process's first import and needs a real
+        // DSN side effect, so no test can execute it meaningfully.
+        'src/instrument.ts',
+        // The composition root: 25 inline socket handlers plus the listen/shutdown
+        // wiring, exercised for real by the integration config and smoke boot, not
+        // meaningfully by unit suites.
+        'src/index.ts',
       ],
       thresholds: {
         lines: 75,

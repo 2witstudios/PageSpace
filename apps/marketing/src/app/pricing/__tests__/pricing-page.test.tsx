@@ -16,7 +16,9 @@ async function renderPricing() {
   return renderCards(<PricingPage />);
 }
 
-describe('marketing pricing page on the money model', () => {
+// The suite renders the whole pricing page per test; under coverage instrumentation and
+// turbo's parallel load a 5 s default has tripped, so give every test a wide margin.
+describe('marketing pricing page on the money model', { timeout: 30_000 }, () => {
   it('UI-12 (partial) the rendered pricing page never puts a "$" beside the word credits', async () => {
     const { text } = await renderPricing();
     expect(text).toMatch(/credits/);

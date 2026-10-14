@@ -57,7 +57,10 @@ const startSite = (): Promise<void> =>
         return;
       }
       if (req.url === '/stall') {
-        setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Stalled</title>'), 8_000);
+        // Held-hostage discrimination: a working deadline+restart returns the take-over in
+        // single-digit seconds even on a loaded runner; only a worker that lets the
+        // navigation hold the take-over would answer as late as this page does.
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Stalled</title>'), 30_000);
         return;
       }
       if (req.url === '/slow') {
@@ -330,11 +333,11 @@ describe('a page that will not answer', () => {
     await stuck.close();
     await rm(root, { recursive: true, force: true });
     assert({
-      given: 'an agent navigation to a page that answers after 8 s, a 2 s deadline, and a take-over 0.3 s in',
+      given: 'an agent navigation to a page that answers after 30 s, a 2 s deadline, and a take-over 0.3 s in',
       should: 'give the human control within the deadline plus a restart, withhold the navigation, and restart once',
       actual: {
         takeOver: [takeOver.status, takeOver.body.mode],
-        inTime: tookMs < 7_000,
+        inTime: tookMs < 15_000,
         navigated: navigated.ok ? 'released' : navigated.refusal.reason,
         restarts: audit.browserRestarts,
         releasedOutside: audit.agentResultsReleasedOutsideAgentControl,

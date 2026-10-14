@@ -32,7 +32,7 @@ vi.mock('@pagespace/lib/billing/money-model', async (importOriginal) => {
   };
 });
 
-describe('the pricing page follows the money model when its constants change', () => {
+describe('the pricing page follows the money model when its constants change', { timeout: 30_000 }, () => {
   it('MON-6 (partial) every card figure moves with the changed prices, seat terms and pack', async () => {
     const { default: PricingPage } = await import('../page');
     const { cards, text } = renderCards(<PricingPage />);
