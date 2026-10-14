@@ -252,6 +252,15 @@ describe('browser control worker (real Chromium)', () => {
     const release = await command(ALICE, { type: 'release' });
     const afterTabs = await agentOp({ kind: 'tabs', action: 'list' });
 
+    // The stale profile's deletion trails the restart (background cleanup); on a loaded
+    // machine the readdir right after the restart still sees it. Wait for the deletion.
+    const cleanupDeadline = Date.now() + 30_000;
+    let profiles = (await readdir(profileRoot)).length;
+    while (profiles > 1 && Date.now() < cleanupDeadline) {
+      await new Promise((done) => setTimeout(done, 250));
+      profiles = (await readdir(profileRoot)).length;
+    }
+
     assert({
       given: 'a slow agent navigation in flight, a take-over by Alice, 3 s of agent reads, screenshots and tab lists, then Alice releasing',
       should: 'withhold the in-flight result, refuse every agent request, let only Alice view and type, release nothing to the agent, and hand back a fresh browser',
@@ -269,7 +278,7 @@ describe('browser control worker (real Chromium)', () => {
         release: [release.status, (release.body as { mode: string }).mode],
         freshContext: afterTabs.ok && afterTabs.result.kind === 'tabs' ? afterTabs.result.tabs.map((t) => t.url) : afterTabs,
         restarts: worker.audit().browserRestarts,
-        profiles: (await readdir(profileRoot)).length,
+        profiles,
       },
       expected: {
         takeOver: [200, 'human-control'],

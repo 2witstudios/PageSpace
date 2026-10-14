@@ -34,7 +34,11 @@ const config: Record<'test' | 'live', StripeConfig> = {
     priceIds: {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
     },
-    orgPriceIds: { businessBase: '', extraSeat: '' },
+    // Staged inactive in Stripe; activate during the coordinated billing cutover.
+    orgPriceIds: {
+      businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
+      extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
+    },
   },
 };
 

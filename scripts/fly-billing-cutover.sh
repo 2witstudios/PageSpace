@@ -2,64 +2,87 @@
 # No migration is allowed until every application fleet is empty. Stopped VMs
 # still count: Fly Proxy can auto-start them. Databases and volumes are untouched.
 #
-# MONEY-3 (#: cutover recovery): the SNAPSHOT and the DRAIN are separate steps, and the
-# only copy of the restoration topology must be durably persisted BEFORE the first
-# destructive scale operation. A one-shot run on an ephemeral runner that drains, then
-# loses the snapshot to a runner failure (mid-migration, mid-deploy), leaves every fleet
-# at zero with a fresh retry snapshotting EMPTY fleets — recovery inputs gone. CI splits
-# this script around an artifact upload for exactly that reason.
+# Two phases, so the topology can be made durable before anything is scaled to zero:
+#   snapshot <dir>  saves and seals each fleet's configuration and topology. Non-destructive.
+#   drain <dir>     verifies the sealed snapshot, then scales every recorded process group to 0.
+# The workflow uploads the sealed snapshot between phases. The one-argument form runs both
+# phases locally; production recovery requires the durable artifact from the workflow.
 #
-# Usage:
-#   fly-billing-cutover.sh <config-dir>                 snapshot, then drain (one-shot)
-#   fly-billing-cutover.sh --snapshot-only <config-dir> snapshot only — no destructive call
-#   fly-billing-cutover.sh --drain <config-dir>         drain only; REFUSES without a valid
-#                                                       pre-drain snapshot for every app
-# Resume: fly-billing-restore.sh loads this snapshot; it never takes a new one, so a fresh
-# runner recovers the ORIGINAL topology instead of reconciling to empty.
+# Drain never snapshots. A snapshot is taken only from fleets that have machines, so a retry
+# after a lost runner cannot overwrite the original topology with an empty one.
 set -euo pipefail
-mode="both"
-case "${1:-}" in
-  --snapshot-only) mode="snapshot"; shift;;
-  --drain) mode="drain"; shift;;
-esac
-config_dir="${1:?configuration snapshot directory required}"
 script_dir="$(cd "$(dirname "$0")" && pwd)"
-apps=(pagespace-web pagespace-admin pagespace-realtime pagespace-processor pagespace-cron)
+source "$script_dir/fly-cutover-lib.sh"
+
+case "$#" in
+  1) mode=both; config_dir="$1" ;;
+  2) mode="$1"; config_dir="$2" ;;
+  *) cutover_fail "usage: fly-billing-cutover.sh [snapshot|drain] <configuration snapshot directory>" ;;
+esac
+
+case "$mode" in
+  --snapshot-only) mode=snapshot ;;
+  --drain) mode=drain ;;
+  both|snapshot|drain) ;;
+  *) cutover_fail "unknown cutover mode: $mode" ;;
+esac
+
+candidate="$(cutover_candidate)"
 
 snapshot() {
-  mkdir -p "$config_dir"
-  for app in "${apps[@]}"; do
-    flyctl config save --app "$app" --config "$config_dir/$app.toml" --yes
-    flyctl machines list --app "$app" --json > "$config_dir/$app.machines.json"
-    jq -ce -f "$script_dir/fly-machine-topology.jq" "$config_dir/$app.machines.json" > "$config_dir/$app.topology.json"
+  local stage app
+  mkdir -p "$(dirname "$config_dir")"
+  stage="$(mktemp -d "$config_dir.staging.XXXXXX")"
+  for app in "${CUTOVER_APPS[@]}"; do
+    flyctl config save --app "$app" --config "$stage/$app.toml" --yes
+    flyctl machines list --app "$app" --json > "$stage/$app.machines.json"
+    jq -ce -f "$script_dir/fly-machine-topology.jq" "$stage/$app.machines.json" > "$stage/$app.topology.json"
+    if ! jq -e 'length > 0' "$stage/$app.topology.json" >/dev/null; then
+      rm -rf "$stage"
+      cutover_fail "$app has no machines; its topology cannot be restored from a snapshot taken now. Recover from the original sealed snapshot instead."
+    fi
   done
   # Do not begin a cutover from an already broken scheduler deployment.
-  jq -e 'map(.count) | add == 1' "$config_dir/pagespace-cron.topology.json" >/dev/null
+  if ! jq -e 'map(.count) | add == 1' "$stage/pagespace-cron.topology.json" >/dev/null; then
+    rm -rf "$stage"
+    cutover_fail "pagespace-cron must have exactly one machine before a cutover"
+  fi
+  cutover_seal "$stage" "$candidate"
+  rm -rf "$config_dir"
+  mv "$stage" "$config_dir"
 }
 
 drain() {
-  # A drain without the ORIGINAL topology on disk cannot be recovered if this runner dies:
-  # refuse rather than drain toward a snapshot a fresh retry could never take. The check
-  # re-derives the topology from each app's machines list — the same filter restore uses —
-  # so a truncated or hand-edited snapshot fails here, before anything is destroyed.
-  for app in "${apps[@]}"; do
-    if ! jq -ce -f "$script_dir/fly-machine-topology.jq" "$config_dir/$app.machines.json" >/dev/null 2>&1; then
-      echo "ERROR: no valid pre-drain topology for $app under $config_dir — snapshot first; a drain with nothing to restore from is unrecoverable." >&2
-      exit 1
-    fi
-  done
-  for app in "${apps[@]}"; do
+  local app group counts
+  cutover_verify "$config_dir" "$candidate"
+  for app in "${CUTOVER_APPS[@]}"; do
     counts=()
     while IFS= read -r group; do counts+=("$group=0"); done < <(jq -r '.[].group' "$config_dir/$app.topology.json" | sort -u)
     if [ "${#counts[@]}" -gt 0 ]; then flyctl scale count "${counts[@]}" --app "$app" --yes; fi
   done
-  for app in "${apps[@]}"; do
-    flyctl machines list --app "$app" --json | jq -e 'type == "array" and length == 0' >/dev/null
+  for app in "${CUTOVER_APPS[@]}"; do
+    flyctl machines list --app "$app" --json | jq -e 'type == "array" and length == 0' >/dev/null \
+      || cutover_fail "$app still has machines after drain; no migration may run"
   done
 }
 
-case "$mode" in
-  snapshot) snapshot;;
-  drain) drain;;
-  both) snapshot; drain;;
-esac
+if [ "$mode" = both ] || [ "$mode" = snapshot ]; then
+  if [ -f "$config_dir/COMPLETE" ]; then
+    cutover_verify "$config_dir" "$candidate"
+    echo "Reusing the sealed snapshot in $config_dir; no new snapshot is taken."
+  else
+    if [ -n "$(ls -A "$config_dir" 2>/dev/null || true)" ]; then
+      cutover_fail "$config_dir holds an unsealed snapshot; refusing to overwrite it"
+    fi
+    snapshot
+  fi
+fi
+
+if [ "$mode" = snapshot ]; then
+  exit 0
+fi
+
+if [ "$mode" = both ]; then
+  echo "WARNING: snapshot and drain ran in one job; the snapshot is durable only if it is uploaded before a later failure." >&2
+fi
+drain

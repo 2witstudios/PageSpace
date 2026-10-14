@@ -8,7 +8,7 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { wallets } from '@pagespace/db/schema/wallets';
 import { loggers } from '../logging/logger-config';
-import { emitWalletChanged, emitSpendPreferencesChanged, type WalletChange } from '../realtime/org-wallet-events';
+import { emitSpendPreferencesChanged, emitWalletChanged, type WalletChange } from '../realtime/org-wallet-events';
 
 export async function announceWalletChange(walletId: string, change: WalletChange): Promise<void> {
   try {
@@ -35,12 +35,9 @@ export async function announceDriveWalletChange(driveId: string, change: WalletC
  * JOURNEYS-3: one of the person's SPEND preferences changed (a conversation's source, their
  * default, an always-own-credits switch). Every other window of the same person hears this on
  * their notifications room and refetches the previews it shows, so what a window displays
- * never disagrees with what the next send will spend. Never throws.
+ * never disagrees with what the next send will spend. Never throws: the emit already contains
+ * its own failure handling.
  */
 export async function announceSpendPreferenceChange(userId: string): Promise<void> {
-  try {
-    await emitSpendPreferencesChanged({ userId });
-  } catch (error) {
-    loggers.realtime.warn('spend preference announcement failed', { userId, error: error instanceof Error ? error.message : String(error) });
-  }
+  await emitSpendPreferencesChanged({ userId });
 }

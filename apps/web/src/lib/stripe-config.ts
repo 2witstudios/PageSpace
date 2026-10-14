@@ -46,10 +46,10 @@ const config: Record<'test' | 'live', StripeConfig> = {
     priceIds: {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
     },
-    // Not created in live mode yet: org provisioning refuses while these are empty.
+    // Staged inactive in Stripe; activate during the coordinated billing cutover.
     orgPriceIds: {
-      businessBase: '',
-      extraSeat: '',
+      businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
+      extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
     },
   },
 };

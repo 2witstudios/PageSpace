@@ -45,6 +45,17 @@ describe('strict price reconciliation against PostgreSQL', () => {
     expect((await reconcileSubscriptionTiers({ priceTier })).details).not.toContainEqual(expect.objectContaining({ userId: user.id }));
   });
 
+  it('SEAT-2 (partial) a user-scoped sweep repairs only its named users, leaving the rest of the table to the full cron', async () => {
+    const inScope = await subscriber();
+    const outOfScope = await subscriber();
+    const result = await reconcileSubscriptionTiers({ priceTier, userIds: [inScope.id] });
+    expect(result.details.map(d => d.userId)).toEqual([inScope.id]);
+    const [scoped] = await db.select().from(users).where(eq(users.id, inScope.id));
+    expect(scoped.subscriptionTier).toBe('free');
+    const [unscoped] = await db.select().from(users).where(eq(users.id, outOfScope.id));
+    expect(unscoped.subscriptionTier).toBe('pro');
+  });
+
   it('SEAT-2 (partial) a concurrent price replacement cannot restore stale Pro access', async () => {
     const observedPrice = `price_${createId()}`;
     const user = await subscriber(observedPrice);

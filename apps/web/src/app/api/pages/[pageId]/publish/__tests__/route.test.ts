@@ -14,6 +14,7 @@ import { GET, POST, DELETE } from '../route';
 import { getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
 import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { PublishHiddenError } from '@pagespace/lib/organizations/published-visibility';
+import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
 
 // SEAT-9 and POL-4: an org drive asks the org's billing status and publishing policy before it publishes.
 const checkOrgActive = vi.hoisted(() => vi.fn());
@@ -169,6 +170,21 @@ describe('POST /api/pages/[pageId]/publish', () => {
 
     expect(res.status).toBe(403);
     expect((await res.json()).error).toMatch(/publishing to the web/i);
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) publishing from a lapsed org\'s drive answers 402 with the lapse copy, and uploads and writes nothing', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'T', content: '<p>x</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', kind: 'STANDARD', publishSubdomain: 'acme', homePageId: null, orgId: 'org-1' });
+    findFirstPublished.mockResolvedValue(undefined);
+    checkOrgActive.mockResolvedValue(ORG_LAPSED_REFUSAL);
+
+    const res = await POST(makeReq({}), { params });
+
+    expect(checkOrgActive).toHaveBeenCalledWith('org-1');
+    expect(res.status).toBe(402);
+    expect((await res.json()).error).toBe(ORG_LAPSED_MESSAGE);
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
     expect(onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
@@ -750,6 +766,19 @@ describe('DELETE /api/pages/[pageId]/publish', () => {
     canUserEditPage.mockResolvedValue(false);
     const res = await DELETE(makeReq(), { params });
     expect(res.status).toBe(403);
+  });
+
+  it('SEAT-9 (partial) a lapsed org\'s published page can still be unpublished: the artifact and row are removed', async () => {
+    checkOrgActive.mockResolvedValue(ORG_LAPSED_REFUSAL);
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ homePageId: 'other-page' });
+
+    const res = await DELETE(makeReq(), { params });
+
+    expect(res.status).toBe(200);
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/acme/welcome/index.html');
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toEqual({ unpublished: true });
   });
 
   it('removes the artifact and row, returns 200', async () => {

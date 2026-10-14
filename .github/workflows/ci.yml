@@ -326,11 +326,11 @@ jobs:
           bunx vitest run --config vitest.integration.config.ts \
             src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts \
             src/agent-accounts/__tests__/adversarial/http-executor-end-to-end.integration.test.ts \
-            --reporter=default --reporter=json --outputFile.json=infisical-result.json
+            --reporter=default --reporter=json --outputFile.json=test-results/infisical-result.json
           vitest_status=$?
           set -e
           node -e "
-            const r = require('./infisical-result.json');
+            const r = require('./test-results/infisical-result.json');
             const passed = r.numPassedTests ?? 0;
             const failed = r.numFailedTests ?? 0;
             const total = r.numTotalTests ?? 0;

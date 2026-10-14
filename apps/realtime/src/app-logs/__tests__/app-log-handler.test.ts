@@ -287,6 +287,45 @@ describe('app-log-handler onSubscribe payload contract', () => {
   });
 });
 
+describe('app-log-handler — an org sign-in eviction ends the stream it governs', () => {
+  beforeEach(() => {
+    limitQueue.length = 0;
+    subscribeToAppLogs.mockReset();
+    subscribeToAppLogs.mockResolvedValue({ unsubscribe: vi.fn() });
+    vi.mocked(getUserDriveAccess).mockReset();
+  });
+
+  it('SEC-3 (partial) an org sign-in eviction of a watched app\'s room ends that app\'s stream for this socket: the viewer leaves, the room is untracked, and the socket is told why', async () => {
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+    limitQueue.push([{ driveId: 'drive-1' }], [{ flyAppName: 'pgs-app-a' }]);
+    const socket = makeSocket('user-1');
+    const sessionMap = createAppLogSessionMap();
+    const watch = { track: vi.fn(), untrack: vi.fn() };
+    const handlers = buildAppLogHandlers(socket, sessionMap, watch);
+
+    await handlers.onSubscribe({ envId: 'env-a', flyAppName: 'pgs-app-a' });
+    expect(sessionMap.getByApp('pgs-app-a')?.viewers.size).toBe(1);
+
+    handlers.onEvicted(appLogRoom('pgs-app-a'));
+
+    expect(watch.untrack).toHaveBeenCalledWith(appLogRoom('pgs-app-a'));
+    expect(sessionMap.getByApp('pgs-app-a')?.viewers.size).toBe(0);
+    expect(socket.emit).toHaveBeenCalledWith('app:logs:ended', { flyAppName: 'pgs-app-a', reason: 'org_sign_in' });
+  });
+
+  it('SEC-3 (partial) an eviction of an app this socket is not watching, or of a room that is not an app log, ends nothing and tells no one', () => {
+    const socket = makeSocket('user-1');
+    const watch = { track: vi.fn(), untrack: vi.fn() };
+    const handlers = buildAppLogHandlers(socket, createAppLogSessionMap(), watch);
+
+    handlers.onEvicted(appLogRoom('pgs-app-b'));
+    handlers.onEvicted('drive:drive-1');
+
+    expect(socket.emit).not.toHaveBeenCalled();
+    expect(watch.untrack).not.toHaveBeenCalled();
+  });
+});
+
 describe('app-log-handler — one socket watching two apps independently', () => {
   beforeEach(() => {
     limitQueue.length = 0;

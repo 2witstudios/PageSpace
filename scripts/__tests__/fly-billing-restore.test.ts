@@ -11,6 +11,13 @@ function run(mode = '') {
   writeFileSync(join(dir, 'pagespace-web.machines.json'), JSON.stringify([
     machine('iad', 'web'), machine('iad', 'web'), machine('lhr', 'web'), machine('lhr', 'worker'),
   ]));
+  for (const app of ['web', 'admin', 'realtime', 'processor', 'cron']) {
+    writeFileSync(join(dir, `pagespace-${app}.toml`), '# original config');
+    if (app !== 'web') writeFileSync(join(dir, `pagespace-${app}.machines.json`), '[]');
+    writeFileSync(join(dir, `pagespace-${app}.topology.json`), '[]');
+  }
+  const seal = spawnSync('bash', ['-c', 'source "$1"; cutover_seal "$2" candidate-sha', 'seal', resolve('fly-cutover-lib.sh'), dir], { encoding: 'utf8' });
+  expect(seal.status, seal.stderr).toBe(0);
   writeFileSync(join(dir, 'current.json'), JSON.stringify([machine('ord', 'web'), machine('ord', 'worker')]));
   writeFileSync(join(dir, 'flyctl'), `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -28,7 +35,7 @@ if (args[0] === 'scale' && process.env.MODE !== 'unchanged') {
 }
 `, { mode: 0o755 });
   const result = spawnSync('bash', [resolve('fly-billing-restore.sh'), dir, 'pagespace-web'], {
-    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CALLS: join(dir, 'calls'), STATE: join(dir, 'current.json'), MODE: mode }, encoding: 'utf8',
+    env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, CALLS: join(dir, 'calls'), STATE: join(dir, 'current.json'), MODE: mode, CUTOVER_CANDIDATE_SHA: 'candidate-sha' }, encoding: 'utf8',
   });
   let calls = ''; try { calls = readFileSync(join(dir, 'calls'), 'utf8'); } catch { /* Refused before invoking Fly. */ }
   return { result, calls };

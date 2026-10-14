@@ -217,11 +217,6 @@ jobs:
           # On a resume, the durable copy IS the original pre-drain topology: never
           # re-snapshot over it — the fleets may already be drained, and snapshotting
           # then would record empty fleets as the restoration target.
-          if [ -f /tmp/pagespace-cutover/pagespace-web.topology.json ] \
-            && [ -f /tmp/pagespace-cutover/pagespace-cron.topology.json ]; then
-            echo "Original pre-drain topology already present — resuming, not re-snapshotting"
-            exit 0
-          fi
           bash scripts/fly-billing-cutover.sh --snapshot-only /tmp/pagespace-cutover
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

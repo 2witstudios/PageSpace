@@ -57,3 +57,7 @@ describe('decideResolveCaller', () => {
   });
 });
 
+
+it('browser-worker may run the browser-fill session account, not only password ones', () => {
+  expect(decideResolveCaller({ aud: 'browser-worker', kind: 'session' })).toEqual({ ok: true });
+});
