@@ -1,5 +1,17 @@
 # Stripe readiness for the Organizations & Wallets cutover
 
+Updated 2026-10-14: [the current operator package](billing-cutover/README.md) supersedes the preparation gates below.
+The confirmed account now has active test prices, matching public configuration, separate personal/org portals,
+and disabled Clover replacement destinations with privately retained signing secrets. The owner's explicit Pro
+manifest and zero-charge live preview are prepared. Live subscriptions, existing destination/default portal,
+inactive live org prices, and deployment remain unchanged.
+
+**Final clearance is pending** final-head CI, all 87 specification IDs and independent acceptance.
+Production preflight, backup/restore, real live destination delivery and cutover remain owner launch gates.
+See the package's explicit evidence boundaries; a passing focused test is not complete acceptance.
+
+## Historical inventory and preparation record
+
 Prepared 2026-10-14 from read-only Stripe inventory and the candidate at
 `14405ed4` (before this integration commit). **Not ready to cut over.** This record supplements
 [personal billing cutover](personal-billing-cutover.md) and

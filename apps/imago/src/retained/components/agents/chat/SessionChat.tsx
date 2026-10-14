@@ -306,6 +306,7 @@ export function SessionChatView({
           isStreaming={chat.displayIsStreaming}
           isStopping={chat.isStopping}
           disabled={isReadOnly}
+          sendDisabled={sendPausedBySpend}
           placeholder={isReadOnly ? 'View only' : imagoComposer?.placeholder ?? `Message ${name}...`}
           inputLabel={imagoComposer ? `Message ${name}` : undefined}
           hideModelSelector

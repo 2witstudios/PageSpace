@@ -675,7 +675,10 @@ export function stripeOrgBilling(client: Stripe): OrgBillingStripe {
       };
     },
     async createBillingPortalSession(customerId, returnUrl) {
-      const session = await client.billingPortal.sessions.create({ customer: customerId, return_url: returnUrl });
+      const session = await client.billingPortal.sessions.create({
+        customer: customerId, return_url: returnUrl,
+        configuration: stripeConfig.portalConfigurationIds.organization,
+      });
       return { url: session.url };
     },
     async listInvoices(customerId, opts) {

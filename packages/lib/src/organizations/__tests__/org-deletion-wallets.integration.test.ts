@@ -78,7 +78,7 @@ describe('organization closure preserves surviving drive wallets (real Postgres)
     const [root] = await db.select().from(wallets).where(and(eq(wallets.userId, newOwner), isNull(wallets.subjectType)));
     expect(root).toBeDefined();
     expect(await walletRow(f.wallet.id)).toMatchObject({ id: f.wallet.id, ownerType: 'user', userId: newOwner, orgId: null, parentWalletId: root.id, topupRemainingCents: 777, monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0, status: 'paused' });
-    expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, f.wallet.id))).toEqual(f.legs.map(leg => ({ ...leg, funderOrgId: null })));
+    expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, f.wallet.id)).orderBy(walletFundingLegs.id)).toEqual([...f.legs].sort((a, b) => a.id.localeCompare(b.id)).map(leg => ({ ...leg, funderOrgId: null })));
     expect(await db.select().from(creditLedger).where(eq(creditLedger.id, f.ledger[0].id))).toEqual(f.ledger);
     expect(await db.select().from(creditLedger).where(and(eq(creditLedger.walletId, f.wallet.id), eq(creditLedger.entryType, 'debt_forgiven')))).toMatchObject([{ amountCents: 20, userId: w.owner.id }]);
     expect(await db.select().from(pages).where(eq(pages.id, f.page.id))).toHaveLength(1);

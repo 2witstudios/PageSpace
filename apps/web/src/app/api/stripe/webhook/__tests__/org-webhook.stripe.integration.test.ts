@@ -46,7 +46,7 @@ import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const TEST_KEY = process.env.STRIPE_TEST_SECRET_KEY;
 const RUN = `ow-d3 test ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-const WEBHOOK_SECRET = 'whsec_ow_d3_live_replay_local_only';
+const WEBHOOK_SECRET = process.env.STRIPE_TEST_WEBHOOK_SECRET ?? 'whsec_ow_d3_live_replay_local_only';
 const PRICES: OrgBusinessPrices = { basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat };
 const env = { mode: process.env.DEPLOYMENT_MODE, secret: process.env.STRIPE_WEBHOOK_SECRET, key: process.env.STRIPE_SECRET_KEY };
 
@@ -86,6 +86,15 @@ async function realEvent(type: string, customerId: string, since: number): Promi
     await new Promise((r) => setTimeout(r, 1_000));
   }
   throw new Error(`Stripe emitted no ${type} for ${customerId} within 30 s`);
+}
+
+/** Canonical pinned-API fixture alongside the account-default real event; not a captured delivery. */
+async function pinnedInvoiceFixture(event: Stripe.Event): Promise<Stripe.Event> {
+  if (event.type !== 'invoice.paid') throw new Error('Expected an invoice.paid fixture');
+  const invoice = await client.invoices.retrieve(event.data.object.id);
+  const fixture: Stripe.InvoicePaidEvent = { ...event, id: `${event.id}_clover_fixture`, api_version: '2026-02-25.clover', data: { ...event.data, object: invoice } };
+  eventIds.add(fixture.id);
+  return fixture;
 }
 
 async function deliver(event: Stripe.Event): Promise<number> {
@@ -175,7 +184,9 @@ describe.skipIf(!TEST_KEY)('Stripe webhook org branch with real Stripe TEST even
     expect(invoice.amount_paid).toBe(7000);
 
     // Two concurrent deliveries, then a late redelivery: one grant.
-    const statuses = await Promise.all([deliver(paid), deliver(paid)]);
+    const cloverFixture = await pinnedInvoiceFixture(paid);
+    expect(cloverFixture.api_version).toBe('2026-02-25.clover');
+    const statuses = await Promise.all([deliver(cloverFixture), deliver(cloverFixture)]);
     expect(statuses).toContain(200);
     expect(statuses.every((s) => s === 200 || s === 500)).toBe(true);
     expect(await deliver(paid)).toBe(200);

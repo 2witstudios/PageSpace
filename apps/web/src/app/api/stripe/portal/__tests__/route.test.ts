@@ -21,6 +21,10 @@ vi.mock('@/lib/stripe', () => ({
   },
 }));
 
+vi.mock('@/lib/stripe-config', () => ({
+  stripeConfig: { portalConfigurationIds: { personal: 'bpc_personal_test', organization: 'bpc_org_test' } },
+}));
+
 // Mock database
 const mockSelectWhere = vi.fn();
 
@@ -174,6 +178,7 @@ describe('Portal API', () => {
       expect(mockStripeBillingPortalSessionsCreate).toHaveBeenCalledWith({
         customer: 'cus_123',
         return_url: 'https://app.example.com/settings/billing',
+        configuration: 'bpc_personal_test',
       });
     });
 

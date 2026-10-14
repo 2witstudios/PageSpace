@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -16,8 +17,16 @@ function run(mode = '') {
     if (app !== 'web') writeFileSync(join(dir, `pagespace-${app}.machines.json`), '[]');
     writeFileSync(join(dir, `pagespace-${app}.topology.json`), '[]');
   }
-  const seal = spawnSync('bash', ['-c', 'source "$1"; cutover_seal "$2" candidate-sha', 'seal', resolve('fly-cutover-lib.sh'), dir], { encoding: 'utf8' });
-  expect(seal.status, seal.stderr).toBe(0);
+  // Build the seal independently: the restore test must not depend on the sealer.
+  const candidate = mode === 'wrong-candidate' ? 'other-candidate' : 'candidate-sha';
+  writeFileSync(join(dir, 'CANDIDATE'), `${candidate}\n`);
+  const files = ['CANDIDATE', ...['web', 'admin', 'realtime', 'processor', 'cron'].flatMap(app =>
+    ['toml', 'machines.json', 'topology.json'].map(extension => `pagespace-${app}.${extension}`))];
+  writeFileSync(join(dir, 'SHA256SUMS'), files.map(file =>
+    `${createHash('sha256').update(readFileSync(join(dir, file))).digest('hex')}  ${file}\n`).join(''));
+  writeFileSync(join(dir, 'COMPLETE'), `${candidate}\n`);
+  if (mode === 'corrupt') writeFileSync(join(dir, 'pagespace-web.machines.json'), '[]');
+  if (mode === 'incomplete') unlinkSync(join(dir, 'COMPLETE'));
   writeFileSync(join(dir, 'current.json'), JSON.stringify([machine('ord', 'web'), machine('ord', 'worker')]));
   writeFileSync(join(dir, 'flyctl'), `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -51,6 +60,12 @@ describe('Fly cutover topology restoration', () => {
     expect(calls).toContain('scale count worker=0 --region ord --app pagespace-web --yes');
     expect(calls.indexOf('web=2')).toBeLessThan(calls.indexOf('web=0'));
   });
+  it.each(['wrong-candidate', 'corrupt', 'incomplete'])('refuses a %s snapshot before contacting Fly', (mode) => {
+    const { result, calls } = run(mode);
+    expect(result.status).not.toBe(0);
+    expect(calls).toBe('');
+  });
+
   it('fails the deployment if Fly does not restore the recorded topology', () => {
     expect(run('unchanged').result.status).not.toBe(0);
   });

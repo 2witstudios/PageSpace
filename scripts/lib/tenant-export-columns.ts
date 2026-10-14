@@ -422,7 +422,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
   wallet_funding_legs: {
     columns: [
       'id', 'walletId', 'funderKind', 'funderUserId', 'funderOrgId', 'originalCents',
-      'remainingCents', 'nonRefundable', 'sourceRef', 'createdAt',
+      'remainingCents', 'includedCents', 'nonRefundable', 'sourceRef', 'createdAt',
     ],
   },
 

@@ -343,11 +343,12 @@ describe('X-2 GDPR export carries the subject\'s org membership, wallets and don
     expect(byId.get(personalDriveId)?.orgId).toBeNull();
   });
 
-  it('HIST-02 emits EVERY leg the subject funded — keyset batches, deterministic order, no silent cap', async () => {
+  it('HIST-02 emits EVERY leg the subject funded — keyset batches, deterministic order, no silent cap', { timeout: 60_000 }, async () => {
     // A subject of their own, so the shared fixture's legs stay out of the count.
     const histUser = await factories.createUser({ subscriptionTier: 'pro' });
     const createdWalletIds: string[] = [];
     let histDriveId = '';
+    let foreignLegId = '';
     try {
       const [histDrive] = await db.insert(drives).values({
         name: 'History Export Drive', slug: `hist-${createId()}`, ownerId: histUser.id,
@@ -360,37 +361,44 @@ describe('X-2 GDPR export carries the subject\'s org membership, wallets and don
           .returning({ id: wallets.id });
         const [child] = await tx.insert(wallets).values({
           userId: histUser.id, subjectType: 'drive', subjectId: histDrive.id,
-          parentWalletId: root.id, topupRemainingCents: 15,
+          parentWalletId: root.id, topupRemainingCents: 10002,
         }).returning({ id: wallets.id });
-        await tx.insert(walletFundingLegs).values([1, 2, 3, 4, 5].map((n) => ({
-          walletId: child.id,
-          funderKind: 'donation' as const,
-          funderUserId: histUser.id,
-          originalCents: n,
-          remainingCents: n,
-          nonRefundable: true,
-          sourceRef: `donation-${createId()}`,
-          createdAt: new Date(Date.UTC(2026, 0, n)),
-        })));
+        const legs = Array.from({ length: 10001 }, (_, n) => ({
+          walletId: child.id, funderKind: 'donation' as const, funderUserId: histUser.id,
+          originalCents: 1, remainingCents: 1, nonRefundable: true,
+          sourceRef: `donation-${createId()}`, createdAt: new Date(Date.UTC(2026, 0, 1) + n),
+        }));
+        for (let offset = 0; offset < legs.length; offset += 1000) {
+          await tx.insert(walletFundingLegs).values(legs.slice(offset, offset + 1000));
+        }
+        const [foreignLeg] = await tx.insert(walletFundingLegs).values({
+          walletId: child.id, funderKind: 'donation', funderUserId: ownerId,
+          originalCents: 1, remainingCents: 1, nonRefundable: true, sourceRef: `foreign-${createId()}`,
+        }).returning({ id: walletFundingLegs.id });
+        foreignLegId = foreignLeg.id;
         return [root, child];
       });
       createdWalletIds.push(rootWallet.id, childWallet.id);
 
-      // Five legs past a two-per-batch window: two full batches and a remainder.
-      const walletFile = await collectUserWallet(database, histUser.id, { fundingLegBatchSize: 2 });
+      // Reproduce the original 10,001-row counterexample through the production batch size.
+      const walletFile = await collectUserWallet(database, histUser.id);
 
-      // All five arrive — a capped single query would have dropped two without a signal.
-      expect(walletFile.fundingLegs.map((leg) => leg.originalCents)).toEqual([1, 2, 3, 4, 5]);
+      // The old 10,000-row cap loses a donation; a foreign donor still must not appear.
+      expect(walletFile.fundingLegs).toHaveLength(10001);
+      expect(walletFile.fundingLegs.map(leg => leg.id)).not.toContain(foreignLegId);
+      expect(new Set(walletFile.fundingLegs.map(leg => leg.id)).size).toBe(10001);
       // Deterministic (createdAt, id) order, not whichever rows the engine returned.
       const ordered = walletFile.fundingLegs.every((leg, i, all) =>
         i === 0 || all[i - 1].createdAt.getTime() <= leg.createdAt.getTime());
       expect(ordered).toBe(true);
     } finally {
       const { users } = await import('@pagespace/db/schema/auth');
-      await db.delete(walletFundingLegs).where(inArray(walletFundingLegs.funderUserId, [histUser.id]));
-      if (createdWalletIds.length) await db.delete(wallets).where(inArray(wallets.id, createdWalletIds));
-      if (histDriveId) await db.delete(drives).where(inArray(drives.id, [histDriveId]));
-      await db.delete(users).where(inArray(users.id, [histUser.id]));
+      await db.transaction(async tx => {
+        if (createdWalletIds.length) await tx.delete(wallets).where(inArray(wallets.id, createdWalletIds));
+        if (histDriveId) await tx.delete(drives).where(inArray(drives.id, [histDriveId]));
+        await tx.delete(users).where(inArray(users.id, [histUser.id]));
+      });
     }
+
   });
 });

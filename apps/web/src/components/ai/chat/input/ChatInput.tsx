@@ -42,6 +42,8 @@ export interface ChatInputProps {
   isStopping?: boolean;
   /** Whether the input is disabled */
   disabled?: boolean;
+  /** Pause dispatch while the spend source resolves, keeping the draft editable. */
+  sendDisabled?: boolean;
   /** Placeholder text */
   placeholder?: string;
   /** Drive ID for mention suggestions */
@@ -148,6 +150,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       isStreaming,
       isStopping = false,
       disabled = false,
+      sendDisabled = false,
       placeholder = 'Type your message...',
       driveId,
       commandDriveId,
@@ -244,12 +247,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     // Issue #2676: during a stream the send verb is QUEUE, so the gate is no
     // longer `!isStreaming` — only the observer lock (`effectiveDisabled`)
     // blocks, exactly as before. Attachments still never send mid-stream.
-    const canSend = (hasText || hasImages) && !effectiveDisabled && (!isStreaming || queueWired);
+    const canSend = (hasText || hasImages) && !effectiveDisabled && !sendDisabled && (!isStreaming || queueWired);
     // Queued = text-only v1: images keep their existing disabled-during-stream rule.
-    const canQueue = queueWired && hasText && !hasImages && !effectiveDisabled && !isQueueFull;
+    const canQueue = queueWired && hasText && !hasImages && !effectiveDisabled && !sendDisabled && !isQueueFull;
 
     const handleSend = () => {
-      if (effectiveDisabled) return;
+      if (effectiveDisabled || sendDisabled) return;
       if (!hasText && !hasImages) return;
 
       if (!isStreaming) {

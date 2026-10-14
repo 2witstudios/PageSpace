@@ -41,6 +41,7 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
+    getUserDriveAccess: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -122,7 +123,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
@@ -172,6 +173,7 @@ describe('POST /api/ai/page-agents/create', () => {
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
 
     // Default: MCP scope check passes (returns null = allowed)
     vi.mocked(checkMCPDriveScope).mockReturnValue(null);
@@ -215,6 +217,13 @@ describe('POST /api/ai/page-agents/create', () => {
   });
 
   describe('authentication', () => {
+    it.each([undefined, [], ['read_page']])('refuses root creation when the lead credential fails drive access, regardless of tools %s', async (enabledTools) => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+      const response = await POST(createRequest({ driveId: mockDriveId, title: 'Agent', systemPrompt: 'Helpful', enabledTools }));
+      expect(response.status).toBe(403);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));

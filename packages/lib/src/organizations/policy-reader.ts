@@ -32,13 +32,13 @@ export async function getOrgPolicies(orgId: string, executor: Executor = db, opt
  * does not exist.
  */
 export async function lockStoredOrgPolicies(tx: Tx, orgId: string): Promise<{ stored: unknown } | null> {
-  const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('update').limit(1);
+  const [row] = await tx.select({ policies: organizations.policies }).from(organizations).where(eq(organizations.id, orgId)).for('no key update').limit(1);
   return row ? { stored: row.policies } : null;
 }
 
 /**
  * `forShare` (inside a transaction only): hold the org row FOR SHARE until the caller commits. The policy writer
- * takes the row FOR UPDATE, so a decision made under this lock and the write it guards serialize with a policy
+ * takes the row FOR NO KEY UPDATE, so a decision made under this lock and the write it guards serialize with a policy
  * change: either the write commits first and the change's suspension sees it, or the decision sees the new policy.
  */
 export interface ReadLock {

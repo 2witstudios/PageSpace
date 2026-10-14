@@ -12,6 +12,8 @@
 
 interface StripeConfig {
   publishableKey: string;
+  /** Separate portals disable plan and quantity changes; seats are application-controlled. */
+  portalConfigurationIds: { personal: string; organization: string };
   /** The only purchasable personal plan (SEAT-2, A-9). */
   priceIds: { pro: string };
   /**
@@ -32,24 +34,32 @@ interface StripeConfig {
 
 const config: Record<'test' | 'live', StripeConfig> = {
   test: {
-    publishableKey: 'pk_test_51S2LlZPCGvbSozobCg5nWBQeS8xHHYQqsbLZxAjzWnTL2o2BSSRtafSH36n4iaKe52Mmj2dGk2ybJtN5yLN6QCjX00JFh3a7MY',
+    portalConfigurationIds: {
+      personal: 'bpc_1UQXAxPRnBcvXFsoYbIcbPsB',
+      organization: 'bpc_1UQXAyPRnBcvXFsoHhQmOeSG',
+    },
+    publishableKey: 'pk_test_51S2LlQPRnBcvXFsoJEzuFyfXe7ou1YYb4F6yjL9wy5NrIXNMd0Gnya0byLpJ5ECObEAc3mr58UEG616WhktweYJL00BrhA3oVf',
     priceIds: {
-      pro: 'price_1Sdbh6PCGvbSozob1IBfmSuv',        // $15/month
+      pro: 'price_1UQXAuPRnBcvXFsoA3uYJyHL',        // $15/month
     },
     orgPriceIds: {
-      businessBase: 'price_1UK59APCGvbSozobgDCKr4zB', // org base (D-OW-20)
-      extraSeat: 'price_1UK59APCGvbSozobTxuoHMeP',    // per extra seat (D-OW-20)
+      businessBase: 'price_1UQXAvPRnBcvXFsoeKQE6H0u', // org base (D-OW-20)
+      extraSeat: 'price_1UQXAwPRnBcvXFso1TqKRFSM',    // per extra seat (D-OW-20)
     },
   },
   live: {
+    portalConfigurationIds: {
+      personal: 'bpc_1UQXAzPRnBcvXFsoKdnU1dUr',
+      organization: 'bpc_1UQXAzPRnBcvXFsoGwqBbnSf',
+    },
     publishableKey: 'pk_live_51S2LlQPRnBcvXFso7Y3yM21QcIuHM3b6Iz1VdOZ7d51aVaZvITRSs7M5KVpKF3jih2p2t59xwlR4Jr8DwIydW9Ht00KeOaUd35',
     priceIds: {
       pro: 'price_1SdfbXPRnBcvXFsoRbjnaQFS',        // $15/month
     },
-    // Not created in live mode yet: org provisioning refuses while these are empty.
+    // Staged inactive in Stripe; activate during the coordinated billing cutover.
     orgPriceIds: {
-      businessBase: '',
-      extraSeat: '',
+      businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
+      extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
     },
   },
 };

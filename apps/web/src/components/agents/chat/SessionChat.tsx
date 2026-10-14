@@ -277,6 +277,7 @@ export function SessionChatView({
           isStreaming={chat.displayIsStreaming}
           isStopping={chat.isStopping}
           disabled={isReadOnly}
+          sendDisabled={sendPausedBySpend}
           placeholder={isReadOnly ? 'View only' : `Message ${name}...`}
           hideModelSelector
           variant={context === 'console' ? 'sidebar' : 'main'}

@@ -36,6 +36,7 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  if (created.users.length) await db.delete(activityLogs).where(inArray(activityLogs.userId, created.users));
   if (created.orgs.length) await db.delete(drives).where(inArray(drives.orgId, created.orgs));
   if (created.orgs.length) await db.delete(organizations).where(inArray(organizations.id, created.orgs.splice(0)));
   if (created.users.length) await db.delete(users).where(inArray(users.id, created.users.splice(0)));

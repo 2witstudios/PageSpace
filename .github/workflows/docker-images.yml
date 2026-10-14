@@ -3,6 +3,14 @@ name: Docker Images
 on:
   workflow_dispatch:
     inputs:
+      build_only:
+        description: 'Build candidate images without changing latest tags or deploying'
+        type: boolean
+        default: false
+      topology_run_id:
+        description: 'Original topology artifact run ID for a fresh-runner billing recovery'
+        type: string
+        default: ''
       billing_cutover:
         description: 'Offline final billing cutover: remove old app machines before migration'
         type: boolean
@@ -40,6 +48,7 @@ on:
       - '.github/workflows/docker-images.yml'
 
 env:
+  RELEASE_IMAGE_TAG: ${{ inputs.billing_cutover == true && format('sha-{0}', github.sha) || 'latest' }}
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/2witstudios/pagespace
 
@@ -144,7 +153,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ inputs.build_only != true }}
+            type=raw,value=sha-${{ github.sha }}
             type=sha,prefix=sha-,format=short
             type=semver,pattern=v{{version}}
 
@@ -179,7 +189,7 @@ jobs:
     needs: [build-and-push, ci]
     runs-on: ubuntu-latest
     environment: fly-production
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/master' && inputs.build_only != true
 
     steps:
       - uses: actions/checkout@v7
@@ -205,11 +215,13 @@ jobs:
       # is not an error, the snapshot step below takes the original.
       - name: Resume from the durable topology snapshot
         if: inputs.billing_cutover == true
-        continue-on-error: true
+        continue-on-error: ${{ inputs.topology_run_id == '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: billing-cutover-topology
           path: /tmp/pagespace-cutover
+          run-id: ${{ inputs.topology_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Snapshot old application topology for billing cutover
         if: inputs.billing_cutover == true
@@ -242,14 +254,14 @@ jobs:
 
       - name: Run migrations
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
-          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate
-          docker push registry.fly.io/pagespace-web:migrate
+          docker pull ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
 
           # Migrations exit before reaching "started" state, so flyctl errors with
           # "failed to reach desired start state" after 60s. This is expected.
           # Use || true so bash -e doesn't exit; we verify success via machine state below.
-          flyctl machine run registry.fly.io/pagespace-web:migrate \
+          flyctl machine run registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG \
             --env "BILLING_CUTOVER_OFFLINE=$BILLING_CUTOVER_OFFLINE" \
             --app pagespace-web \
             --region iad \
@@ -348,13 +360,13 @@ jobs:
             exit 1
           fi
 
-          docker pull ghcr.io/2witstudios/pagespace-migrate:latest
-          docker tag ghcr.io/2witstudios/pagespace-migrate:latest registry.fly.io/pagespace-web:migrate-admin
-          docker push registry.fly.io/pagespace-web:migrate-admin
+          docker pull ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG
 
           # Same expected "desired start state" error as the main migration machine
           # (one-shot machines exit before reaching "started"); verify via state below.
-          flyctl machine run registry.fly.io/pagespace-web:migrate-admin \
+          flyctl machine run registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG \
             --app pagespace-web \
             --region iad \
             --restart no \
@@ -443,14 +455,14 @@ jobs:
       # Pinned by apps/realtime/src/__tests__/deploy-order.guard.test.ts.
       - name: Deploy realtime
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-realtime:latest
-          docker tag ghcr.io/2witstudios/pagespace-realtime:latest registry.fly.io/pagespace-realtime:latest
-          docker push registry.fly.io/pagespace-realtime:latest
+          docker pull ghcr.io/2witstudios/pagespace-realtime:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-realtime:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG
           config_args=()
           if [ -f /tmp/pagespace-cutover/pagespace-realtime.toml ]; then
             config_args=(--config /tmp/pagespace-cutover/pagespace-realtime.toml)
           fi
-          flyctl deploy "${config_args[@]}" --app pagespace-realtime --image registry.fly.io/pagespace-realtime:latest --wait-timeout 300
+          flyctl deploy "${config_args[@]}" --app pagespace-realtime --image registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG --wait-timeout 300
           if [ -f /tmp/pagespace-cutover/pagespace-realtime.machines.json ]; then
             bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-realtime
           fi
@@ -459,14 +471,14 @@ jobs:
 
       - name: Deploy web
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-web:latest
-          docker tag ghcr.io/2witstudios/pagespace-web:latest registry.fly.io/pagespace-web:latest
-          docker push registry.fly.io/pagespace-web:latest
+          docker pull ghcr.io/2witstudios/pagespace-web:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-web:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG
           config_args=()
           if [ -f /tmp/pagespace-cutover/pagespace-web.toml ]; then
             config_args=(--config /tmp/pagespace-cutover/pagespace-web.toml)
           fi
-          flyctl deploy "${config_args[@]}" --app pagespace-web --image registry.fly.io/pagespace-web:latest --wait-timeout 300
+          flyctl deploy "${config_args[@]}" --app pagespace-web --image registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG --wait-timeout 300
           if [ -f /tmp/pagespace-cutover/pagespace-web.machines.json ]; then
             bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-web
           fi
@@ -475,9 +487,9 @@ jobs:
 
       - name: Deploy processor
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-processor:latest
-          docker tag ghcr.io/2witstudios/pagespace-processor:latest registry.fly.io/pagespace-processor:latest
-          docker push registry.fly.io/pagespace-processor:latest
+          docker pull ghcr.io/2witstudios/pagespace-processor:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-processor:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG
           # strategy=immediate (fly.processor.toml): restarts in-place, no two-phase rolling swap.
           # flyctl deploy with immediate strategy completes in ~3s (updates config + restart) and
           # returns "good state" only after the machine is up. No post-deploy machine wait needed —
@@ -487,7 +499,7 @@ jobs:
           if [ -f /tmp/pagespace-cutover/pagespace-processor.toml ]; then
             config_args=(--config /tmp/pagespace-cutover/pagespace-processor.toml)
           fi
-          flyctl deploy "${config_args[@]}" --app pagespace-processor --image registry.fly.io/pagespace-processor:latest --wait-timeout 120
+          flyctl deploy "${config_args[@]}" --app pagespace-processor --image registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG --wait-timeout 120
           if [ -f /tmp/pagespace-cutover/pagespace-processor.machines.json ]; then
             bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-processor
           fi
@@ -496,14 +508,14 @@ jobs:
 
       - name: Deploy admin
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-admin:latest
-          docker tag ghcr.io/2witstudios/pagespace-admin:latest registry.fly.io/pagespace-admin:latest
-          docker push registry.fly.io/pagespace-admin:latest
+          docker pull ghcr.io/2witstudios/pagespace-admin:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-admin:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG
           config_args=()
           if [ -f /tmp/pagespace-cutover/pagespace-admin.toml ]; then
             config_args=(--config /tmp/pagespace-cutover/pagespace-admin.toml)
           fi
-          flyctl deploy "${config_args[@]}" --app pagespace-admin --image registry.fly.io/pagespace-admin:latest --wait-timeout 300
+          flyctl deploy "${config_args[@]}" --app pagespace-admin --image registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG --wait-timeout 300
           if [ -f /tmp/pagespace-cutover/pagespace-admin.machines.json ]; then
             bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-admin
           fi
@@ -512,14 +524,14 @@ jobs:
 
       - name: Deploy cron
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-cron:latest
-          docker tag ghcr.io/2witstudios/pagespace-cron:latest registry.fly.io/pagespace-cron:latest
-          docker push registry.fly.io/pagespace-cron:latest
+          docker pull ghcr.io/2witstudios/pagespace-cron:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-cron:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG
           config_args=()
           if [ -f /tmp/pagespace-cutover/pagespace-cron.toml ]; then
             config_args=(--config /tmp/pagespace-cutover/pagespace-cron.toml)
           fi
-          flyctl deploy "${config_args[@]}" --app pagespace-cron --image registry.fly.io/pagespace-cron:latest --wait-timeout 300
+          flyctl deploy "${config_args[@]}" --app pagespace-cron --image registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG --wait-timeout 300
           if [ -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
             bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-cron
           fi
@@ -548,9 +560,9 @@ jobs:
 
       - name: Deploy marketing
         run: |
-          docker pull ghcr.io/2witstudios/pagespace-marketing:latest
-          docker tag ghcr.io/2witstudios/pagespace-marketing:latest registry.fly.io/pagespace-marketing:latest
-          docker push registry.fly.io/pagespace-marketing:latest
-          flyctl deploy --app pagespace-marketing --image registry.fly.io/pagespace-marketing:latest --wait-timeout 300
+          docker pull ghcr.io/2witstudios/pagespace-marketing:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-marketing:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG
+          flyctl deploy --app pagespace-marketing --image registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

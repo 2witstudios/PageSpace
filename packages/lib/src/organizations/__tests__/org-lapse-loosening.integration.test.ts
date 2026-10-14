@@ -70,6 +70,7 @@ interface World {
 let dbAvailable = false;
 let world: World | null = null;
 const originalMode = process.env.DEPLOYMENT_MODE;
+const originalRealtimeUrl = process.env.INTERNAL_REALTIME_URL;
 
 const ctxFor = (userId: string): EnforcedAuthContext => {
   const claims: SessionClaims = {
@@ -176,10 +177,14 @@ describe('[D-OW-33] a lapsed org may only restrict, on every guarded write (real
 
   beforeEach(async () => {
     process.env.DEPLOYMENT_MODE = 'cloud';
+    // This suite asserts persisted lapse guards; transport has independent realtime tests.
+    delete process.env.INTERNAL_REALTIME_URL;
     if (dbAvailable) world = await build();
   });
 
   afterEach(async () => {
+    if (originalRealtimeUrl === undefined) delete process.env.INTERNAL_REALTIME_URL;
+    else process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
     if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
     else process.env.DEPLOYMENT_MODE = originalMode;
     if (world) await teardown(world);

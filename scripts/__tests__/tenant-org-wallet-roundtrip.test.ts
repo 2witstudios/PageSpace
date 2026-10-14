@@ -135,9 +135,9 @@ async function seedOrgWorld(): Promise<void> {
       (${OUTSIDER_ROOT}, 'user', ${outsider.id}, NULL, NULL, NULL, NULL, 777, 777, 0, 0, 0, 0, 'active', TRUE, NULL, NULL, ${t}, ${t}, ${t}, ${t})
   `);
   await db.execute(sql`
-    INSERT INTO wallet_funding_legs (id, "walletId", "funderKind", "funderUserId", "funderOrgId", "originalCents", "remainingCents", "nonRefundable", "sourceRef", "createdAt") VALUES
-      ('test_leg_donation', ${DRIVE_WALLET}, 'donation', ${member.id}, NULL, 500, 200, TRUE, 'donation-ref-1', ${t}),
-      ('test_leg_owner', ${DRIVE_WALLET}, 'owner', NULL, ${NW}, 100, 100, FALSE, 'topup-ref-1', ${t})
+    INSERT INTO wallet_funding_legs (id, "walletId", "funderKind", "funderUserId", "funderOrgId", "originalCents", "remainingCents", "includedCents", "nonRefundable", "sourceRef", "createdAt") VALUES
+      ('test_leg_donation', ${DRIVE_WALLET}, 'donation', ${member.id}, NULL, 500, 200, 150, TRUE, 'donation-ref-1', ${t}),
+      ('test_leg_owner', ${DRIVE_WALLET}, 'owner', NULL, ${NW}, 100, 100, 0, FALSE, 'topup-ref-1', ${t})
   `);
   await db.execute(sql`
     INSERT INTO wallet_consumer_caps ("walletId", "consumerKey", "dailyCapCents", "monthlyCapCents", "createdAt", "updatedAt")
@@ -251,7 +251,7 @@ describe('X-3 tenant export/import round-trip of organizations and wallets (real
     // Spot-check the facts the spec names, so a both-sides-empty table cannot pass for a carried one.
     expect(after.drives).toContainEqual({ id: DRIVE, ownerId: owner.id, orgId: NW, orgVisibility: 'RESTRICTED' });
     expect(after.wallets).toContainEqual(expect.objectContaining({ id: DRIVE_WALLET, debtCents: 250, status: 'over', topupRemainingCents: 300 }));
-    expect(after.wallet_funding_legs).toContainEqual(expect.objectContaining({ funderKind: 'donation', funderUserId: member.id, remainingCents: 200 }));
+    expect(after.wallet_funding_legs).toContainEqual(expect.objectContaining({ funderKind: 'donation', funderUserId: member.id, remainingCents: 200, includedCents: 150 }));
     expect(after.conversations).toEqual([{ id: FIXTURES.conversations.pageChat.id, chosenWalletId: DRIVE_WALLET }]);
   });
 

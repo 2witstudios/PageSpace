@@ -135,7 +135,8 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}
     <div className="p-2">{aboveComposer}<SpendStrip conversationId={null} driveId={page.driveId} onChooseDraftSource={permissions?.canEdit === true && !preparing ? chooseDraftSource : undefined} /><ChatInput value={input}
       onChange={value => dispatch(transactions.setChatDraft, value)} onSend={() => void prepareFirstSend()}
-      disabled={preparing || permissions?.canEdit !== true || firstSendPreviewResolved === false} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention
+      disabled={preparing || permissions?.canEdit !== true}
+      sendDisabled={firstSendPreviewResolved === false} isStreaming={false} onStop={() => undefined} hideModelSelector variant="sidebar" showMention
       placeholder={placeholder ?? `Message ${name}...`} inputLabel={`Message ${name}`} hasVision={hasVisionCapability(page.aiModel || '')}
       attachments={attachments} onAddFiles={addFiles} onRemoveFile={removeFile} driveId={page.driveId} crossDrive commandDriveId={page.driveId} /></div>
   </div></RetainedSurface>;

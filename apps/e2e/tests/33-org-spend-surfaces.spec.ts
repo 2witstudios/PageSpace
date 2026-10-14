@@ -54,8 +54,8 @@ async function seedSpendWorld(): Promise<SpendWorld> {
   return { org, jono, marcus, productId, walletId };
 }
 
-async function openAs(browser: Parameters<typeof authedContext>[0], user: SeededUser, baseURL: string): Promise<Page> {
-  const context = await authedContext(browser, user.sessionToken, baseURL);
+async function openAs(browser: Parameters<typeof authedContext>[0], user: SeededUser, baseURL: string, interceptRequests = false): Promise<Page> {
+  const context = await authedContext(browser, user.sessionToken, baseURL, interceptRequests ? { serviceWorkers: 'block' } : {});
   openContexts.push(context);
   const page = await context.newPage();
   await page.setViewportSize(DESKTOP_VIEWPORT);
@@ -320,4 +320,79 @@ test('UI-8 Spending-from chip and popover, composer strip, refusal card, automat
   await isolatedStep('Paused wallet fallback disclosed in composer, chip and reply', () => personalFallbackJourney(context, 'paused'));
   await isolatedStep('Empty wallet fallback disclosed in composer, chip and reply', () => personalFallbackJourney(context, 'empty'));
   await isolatedStep('Automation creator, wallet, skipped run and departed owner', () => automationStatesJourney(context));
+});
+
+test('JOURNEYS-1 the visible absolute global switch survives reload and charges personal credits on an org conversation', async ({ browser, baseURL, request }) => {
+  const w = await seedSpendWorld();
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const page = await openAs(browser, w.marcus, baseURL!);
+  await page.goto('/settings/usage/wallets');
+  const absolute = page.getByRole('switch', { name: 'Always my own credits, globally', exact: true });
+  await expect(absolute).toBeEnabled();
+  await absolute.click();
+  await expect(absolute).toBeChecked();
+  await page.reload();
+  await expect(absolute).toBeChecked();
+  await gotoChatPage(page, w.productId, pageId);
+  const chat = page.getByTestId('session-chat');
+  await expect(chat.getByTestId('composer-spend-strip')).toContainText('Your credits');
+  const before = await financialState(w);
+  await resetMock(request);
+  await sendChatMessage(chat, 'Summarize the launch plan');
+  await expectPersonalCharge(w, before);
+});
+
+test('JOURNEYS-2 failed source previews pause Send and Enter without charging; retry shows the source before sending', async ({ browser, baseURL, request }) => {
+  const w = await seedSpendWorld();
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const page = await openAs(browser, w.marcus, baseURL!, true);
+  let failPreview = true;
+  let refusedPreviews = 0;
+  await page.route('**/api/wallets/**', async route => {
+    if (failPreview && route.request().method() === 'GET') {
+      refusedPreviews += 1;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Preview unavailable"}' });
+    } else await route.continue();
+  });
+  await gotoChatPage(page, w.productId, pageId);
+  const chat = page.getByTestId('session-chat');
+  await expect(chat.getByTestId('composer-spend-strip-error')).toBeVisible();
+  expect(refusedPreviews).toBeGreaterThan(0);
+  const before = await financialState(w);
+  const callsBefore = await mockCallCount(request);
+  await chat.getByTestId('chat-textarea').fill('Do not send while the source is unresolved');
+  await expect(chat.getByTestId('chat-send')).toBeDisabled();
+  await chat.getByTestId('chat-textarea').press('Enter');
+  expect(await financialState(w)).toEqual(before);
+  expect(await mockCallCount(request)).toBe(callsBefore);
+  failPreview = false;
+  await chat.getByTestId('composer-spend-retry').click();
+  await expect(chat.getByTestId('composer-spend-strip')).toContainText('Product wallet');
+  await sendChatMessage(chat, 'Summarize the launch plan');
+  const prior = new Set(before.ledger.map(row => row.id));
+  await expect.poll(async () => (await getLedger(w.marcus.userId, 'usage')).filter(row => !prior.has(row.id)).map(row => row.walletId)).toEqual([w.walletId]);
+});
+
+test('JOURNEYS-3 two independent windows show the persisted source change before the second window charges it', async ({ browser, baseURL, request }) => {
+  const w = await seedSpendWorld();
+  const pageId = await createAgentPage(w.productId, w.marcus.userId);
+  const first = await openAs(browser, w.marcus, baseURL!);
+  const previewRead = first.waitForResponse(response => response.request().method() === 'GET' && response.ok() && new URL(response.url()).pathname.startsWith('/api/wallets/conversations/') && !new URL(response.url()).searchParams.has('driveId'));
+  await gotoChatPage(first, w.productId, pageId);
+  const { conversationId } = await (await previewRead).json() as { conversationId: string };
+  const firstChat = first.getByTestId('session-chat');
+  await expect(firstChat.getByTestId('composer-spend-strip')).toContainText('Product wallet');
+  const second = await openAs(browser, w.marcus, baseURL!);
+  await second.goto(`/dashboard/${w.productId}/${pageId}?conversationId=${encodeURIComponent(conversationId)}`);
+  const secondChat = second.getByTestId('session-chat');
+  await expect(secondChat.getByTestId('composer-spend-strip')).toContainText('Product wallet');
+  await firstChat.getByTestId('composer-spend-strip').getByRole('button', { name: 'Change', exact: true }).click();
+  await first.getByRole('radiogroup', { name: 'Spending source', exact: true }).getByRole('radio', { name: /^Your credits/ }).click();
+  await expect(firstChat.getByTestId('composer-spend-strip')).toContainText('Your credits');
+  // No reload or focus-based refetch: the preference announcement must reach this window.
+  await expect(secondChat.getByTestId('composer-spend-strip')).toContainText('Your credits', { timeout: 15_000 });
+  const before = await financialState(w);
+  await resetMock(request);
+  await sendChatMessage(secondChat, 'Summarize the launch plan');
+  await expectPersonalCharge(w, before);
 });

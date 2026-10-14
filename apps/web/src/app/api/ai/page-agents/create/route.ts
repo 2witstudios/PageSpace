@@ -19,6 +19,7 @@ import { pageAgentRepository, type AgentData } from '@/lib/repositories/page-age
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
@@ -62,6 +63,14 @@ export async function POST(request: Request) {
     if (scopeError) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: 'create', details: { reason: 'mcp_drive_scope_denied', driveId, method: 'POST' }, riskScore: 0.5 });
       return scopeError;
+    }
+
+    // Lead ownership alone cannot satisfy an organization's credential policy.
+    const actor = actorFromAuth(auth);
+    if (!(await getUserDriveAccess(actor, driveId))) {
+      return deniedResponse(actor, driveId, NextResponse.json(
+        { error: 'You do not have access to this drive' }, { status: 403 },
+      ));
     }
 
     // If parentId is provided, verify it exists and belongs to this drive

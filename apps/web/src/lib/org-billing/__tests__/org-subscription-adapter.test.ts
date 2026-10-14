@@ -4,7 +4,20 @@ import type Stripe from 'stripe';
 import { stripeOrgBilling } from '../org-subscription';
 import { planOrgSubscriptionPriceMirror } from '@pagespace/lib/billing/org-webhook-core';
 
+vi.mock('@/lib/stripe-config', () => ({
+  stripeConfig: { portalConfigurationIds: { personal: 'bpc_personal_test', organization: 'bpc_org_test' } },
+}));
+
 describe('Stripe org subscription adapter', () => {
+  it('binds the organization portal to its customer and explicit organization configuration', async () => {
+    const create = vi.fn().mockResolvedValue({ url: 'https://billing.stripe.com/session/test' });
+    const client = { billingPortal: { sessions: { create } } } as unknown as Stripe;
+    await stripeOrgBilling(client).createBillingPortalSession('cus_org', 'https://app.test/org');
+    expect(create).toHaveBeenCalledWith({
+      customer: 'cus_org', return_url: 'https://app.test/org', configuration: 'bpc_org_test',
+    });
+  });
+
   it('D-OW-44 maps collection_method, so a send_invoice subscription is never read as automatically collected', async () => {
     const retrieve = vi.fn().mockResolvedValue({
       id: 'sub_org', customer: 'cus_org', status: 'active', created: 1, collection_method: 'send_invoice',

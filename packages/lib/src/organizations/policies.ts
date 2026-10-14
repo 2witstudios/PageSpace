@@ -162,9 +162,9 @@ export async function updateOrgPolicies(input: {
   const done = await retryOnDeadlock(() => db.transaction(async (tx) => {
     const row = await lockStoredOrgPolicies(tx, orgId);
     if (!row) return null;
-    // All authority mutations lock org before membership, so a stale route preflight cannot authorize this write.
+    // Share-lock current authority: removal waits, while other authorized reads remain concurrent.
     const [membership] = await tx.select({ role: orgMembers.role }).from(orgMembers)
-      .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, actorId))).for('update');
+      .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, actorId))).for('share');
     const authority = decideOrgRole({ membershipRole: membership?.role ?? null, minRole: 'ADMIN' });
     if (!authority.ok) return { authorityRefusal: authority.reason };
     const before = parseOrgPolicies(row.stored);

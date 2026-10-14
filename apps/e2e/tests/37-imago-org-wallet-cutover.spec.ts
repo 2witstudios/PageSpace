@@ -109,3 +109,31 @@ test('SPEND-1 (partial) SPEND-3 (partial) UI-8 (partial) a native org agent choo
   const [orgAfter] = await db.select().from(wallets).where(eq(wallets.id, w.walletId));
   expect(orgAfter).toEqual(orgBefore);
 });
+
+test('JOURNEYS-2 native failed previews pause Enter without charging and recover only after the source resolves', async ({ browser, baseURL }) => {
+  const w = await world();
+  const agentId = await createAgentPage(w.driveId, w.user.id);
+  await db.update(pages).set({ title: 'Native preview refusal' }).where(eq(pages.id, agentId));
+  const page = await open(browser, baseURL!, w.user, imagoPath(w.driveId, 'files'));
+  let failPreview = true;
+  await page.route('**/api/wallets/**', async route => {
+    if (failPreview && route.request().method() === 'GET') await route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Preview unavailable"}' });
+    else await route.continue();
+  });
+  const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
+  await chat.getByLabel('Choose agent: Imago', { exact: true }).click();
+  await chat.getByRole('radiogroup', { name: 'Agent', exact: true }).getByRole('radio', { name: /^Native preview refusal/ }).click();
+  await expect(chat.getByText('Who pays could not be checked — sending is paused until the source is shown.')).toBeVisible();
+  const input = chat.getByLabel('Message Native preview refusal', { exact: true });
+  const before = await getLedger(w.user.id, 'usage');
+  await input.fill('Keep this unsent');
+  await input.press('Enter');
+  expect(await getLedger(w.user.id, 'usage')).toEqual(before);
+  failPreview = false;
+  await chat.getByRole('button', { name: 'Retry check', exact: true }).click();
+  await expect(chat.getByRole('status', { name: 'Spending from', exact: true })).toContainText('Product wallet');
+  await input.fill('Summarize the launch plan');
+  await input.press('Enter');
+  const prior = new Set(before.map(row => row.id));
+  await expect.poll(async () => (await getLedger(w.user.id, 'usage')).filter(row => !prior.has(row.id)).map(row => row.walletId), { timeout: 30_000 }).toEqual([w.walletId]);
+});
