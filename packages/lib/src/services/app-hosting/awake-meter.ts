@@ -42,15 +42,19 @@ import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pages
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import { isAppHostingEnabled, resolveDailyAwakeSecondsCap } from './app-hosting-env';
-import { defaultAppBillingDeps, type AppBillingDeps } from './app-billing';
+import { awakeChargeMillicents, defaultAppBillingDeps, type AppBillingDeps } from './app-billing';
+import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
 import { findStopBoundarySince } from './app-machine-events';
 import {
   METER_AWAKE_LOCK_KEY,
   planAwakeSettle,
   planDailyAwakeCap,
+  planOrgAwakeSettle,
   utcDayOf,
+  type AwakeSettlePlan,
 } from './app-metering-core';
 import {
+  holdForCharge,
   closeAppWindowAtBoundary,
   defaultAppLifecycleMeteringDeps,
   passThroughSettleLock,
@@ -121,10 +125,15 @@ export interface AwakeMeterDeps {
    * inside the meter's own locked region; the default binding hands
    * `stopPublishedApp` a pass-through serializer for exactly that reason.
    */
-  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap'>, signal?: AbortSignal) => Promise<void>;
+  park: (publishedAppId: string, reason: Extract<StopReason, 'insolvent' | 'daily_cap' | 'member_cap'>, signal?: AbortSignal) => Promise<void>;
   /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
   dailyAwakeCapSeconds: () => number;
   now: () => Date;
+  /**
+   * The instant org compute billing went live (WAL-9) — the same `billing_epochs` row the
+   * storage reconcile stamps. An org app's awake span before it is forgiven, never charged.
+   */
+  orgComputeBillingEpoch: (tickStart: Date) => Promise<Date>;
 }
 
 export const defaultAwakeMeterDeps: AwakeMeterDeps = {
@@ -249,6 +258,7 @@ export const defaultAwakeMeterDeps: AwakeMeterDeps = {
   dailyAwakeCapSeconds: resolveDailyAwakeSecondsCap,
 
   now: () => new Date(),
+  orgComputeBillingEpoch: stampOrgComputeBillingEpoch,
 };
 
 export interface MeterAwakeResult {
@@ -263,6 +273,12 @@ export interface MeterAwakeResult {
   skipped: number;
   /** Rows left unbilled because the owning drive could not be resolved — retried next tick. */
   unresolvedPayer: number;
+  /**
+   * WAL-9: org-drive rows whose awake span from BEFORE org compute billing went live was
+   * forgiven on their first org-billed tick — the watermark advanced, nothing charged, a log
+   * line written. Only rows the interim refusal left behind ever count here.
+   */
+  orgBacklogForgiven: number;
   /** Rows stopped and parked because the payer ran out of credits at the re-gate. */
   parked: number;
   /**
@@ -309,6 +325,7 @@ const EMPTY_RESULT: MeterAwakeResult = {
   stamped: 0,
   skipped: 0,
   unresolvedPayer: 0,
+  orgBacklogForgiven: 0,
   parked: 0,
   cappedParked: 0,
   failed: 0,
@@ -390,14 +407,16 @@ async function meterOneApp(
   // rather than an invented amount. A hold is placed with it so the very next tick
   // settles against a real reservation.
   if (row.awakeBilledThrough === null) {
-    const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
-    if (!payerId) {
+    const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
+    if (!charge) {
       result.unresolvedPayer += 1;
       return;
     }
-    const gate = await deps.billing.gate({ payerId });
+    // WAL-9: an org drive's app holds on the org pool; a refused pool parks it.
+    const gate = await deps.billing.gate({ charge });
     if (!gate.allowed) {
-      await deps.park(row.id, 'insolvent', signal);
+      // [D-OW-28] The publisher's per-member cap refused, not the pool: parked and said so.
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent', signal);
       result.parked += 1;
       return;
     }
@@ -437,16 +456,16 @@ async function meterOneApp(
   }
 
   // 3. ORDINARY SETTLE.
-  const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now });
-  if (plan.action !== 'settle') {
+  const normalPlan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now });
+  if (normalPlan.action !== 'settle') {
     // `stamp` is unreachable here (the null case returned above); `skip` is a
     // back-to-back rerun or a watermark ahead of this tick's clock.
     result.skipped += 1;
     return;
   }
 
-  const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
-  if (!payerId) {
+  const charge = await deps.billing.resolveCharge({ driveId: row.driveId, costOwnerId: row.costOwnerId });
+  if (!charge) {
     // Leave the watermark alone so the span keeps accruing and is billed in full
     // once the drive resolves — or is torn down with the row. Never substitute a
     // payer: a misdirected charge cannot be taken back, a skipped tick corrects
@@ -455,16 +474,54 @@ async function meterOneApp(
     return;
   }
 
+  // WAL-9: an org drive's span settles on the org pool, recorded under the lead — never
+  // onto the lead's own wallet. Its awake time from BEFORE org compute billing went live
+  // (the interim refusal left the watermark behind) is forgiven, logged with what it
+  // would have cost, and never charged.
+  let plan: Extract<AwakeSettlePlan, { action: 'settle' }> = normalPlan;
+  if (charge.kind === 'org') {
+    const org = planOrgAwakeSettle({ billedThrough: row.awakeBilledThrough, now, epoch: await deps.orgComputeBillingEpoch(now) });
+    if (org.forgiven) {
+      result.orgBacklogForgiven += 1;
+      const wouldHaveChargedMillicents = awakeChargeMillicents(org.forgiven.wouldHaveBilledSeconds);
+      loggers.ai.warn('Published-app awake: org backlog from before org compute billing forgiven — not charged', {
+        subjectKind: 'published_app_awake',
+        publishedAppId: row.id,
+        driveId: row.driveId,
+        orgId: charge.orgId,
+        forgivenFrom: org.forgiven.from.toISOString(),
+        forgivenThrough: org.forgiven.through.toISOString(),
+        forgivenSeconds: org.forgiven.wouldHaveBilledSeconds,
+        wouldHaveChargedMillicents,
+        wouldHaveChargedCents: Math.round(wouldHaveChargedMillicents / 1000),
+      });
+    }
+    // org.plan is `skip` only when the personal plan above already was — the same
+    // planAwakeSettle inputs answer both — and that case returned before the charge
+    // was resolved. So it is always `settle` here and the org block reuses the
+    // personal skip check wholesale; the invariant is pinned by planOrgAwakeSettle's
+    // own suite ("never answers skip for a span the personal plan settles"). If a
+    // future planner change breaks it, this cast would settle a plan with zero
+    // active seconds — which the `activeSeconds > 0` fold below already treats as
+    // "forgiven-only", charging nothing.
+    plan = org.plan as typeof normalPlan;
+  }
+  // Nothing after a forgiven backlog to bill yet: nothing is charged, and the wake's hold is
+  // returned (a settle would have consumed it); the watermark still moves past the backlog below.
   // Last check before the money moves. Never placed between the charge and the watermark
   // advance below: skipping that write after a charge is exactly what re-bills a window.
   throwIfLockLost(signal, 'the published-app heartbeat settle');
-  const settle = await deps.billing.trackUsage({
-    payerId,
-    holdId: row.awakeHoldId ?? undefined,
-    activeSeconds: plan.activeSeconds,
-    driveId: row.driveId,
-    publishedAppId: row.id,
-  });
+  const settle = plan.activeSeconds > 0
+    ? await deps.billing.trackUsage({
+        charge,
+        // Never across a payer change: a drive moved into or out of an org mid-window has its
+        // stale hold released and re-acquired on the new payer's wallet (P1-1).
+        holdId: await holdForCharge(row, charge, deps.billing),
+        activeSeconds: plan.activeSeconds,
+        driveId: row.driveId,
+        publishedAppId: row.id,
+      })
+    : await releaseForForgiven(row, deps);
   if (!settle.persisted) {
     // The settle resolved but reported NO persisted usage row, so nothing — not the
     // ledger, not the backfill cron, which reads `ai_usage_logs` — will ever bill
@@ -506,7 +563,7 @@ async function meterOneApp(
       { publishedAppId: row.id, driveId: row.driveId },
     );
   }
-  result.settled += 1;
+  if (plan.activeSeconds > 0) result.settled += 1;
   result.totalAwakeSeconds += plan.activeSeconds;
   if (plan.clamped) result.clamped += 1;
 
@@ -553,7 +610,7 @@ async function meterOneApp(
   // at the next cold wake.
   let nextHoldId: string | null = null;
   try {
-    const gate = await deps.billing.gate({ payerId });
+    const gate = await deps.billing.gate({ charge });
     if (!gate.allowed) {
       // Insolvent: stop the machine and park it, through the status machine's own
       // legal `running -> parked` edge.
@@ -568,7 +625,7 @@ async function meterOneApp(
       // Same rule as the cap park above, and for the same reason: parking on a
       // watermark that never moved double-charges the span already billed.
       if (!mayParkAfter(advanced)) return;
-      await deps.park(row.id, 'insolvent', signal);
+      await deps.park(row.id, gate.orgRefusal === 'org_member_cap_reached' ? 'member_cap' : 'insolvent', signal);
       result.parked += 1;
       return;
     }
@@ -585,6 +642,12 @@ async function meterOneApp(
   }
 
   await advanceSettledWatermark(row, plan.billedThrough, plan.activeSeconds, nextHoldId, deps, result);
+}
+
+/** The settle outcome of a forgiven-only tick: nothing charged, the wake's hold returned. */
+async function releaseForForgiven(row: PublishedApp, deps: AwakeMeterDeps): Promise<{ persisted: true; creditsSettled: true }> {
+  if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
+  return { persisted: true, creditsSettled: true };
 }
 
 /**

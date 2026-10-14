@@ -56,6 +56,7 @@ import {
   convertIntegrationToolsToAISDK,
   type GrantWithConnectionAndProvider,
 } from '@pagespace/lib/integrations/converter/ai-sdk';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { createConfiguredToolExecutor } from '@pagespace/lib/integrations/saga/create-configured-executor';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
@@ -96,7 +97,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       mockResolveGlobalIntegrations.mockResolvedValue([]);
 
       await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1',
+        agentId: 'imago-1', actor: credentialActor('user-1', null), driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1',
       });
 
       expect(mockResolveAgentIntegrations).not.toHaveBeenCalled();
@@ -110,7 +111,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       mockResolveGlobalIntegrations.mockResolvedValue([]);
 
       await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'excluded-1',
+        agentId: 'imago-1', actor: credentialActor('user-1', null), driveId: 'home-1', currentTools: {}, contextDriveId: 'excluded-1',
       });
 
       expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
@@ -123,7 +124,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       mockResolveGlobalIntegrations.mockResolvedValue([]);
 
       await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1', allowedDriveIds: ['other-1'],
+        agentId: 'imago-1', actor: credentialActor('user-1', null), driveId: 'home-1', currentTools: {}, contextDriveId: 'team-1', allowedDriveIds: ['other-1'],
       });
 
       expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
@@ -134,7 +135,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       vi.mocked(loadImagoAgentContext).mockResolvedValueOnce(imagoContext);
       mockIsOnPrem.mockReturnValueOnce(true);
 
-      expect(await resolvePageAgentIntegrationTools({ agentId: 'imago-1', userId: 'user-1', driveId: 'home-1', currentTools: {} })).toEqual({});
+      expect(await resolvePageAgentIntegrationTools({ agentId: 'imago-1', actor: credentialActor('user-1', null), driveId: 'home-1', currentTools: {} })).toEqual({});
       expect(mockResolveGlobalIntegrations).not.toHaveBeenCalled();
     });
 
@@ -142,7 +143,7 @@ describe('resolvePageAgentIntegrationTools', () => {
       vi.mocked(findBuiltinAgentOwner).mockResolvedValueOnce('owner-1');
 
       const result = await resolvePageAgentIntegrationTools({
-        agentId: 'imago-1', userId: 'user-2', driveId: 'home-1', currentTools: {},
+        agentId: 'imago-1', actor: credentialActor('user-2', null), driveId: 'home-1', currentTools: {},
       });
 
       expect(result).toEqual({});
@@ -156,7 +157,7 @@ describe('resolvePageAgentIntegrationTools', () => {
 
     const result = await resolvePageAgentIntegrationTools({
       agentId: 'agent-1',
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       driveId: 'drive-1',
       currentTools: {},
     });
@@ -201,7 +202,7 @@ describe('resolvePageAgentIntegrationTools', () => {
 
     const result = await resolvePageAgentIntegrationTools({
       agentId: 'agent-1',
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       driveId: 'drive-1',
       currentTools: {},
     });
@@ -226,7 +227,7 @@ describe('resolvePageAgentIntegrationTools', () => {
 
     const result = await resolvePageAgentIntegrationTools({
       agentId: 'agent-1',
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       driveId: 'drive-1',
       currentTools: { git_clone: {} },
     });
@@ -245,7 +246,7 @@ describe('resolvePageAgentIntegrationTools', () => {
 
     const result = await resolvePageAgentIntegrationTools({
       agentId: 'agent-1',
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       driveId: 'drive-1',
       currentTools: { read_page: {} },
     });
@@ -263,7 +264,7 @@ describe('resolveAssistantIntegrationTools (the global assistant and Imago)', ()
     mockResolveGlobalIntegrations.mockResolvedValue([]);
 
     const result = await resolveAssistantIntegrationTools({
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       agentId: null,
       driveInView: null,
       currentTools: {},
@@ -281,7 +282,7 @@ describe('resolveAssistantIntegrationTools (the global assistant and Imago)', ()
     });
 
     const result = await resolveAssistantIntegrationTools({
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       agentId: null,
       driveInView: null,
       currentTools: { gh_pr_view: {} },
@@ -298,21 +299,21 @@ describe('resolveIntegrationDriveScope', () => {
   });
 
   it('given no drive, should scope to no drive without a lookup', async () => {
-    expect(await resolveIntegrationDriveScope('user-1', null)).toEqual({ driveId: null, userDriveRole: null });
+    expect(await resolveIntegrationDriveScope(credentialActor('user-1', null), null)).toEqual({ driveId: null, userDriveRole: null });
     expect(mockGetDriveAccess).not.toHaveBeenCalled();
   });
 
   it("given a drive the user is a member of, should keep it with the user's role", async () => {
     mockGetDriveAccess.mockResolvedValue(access('ADMIN'));
 
-    expect(await resolveIntegrationDriveScope('user-1', 'drive-1')).toEqual({ driveId: 'drive-1', userDriveRole: 'ADMIN' });
-    expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-1', 'user-1');
+    expect(await resolveIntegrationDriveScope(credentialActor('user-1', null), 'drive-1')).toEqual({ driveId: 'drive-1', userDriveRole: 'ADMIN' });
+    expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-1', credentialActor('user-1', null));
   });
 
   it('given a drive the user is not a member of, should drop it', async () => {
     mockGetDriveAccess.mockResolvedValue(access(null));
 
-    expect(await resolveIntegrationDriveScope('user-1', 'drive-1')).toEqual({ driveId: null, userDriveRole: null });
+    expect(await resolveIntegrationDriveScope(credentialActor('user-1', null), 'drive-1')).toEqual({ driveId: null, userDriveRole: null });
   });
 });
 
@@ -330,7 +331,7 @@ describe('resolveAssistantIntegrationTools — drive in view', () => {
     });
 
     const result = await resolveAssistantIntegrationTools({
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       agentId: 'imago-1',
       driveInView: 'drive-1',
       currentTools: {},
@@ -344,7 +345,7 @@ describe('resolveAssistantIntegrationTools — drive in view', () => {
   it('given no drive in view, should resolve user-level integrations only', async () => {
     mockResolveGlobalIntegrations.mockResolvedValue([]);
 
-    const result = await resolveAssistantIntegrationTools({ userId: 'user-1', agentId: null, driveInView: null, currentTools: {} });
+    const result = await resolveAssistantIntegrationTools({ actor: credentialActor('user-1', null), agentId: null, driveInView: null, currentTools: {} });
 
     expect(result).toEqual({});
     expect(mockResolveGlobalIntegrations).toHaveBeenCalledWith(expect.anything(), 'user-1', null, null);
@@ -373,9 +374,9 @@ describe('integration tool key order determinism', () => {
     // only from the sort step (not from mockConvert itself).
     mockConvert.mockReturnValue(unorderedTools);
 
-    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', actor: credentialActor('u', null), driveId: 'd', currentTools: {} });
     mockConvert.mockReturnValue(unorderedTools);
-    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', actor: credentialActor('u', null), driveId: 'd', currentTools: {} });
 
     expect(JSON.stringify(Object.keys(build1))).toBe(JSON.stringify(Object.keys(build2)));
     // Keys must be alphabetically sorted
@@ -389,9 +390,9 @@ describe('integration tool key order determinism', () => {
     mockResolveAgentIntegrations.mockResolvedValue([{} as never]);
     mockCreateExecutor.mockReturnValue(vi.fn());
     mockConvert.mockReturnValue(tools);
-    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
+    const build1 = await resolvePageAgentIntegrationTools({ agentId: 'a', actor: credentialActor('u', null), driveId: 'd', currentTools: {} });
     mockConvert.mockReturnValue(tools);
-    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', userId: 'u', driveId: 'd', currentTools: {} });
+    const build2 = await resolvePageAgentIntegrationTools({ agentId: 'a', actor: credentialActor('u', null), driveId: 'd', currentTools: {} });
 
     // Both serializations must be byte-identical
     expect(JSON.stringify(build1)).toBe(JSON.stringify(build2));

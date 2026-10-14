@@ -8,6 +8,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { PATHNAME_HEADER } from './sign-in-url';
 
 // The request scope is Next's to provide; everything behind it is real: the
@@ -67,7 +68,7 @@ describe('getViewer()', () => {
   let userId: string;
 
   const mint = (type: 'user' | 'socket' = 'user', expiresInMs = 60 * 60 * 1000) =>
-    sessionService.createSession({ userId, type, scopes: ['*'], expiresInMs });
+    sessionService.createSession({ userId, type, scopes: ['*'], expiresInMs, authentication: null });
 
   beforeEach(async () => {
     userId = crypto.randomUUID();
@@ -99,7 +100,7 @@ describe('getViewer()', () => {
       given: 'a live user session in the session cookie',
       should: 'return the viewer it belongs to',
       actual: outcome.kind === 'viewer' ? outcome.viewer : outcome,
-      expected: { userId, role: 'user', sessionId: claims?.sessionId ?? 'no claims' },
+      expected: { userId, role: 'user', sessionId: claims?.sessionId ?? 'no claims', actor: credentialActor(userId, null) },
     });
   });
 

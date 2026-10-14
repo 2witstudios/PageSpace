@@ -1,25 +1,13 @@
 /**
  * Periodic reconciler for the users.subscriptionTier cache — the counterpart
- * of the credit balance's computeBalanceDrift sweep, for subscription tiers.
+ * of the wallet balance-drift sweep (wallet-reconcile), for subscription tiers.
  *
  * The cache is written only by the Stripe webhook, so a missed/failed webhook
  * leaves it stale indefinitely. This sweep walks every user, re-derives the
  * tier from their subscriptions rows (Stripe's local mirror — no Stripe
  * calls), and repairs repairable drift in place with logging + audit-friendly
- * details. Two drift shapes are reported but never auto-repaired — see
- * computeTierDrift:
- *   - an indeterminate derivation (an entitled row on an unmapped legacy price)
- *   - a non-free stored tier with ZERO subscriptions rows at all — the exact
- *     population `scripts/sync-legacy-subscriptions.ts` used to migrate.
- *     Auto-repairing this would silently revoke a paying customer's
- *     entitlements instead of completing that migration. A canceled/expired
- *     subscription still leaves a row and derives to 'free' normally — this
- *     guard only withholds the true zero-rows case.
- *
- * Replaces the one-shot repair scripts this drift class used to require
- * for the entitled-row derivation itself (scripts/sync-legacy-subscriptions.ts);
- * the zero-rows case it also handled still needs a human to complete (create
- * the missing subscription/gift), which is why that case is flagged, not fixed.
+ * details. Unknown prices and absent subscription rows confer no paid entitlement;
+ * the cache is repaired to the verified result even when diagnosis is indeterminate.
  */
 
 import { db } from '@pagespace/db/db';
@@ -27,11 +15,11 @@ import { and, eq, gt, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { loggers } from '../logging/logger-config';
+import { isBillingEnabled } from '../deployment-mode';
 import {
   ENTITLED_SUBSCRIPTION_STATUSES,
   computeTierDrift,
   deriveTierFromSubscriptions,
-  isTierDriftRepairable,
   type PriceTierResolver,
   type SubscriptionRowLike,
 } from './subscription-tier-sync';
@@ -46,7 +34,7 @@ export interface TierDriftDetail {
   repaired: boolean;
   /** True when the derivation saw an entitled row with an unmapped price. */
   indeterminate: boolean;
-  /** False means a non-free stored tier with zero subscriptions rows — the unmigrated-legacy-user case. */
+  /** Whether the user has any mirrored subscription, including inactive ones. */
   hasAnySubscriptionRecord: boolean;
 }
 
@@ -54,7 +42,7 @@ export interface TierReconcileResult {
   scanned: number;
   drifted: number;
   repaired: number;
-  /** Drifts flagged for a human because the derivation was indeterminate. */
+  /** Drifts not written because repair was disabled or a concurrent write won. */
   flaggedOnly: number;
   details: TierDriftDetail[];
 }
@@ -66,31 +54,39 @@ const MAX_DETAILS = 100;
 /**
  * Sweep all users, compare the cached tier against the derived tier, and (when
  * `repair` is true) write the derived value back for repairable drift. The
- * repair UPDATE is guarded on the observed stored value so a concurrent
- * webhook write always wins over the sweep.
+ * repair locks the user and re-reads subscription evidence. Webhooks atomically
+ * update their subscription mirror and this same user, so a stale batch cannot
+ * overwrite a completed webhook or win over a webhook waiting on the user lock.
  */
 export async function reconcileSubscriptionTiers(options: {
   priceTier: PriceTierResolver;
   repair?: boolean;
+  /**
+   * Restrict the sweep to these users. The cron omits it and walks the whole
+   * table; tests in a shared database pass their fixtures so a sweep cannot
+   * "repair" users that belong to concurrently running suites.
+   */
+  userIds?: string[];
 }): Promise<TierReconcileResult> {
   const repair = options.repair ?? true;
   const result: TierReconcileResult = { scanned: 0, drifted: 0, repaired: 0, flaggedOnly: 0, details: [] };
+  if (!isBillingEnabled()) return result;
 
   let cursor = '';
   for (;;) {
     const batch = await db
       .select({ id: users.id, subscriptionTier: users.subscriptionTier })
       .from(users)
-      .where(gt(users.id, cursor))
+      .where(options.userIds
+        ? and(inArray(users.id, options.userIds), gt(users.id, cursor))
+        : gt(users.id, cursor))
       .orderBy(users.id)
       .limit(BATCH_SIZE);
     if (batch.length === 0) break;
     cursor = batch[batch.length - 1].id;
     result.scanned += batch.length;
 
-    // ALL statuses, not just entitled: a user with zero rows whatsoever is a
-    // different (non-repairable) case from a user whose only row is
-    // canceled — see computeTierDrift's unmigrated-legacy-user guard.
+    // Keep all rows for diagnostics; only entitled configured prices establish access.
     const subRows: ReconcileSubscriptionRow[] = await db
       .select({
         userId: subscriptions.userId,
@@ -123,30 +119,39 @@ export async function reconcileSubscriptionTiers(options: {
           drift,
           hasAnySubscriptionRecord,
           indeterminate: derived.indeterminate,
-          repairable: isTierDriftRepairable({ storedTier: drift.storedTier, derived, hasAnySubscriptionRecord }),
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
 
     result.drifted += driftedUsers.length;
 
-    // Each repair is an independent CAS UPDATE (different user id + guarded on
-    // the observed stored value) — safe to run concurrently.
+    // Batch reads are diagnostics only; authorize every repair from fresh evidence
+    // while holding the user lock shared with webhook transactions.
     const repairedFlags = await Promise.all(
-      driftedUsers.map(async ({ user, drift, repairable }) => {
-        if (!repair || !repairable) return false;
-        const updated = await db
-          .update(users)
-          .set({ subscriptionTier: drift.expectedTier, updatedAt: new Date() })
-          .where(and(eq(users.id, user.id), eq(users.subscriptionTier, user.subscriptionTier)))
-          .returning({ id: users.id });
-        return updated.length > 0;
+      driftedUsers.map(async ({ user, drift }) => {
+        if (!repair) return false;
+        return db.transaction(async (tx) => {
+          const [current] = await tx.select({ tier: users.subscriptionTier }).from(users)
+            .where(eq(users.id, user.id)).for('update');
+          if (!current || current.tier !== user.subscriptionTier) return false;
+          const currentRows = await tx.select({ status: subscriptions.status, stripePriceId: subscriptions.stripePriceId })
+            .from(subscriptions).where(eq(subscriptions.userId, user.id));
+          const derived = deriveTierFromSubscriptions(
+            currentRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status)),
+            options.priceTier,
+          );
+          const freshDrift = computeTierDrift({ storedTier: current.tier, derived });
+          if (!freshDrift.drifted || freshDrift.expectedTier !== drift.expectedTier) return false;
+          await tx.update(users).set({ subscriptionTier: freshDrift.expectedTier, updatedAt: new Date() })
+            .where(eq(users.id, user.id));
+          return true;
+        });
       }),
     );
 
-    driftedUsers.forEach(({ user, drift, hasAnySubscriptionRecord, indeterminate, repairable }, i) => {
+    driftedUsers.forEach(({ user, drift, hasAnySubscriptionRecord, indeterminate }, i) => {
       const repaired = repairedFlags[i];
-      if (!repaired && !repairable) result.flaggedOnly += 1;
+      if (!repaired) result.flaggedOnly += 1;
       if (repaired) result.repaired += 1;
 
       loggers.system.warn('Subscription tier drift detected', {

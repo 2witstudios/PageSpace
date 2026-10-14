@@ -6,7 +6,8 @@ import type { ReactNode } from 'react';
 import { isBillingEnabled, isOnPrem } from '@/retained/lib/deployment-mode';
 import { isNativeApp } from '@/retained/lib/capacitor-bridge';
 import { useDriveStore } from '@/retained/hooks/useDrive';
-import { ORGS_ENABLED } from '../orgs-flag';
+import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
+import { useOrgRealtime } from '@/retained/hooks/useOrgs';
 import { ListPane } from '../../frame/list-pane/list-pane';
 import { accountNav, activeNavHref, driveSettingsNav, type NavContext, type NavItem } from './settings-nav';
 import { navGroupLabelClass, navRowClass } from './settings-nav-class';
@@ -20,8 +21,15 @@ export const navContext = (): NavContext => ({
   showBilling: isBillingEnabled(),
   isNative: isNativeApp(),
   onPrem: isOnPrem(),
-  orgs: ORGS_ENABLED,
+  hasOrganizations: false,
 });
+
+/** Membership-based account visibility shares the org realtime cache with the retained surfaces. */
+export function useAccountNav() {
+  const { organizations } = useMyOrganizations();
+  useOrgRealtime();
+  return accountNav({ ...navContext(), hasOrganizations: organizations.length > 0 });
+}
 
 const rows = (items: readonly NavItem[], active: string | null): ReactNode =>
   items.map((item) => (
@@ -52,7 +60,7 @@ export function DriveSettingsNavPane({ driveId }: { readonly driveId: string }) 
 /** The 260px "Account" pane: the account screens grouped You · AI · Plan & data · Connections · Other. */
 export function AccountNavPane() {
   const pathname = usePathname() ?? '/';
-  const groups = accountNav(navContext());
+  const groups = useAccountNav();
   const active = activeNavHref(groups.flatMap((group) => group.items), pathname);
   return (
     <ListPane section="account" variant="tree" title="Account">

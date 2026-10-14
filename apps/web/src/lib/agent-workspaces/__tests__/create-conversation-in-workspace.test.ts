@@ -87,6 +87,22 @@ describe('the conversation and its membership are one transaction', () => {
     deps = makeDeps();
   });
 
+  it('Given a validated initial source, should carry it into the page creator on the membership transaction', async () => {
+    await createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' });
+    expect(deps.createPageConversation).toHaveBeenCalledWith(expect.objectContaining({ initialChosenWalletId: 'wallet-own' }), TX);
+  });
+
+  it('Given an already-bound row that skips creation, should refuse an initial source instead of acknowledging an unstored choice', async () => {
+    deps.admitConversation = vi.fn(async () => 'already_a_member');
+    await expect(createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' })).rejects.toBeInstanceOf(ConversationUnavailableError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('Given an existing row, should refuse initial-source creation instead of ignoring the requested choice', async () => {
+    deps.createPageConversation.mockResolvedValue('exists');
+    await expect(createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' })).rejects.toBeInstanceOf(ConversationUnavailableError);
+  });
+
   it('creates the row on the TRANSACTION the membership write supplied', async () => {
     await createConversationInSessionWith(deps, input);
 

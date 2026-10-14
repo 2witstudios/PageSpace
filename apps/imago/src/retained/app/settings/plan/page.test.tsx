@@ -116,10 +116,10 @@ describe('PlanPage (/account/plan)', () => {
   test('ledes the current plan with its whole-credit allowance and renewal date', async () => {
     await renderPlan();
     assert({
-      given: 'a Pro subscriber with a 15 credit monthly allowance renewing Nov 3',
+      given: 'a Pro subscriber with a 1,500 credit monthly allowance renewing Nov 3',
       should: 'lede the page with the tier, the included credits and the renewal date',
       actual: screen.getByText(/^You're on Pro/).textContent,
-      expected: "You're on Pro · 15 credits included each month · renews Nov 3",
+      expected: "You're on Pro · 1,500 credits included each month · renews Nov 3",
     });
   });
 
@@ -128,7 +128,7 @@ describe('PlanPage (/account/plan)', () => {
     const columns = screen.getByText('Current Plan').closest('.overflow-hidden') as HTMLElement;
     const headings = Array.from(columns.querySelectorAll('.text-\\[15px\\]')).map((node) => node.textContent);
     assert({
-      given: 'a Pro subscriber on orgs-off billing',
+      given: 'a Pro subscriber on personal billing',
       should: 'render the Free and Pro tier columns with Current Plan on Pro and no Business column',
       actual: {
         headings,
@@ -155,9 +155,9 @@ describe('PlanPage (/account/plan)', () => {
       expected: {
         rows: [
           'FeatureFreePro',
-          'Credits5 credits to start15 credits/mo',
+          'Credits500 credits to start900 credits/mo',
           'AI modelsStandardStandard + Pro',
-          'Buy more credits10 credits per $1010 credits per $10',
+          'Buy more credits1,000 credits per $101,000 credits per $10',
           'Storage500MB2GB',
           'Max File Size50MB250MB',
         ],

@@ -5,7 +5,7 @@ import {
   extractOpenRouterGenerationIds,
 } from '@pagespace/lib/monitoring/ai-monitoring';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
-import { MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { providerDollarsCoveredByCents } from '@pagespace/lib/billing/money-model';
 import type { RunAgentWithRetryResult } from './run-agent-with-retry';
 
 /** How the step that was still streaming at an abort was priced. Stamped into usage metadata. */
@@ -92,7 +92,7 @@ export function agentRunBillingFields(params: {
   const estimatedDollars = calculateCost(model, stepInputTokens, stepOutputTokens, {
     cachedInputTokens: stepCachedTokens,
   });
-  const capDollars = estimateChatHoldCentsForModel(model) / 100 / (MARKUP_BPS / 10000);
+  const capDollars = providerDollarsCoveredByCents(estimateChatHoldCentsForModel(model));
   const stepDollars = Math.min(estimatedDollars, capDollars);
 
   const finishedStepsDollars =

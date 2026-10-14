@@ -1,8 +1,11 @@
 import { db } from '@pagespace/db/db';
 import { eq, and, isNotNull, inArray } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
+import { loadEffectiveDriveMembership } from './org-drive-membership';
 import { driveRoles, driveMembers } from '@pagespace/db/schema/members';
 import { isGuestRole } from './guest-role';
+import { applyOpenDriveFloor } from './open-drive-floor';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 
 export type CustomRolePerms = Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
 export type PagePerm = { canView: boolean; canEdit: boolean; canShare: boolean };
@@ -51,14 +54,28 @@ export async function fetchCustomRolePermissions(
 }
 
 // Returns the customRoleId assigned to the user in this drive, or null if none / not a member / a guest.
+// It is the EFFECTIVE membership's role: an implicit Open member holds the drive's default role, an
+// org Owner/Admin none, and a stale org row counts for nothing.
 export async function getMemberCustomRoleId(driveId: string, userId: string): Promise<string | null> {
+  const [drive] = await db
+    .select({ id: drives.id, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive) return null;
+  return (await loadEffectiveDriveMembership(userId, drive))?.customRoleId ?? null;
+}
+
+// True when the user's ACCEPTED drive_members row in this drive is a GUEST row (a redeemed page
+// share link). The membership resolvers read that row as no membership (driveMembershipRole); a
+// caller that also admits page collaborators reads it here to tell a guest apart from them.
+export async function holdsAcceptedGuestRow(driveId: string, userId: string): Promise<boolean> {
   const result = await db
-    .select({ customRoleId: driveMembers.customRoleId, role: driveMembers.role })
+    .select({ role: driveMembers.role })
     .from(driveMembers)
     .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt)))
     .limit(1);
-  if (result.length === 0 || isGuestRole(result[0].role)) return null;
-  return result[0].customRoleId ?? null;
+  return result.length > 0 && isGuestRole(result[0].role);
 }
 
 // Returns true only when the custom role exists and belongs to the specified drive.
@@ -75,6 +92,11 @@ export interface DriveWideEditEntry {
   driveId: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
   customRoleId?: string | null;
+  /**
+   * POL-6: the effective membership's `openDriveFloor` (an implicit Open-drive member's org floor), or null for
+   * anything else (an owner, an explicit token role, a personal drive). Required so no caller drops it silently.
+   */
+  openDriveFloor: OpenRoleFloor | null;
 }
 
 /**
@@ -130,9 +152,11 @@ export async function resolveDriveWideCanEdit(
     // drive, or a role without explicit drive-wide edit grants nothing at the
     // drive root.
     const role = roles.get(entry.customRoleId);
+    const canEdit = role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true;
+    // POL-6: an implicit Open-drive member edits drive-wide when the org's floor is edit.
     result.set(
       entry.driveId,
-      role?.driveId === entry.driveId && role.driveWidePermissions?.canEdit === true,
+      applyOpenDriveFloor({ canView: true, canEdit, canShare: false, canDelete: false }, entry.openDriveFloor, { isPrivate: false })?.canEdit === true,
     );
   }
   return result;

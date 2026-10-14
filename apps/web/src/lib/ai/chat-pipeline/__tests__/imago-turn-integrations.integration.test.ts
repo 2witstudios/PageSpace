@@ -88,6 +88,7 @@ import {
   integrationToolGrants,
 } from '@pagespace/db/schema/integrations';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
@@ -207,7 +208,7 @@ async function seedWorld(): Promise<World> {
   });
 
   const { agents } = await provisionImagoAgents(user.id);
-  expect((await setImagoDriveAccess(user.id, journal.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(user.id, null), journal.id, false)).ok).toBe(true);
   await factories.createPagePermission(agents.imago, visitor.id, { canEdit: true });
 
   const slugs = {} as Record<ProviderKey, string>;
@@ -233,7 +234,7 @@ async function seedWorld(): Promise<World> {
   await db.insert(integrationToolGrants).values({ agentId: ordinary.id, connectionId: userEnabled });
 
   const session = (userId: string) =>
-    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
 
   return {
     userId: user.id,
@@ -374,14 +375,14 @@ describe("runPageChatTurn — Imago's integrations are the global assistant's (I
   });
 
   it('negative control: given the same drive let back in, should hand it that drive’s integrations', async () => {
-    expect((await setImagoDriveAccess(world.userId, world.excluded.driveId, true)).ok).toBe(true);
+    expect((await setImagoDriveAccess(credentialActor(world.userId, null), world.excluded.driveId, true)).ok).toBe(true);
     try {
       expect(await integrationsSent(world.imagoPageId, { routeType: 'drive', driveId: world.excluded.driveId })).toEqual([
         'excludedDrive',
         'userEnabled',
       ]);
     } finally {
-      expect((await setImagoDriveAccess(world.userId, world.excluded.driveId, false)).ok).toBe(true);
+      expect((await setImagoDriveAccess(credentialActor(world.userId, null), world.excluded.driveId, false)).ok).toBe(true);
     }
   });
 

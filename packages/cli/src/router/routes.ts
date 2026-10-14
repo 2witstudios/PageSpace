@@ -39,6 +39,13 @@ import { loginHandler } from '../commands/login.js';
 import { logoutHandler } from '../commands/logout.js';
 import { mcpHandler } from '../commands/mcp.js';
 import {
+  orgsDrivesHandler,
+  orgsGetHandler,
+  orgsListHandler,
+  orgsMembersHandler,
+  orgsPoliciesHandler,
+} from '../commands/orgs.js';
+import {
   rolesCreateHandler,
   rolesDeleteHandler,
   rolesGetHandler,
@@ -82,6 +89,48 @@ import {
 } from '../commands/tasks.js';
 import { trashListHandler } from '../commands/trash.js';
 import { workspacesExecHandler, workspacesListHandler } from '../commands/workspaces.js';
+import { walletsAlwaysOwnCreditsHandler, walletsDriveHandler, walletsDriveSourceHandler, walletsListHandler, walletsSourceHandler } from '../commands/wallets.js';
+import {
+  orgsAcceptInviteHandler,
+  orgsActivityHandler,
+  orgsAddDomainHandler,
+  orgsAnswerGuestHandler,
+  orgsAuditExportHandler,
+  orgsAuditHandler,
+  orgsAutomationsHandler,
+  orgsClearSuppressionHandler,
+  orgsConfirmDomainHandler,
+  orgsDeleteAutomationHandler,
+  orgsDomainsHandler,
+  orgsDriveUsageHandler,
+  orgsGuestApprovalsHandler,
+  orgsGuestsHandler,
+  orgsInvitationsHandler,
+  orgsInviteHandler,
+  orgsLeaveHandler,
+  orgsReassignAutomationHandler,
+  orgsRemoveDomainHandler,
+  orgsRemoveMemberHandler,
+  orgsResendInviteHandler,
+  orgsRevokeInviteHandler,
+  orgsSetPoliciesHandler,
+  orgsSetRoleHandler,
+  orgsSignInPreviewHandler,
+  orgsSuspendedHandler,
+  orgsTrashedDrivesHandler,
+  orgsUpdateHandler,
+  orgsVerifyDomainHandler,
+} from '../commands/org-writes.js';
+import {
+  drivesAnswerJoinHandler,
+  drivesJoinRequestsHandler,
+  drivesMoveOutOfOrgHandler,
+  drivesMoveToOrgHandler,
+  drivesRequestJoinHandler,
+  drivesSetLeadHandler,
+  drivesSetVisibilityHandler,
+  drivesWithdrawJoinHandler,
+} from '../commands/drive-org.js';
 import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
 import { keysDescribeHandler } from '../commands/keys/describe.js';
@@ -136,6 +185,15 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['drives', 'set-home-page'], handler: drivesSetHomePageHandler, summary: "Set (or --clear) a drive's landing page" },
   { path: ['drives', 'trash'], handler: drivesTrashHandler, summary: 'Trash a drive' },
   { path: ['drives', 'restore'], handler: drivesRestoreHandler, summary: 'Restore a trashed drive' },
+  // Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6). Unscoped key; the org's sign-in policy applies.
+  { path: ['drives', 'move-to-org'], handler: drivesMoveToOrgHandler, summary: 'Move a personal drive you own into an organization' },
+  { path: ['drives', 'move-out-of-org'], handler: drivesMoveOutOfOrgHandler, summary: 'Move a drive out of its organization (Owner/Admin; keep|remove members)' },
+  { path: ['drives', 'set-visibility'], handler: drivesSetVisibilityHandler, summary: "Set an org drive's visibility: OPEN, RESTRICTED or PRIVATE" },
+  { path: ['drives', 'set-lead'], handler: drivesSetLeadHandler, summary: 'Hand an org drive to a new lead' },
+  { path: ['drives', 'join-requests'], handler: drivesJoinRequestsHandler, summary: "List a Restricted drive's pending join requests (lead/Owner/Admin)" },
+  { path: ['drives', 'request-join'], handler: drivesRequestJoinHandler, summary: 'Ask to join a Restricted org drive' },
+  { path: ['drives', 'answer-join'], handler: drivesAnswerJoinHandler, summary: 'Approve or deny a join request' },
+  { path: ['drives', 'withdraw-join'], handler: drivesWithdrawJoinHandler, summary: 'Withdraw your own join request' },
   { path: ['roles', 'list'], handler: rolesListHandler, summary: 'List custom roles in a drive' },
   { path: ['roles', 'get'], handler: rolesGetHandler, summary: 'Get a role and its permissions' },
   { path: ['roles', 'create'], handler: rolesCreateHandler, summary: 'Create a custom role' },
@@ -195,6 +253,50 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
   { path: ['workspaces', 'list'], handler: workspacesListHandler, summary: 'List your agent workspaces (each has one sandbox)' },
   { path: ['workspaces', 'exec'], handler: workspacesExecHandler, summary: "Run a shell command in a workspace's sandbox" },
+  // Organizations (Spec X-1, ORG-5). Every verb needs an unscoped key (the drive directory also
+  // serves a scoped key, filtered) and is authorized by the web's requireOrgRole; the org's sign-in
+  // policy applies to the key. Creating or deleting an org, transferring ownership, seat caps, the
+  // pool and billing need a signed-in session ([D-OW-26]) and are not verbs.
+  { path: ['orgs', 'list'], handler: orgsListHandler, summary: 'List the organizations you belong to, with your role (unscoped key)' },
+  { path: ['orgs', 'get'], handler: orgsGetHandler, summary: 'Show one organization: identity, owner, your role (unscoped key)' },
+  { path: ['orgs', 'update'], handler: orgsUpdateHandler, summary: "Rename an organization or change its slug/avatar (Owner/Admin)" },
+  { path: ['orgs', 'members'], handler: orgsMembersHandler, summary: 'List an organization\'s members and roles (unscoped key)' },
+  { path: ['orgs', 'activity'], handler: orgsActivityHandler, summary: "Each member's drive count and last activity (Owner/Admin)" },
+  { path: ['orgs', 'set-role'], handler: orgsSetRoleHandler, summary: 'Make a member an ADMIN or MEMBER (Owner/Admin)' },
+  { path: ['orgs', 'remove-member'], handler: orgsRemoveMemberHandler, summary: 'Remove a member from an organization (Owner/Admin)' },
+  { path: ['orgs', 'leave'], handler: orgsLeaveHandler, summary: 'Leave an organization' },
+  { path: ['orgs', 'invitations'], handler: orgsInvitationsHandler, summary: "List an organization's open invitations (Owner/Admin)" },
+  { path: ['orgs', 'invite'], handler: orgsInviteHandler, summary: 'Invite someone to an organization by email' },
+  { path: ['orgs', 'resend-invite'], handler: orgsResendInviteHandler, summary: 'Resend an invitation with a new link' },
+  { path: ['orgs', 'revoke-invite'], handler: orgsRevokeInviteHandler, summary: 'Revoke an open invitation (Owner/Admin)' },
+  { path: ['orgs', 'accept-invite'], handler: orgsAcceptInviteHandler, summary: 'Accept an organization invitation by its token' },
+  { path: ['orgs', 'drives'], handler: orgsDrivesHandler, summary: "List an organization's drive directory, incl. Restricted (unscoped key)" },
+  { path: ['orgs', 'trashed-drives'], handler: orgsTrashedDrivesHandler, summary: "List an organization's trashed drives (Owner/Admin)" },
+  { path: ['orgs', 'drive-usage'], handler: orgsDriveUsageHandler, summary: 'People, guests and storage per org drive (Owner/Admin)' },
+  { path: ['orgs', 'policies'], handler: orgsPoliciesHandler, summary: "Read an organization's policies (Owner/Admin; unscoped key)" },
+  { path: ['orgs', 'set-policies'], handler: orgsSetPoliciesHandler, summary: 'Change organization policies, key=value (Owner/Admin)' },
+  { path: ['orgs', 'suspended'], handler: orgsSuspendedHandler, summary: "List what an organization's policies hold suspended (Owner/Admin)" },
+  { path: ['orgs', 'sign-in-preview'], handler: orgsSignInPreviewHandler, summary: 'Count the members and credentials a sign-in policy would refuse now (Owner/Admin)' },
+  { path: ['orgs', 'audit'], handler: orgsAuditHandler, summary: "Read an organization's audit log (Owner/Admin)" },
+  { path: ['orgs', 'audit-export'], handler: orgsAuditExportHandler, summary: "Export an organization's audit log as CSV (Owner/Admin)" },
+  { path: ['orgs', 'automations'], handler: orgsAutomationsHandler, summary: 'List automations whose creator left (Owner/Admin)' },
+  { path: ['orgs', 'delete-automation'], handler: orgsDeleteAutomationHandler, summary: 'Delete an automation whose creator left (Owner/Admin)' },
+  { path: ['orgs', 'reassign-automation'], handler: orgsReassignAutomationHandler, summary: 'Hand an automation whose creator left to a member (Owner/Admin)' },
+  { path: ['orgs', 'guests'], handler: orgsGuestsHandler, summary: "List an organization's guests (Owner/Admin)" },
+  { path: ['orgs', 'guest-approvals'], handler: orgsGuestApprovalsHandler, summary: 'List guests waiting for approval (Owner/Admin)' },
+  { path: ['orgs', 'answer-guest'], handler: orgsAnswerGuestHandler, summary: 'Approve or decline a waiting guest (Owner/Admin)' },
+  { path: ['orgs', 'domains'], handler: orgsDomainsHandler, summary: "List an organization's domain claims (Owner/Admin)" },
+  { path: ['orgs', 'add-domain'], handler: orgsAddDomainHandler, summary: 'Claim a domain for an organization (Owner/Admin)' },
+  { path: ['orgs', 'remove-domain'], handler: orgsRemoveDomainHandler, summary: 'Remove a domain claim (Owner/Admin)' },
+  { path: ['orgs', 'verify-domain'], handler: orgsVerifyDomainHandler, summary: 'Verify a domain claim by DNS or a mailed link (Owner/Admin)' },
+  { path: ['orgs', 'confirm-domain'], handler: orgsConfirmDomainHandler, summary: 'Confirm a mailed domain verification link by its token' },
+  { path: ['orgs', 'clear-suppression'], handler: orgsClearSuppressionHandler, summary: "Let a departed member's address auto-join again (Owner/Admin)" },
+  // Wallet READS only ([D-OW-26]): a key never moves money or changes a spend source.
+  { path: ['wallets', 'drive'], handler: walletsDriveHandler, summary: "Show a drive's wallet: remaining credits and your own cap" },
+  { path: ['wallets', 'list'], handler: walletsListHandler, summary: 'List the wallets you spend from and fund (unscoped key)' },
+  { path: ['wallets', 'source'], handler: walletsSourceHandler, summary: 'Show which wallet a conversation spends from (unscoped key)' },
+  { path: ['wallets', 'drive-source'], handler: walletsDriveSourceHandler, summary: 'Show which wallet a new conversation in a drive would spend from' },
+  { path: ['wallets', 'always-own-credits'], handler: walletsAlwaysOwnCreditsHandler, summary: 'Read your "Always my own credits" switches (unscoped key)' },
 ];
 
 const HELP_DESCRIPTOR = { path: ['help'], summary: 'Show this help message' };

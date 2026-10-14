@@ -10,6 +10,7 @@
  */
 
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
@@ -80,12 +81,21 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     return;
   }
 
+  const claimed = await dataSubjectRequestRepository.claimErasure(requestId, userId);
+  if (!claimed) return;
+
   const mode = resolveDeploymentMode();
   const forceDelete = request.forceDelete;
 
   // Concrete step implementations keyed by the plan's step ids.
   const impls: Partial<Record<ErasureStepId, () => Promise<{ status: 'ok' | 'skipped'; detail?: string }>>> = {
     'drive-disposition': async () => {
+      // First destructive step: an org Owner cannot be erased (ORG-6), even by force. Refuse here,
+      // not at delete-user, or everything before it is already gone.
+      const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+      if (ownedOrganizations.length > 0) {
+        throw new Error(`${ERASURE_BLOCKED_PREFIX}: owns organizations ${ownedOrganizations.join(', ')}`);
+      }
       const owned = await accountRepository.getOwnedDrives(userId);
       const withCounts = await Promise.all(
         owned.map(async (d) => ({
@@ -192,7 +202,15 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
     },
 
     'delete-user': async () => {
-      await accountRepository.deleteUser(userId);
+      try {
+        await accountRepository.deleteUser(userId);
+      } catch (error) {
+        // Defense against legacy/direct database writes bypassing retirement admission.
+        if (error instanceof LeaveOrganizationRefusedError) {
+          throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${error.message}`);
+        }
+        throw error;
+      }
       return ok();
     },
   };

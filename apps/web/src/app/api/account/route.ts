@@ -1,3 +1,4 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
@@ -14,6 +15,7 @@ import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-di
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const patchBodySchema = z
   .object({
@@ -184,6 +186,7 @@ export async function DELETE(req: Request) {
   if (isAuthError(auth)) {
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   try {
@@ -216,6 +219,18 @@ export async function DELETE(req: Request) {
           appleSignIn: user.appleId !== null ? 'manual' : 'none',
         },
         { status: 202 }
+      );
+    }
+
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
       );
     }
 
@@ -254,7 +269,7 @@ export async function DELETE(req: Request) {
       subjectUserId: userId,
       subjectEmail: user.email,
       stripeCustomerId: user.stripeCustomerId,
-      callerUserId: userId,
+      caller: actor,
       requestedByType: 'self',
       forceDelete: false,
       subjectAppleLinked: user.appleId !== null,
@@ -269,6 +284,9 @@ export async function DELETE(req: Request) {
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
     loggers.auth.error('Account erasure request error:', error as Error);
     return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }

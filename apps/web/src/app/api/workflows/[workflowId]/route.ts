@@ -12,6 +12,8 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
+import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -48,9 +50,9 @@ async function getWorkflowWithAuth(workflowId: string, auth: AuthResult) {
   if (scopeError) return { error: scopeError };
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, workflow.driveId))) {
-    const access = await checkDriveAccess(workflow.driveId, auth.userId);
+    const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
     if (!access.drive) return { error: NextResponse.json({ error: 'Drive not found' }, { status: 404 }) };
-    return { error: NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }) };
+    return { error: await deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 })) };
   }
 
   return { workflow };
@@ -131,6 +133,11 @@ export async function PATCH(
       return NextResponse.json({ error: stepsResult.error }, { status: 400 });
     }
     stepWarnings = stepsResult.warnings;
+  }
+
+  // [D-OW-36] An owner-left workflow stays off until an Owner or Admin reassigns it (which switches it back on).
+  if (workflow.ownerLeftAt && data.isEnabled === true) {
+    return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: AUTOMATION_OWNER_LEFT_CODE }, { status: 409 });
   }
 
   // Validate timezone. Body value wins, else the workflow's own stored zone,

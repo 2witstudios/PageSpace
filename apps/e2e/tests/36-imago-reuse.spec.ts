@@ -57,7 +57,9 @@ test('creates through the retained palette, edits with the retained toolbar and 
   await page.getByLabel('Account menu', { exact: true }).click();
   await page.getByRole('radio', { name: 'Dark', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await expect(page.locator('.retained-ui.dark').first()).toBeVisible();
+  const themedEditor = page.locator('.retained-ui.dark').filter({ has: page.locator('.tiptap[contenteditable="true"]') });
+  await expect(themedEditor).toBeVisible();
+  await expect(editor).toBeVisible();
   await page.keyboard.press('Escape');
   // v3 has no second header bar: Version history lives in the page head's "…" Page tools menu (the
   // Page actions menu beside it holds the page's rename, move and delete).

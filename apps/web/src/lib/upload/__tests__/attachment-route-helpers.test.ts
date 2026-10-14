@@ -20,7 +20,8 @@ vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id' } }));
 vi.mock('@pagespace/db/schema/social', () => ({
   dmConversations: { id: 'dm.id', participant1Id: 'dm.p1', participant2Id: 'dm.p2' },
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ canUserEditPage: vi.fn() }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), canUserEditPage: vi.fn() }));
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({ isEmailVerified: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 

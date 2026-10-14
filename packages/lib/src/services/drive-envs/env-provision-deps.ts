@@ -46,6 +46,9 @@ import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
 import { isLocalEnvsEnabled } from './local-envs-enabled';
 import { gateLocalEnv, noLiveConnections, resolveDriveActorRole, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
 import type { ActorRole } from '../../env-bridge/decide-bind';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { environmentsDecision } from '../../organizations/org-action-decisions';
+import type { AccessActor } from '../../permissions/access-actor';
 
 /**
  * The env's PAYER — the drive's OWNER — and their tier.
@@ -75,20 +78,20 @@ export type DriveEnvProvisionStore = Pick<
 /**
  * Build the env's `SpriteHolderProvisionDeps`.
  *
- * `requesterId` is who this provision authorizes as. `payer` is resolved by the
+ * `requester` is who this provision authorizes as (their credential). `payer` is resolved by the
  * caller and passed in — it is a database fact about the drive, and this module
  * takes no database.
  */
 export function buildEnvProvisionDeps({
   row,
   payer,
-  requesterId,
+  requester,
   store,
   host,
 }: {
   row: Pick<DriveEnvRecord, 'driveId'>;
   payer: DriveEnvPayer;
-  requesterId: string;
+  requester: AccessActor;
   store: DriveEnvProvisionStore;
   host: SandboxHost;
 }): SpriteHolderProvisionDeps {
@@ -122,7 +125,7 @@ export function buildEnvProvisionDeps({
      */
     authorize: async () => {
       const result = await canRunCode({
-        userId: requesterId,
+        actor: requester,
         driveId: row.driveId,
         ownerId: payer.payerId,
         requestOrigin: 'user',
@@ -187,13 +190,15 @@ export interface EnsureDriveEnvSandboxDeps {
    * tenant — see `DriveEnvPayer`.
    */
   resolvePayer: (driveId: string) => Promise<DriveEnvPayer | null>;
+  /** POL-10: the drive's org policies, read live at every provision/start; null when the drive has no org. Required, never defaulted. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /**
    * LOCAL envs only (C1). This replica's bridge-socket registry reading; absent
    * until the socket route (t07) exists, so status derives from the heartbeat.
    */
   liveConnection?: LiveConnectionReader;
   /** LOCAL envs only. Test seam; production resolves the role with the centralized permission helper. */
-  resolveActorRole?: (input: { userId: string; driveId: string }) => Promise<ActorRole>;
+  resolveActorRole?: (input: { actor: AccessActor; driveId: string }) => Promise<ActorRole>;
   /** LOCAL envs only. `LOCAL_ENVS_ENABLED`; read from the environment when absent. */
   localEnvsEnabled?: boolean;
   /**
@@ -221,26 +226,26 @@ export interface EnsureDriveEnvSandboxDeps {
  */
 export async function gateLocalEnvForRequester({
   row,
-  requesterId,
+  requester,
   deps,
 }: {
   row: Pick<DriveEnvRecord, 'id' | 'driveId' | 'substrate'>;
-  requesterId: string;
+  requester: AccessActor;
   deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'resolveActorRole' | 'localEnvsEnabled'>;
 }): Promise<LocalEnvGateVerdict> {
   const payer = await deps.resolvePayer(row.driveId);
   // A vanished drive has nobody to authorize against; the code-exec gate's own
   // vocabulary says so rather than this module inventing a verdict.
   const canRun = payer
-    ? () => canRunCode({ userId: requesterId, driveId: row.driveId, ownerId: payer.payerId, requestOrigin: 'user' })
+    ? () => canRunCode({ actor: requester, driveId: row.driveId, ownerId: payer.payerId, requestOrigin: 'user' })
     : async () => ({ ok: false as const, reason: 'no_drive_access' as const });
   return gateLocalEnv({
     row,
-    requesterId,
+    requesterId: requester.userId,
     deps: {
       store: deps.store,
       canRunCode: canRun,
-      resolveActorRole: () => (deps.resolveActorRole ?? resolveDriveActorRole)({ userId: requesterId, driveId: row.driveId }),
+      resolveActorRole: () => (deps.resolveActorRole ?? resolveDriveActorRole)({ actor: requester, driveId: row.driveId }),
       liveConnection: deps.liveConnection ?? noLiveConnections,
       flagEnabled: deps.localEnvsEnabled ?? isLocalEnvsEnabled(),
       now: () => new Date(),
@@ -265,21 +270,26 @@ export async function gateLocalEnvForRequester({
 export async function ensureDriveEnvSandbox({
   envId,
   intent,
-  requesterId,
+  requester,
   deps,
 }: {
   envId: string;
   intent: SpriteHolderProvisionIntent;
-  requesterId: string;
+  requester: AccessActor;
   deps: EnsureDriveEnvSandboxDeps;
 }): Promise<EnsureSpriteHolderSandboxResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'provision_failed', detail: 'env_not_found' };
+  // POL-10: an org that turned persistent environments off stops them STARTING, not just being created.
+  // The row is kept (suspend, never delete); turning the policy back on lets it start again.
+  if (!environmentsDecision(await deps.getDriveOrgPolicies(row.driveId)).ok) {
+    return { ok: false, reason: 'provision_failed', detail: 'org_policy' };
+  }
   // C1: a LOCAL env never reaches the Sprite host. The pure planners decide
   // (via the gate), and t09 replaces the flat refusal that stood here with the
   // real local host — keeping every typed verdict for every case that still
   // refuses, and changing only the connected-and-allowed one.
-  if (row.substrate === 'local') return ensureLocalEnvSandbox({ row, requesterId, deps });
+  if (row.substrate === 'local') return ensureLocalEnvSandbox({ row, requester, deps });
   const payer = await deps.resolvePayer(row.driveId);
   if (!payer) return { ok: false, reason: 'provision_failed', detail: 'drive_not_found' };
   return ensureSpriteHolderSandbox({
@@ -288,7 +298,7 @@ export async function ensureDriveEnvSandbox({
     // rather than inferring a session-shaped lifecycle the env does not have.
     row: { ...row, holderId: row.id, endedAt: null },
     intent,
-    deps: buildEnvProvisionDeps({ row, payer, requesterId, store: deps.store, host: deps.host }),
+    deps: buildEnvProvisionDeps({ row, payer, requester, store: deps.store, host: deps.host }),
   });
 }
 
@@ -325,14 +335,14 @@ export async function ensureDriveEnvSandbox({
  */
 async function ensureLocalEnvSandbox({
   row,
-  requesterId,
+  requester,
   deps,
 }: {
   row: DriveEnvRecord;
-  requesterId: string;
+  requester: AccessActor;
   deps: EnsureDriveEnvSandboxDeps;
 }): Promise<EnsureSpriteHolderSandboxResult> {
-  const verdict = await gateLocalEnvForRequester({ row, requesterId, deps });
+  const verdict = await gateLocalEnvForRequester({ row, requester, deps });
   if (!verdict.ok) return { ok: false, reason: 'local_refused', refusal: verdict.refusal, detail: verdict.cause ?? verdict.refusal };
 
   // No registry in this process (see `resolveLocalHost`). A typed refusal, and
@@ -341,7 +351,7 @@ async function ensureLocalEnvSandbox({
     return { ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' };
   }
 
-  const localHost = await deps.resolveLocalHost({ envId: row.id, requesterId });
+  const localHost = await deps.resolveLocalHost({ envId: row.id, requesterId: requester.userId });
   try {
     const handle = await localHost.provision({
       // The env id IS the name: a local machine has one identity, its

@@ -52,6 +52,9 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+// Real, unmocked: money-model is pure (no IO), and mocking it would defeat the planCredits test.
+import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
+import { TIERS } from '@pagespace/lib/billing/subscription-tiers';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -189,28 +192,7 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.storage.quota).toBe(2 * 1024 * 1024 * 1024); // 2GB
     });
 
-    it('should return founder tier status with correct quota', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({
-        subscriptionTier: 'founder',
-        stripeCustomerId: 'cus_123',
-      })]);
-
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
-
-      const request = new Request('https://example.com/api/subscriptions/status', {
-        method: 'GET',
-      }) as unknown as import('next/server').NextRequest;
-
-      const response = await GET(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('founder');
-      expect(body.storage.tier).toBe('founder');
-      expect(body.storage.quota).toBe(10 * 1024 * 1024 * 1024); // 10GB
-    });
-
-    it('should return business tier status with correct quota', async () => {
+    it('A-9 refuses a retired personal Business tier and omits grandfathering', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({
         subscriptionTier: 'business',
         stripeCustomerId: 'cus_123',
@@ -226,9 +208,10 @@ describe('GET /api/subscriptions/status', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('business');
-      expect(body.storage.tier).toBe('business');
-      expect(body.storage.quota).toBe(50 * 1024 * 1024 * 1024); // 50GB
+      expect(body.subscriptionTier).toBe('free');
+      expect(body).not.toHaveProperty('subscriptionGrandfathered');
+      expect(body.storage.tier).toBe('free');
+      expect(body.storage.quota).toBe(500 * 1024 * 1024);
     });
 
     it('should include cancelAtPeriodEnd status', async () => {
@@ -345,12 +328,31 @@ describe('GET /api/subscriptions/status', () => {
     });
   });
 
+  describe('MON-2 planCredits', () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents (A-11: Pro 900)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+
+      const request = new Request('https://example.com/api/subscriptions/status', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.planCredits).toEqual(
+        Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
+      );
+      // Pinned: A-11's 60% of list price (free = starter grant).
+      expect(body.planCredits).toEqual({ free: 500, pro: 900, business: 3000 });
+    });
+  });
+
   describe('Storage quota by tier', () => {
     const tierQuotaTests = [
       { tier: 'free', expectedQuota: 500 * 1024 * 1024, description: '500MB' },
       { tier: 'pro', expectedQuota: 2 * 1024 * 1024 * 1024, description: '2GB' },
-      { tier: 'founder', expectedQuota: 10 * 1024 * 1024 * 1024, description: '10GB' },
-      { tier: 'business', expectedQuota: 50 * 1024 * 1024 * 1024, description: '50GB' },
+      { tier: 'business', expectedQuota: 500 * 1024 * 1024, description: 'Free fallback for retired personal Business' },
     ];
 
     for (const { tier, expectedQuota, description } of tierQuotaTests) {
@@ -373,7 +375,7 @@ describe('GET /api/subscriptions/status', () => {
 
         expect(response.status).toBe(200);
         expect(body.storage.quota).toBe(expectedQuota);
-        expect(body.storage.tier).toBe(tier);
+        expect(body.storage.tier).toBe(tier === 'business' ? 'free' : tier);
       });
     }
   });

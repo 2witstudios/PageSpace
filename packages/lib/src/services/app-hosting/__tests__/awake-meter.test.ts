@@ -1,12 +1,36 @@
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from '../../sandbox/__tests__/riteway';
-import { meterAwakePublishedApps, type AwakeMeterDeps } from '../awake-meter';
+import { defaultAwakeMeterDeps, meterAwakePublishedApps, meterAwakePublishedAppsSerialized, type AwakeMeterDeps } from '../awake-meter';
 import type { AppBillingDeps } from '../app-billing';
 import { MAX_AWAKE_SETTLE_SPAN_MS } from '../app-metering-core';
 import type { PublishedApp } from '@pagespace/db/schema/published-apps';
 
+// The default park binding hands the real `stopPublishedApp`; only its WIRING is
+// under test here, never a real stop. Everything else from the module stays actual.
+vi.mock('../app-lifecycle-metering', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../app-lifecycle-metering')>();
+  return {
+    ...actual,
+    stopPublishedApp: vi.fn(
+      async (
+        publishedAppId: string,
+        reason: Parameters<typeof actual.stopPublishedApp>[1],
+        deps?: Parameters<typeof actual.stopPublishedApp>[2],
+      ) => {
+        void publishedAppId;
+        void reason;
+        void deps;
+        return { outcome: 'stopped', status: 'parked', billedSeconds: 0 } as const;
+      },
+    ),
+  };
+});
+
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
+/** Org compute billing went live well before every default window, so nothing is forgiven by default. */
+const EPOCH = ago(86_400_000);
+const ORG_CHARGE = { kind: 'org' as const, orgId: 'org-northwind', userId: 'lead-marcus' };
 
 function runningApp(over: Partial<PublishedApp> = {}): PublishedApp {
   return {
@@ -37,15 +61,16 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
   // test can hand it a refusal (which carries `reason` and no `holdId`).
   const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-next' }));
   const releaseHold = vi.fn(async () => {});
+  const holdMatchesCharge = vi.fn<AppBillingDeps['holdMatchesCharge']>(async () => true);
   const writeSettle = vi.fn<AwakeMeterDeps['writeSettle']>(async () => 'advanced');
   const stampWindowStart = vi.fn(async () => 'stamped' as const);
   const closeAtBoundary = vi.fn(async () => ({ billedSeconds: 600, failed: false }));
-  const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap') => {});
+  const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap' | 'member_cap') => {});
   const findStopBoundary = vi.fn(async () => null);
 
   const deps: AwakeMeterDeps = {
     isEnabled: () => true,
-    billing: { resolvePayerId: async () => 'payer-1', gate, trackUsage, releaseHold },
+    billing: { resolveCharge: async () => ({ kind: 'user' as const, userId: 'payer-1' }), gate, trackUsage, releaseHold, holdMatchesCharge },
     listRunningApps: async () => [runningApp()],
     findStopBoundary,
     writeSettle,
@@ -54,9 +79,10 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
     park,
     dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
+    orgComputeBillingEpoch: async () => EPOCH,
     ...over,
   };
-  return { deps, trackUsage, gate, releaseHold, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
+  return { deps, trackUsage, gate, releaseHold, holdMatchesCharge, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
 }
 
 /** Narrow the run to its metered shape — `disabled` carries no counters. */
@@ -92,7 +118,7 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     const run = await meter(deps);
 
     expect(trackUsage).toHaveBeenCalledWith({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: 'hold-1',
       activeSeconds: 600,
       driveId: 'drive-1',
@@ -167,7 +193,7 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
 
     await meter(deps);
 
-    expect(gate).toHaveBeenCalledWith({ payerId: 'payer-1' });
+    expect(gate).toHaveBeenCalledWith({ charge: { kind: 'user', userId: 'payer-1' } });
   });
 
   it('given the re-gate REFUSES, should ADVANCE THE WATERMARK BEFORE parking — the span is already charged', async () => {
@@ -322,11 +348,22 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
     expect(stampWindowStart).not.toHaveBeenCalled();
   });
 
+  it('WAL-2 (partial) [D-OW-28] parks for the PUBLISHER\'S cap when that is what refused, so the app says so', async () => {
+    const { deps, gate, park } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: null })],
+    });
+    gate.mockResolvedValue({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+
+    await meter(deps);
+
+    expect(park).toHaveBeenCalledWith('app-1', 'member_cap', undefined);
+  });
+
   it('given an unresolvable drive, should count it and open no window', async () => {
     const { deps, stampWindowStart } = makeDeps({
       listRunningApps: async () => [runningApp({ awakeBilledThrough: null })],
     });
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
 
     const run = await meter(deps);
 
@@ -340,7 +377,7 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     // Never substitute a payer: a misdirected charge cannot be taken back, a
     // skipped tick corrects itself.
     const { deps, trackUsage, writeSettle } = makeDeps();
-    deps.billing.resolvePayerId = async () => null;
+    deps.billing.resolveCharge = async () => null;
 
     const run = await meter(deps);
 
@@ -354,6 +391,79 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
       },
       expected: { unresolved: 1, charges: 0, advances: 0 },
     });
+  });
+
+  it('WAL-9 (partial) given an ORG drive, should settle the span on the org charge and re-gate on the same charge', async () => {
+    const { deps, trackUsage, gate } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+
+    await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, holdId: 'hold-1', activeSeconds: 600 }));
+    expect(gate).toHaveBeenCalledWith({ charge: ORG_CHARGE });
+  });
+
+  it('WAL-9 (partial) an EMPTY org pool at the re-gate parks the app after advancing the charged span — no person is gated', async () => {
+    const { deps, gate, park, writeSettle } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    gate.mockResolvedValue({ allowed: false, reason: 'org_wallet_empty', orgRefusal: 'org_wallet_empty' });
+
+    await meter(deps);
+
+    expect(writeSettle).toHaveBeenCalled();
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent', undefined);
+  });
+
+  it("WAL-9 (partial) an org app's awake backlog from before org billing is forgiven on its first org-billed tick — nothing charged, the watermark moves to now, counted by name", async () => {
+    const { deps, trackUsage, writeSettle, releaseHold } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(3 * 3_600_000) })],
+      orgComputeBillingEpoch: async () => NOW,
+    });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+
+    const run = await meter(deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(writeSettle).toHaveBeenCalledWith(expect.objectContaining({ billedThrough: NOW, billedSeconds: 0 }));
+    expect(run.orgBacklogForgiven).toBe(1);
+  });
+
+  it('WAL-9 (partial) a later tick bills only the span after the epoch, the pre-epoch part forgiven', async () => {
+    const { deps, trackUsage } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(3 * 3_600_000) })],
+      orgComputeBillingEpoch: async () => ago(600_000),
+    });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+
+    const run = await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, activeSeconds: 600 }));
+    expect(run.orgBacklogForgiven).toBe(1);
+  });
+
+  it('WAL-9 (partial) a payer change mid-window: the stale hold is released and re-acquired on the new charge before the settle', async () => {
+    const { deps, trackUsage, gate, releaseHold, holdMatchesCharge } = makeDeps();
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    holdMatchesCharge.mockResolvedValue(false);
+    gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-on-pool' });
+
+    await meter(deps);
+
+    expect(releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: ORG_CHARGE, holdId: 'hold-on-pool' }));
+  });
+
+  it('a PERSONAL app with an old watermark is never forgiven — the epoch is only for org rows', async () => {
+    const { deps, trackUsage } = makeDeps({
+      listRunningApps: async () => [runningApp({ awakeBilledThrough: ago(1_800_000) })],
+      orgComputeBillingEpoch: async () => NOW,
+    });
+
+    const run = await meter(deps);
+
+    expect(trackUsage).toHaveBeenCalledWith(expect.objectContaining({ activeSeconds: 1800 }));
+    expect(run.orgBacklogForgiven).toBe(0);
   });
 
   it('ISOLATES one bad row — the rest of the fleet is still billed', async () => {
@@ -650,14 +760,14 @@ describe('meterAwakePublishedApps — the meter lock is lost mid-tick', () => {
     // Another tick can hold the lock from the moment it is lost, pricing the same windows from
     // the same watermarks — so no further charge may happen in this tick.
     const lost = new AbortController();
-    const resolvePayerId = vi.fn(async () => {
+    const resolveCharge = vi.fn(async () => {
       lost.abort(new Error('terminating connection due to administrator command'));
-      return 'payer-1';
+      return { kind: 'user' as const, userId: 'payer-1' };
     });
     const { deps, trackUsage, writeSettle } = makeDeps({
       listRunningApps: async () => [runningApp({ id: 'app-1' }), runningApp({ id: 'app-2' })],
     });
-    deps.billing = { ...deps.billing, resolvePayerId };
+    deps.billing = { ...deps.billing, resolveCharge };
 
     const run = await meterAwakePublishedApps(deps, lost.signal);
     if (run.outcome !== 'metered') throw new Error('expected a metered run');
@@ -665,8 +775,8 @@ describe('meterAwakePublishedApps — the meter lock is lost mid-tick', () => {
     assert({
       given: 'the lock lost while the first row was being priced',
       should: 'charge nothing, advance no watermark, and never reach the second row',
-      actual: { charges: trackUsage.mock.calls.length, advances: writeSettle.mock.calls.length, payerLookups: resolvePayerId.mock.calls.length, settled: run.settled },
-      expected: { charges: 0, advances: 0, payerLookups: 1, settled: 0 },
+      actual: { charges: trackUsage.mock.calls.length, advances: writeSettle.mock.calls.length, priceLookups: resolveCharge.mock.calls.length, settled: run.settled },
+      expected: { charges: 0, advances: 0, priceLookups: 1, settled: 0 },
     });
   });
 
@@ -691,5 +801,74 @@ describe('meterAwakePublishedApps — the meter lock is lost mid-tick', () => {
     await meterAwakePublishedApps(deps, lost.signal);
 
     expect(closeAtBoundary).toHaveBeenCalledWith(expect.objectContaining({ id: 'app-1' }), boundary, lost.signal);
+  });
+});
+
+describe('meterOneApp — an org app whose span has nothing to bill', () => {
+  it('WAL-9 (partial) a back-to-back tick on an org app (watermark AT the tick clock) is skipped — not charged, not forgiven, no watermark write', async () => {
+    // planOrgAwakeSettle answers `skip` when the watermark has reached the tick's
+    // clock already: the previous tick billed through `now`, so this one has zero
+    // active seconds. The org branch must fold that into the same quiet skip a
+    // personal app gets — no trackUsage, no releaseHold churn, no watermark write.
+    const { deps, trackUsage, writeSettle, releaseHold } = makeDeps({
+      listRunningApps: async () => [runningApp({ driveId: 'org-drive', awakeBilledThrough: NOW })],
+    });
+    deps.billing.resolveCharge = async () => ORG_CHARGE;
+    deps.orgComputeBillingEpoch = async () => EPOCH;
+
+    const run = await meter(deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).not.toHaveBeenCalled();
+    expect(writeSettle).not.toHaveBeenCalled();
+    assert({
+      given: 'an org app whose watermark already equals the tick clock',
+      should: 'skip the row quietly',
+      actual: { skipped: run.skipped, charged: trackUsage.mock.calls.length, orgBacklogForgiven: run.orgBacklogForgiven },
+      expected: { skipped: 1, charged: 0, orgBacklogForgiven: 0 },
+    });
+  });
+});
+
+describe('defaultAwakeMeterDeps.park — the meter lock-lost signal rides with the stop', () => {
+  it('binds passThroughSettleLockUnder(signal) when the meter carries a signal and the plain pass-through when it does not', async () => {
+    // The default park runs INSIDE the meter's locked region, so it must never
+    // re-take the lock; when the meter's lock was lost, its settle must stop with
+    // the meter's own signal. This is the production wiring — unit tests above
+    // override `park`, so the two bindings are exercised directly here.
+    const { stopPublishedApp } = await import('../app-lifecycle-metering');
+    const signal = new AbortController().signal;
+
+    await defaultAwakeMeterDeps.park('app-1', 'insolvent', signal);
+    await defaultAwakeMeterDeps.park('app-2', 'daily_cap');
+
+    expect(stopPublishedApp).toHaveBeenCalledTimes(2);
+    const withSignal = vi.mocked(stopPublishedApp).mock.calls[0]![2];
+    const withoutSignal = vi.mocked(stopPublishedApp).mock.calls[1]![2];
+    if (!withSignal || !withoutSignal) throw new Error('the default park must always hand the stop its deps');
+    expect(withSignal.serializeSettle).toBeDefined();
+    expect(withSignal.serializeSettle).not.toBe(withoutSignal.serializeSettle);
+    // The signal-bound serializer runs fn and reports locked (it never takes the lock).
+    await expect(withSignal.serializeSettle(async () => 'settled')).resolves.toEqual({ locked: true, result: 'settled' });
+    await expect(withoutSignal.serializeSettle(async () => 'settled')).resolves.toEqual({ locked: true, result: 'settled' });
+  });
+});
+
+describe('meterAwakePublishedAppsSerialized', () => {
+  it('reports lock_busy without running the tick, and rethrows a pool connection failure', async () => {
+    const { deps, trackUsage } = makeDeps();
+    const busyClient = {
+      query: vi.fn(async () => ({ rows: [{ acquired: false }] })),
+      release: vi.fn(),
+    };
+    const busyPool = { connect: vi.fn(async () => busyClient) };
+
+    expect(await meterAwakePublishedAppsSerialized(deps, busyPool)).toEqual({ outcome: 'lock_busy' });
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(busyClient.release).toHaveBeenCalledWith(undefined);
+
+    const exhausted = { connect: vi.fn(async () => { throw new Error('pool exhausted'); }) };
+    await expect(meterAwakePublishedAppsSerialized(deps, exhausted)).rejects.toThrow('pool exhausted');
+    expect(trackUsage).not.toHaveBeenCalled();
   });
 });

@@ -21,7 +21,9 @@ import {
   sessionReducer,
   type SessionState,
 } from '@/retained/lib/ai/realtime/session-state';
+import { toast } from 'sonner';
 import { chainDelayMs } from '@/retained/lib/ai/realtime/chain-schedule';
+import { spendFallbackNoticeText } from '@/retained/lib/ai/shared/spend-fallback-notice';
 import { decideBind, type VoiceTarget } from '@/retained/lib/ai/realtime/voice-target';
 import type { VoiceLocationContext } from '@pagespace/lib/realtime/voice-bridge-contract';
 
@@ -341,6 +343,11 @@ export function VoiceSessionProvider({
       setAttached(result.connection.attached);
       setLocalStream(result.connection.microphone);
       dispatch({ type: 'connected' });
+      // SPEND-4: the call moved to another source under the drive's rule; never silently.
+      const fallbackText = spendFallbackNoticeText(result.connection.spendFallback);
+      if (fallbackText) toast.info(fallbackText);
+      // POL-8: the call started without the conversation's earlier messages; never silently.
+      if (result.connection.historyWithheld) toast.info(result.connection.historyWithheld);
 
       // Each call schedules its own successor from its own reported ceiling.
       clearChainTimer();

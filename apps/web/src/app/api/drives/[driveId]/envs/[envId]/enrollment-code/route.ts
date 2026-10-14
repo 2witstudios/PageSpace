@@ -32,6 +32,7 @@ import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-env
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { reissueEnvEnrollmentCode, resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -52,7 +53,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'reissue-enrollment-code', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can issue enrollment codes' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can issue enrollment codes' }, { status: 403 }));
     }
 
     // The same opt-in the create path enforces: with local envs off there is

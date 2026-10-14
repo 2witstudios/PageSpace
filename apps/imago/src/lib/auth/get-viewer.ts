@@ -3,12 +3,15 @@ import { cache } from 'react';
 import { cookies, headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { PATHNAME_HEADER, SESSION_COOKIE, signInLocation, webAppOrigin } from './sign-in-url';
 
 export type Viewer = {
   userId: string;
   role: 'user' | 'admin';
   sessionId: string;
+  /** The viewer's credential as the permission layer reads it: their session's ceremony evidence (SEC-2/3). */
+  actor: AccessActor;
 };
 
 /**
@@ -28,7 +31,12 @@ export const getViewer = cache(async (): Promise<Viewer> => {
     : null;
 
   if (claims) {
-    return { userId: claims.userId, role: claims.userRole, sessionId: claims.sessionId };
+    return {
+      userId: claims.userId,
+      role: claims.userRole,
+      sessionId: claims.sessionId,
+      actor: credentialActor(claims.userId, claims.authentication ?? null),
+    };
   }
 
   const requestHeaders = await headers();

@@ -3,7 +3,9 @@
 import { useCallback, useMemo } from "react";
 import { usePathname, useRouter } from "@/retained-adapters/navigation";
 
+import { groupPickerDrives, type PickerGroup } from "@pagespace/lib/organizations/drive-picker-groups";
 import { useDriveStore, type Drive } from "@/retained/hooks/useDrive";
+import { useMyOrganizations } from "@/retained/hooks/useMyOrganizations";
 import { useFavorites } from "@/retained/hooks/useFavorites";
 import { fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
 import { ALL_DRIVES, driveFocus, focusDestinationHref } from "@/retained/lib/dashboard/focus";
@@ -33,6 +35,7 @@ export function useDrivePicker(query: string) {
   const removeFavorite = useFavorites((state) => state.removeFavorite);
 
   const normalizedQuery = query.toLowerCase().trim();
+  const { organizations } = useMyOrganizations();
 
   const { favoriteDrives, recentDrives, allDrives } = useMemo(() => {
     const activeDrives = drives.filter((drive) => !drive.isTrashed);
@@ -57,6 +60,15 @@ export function useDrivePicker(query: string) {
 
     return { favoriteDrives: favorites, recentDrives: recent, allDrives: sortedAll };
   }, [drives, normalizedQuery, driveIds]);
+
+  /**
+   * DRV-9: the same drives, under an org header per organization and a Personal group. Only while
+   * some accessible drive belongs to an org; otherwise null and the picker lists All drives.
+   */
+  const ownerGroups = useMemo<PickerGroup<Drive>[] | null>(() => {
+    if (!allDrives.some((drive) => drive.orgId)) return null;
+    return groupPickerDrives(allDrives, organizations);
+  }, [allDrives, organizations]);
 
   const selectDrive = useCallback(
     (drive: Drive) => {
@@ -103,6 +115,7 @@ export function useDrivePicker(query: string) {
     favoriteDrives,
     recentDrives,
     allDrives,
+    ownerGroups,
     isSearching: normalizedQuery.length > 0,
     selectDrive,
     selectAllDrives,

@@ -1,13 +1,15 @@
+import { canPrincipalViewPage, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db'
 import { eq, and, isNotNull, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Unified assignee type for task assignment
@@ -50,12 +52,12 @@ export async function GET(
       );
     }
 
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
+    const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'You don\'t have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
 
     // Fetch members with their profiles
@@ -101,7 +103,7 @@ export async function GET(
     const agentAccessResults = await Promise.all(
       allAgents.map(async (agent) => ({
         agent,
-        canView: await canUserViewPage(userId, agent.id),
+        canView: await canPrincipalViewPage(auth, agent.id),
       }))
     );
     const accessibleAgents = agentAccessResults

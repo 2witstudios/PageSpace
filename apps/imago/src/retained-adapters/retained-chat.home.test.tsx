@@ -22,6 +22,12 @@ const home = vi.hoisted(() => ({
 
 vi.mock('@/retained/hooks/useHomeSignals', () => ({ useHomeSignals: () => ({ line: home.line, isLoading: false }) }));
 vi.mock('@/retained/hooks/usePermissions', () => ({ usePermissions: () => ({ permissions: { canEdit: true } }) }));
+// JOURNEYS-2's first-send readiness reads the drive's spend preview; the shell fixtures test
+// the home chrome, so hand them the resolved preview (the normal state).
+vi.mock('@/retained/hooks/useConversationSpend', () => ({
+  useConversationSpend: () => ({ spend: null, isPending: false, error: null, isLoading: false, choose: vi.fn(async () => undefined), refresh: vi.fn(async () => undefined) }),
+  useDriveSpend: () => ({ spend: { driveId: 'd1', options: [], resolved: { kind: 'spend', source: 'drive_wallet', walletId: 'w-d1' } }, isPending: false, error: null, isLoading: false, refresh: vi.fn(async () => undefined) }),
+}));
 vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({ ChatMessagesArea: () => <div data-empty-messages="" /> }));
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('./chat-attachments', () => ({ useChatAttachments: () => ({ attachments: [], getFilesForSend: () => [], addFiles: vi.fn(), removeFile: vi.fn() }) }));

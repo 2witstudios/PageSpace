@@ -1,11 +1,13 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
 import { resolveStreamJoinContext } from '@/lib/ai/core/stream-join-context';
 import { acquireRemoteChannel } from '@/lib/ai/core/remote-frame-follower';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,7 +71,7 @@ export async function GET(
   // You may join a stream you started, or one in an explicitly shared conversation.
   const hasPageAccess = channelOwner !== null
     ? channelOwner === userId
-    : await canUserViewPage(userId, meta.pageId);
+    : await canPrincipalViewPage(authResult, meta.pageId);
 
   if (!hasPageAccess) {
     // A genuine authorization violation: this user has no business on this page at all.
@@ -80,7 +82,7 @@ export async function GET(
       details: { reason: 'insufficient_permissions', pageId: meta.pageId },
       riskScore: 0.5,
     });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(authResult), meta.pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   // Page access is not conversation access. A page room holds every member, but
@@ -91,7 +93,7 @@ export async function GET(
   // audited 403, which would write an authz-denial row per member per assistant message
   // and bury real signal. Clients already treat a failed join as benign.
   const canSubscribe = async (): Promise<boolean> => canSubscribeToStream({
-    userId,
+    actor: actorFromAuth(authResult),
     streamOwnerId: meta.userId,
     conversationId: meta.conversationId,
   });
@@ -106,7 +108,7 @@ export async function GET(
   const hasViewAccess = async (): Promise<boolean> => {
     const pageOk = channelOwner !== null
       ? channelOwner === userId
-      : await canUserViewPage(userId, meta.pageId);
+      : await canPrincipalViewPage(authResult, meta.pageId);
     if (!pageOk) return false;
     return canSubscribe();
   };

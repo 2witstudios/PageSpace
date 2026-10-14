@@ -1,5 +1,7 @@
 'use client';
 
+import { useAutomationSpendContext } from '@/retained/hooks/useAutomationSpendContext';
+import { AutomationSpendLine, type AutomationSpendContext } from '@/retained/components/wallets/AutomationSpendState';
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -40,6 +42,7 @@ function PageLink({ pageId }: { pageId: string }) {
 
 export type WorkflowDetailViewProps = {
   readonly workflow: Workflow;
+  readonly spendContext?: AutomationSpendContext;
   readonly agentTitle: string | null;
   /** False while the drive's agents are still loading, so a name is not reported missing too early. */
   readonly agentsLoaded: boolean;
@@ -61,6 +64,7 @@ export function WorkflowDetailView({
   agentsLoaded,
   agentTitles,
   createdByName,
+  spendContext,
   running,
   toggling,
   now,
@@ -70,25 +74,26 @@ export function WorkflowDetailView({
   onDelete,
 }: WorkflowDetailViewProps) {
   const steps: readonly StepView[] = stepViews(synthesizeSteps(workflow), agentTitles, workflow.agentPageId);
-  const nextRunAt = workflow.isEnabled && workflow.nextRunAt ? new Date(workflow.nextRunAt) : null;
+  const ownerLeft = Boolean(workflow.ownerLeftAt);
+  const nextRunAt = !ownerLeft && workflow.isEnabled && workflow.nextRunAt ? new Date(workflow.nextRunAt) : null;
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold tracking-tight">{workflow.name}</h1>
-          {createdByName ? <p className="mt-1 text-sm text-muted-foreground">Created by {createdByName}</p> : null}
+          {spendContext || ownerLeft ? <AutomationSpendLine creatorName={createdByName} walletLabel={spendContext?.walletLabel ?? null} ownerLeft={ownerLeft} /> : createdByName ? <p className="mt-1 text-sm text-muted-foreground">Created by {createdByName}</p> : null}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
-            <Switch aria-label="Enabled" checked={workflow.isEnabled} onCheckedChange={onToggle} disabled={toggling} />
+            <Switch aria-label="Enabled" checked={workflow.isEnabled && !ownerLeft} onCheckedChange={onToggle} disabled={toggling || ownerLeft} />
             Enabled
           </label>
           <Button variant="outline" onClick={onEdit}>
             <Pencil className="mr-1.5 h-3.5 w-3.5" />
             Edit workflow
           </Button>
-          <Button onClick={onRun} disabled={running}>
+          <Button onClick={onRun} disabled={running || ownerLeft}>
             <Play className="mr-1.5 h-3.5 w-3.5" />
             Run workflow
           </Button>
@@ -192,6 +197,7 @@ export function WorkflowDetail({ driveId }: { readonly driveId: string }) {
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const { data: workflows, error, isLoading, mutate } = useWorkflowList(driveId);
+  const spendContext = useAutomationSpendContext(driveId);
   const { data: agents } = useDriveAgents(driveId);
   const { data: membersData } = useDriveMembers(driveId);
 
@@ -203,7 +209,7 @@ export function WorkflowDetail({ driveId }: { readonly driveId: string }) {
   const closeNew = () => router.replace(withQuery(selectedId ? { id: selectedId } : {}));
 
   const handleRun = async () => {
-    if (!workflow) return;
+    if (!workflow || workflow.ownerLeftAt) return;
     setRunning(true);
     try {
       const result = await post<{ success: boolean; error?: string }>(`/api/workflows/${workflow.id}/run`);
@@ -218,7 +224,7 @@ export function WorkflowDetail({ driveId }: { readonly driveId: string }) {
   };
 
   const handleToggle = async (enabled: boolean) => {
-    if (!workflow) return;
+    if (!workflow || (enabled && workflow.ownerLeftAt)) return;
     setToggling(true);
     try {
       await patch(`/api/workflows/${workflow.id}`, { isEnabled: enabled });
@@ -264,6 +270,7 @@ export function WorkflowDetail({ driveId }: { readonly driveId: string }) {
     body = (
       <WorkflowDetailView
         workflow={workflow}
+        spendContext={spendContext}
         agentTitle={workflow.agentPageId ? agentTitles.get(workflow.agentPageId) ?? null : null}
         agentsLoaded={agents !== undefined}
         agentTitles={agentTitles}

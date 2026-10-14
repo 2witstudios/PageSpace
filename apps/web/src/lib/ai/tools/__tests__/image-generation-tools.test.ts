@@ -21,6 +21,13 @@ vi.mock('../../core/image-generation', async (orig) => ({
   ...(await orig<typeof import('../../core/image-generation')>()),
   generateImageBytes: (...a: unknown[]) => generateImageBytes(...a),
 }));
+// POL-8: the image client comes from the provider factory, which judges the org allowlists. Default: allowed.
+const IMAGE_CLIENT = { chat: vi.fn() };
+const createImageProvider = vi.fn<(...a: unknown[]) => Promise<unknown>>();
+vi.mock('../../core/provider-factory', () => ({
+  createImageProvider: (...a: unknown[]) => createImageProvider(...a),
+  isProviderError: (r: object) => 'error' in r,
+}));
 vi.mock('@/lib/upload/create-file-page', () => ({
   createImageFilePage: (...a: unknown[]) => createImageFilePage(...a),
   ImageStorageQuotaError: class ImageStorageQuotaError extends Error {},
@@ -77,6 +84,8 @@ import { imageGenerationTools } from '../image-generation-tools';
 import { ImageGenerationError } from '@/lib/ai/core/image-generation';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForReadOnly, isWriteTool } from '@/lib/ai/core/tool-filtering';
+import { buildVoiceToolContext } from '@/lib/ai/realtime/tool-dispatch';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>) =>
   imageGenerationTools.generate_image.execute!(input as never, {
@@ -86,6 +95,8 @@ const run = (input: Record<string, unknown>, ctx: Partial<ToolExecutionContext>)
   });
 
 beforeEach(() => {
+  createImageProvider.mockReset();
+  createImageProvider.mockResolvedValue({ client: IMAGE_CLIENT, provider: 'google', modelName: 'google/gemini-3.1-flash-image' });
   canConsumeAI.mockReset();
   releaseHold.mockReset();
   releaseHold.mockResolvedValue(undefined);
@@ -124,6 +135,33 @@ describe('generate_image destination', () => {
   const inDrive = (id: string) => ({
     locationContext: { currentDrive: { id, name: 'Work', slug: 'work' } },
   }) as Partial<ToolExecutionContext>;
+
+  it('SPEND-1 (partial) an image made during an in-drive voice call reserves on the call\'s drive source, never the person\'s own credits', async () => {
+    okGeneration();
+    const voice = buildVoiceToolContext(
+      { name: 'generate_image', argumentsJson: '{}', userId: 'u1', callId: 'rtc_1', conversationId: 'conv1', spend: { driveId: 'drive-work', chosen: 'drive_wallet' } },
+      'gpt-realtime-2.1',
+    );
+
+    await run({ prompt: 'a diagram' }, { ...voice, isAdmin: true, subscriptionTier: 'pro' });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    const opts = canConsumeAI.mock.calls[0][2] as { spend: unknown };
+    expect(opts.spend).toEqual({ kind: 'drive', driveId: 'drive-work', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true });
+  });
+
+  it('SPEND-6 (partial) WAL-7 (partial) an image made inside a manual Run is gated and settled as the person who pressed Run, on the run\'s wallet, not as the workflow\'s creator (review #2817 P3-A)', async () => {
+    okGeneration();
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work', userId: 'u-presser' , accessActor: credentialActor('u-presser', null)} as ToolExecutionContext['creditSpend'];
+
+    await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') });
+
+    expect(canConsumeAI).toHaveBeenCalledOnce();
+    expect(canConsumeAI.mock.calls[0][0]).toBe('u-presser');
+    expect((canConsumeAI.mock.calls[0][2] as { spend: unknown }).spend).toEqual({ kind: 'automation', driveId: 'drive-work' });
+    expect(trackUsage).toHaveBeenCalledOnce();
+    expect(trackUsage.mock.calls[0][0]).toMatchObject({ userId: 'u-presser', source: 'image_generation' });
+  });
 
   it('files into the workspace currently in view', async () => {
     okGeneration();
@@ -178,6 +216,18 @@ describe('generate_image destination', () => {
 
   // An explicitly named destination must fail loudly rather than silently
   // redirecting to Home — and it must fail BEFORE any spend.
+  it('POL-8 (partial) builds the image model through the provider factory for the turn\'s drive and the destination drive; a refusal reserves nothing and calls no model', async () => {
+    const creditSpend = { spend: { kind: 'automation', driveId: 'drive-work' }, walletId: 'w-drive-work' } as ToolExecutionContext['creditSpend'];
+    createImageProvider.mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+
+    const res = (await run({ prompt: 'a diagram' }, { ...admin({ creditSpend }), ...inDrive('drive-work') })) as { success: boolean; error?: string };
+
+    expect(createImageProvider).toHaveBeenCalledWith({ model: expect.any(String) }, { driveId: 'drive-work', contentDriveIds: ['drive-work'] });
+    expect(res).toMatchObject({ success: false, error: expect.stringContaining("doesn't allow that AI model") });
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateImageBytes).not.toHaveBeenCalled();
+  });
+
   it('rejects an unwritable explicit driveId without reserving credits or calling the provider', async () => {
     okGeneration();
     canActorEditPage.mockResolvedValue(false);

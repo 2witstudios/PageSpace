@@ -5,7 +5,7 @@ import { assert } from 'riteway/vitest';
 import { mount, unmountAll } from '../../test-support/dom';
 import { useChatErrorStore } from '@/retained/stores/useChatErrorStore';
 import type { AIErrorCause } from '@/retained/lib/ai/shared/aiErrorCause';
-import { MONTHLY_CREDITS } from '@/retained/lib/subscription/credits';
+import { monthlyCreditsPhrase } from '@/retained/lib/subscription/credits';
 import { OUT_OF_CREDITS_COPY, OutOfCreditsAlert, PLAN_HREF, UPGRADE_TO_PRO_LABEL } from './out-of-credits';
 
 const cause = (code: AIErrorCause['code'], message = ''): AIErrorCause => ({ code, httpStatus: null, message, retryable: false });
@@ -89,7 +89,7 @@ describe('OutOfCreditsAlert (IMC-10.10)', () => {
       given: 'the plan constants',
       should: 'state Pro as 900 credits/month',
       actual: UPGRADE_TO_PRO_LABEL,
-      expected: `Upgrade to Pro — ${MONTHLY_CREDITS.pro} credits/month`,
+      expected: `Upgrade to Pro — ${monthlyCreditsPhrase('pro')}`,
     });
   });
 

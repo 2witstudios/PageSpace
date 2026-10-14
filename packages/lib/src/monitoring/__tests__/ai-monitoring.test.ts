@@ -24,9 +24,11 @@ vi.mock('../../logging/logger-database', () => ({
   writeAiUsage: mockWriteAiUsage,
 }));
 
+const mockHoldSettleFacts = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 vi.mock('../../billing/credit-consume', () => ({
   consumeCredits: mockConsumeCredits,
   releaseHold: mockReleaseHold,
+  holdSettleFacts: mockHoldSettleFacts,
 }));
 
 vi.mock('../../logging/logger-config', () => ({
@@ -497,6 +499,15 @@ describe('trackAIUsage', () => {
       outputTokens: 500,
     });
     expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+  });
+
+  it('WAL-5 (partial) a settle that names only its hold records the hold\'s wallet and fallback origin on the usage row AND hands the same to the settle', async () => {
+    mockHoldSettleFacts.mockResolvedValueOnce({ walletId: 'w-held', fallbackFromWalletId: 'w-chosen' });
+    mockWriteAiUsage.mockResolvedValueOnce('aul_held');
+    mockConsumeCredits.mockResolvedValueOnce('settled');
+    await trackAIUsage({ userId: 'user-1', provider: 'anthropic', model: 'claude-3-5-sonnet-20241022', inputTokens: 10, outputTokens: 5, holdId: 'hold-1' });
+    expect(mockWriteAiUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w-held', metadata: expect.objectContaining({ fallbackFromWalletId: 'w-chosen' }) }));
+    expect(mockConsumeCredits).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-1', walletId: 'w-held', fallbackFromWalletId: 'w-chosen' }));
   });
 
   it('reports persisted:false when the usage row was NOT written — the one unrecoverable outcome', async () => {

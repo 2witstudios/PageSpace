@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { DriveSummary } from '../drives/drives';
 import { renderBrandChip, type BrandChipRenderProps } from './brand-chip.render';
@@ -58,4 +58,11 @@ describe('renderBrandChip()', () => {
       expected: [true, 'true'],
     });
   });
+});
+
+test('the organization surface uses the same single picker tile instead of a second breadcrumb level', () => {
+  const fragment = markup({ organization: { name: 'Northwind Labs' } });
+  expect(fragment.querySelectorAll('button[aria-haspopup="dialog"]')).toHaveLength(1);
+  expect(fragment.querySelector('button')?.getAttribute('aria-label')).toBe('Switch workspace: Northwind Labs');
+  expect(fragment.querySelector('button')?.textContent).not.toContain('Alpha');
 });

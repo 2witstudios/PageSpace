@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 /**
  * Repository seam for AI settings-related user operations.
  *
@@ -43,7 +44,7 @@ export const aiSettingsRepository = {
       .from(users)
       .where(eq(users.id, userId));
 
-    return user || null;
+    return user ? { ...user, subscriptionTier: resolvePersonalCapabilityTier(user.subscriptionTier) } : null;
   },
 
   /**

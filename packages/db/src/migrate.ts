@@ -2,6 +2,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { getMigrationPool } from "./db";
+import { assertOrgFundingCutoverOffline, assertPersonalBillingCutoverOffline } from "./personal-cutover-gate";
 import { runMigrations } from "./migration-runner";
 
 /**
@@ -21,6 +22,24 @@ async function main() {
   const migrationPool = getMigrationPool();
 
   try {
+    const retired = await migrationPool.query<{ present: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'users'
+          AND column_name = 'subscriptionGrandfathered'
+      ) AS present
+    `);
+    assertPersonalBillingCutoverOffline(retired.rows[0]?.present === true, process.env.BILLING_CUTOVER_OFFLINE);
+    const funding = await migrationPool.query<{ funding: boolean; subscriptions: boolean }>(`
+      SELECT to_regclass('org_subscription_funding') IS NOT NULL AS funding,
+             to_regclass('org_subscriptions') IS NOT NULL AS subscriptions
+    `);
+    const hasOrgSubscriptions = funding.rows[0]?.subscriptions === true
+      && ((await migrationPool.query(`SELECT 1 FROM org_subscriptions LIMIT 1`)).rowCount ?? 0) > 0;
+    assertOrgFundingCutoverOffline(
+      { fundingTableExists: funding.rows[0]?.funding === true, hasOrgSubscriptions },
+      process.env.BILLING_CUTOVER_OFFLINE,
+    );
     await runMigrations(
       drizzle(migrationPool),
       migrations,

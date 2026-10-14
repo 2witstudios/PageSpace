@@ -17,10 +17,15 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
+import { OrgDriveCard } from '@/components/drives/OrgDriveCard';
 
 interface DriveMember {
   id: string;
   userId: string;
+  /** DRV-8: on an org drive, a member who is not in its org. */
+  isGuest?: boolean;
+  /** Where this member's access comes from, as the server decided it ('lead' = the drive lead). */
+  source?: 'invite' | 'org' | 'lead';
   user: { id: string; email: string; name?: string };
   profile?: { username?: string; avatar?: string | null };
 }
@@ -150,6 +155,8 @@ export default function GeneralSettingsPage() {
   }
 
   const humanCount = membersData?.members?.length ?? 0;
+  // DRV-8: guests counted from the members route's own isGuest label — no second source.
+  const guestCount = membersData?.members?.filter((m) => m.isGuest).length ?? 0;
   const agentCount = agentMembersData?.agentMembers?.length ?? 0;
   const appCount = appMembersData?.appMembers?.length ?? 0;
   const topAvatars = (membersData?.members ?? []).slice(0, 5);
@@ -197,6 +204,14 @@ export default function GeneralSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      {drive && (
+        <OrgDriveCard
+          drive={drive}
+          leadName={membersData?.members?.find((m) => m.source === 'lead')?.user?.name ?? null}
+          onChanged={() => void fetchDrives(false, true)}
+        />
+      )}
 
       <Card>
         <CardHeader>
@@ -246,6 +261,13 @@ export default function GeneralSettingsPage() {
                 {humanCount} {humanCount === 1 ? 'member' : 'members'}
               </span>
             </div>
+            {drive?.orgId && guestCount > 0 && (
+              <div className="flex items-center gap-2 text-sm" data-testid="members-guest-count">
+                <span>
+                  {guestCount} {guestCount === 1 ? 'guest' : 'guests'}
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-2 text-sm">
               <Bot className="h-4 w-4 text-muted-foreground" />
               <span>

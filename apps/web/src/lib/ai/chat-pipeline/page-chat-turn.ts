@@ -45,7 +45,10 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { UNGATED_TURN_CREDIT, personalTurnTiers, turnCreditAfterGate, type TurnCredit } from './turn-credit';
+import { pinConversationSource } from '@pagespace/lib/billing/spend-resolution';
+import { writeTurnPreamble } from './turn-preamble';
 import { broadcastChatUserMessage } from '@/lib/websocket';
 import { type StreamLifecycleHandle } from '@/lib/ai/core/stream-lifecycle';
 import { pumpAndRespond, type TurnTimer } from '@/lib/ai/chat-pipeline/pump-and-respond';
@@ -54,6 +57,7 @@ import { takeOverConversationStreams } from '@/lib/ai/core/stream-takeover';
 import { startGenerationExclusive } from '@/lib/ai/core/start-generation-exclusive';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
 import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScope, getAllowedDriveIds, isDriveScopedPrincipal, canPrincipalViewPage, canPrincipalEditPage, type AuthResult } from '@/lib/auth';
+import { actorFromAuth } from '../../auth/request-actor';
 
 /**
  * Thrown when the conversation was still active at the ownership check far
@@ -68,9 +72,8 @@ import { isMCPAuthResult, isServiceAuthResult, authSessionIdOf, checkMCPPageScop
  * other.
  */
 import { ConversationHistoryDeletedError } from '@/lib/repositories/resolve-or-create-conversation';
-// canUserViewPage stays user-level here: it gates mention-notification RECIPIENTS
-// (other users), not the requesting principal.
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+// Mention-notification RECIPIENTS are an audience (third parties), so they resolve through getUsersWhoCanViewPage.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { createAIProvider, updateUserProviderSettings, createProviderErrorResponse, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
@@ -80,12 +83,12 @@ import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistant
 import { processMentionsInMessage, buildMentionSystemPrompt } from '@/lib/ai/core/mention-processor';
 import {
   buildCommandPromptSection,
-  commandExecutionDataFromPlan,
-  COMMAND_EXECUTION_PART_TYPE,
   isSoloBuiltinCommand,
   type CommandExecutionPlan,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { toolModelContext } from '@/lib/ai/core/tool-model-context';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
 import { respondWithHelpAnswer } from '@/lib/ai/core/help-responder';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import { getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
@@ -359,6 +362,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
   let bufferedPartsAtStreamError: Awaited<ReturnType<StreamLifecycleHandle['getParts']>> | undefined;
   // The credit-gate reservation for this request, released when usage is billed.
   let holdId: string | undefined;
+  // What the gate named: the wallet, the source and the funding tier (see turn-credit).
+  let credit: TurnCredit = UNGATED_TURN_CREDIT;
   // True once the stream/error handler owns the hold's release. Any earlier
   // return/throw must release the hold (a pre-generation exit doesn't invoke the
   // model, so the reservation would otherwise sit until the reconcile cron sweeps it).
@@ -375,6 +380,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const { request, auth: authResult } = ctx;
     browserSessionId = ctx.browserSessionId;
     userId = authResult.userId;
+    // The turn's driver as the permission layer's actor: the request credential with its ceremony evidence (SEC-2/3).
+    const turnActor = actorFromAuth(authResult);
     loggers.ai.debug('AI Chat API: Authentication successful', { userId });
 
     // The parsed body, narrowed to the shape this strategy reads. The entry
@@ -782,15 +789,26 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // A solo /help never reaches streamText (see isSoloHelpRequest below), so
     // it costs nothing — skip the gate entirely rather than take a hold that
     // would need special-cased release on the short-circuit path.
+    // The turn runs in a session of this page's conversation, in the page's drive
+    // (SPEND-7). The conversation (its id vetted above) carries its stored source, which the
+    // gate resolves or refuses (SPEND-3, SPEND-4); the turn never writes it.
+    const pageSpend = conversationSpend(page.driveId, conversationId);
+    credit = { spend: pageSpend };
+    // SPEND-3: the source the gate preselected for a conversation with none stored. A first turn
+    // gates before its row exists, so it is pinned right after the row is created (below).
+    let conversationSourceWalletId: string | undefined;
     if (!isMeteringExempt(gateProvider) && !isSoloHelpRequest) {
-      const creditGate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
+      const creditGate = await canConsumeAI(userId, personalTurnTiers(user?.subscriptionTier).gate, {
+        spend: pageSpend,
         estCostCents: estimateChatHoldCentsForModel(selectedModel),
         maxInFlight: MAX_CHAT_INFLIGHT,
       });
       if (!creditGate.allowed) {
         loggers.ai.warn('AI Chat API: AI credit gate denied', { userId, reason: creditGate.reason });
-        return creditGateErrorResponse(creditGate.reason);
+        return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
       }
+      credit = turnCreditAfterGate(pageSpend, creditGate);
+      conversationSourceWalletId = creditGate.conversationSourceWalletId;
       holdId = creditGate.holdId;
       availableBalanceCents =
         holdId && creditGate.balanceSnapshot
@@ -831,6 +849,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           conversationId,
           userId,
         });
+      }
+      if (created === 'created' && conversationSourceWalletId) {
+        await pinConversationSource({ userId: userId!, conversationId, driveId: page.driveId, walletId: conversationSourceWalletId });
       }
     } catch (error) {
       loggers.ai.error('AI Chat API: Failed to ensure conversation row', error as Error, {
@@ -888,7 +909,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         // never sends to a model — respondWithHelpAnswer builds its own
         // "used" pill directly and does its own (single) command-list read.
         if (!isSoloHelpRequest) {
-          commandPlans = await planCommandExecutions(messageContent, userId!, {
+          commandPlans = await planCommandExecutions(messageContent, turnActor, {
             driveId: page.driveId,
           });
           turnTimer.mark('commands_planned');
@@ -1026,9 +1047,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
             .then(async (notifyIds) => {
               const candidates = notifyIds.filter((id) => id !== userId);
               if (candidates.length === 0) return;
-              const viewChecks = await Promise.all(
-                candidates.map(async (id) => ({ id, canView: await canUserViewPage(id, chatId!) }))
-              );
+              const viewers = await getUsersWhoCanViewPage(chatId!, candidates);
+              const viewChecks = candidates.map((id) => ({ id, canView: viewers.has(id) }));
               await Promise.allSettled(
                 viewChecks
                   .filter((e) => e.canView)
@@ -1117,7 +1137,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       }
 
       return await respondWithHelpAnswer({
-        senderId: userId!,
+        sender: turnActor,
         driveId: page.driveId,
         originalMessages: messages,
         persist: (payload, messageId) =>
@@ -1162,7 +1182,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     const admission = resolveGenerationAdmission({
       provider: currentProvider,
       model: currentModel,
-      subscriptionTier: user?.subscriptionTier ?? undefined,
+      // WAL-8: the tier of whoever funds this call, as the gate resolved it.
+      subscriptionTier: credit.entitlementTier ?? personalTurnTiers(user?.subscriptionTier).capability,
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -1172,7 +1193,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         userId,
         provider: currentProvider,
         model: currentModel,
-        subscriptionTier: user?.subscriptionTier
+        subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability
       });
       return createSubscriptionRequiredResponse();
     }
@@ -1246,11 +1267,15 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     };
 
     // Thread the already-loaded user row through the factory so it skips redundant DB selects.
-    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null });
+    const providerResult = await createAIProvider(userId, providerRequest, { user: user ?? null, driveId: page.driveId });
 
+
+    // POL-8: a command's pages reach this turn's model only when their org allows the model it resolved.
+    // After the error check, so the context names the model that will actually run.
     if (isProviderError(providerResult)) {
       return createProviderErrorResponse(providerResult);
     }
+    ({ plans: commandPlans, prompt: commandSystemPrompt } = await commandsForModel(commandPlans, toolModelContext(providerResult)));
     turnTimer.mark('provider_ready');
 
     // Use the resolved (provider, model) for billing. providerResult carries the
@@ -1298,11 +1323,11 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       const sandboxTierEligible = await resolveSandboxToolEligibilityForConversation(
         conversationId,
         { imagoHomeDriveId: imagoContext.homeDriveId },
-        userId,
+        turnActor,
       );
       turnTimer.mark('sandbox_eligibility');
       const selection = await selectAssistantTools({
-        userId,
+        actor: turnActor,
         readOnly: readOnlyMode,
         webSearch: webSearchMode,
         imageGen: imageGenEnabled === true,
@@ -1367,7 +1392,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // An UNBOUND page conversation is not eligible at all (codex round 14):
       // the acquire path never lazily mints page conversations a session.
       const sandboxTierEligible = sandboxEnabled
-        ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', userId)
+        ? await resolveSandboxToolEligibilityForConversation(conversationId, 'page', turnActor)
         : false;
       turnTimer.mark('sandbox_eligibility');
       filteredTools = filterToolsForSandboxEnablement(filteredTools, sandboxEnabled) as ToolSet;
@@ -1428,7 +1453,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       const eligibleSkills = listEligibleSkills(allowedToolNames);
       userCommandCatalog =
         eligibleSkills.length > 0 || allowedToolNames.includes('load_skill')
-          ? await loadUserCommandCatalog(userId!, page.driveId ?? null, allowedToolNames)
+          ? await loadUserCommandCatalog(turnActor, page.driveId ?? null, allowedToolNames)
           : { catalogPrompt: '', searchEntries: [] };
       turnTimer.mark('commands_loaded');
       const exposure = applyToolExposureMode(filteredTools, toolExposureMode, ALWAYS_UPFRONT_TOOLS, [
@@ -1459,14 +1484,14 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
         ? isOnPrem()
           ? {}
           : await resolver.resolveAssistantIntegrationTools({
-            userId,
+            actor: turnActor,
             agentId: chatId,
             driveInView: resolveImagoDriveInView(turnLocation, imagoContext),
             currentTools: preExposureTools,
           })
         : await resolver.resolvePageAgentIntegrationTools({
           agentId: chatId,
-          userId,
+          actor: turnActor,
           driveId: page.driveId,
           currentTools: preExposureTools,
         });
@@ -1639,7 +1664,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     let assistantContext: AssistantContext | null = null;
     if (imagoContext) {
       assistantContext = await buildAssistantContext({
-        userId,
+        actor: turnActor,
         location: turnLocation,
         readOnly: readOnlyMode,
         showPageTree: page.includePageTree === true,
@@ -1652,7 +1677,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       timestampSystemPrompt = assistantContext.timestampPrompt;
     } else {
       // Fetch user personalization for AI system prompt injection
-      personalization = await getUserPersonalization(userId);
+      personalization = await getUserPersonalization(turnActor);
       turnTimer.mark('personalization');
       if (personalization) {
         loggers.ai.debug('AI Chat API: User personalization loaded', {
@@ -1669,7 +1694,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // `locationPrompt` and injected via buildVolatileTurnContext, NOT baked
       // into the system prompt, so that string stays byte-identical across turns.
       const hasTurnLocation = Boolean(turnLocation?.currentPage || turnLocation?.currentDrive);
-      const locationHomeDriveId = await resolveHomeDriveHint(userId, hasTurnLocation, getAllowedDriveIds(authResult));
+      const locationHomeDriveId = await resolveHomeDriveHint(turnActor.userId, hasTurnLocation, getAllowedDriveIds(authResult));
       turnTimer.mark('home_drive_resolved');
 
       locationPrompt = buildLocationTurnPrompt(turnLocation ? {
@@ -1703,8 +1728,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // user-level check would leak an out-of-scope plan's title and id to a token
     // that may not reach that drive.
     // For Imago, also not a page in a drive its owner keeps it out of.
-    const imagoActor = { userId, chatSource: { type: 'page' as const, agentPageId: chatId } };
-    const planPointer = await getActivePlan(conversationId, userId, async (pageId) =>
+    const imagoActor = { userId, accessActor: turnActor, chatSource: { type: 'page' as const, agentPageId: chatId } };
+    const planPointer = await getActivePlan(conversationId, turnActor, async (pageId) =>
       (await canPrincipalViewPage(authResult, pageId)) &&
       !(imagoContext && await pageDeniedForActor(imagoActor, pageId)),
     );
@@ -1715,7 +1740,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // Build page tree context if enabled (Imago's came with its context above).
     let pageTreePrompt = assistantContext?.pageTreePrompt ?? '';
     if (!assistantContext && page.includePageTree && page.driveId) {
-      const pageTreeContext = await getPageTreeContext(userId, {
+      const pageTreeContext = await getPageTreeContext(turnActor, {
         scope: (page.pageTreeScope as 'children' | 'drive') || 'children',
         pageId: chatId,
         driveId: page.driveId,
@@ -1736,7 +1761,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // the page, so it lives in the STABLE system section (not the volatile block).
     let agentMemoryPrompt = '';
     if (page.type === 'AI_CHAT') {
-      const memoryContent = await getAgentMemoryContext(chatId, userId);
+      const memoryContent = await getAgentMemoryContext(chatId, turnActor);
       turnTimer.mark('agent_memory_loaded');
       agentMemoryPrompt = buildAgentMemorySection(memoryContent);
     }
@@ -1849,6 +1874,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       systemPrompt: systemPrompt,
       tools: filteredTools as Record<string, unknown>,
       user: user ? { id: user.id, role: user.role } : null,
+      spend: credit.spend,
     });
     turnTimer.mark('history_compacted');
     const { scheduleCompaction } = prepared;
@@ -1954,19 +1980,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
           // already-aborted signal to short-circuit streamText's underlying fetch.
           if (lifecycle!.preAborted) return;
 
-          // Execution feedback (UX spec §7): announce one command indicator
-          // per resolved plan ("Using /foo" / "Skipped /foo — reason") as
-          // the first parts of the assistant message, in the same order the
-          // chips appeared in the user's message. Persisted with the message
-          // via onFinish so transcripts keep showing which commands informed
-          // the answer.
-          commandPlans.forEach((plan, index) => {
-            writer.write({
-              type: COMMAND_EXECUTION_PART_TYPE,
-              id: `${serverAssistantMessageId}-command-${index}`,
-              data: commandExecutionDataFromPlan(plan),
-            });
-          });
+          // SPEND-4 fallback part, then the command execution indicators (UX spec §7):
+          // the preamble both turns write before the model runs (turn-preamble.ts).
+          writeTurnPreamble(writer, { messageId: serverAssistantMessageId!, credit, commandPlans });
           // Resolve once outside the per-attempt factory (the factory is synchronous).
           // Gate tools on the CONCRETE backend model id (resolvedModelName), not the
           // PageSpace alias in currentModel — vision/tool detection pattern-matches the
@@ -2042,9 +2058,10 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 : undefined,
               experimental_context: {
                 userId,
+                accessActor: turnActor,
                 timezone: userTimezone,
-                aiProvider: currentProvider,
-                aiModel: currentModel,
+                // POL-8: the tools are judged by the model this turn resolved, not the raw selection.
+                ...toolModelContext(providerResult),
                 conversationId,
                 // Same normalized location the model prompt was built from, so
                 // the two can never disagree about which workspace is in view.
@@ -2066,7 +2083,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 } : undefined,
                 modelCapabilities: modelCapabilitiesForTools,
                 isAdmin: isAdminUser,
-                subscriptionTier: user?.subscriptionTier,
+                subscriptionTier: personalTurnTiers(user?.subscriptionTier).capability,
                 imageGenerationModel: user?.imageGenerationModel ?? DEFAULT_IMAGE_MODEL,
                 chatSource: {
                   type: 'page' as const,
@@ -2306,6 +2323,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               // completion. Cost still settles regardless (the provider charged us).
               success: agentRun?.finalOutcome !== 'exhausted',
               holdId,
+              walletId: credit.walletId,
               metadata: {
                 pageName: page.title,
                 toolCallsCount: extractedToolCalls.length,
@@ -2467,6 +2485,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       driveId: undefined,
       success: false,
       holdId,
+      walletId: credit.walletId,
       error: error instanceof Error ? error.message : 'Unknown error',
       metadata: {
         errorType: error instanceof Error ? error.name : 'UnknownError',

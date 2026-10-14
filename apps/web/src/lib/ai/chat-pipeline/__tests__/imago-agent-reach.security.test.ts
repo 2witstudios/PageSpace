@@ -115,6 +115,7 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { sessionRepository } from '@/lib/repositories/session-repository';
@@ -197,8 +198,8 @@ async function seedWorld(): Promise<World> {
 
   // The per-drive setting, through its real service: kept out of an owned
   // drive and of a drive the owner is merely a member of.
-  expect((await setImagoDriveAccess(owner.id, journal.id, false)).ok).toBe(true);
-  expect((await setImagoDriveAccess(owner.id, locked.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(owner.id, null), journal.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(owner.id, null), locked.id, false)).ok).toBe(true);
 
   const teamShared = await seedPage(team.id, 'team-private-shared', { isPrivate: true });
   await factories.createPagePermission(teamShared.id, owner.id);
@@ -222,7 +223,7 @@ async function seedWorld(): Promise<World> {
   }
 
   const session = (userId: string) =>
-    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 });
+    sessionService.createSession({ userId, type: 'user', scopes: ['*'], expiresInMs: 60 * 60 * 1000 , authentication: null});
 
   // An MCP key of the owner's, scoped to the Home drive — the drive Imago
   // lives in, so the token can drive the owner's Imago page.
@@ -430,7 +431,7 @@ describe('IMG-10.10 — never more than its owner', () => {
     expect(leaked(outputs, [world.rival.open, world.team.unsharedPrivate, world.otherHome.unshared])).toEqual([]);
     // Ground truth: every page the search returned is one the user can view.
     for (const pageId of pageIdsIn(outputs)) {
-      expect((await getUserAccessLevel(world.ownerId, pageId))?.canView, pageId).toBe(true);
+      expect((await getUserAccessLevel(credentialActor(world.ownerId, null), pageId))?.canView, pageId).toBe(true);
     }
   });
 });
@@ -504,7 +505,7 @@ describe('IMG-10.10 — a drive the owner keeps Imago out of is denied on every 
   });
 
   it('negative control: given the same drive let back in, should read it, name it and show its activity — so the denials above are the exclusion', async () => {
-    expect((await setImagoDriveAccess(world.ownerId, world.journal.driveId, true)).ok).toBe(true);
+    expect((await setImagoDriveAccess(credentialActor(world.ownerId, null), world.journal.driveId, true)).ok).toBe(true);
     try {
       const { outputs, prompt } = await runTools(
         [
@@ -522,7 +523,7 @@ describe('IMG-10.10 — a drive the owner keeps Imago out of is denied on every 
       expect(prompt).toContain(`${MARK}-journal-prompt`);
       expect(prompt).not.toContain('a workspace they keep you out of');
     } finally {
-      expect((await setImagoDriveAccess(world.ownerId, world.journal.driveId, false)).ok).toBe(true);
+      expect((await setImagoDriveAccess(credentialActor(world.ownerId, null), world.journal.driveId, false)).ok).toBe(true);
     }
   });
 });

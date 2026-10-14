@@ -23,5 +23,10 @@
  * scope), and `POST /api/agent-workspaces/[workspaceId]/exec` runs a shell
  * command in the workspace's sandbox. Additive, so MINOR; `MIN_SERVER_API_VERSION`
  * stays at 1.0.0 — against an older server only these two calls are missing.
+ *
+ * 1.4.0 — `POST /api/ai/page-agents/consult` accepts `sessionDriveId`, the drive of the
+ * session a consultation is called from, which its credits, usage attribution and org model
+ * policy follow (SPEND-7). Additive and optional, so MINOR; `MIN_SERVER_API_VERSION` stays at
+ * 1.0.0 — an older server ignores the field and bills the agent's own drive.
  */
-export const API_CONTRACT_VERSION = '1.3.0';
+export const API_CONTRACT_VERSION = '1.4.0';

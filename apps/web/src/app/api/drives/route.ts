@@ -1,21 +1,25 @@
+import type { AuthResult } from '@/lib/auth';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { listAccessibleDrives, createDrive, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
-import { isReservedDriveName } from '@pagespace/lib/services/drive-guards';
-import { getAppDriveMembership, getScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { listAccessibleDrives, type DriveWithAccess } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
+import { getAppDriveMembership, getEffectiveScopedDriveMembership, hasAppDriveMembership, hasScopedDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray } from '@pagespace/db/operators';
-import { drives as drivesTable } from '@pagespace/db/schema/core';
+import { drives as drivesTable, ORG_DRIVE_VISIBILITIES } from '@pagespace/db/schema/core';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isScopedMCPAuth, isScopedOAuthAuth, isManageKeysOnly } from '@/lib/auth';
+import { getPrincipalAccessLevel } from '@/lib/auth/principal-permissions';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -30,24 +34,29 @@ const createDriveSchema = z.object({
     (v) => (typeof v === 'string' ? v : ''),
     z.string().min(1, 'Missing name')
   ),
+  // Create the drive in an org context (DRV-3). Visibility defaults to Open unless chosen (DRV-4).
+  orgId: z.string().min(1).optional(),
+  orgVisibility: z.enum(ORG_DRIVE_VISIBILITIES).optional(),
 });
 
 async function listScopedDrivesWithMembership({
-  allowedDriveIds,
+  scopedDriveIds,
   includeTrash,
-  userId,
+  auth,
   getMembership,
 }: {
-  allowedDriveIds: string[];
+  /** The key's scoped drives; each is kept only when `getMembership` (owner-bound) answers a membership. */
+  scopedDriveIds: string[];
   includeTrash: boolean;
-  userId: string;
+  auth: AuthResult;
   getMembership: (driveId: string) => ScopedDriveMembership | Promise<ScopedDriveMembership>;
 }): Promise<DriveWithAccess[]> {
+  const userId = auth.userId;
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const rows = await db.query.drives.findMany({
     where: includeTrash
-      ? inArray(drivesTable.id, allowedDriveIds)
-      : and(inArray(drivesTable.id, allowedDriveIds), eq(drivesTable.isTrashed, false)),
+      ? inArray(drivesTable.id, scopedDriveIds)
+      : and(inArray(drivesTable.id, scopedDriveIds), eq(drivesTable.isTrashed, false)),
   });
 
   const resolved = await Promise.all(
@@ -55,7 +64,7 @@ async function listScopedDrivesWithMembership({
       const membership = await getMembership(drive.id);
       if (!membership) return null;
       const role = membership.role
-        ?? (drive.ownerId === userId ? ('OWNER' as const) : ('MEMBER' as const));
+        ?? (isDriveLead(userId, drive) ? ('OWNER' as const) : ('MEMBER' as const));
       return { drive, membership, role };
     }),
   );
@@ -70,6 +79,9 @@ async function listScopedDrivesWithMembership({
       driveId: drive.id,
       role,
       customRoleId: membership.customRoleId,
+      // An explicit scope role is the credential's, never the owner's org floor; an inheriting scope on a drive
+      // the owner does not lead is answered below by getUserAccessLevel, which applies the floor (POL-6).
+      openDriveFloor: null,
     })),
   );
 
@@ -78,13 +90,13 @@ async function listScopedDrivesWithMembership({
       // An inherited scope (role: null) carries the owner's ACTUAL permissions,
       // which the token resolvers read through getUserAccessLevel — the scope
       // row's synthesized MEMBER knows nothing of the owner's custom role.
-      const inheritsNonOwner = membership.role === null && drive.ownerId !== userId;
+      const inheritsNonOwner = membership.role === null && !isDriveLead(userId, drive);
       const canCreatePages = inheritsNonOwner
-        ? (await getUserAccessLevel(userId, drive.id))?.canEdit === true
+        ? (await getPrincipalAccessLevel(auth, drive.id))?.canEdit === true
         : (canCreatePagesMap.get(drive.id) ?? false);
       return {
         ...drive,
-        isOwned: membership.role === null && drive.ownerId === userId,
+        isOwned: membership.role === null && isDriveLead(userId, drive),
         role,
         canCreatePages,
         lastAccessedAt: null,
@@ -112,35 +124,37 @@ export async function GET(req: Request) {
       // A scoped MCP token is its own drive member: list exactly its member
       // drives (with the TOKEN's role), not the owning user's drive universe.
       drives = await listScopedDrivesWithMembership({
-        allowedDriveIds: auth.allowedDriveIds,
+        scopedDriveIds: auth.allowedDriveIds,
         includeTrash,
-        userId,
+        auth,
         getMembership: async (driveId) => {
-          const membership = await getAppDriveMembership(auth.tokenId, driveId);
-          if (!membership || membership.role !== null) return membership;
-          return (await hasAppDriveMembership(auth.tokenId, driveId)) ? membership : null;
+          // Review #2849 r5 (P2): EVERY key row, inherit or explicit, lists only while its owner is a current member.
+          const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
+          if (!membership) return null;
+          return (await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId)) ? membership : null;
         },
       });
     } else if (isScopedOAuthAuth(auth)) {
       if (isManageKeysOnly(auth)) {
-        drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+        drives = await listAccessibleDrives(actorFromAuth(auth), { includeTrash, tokenScopable });
       } else if (auth.allowedDriveIds.length > 0) {
         drives = await listScopedDrivesWithMembership({
-          allowedDriveIds: auth.allowedDriveIds,
+          scopedDriveIds: auth.allowedDriveIds,
           includeTrash,
-          userId,
+          auth,
           getMembership: async (driveId) => {
-            const membership = getScopedDriveMembership(auth.driveScopes, driveId);
-            if (!membership || membership.role !== null) return membership;
-            return (await hasScopedDriveMembership(auth.driveScopes, auth.userId, driveId)) ? membership : null;
+            const membership = await getEffectiveScopedDriveMembership(auth.driveScopes, actorFromAuth(auth), driveId);
+            if (!membership) return null;
+            return (await hasScopedDriveMembership(auth.driveScopes, actorFromAuth(auth), driveId)) ? membership : null;
           },
         });
       } else {
         drives = [];
       }
     } else {
-      drives = await listAccessibleDrives(userId, { includeTrash, tokenScopable });
+      drives = await listAccessibleDrives(actorFromAuth(auth), { includeTrash, tokenScopable });
     }
+
 
     loggers.api.debug('[DEBUG] Drives API - Found drives:', {
       count: drives.length,
@@ -173,14 +187,16 @@ export async function POST(request: Request) {
     return parsed.response;
   }
 
-  const { name } = parsed.data;
+  const { name, orgId, orgVisibility } = parsed.data;
 
   try {
-    if (isReservedDriveName(name)) {
-      return NextResponse.json({ error: 'Cannot create a drive with that name.' }, { status: 400 });
+    // DRV-3: personal, or org-owned from creation under the org's who-can-create policy. A token may
+    // create in an org too ([D-OW-26] forbids only money moves); a drive-scoped one was refused above.
+    const created = await createDriveForCaller({ userId, name, orgId, orgVisibility, authentication: auth.authentication });
+    if (!created.ok) {
+      return NextResponse.json({ error: created.error, ...(created.code && { code: created.code }) }, { status: created.status });
     }
-
-    const newDrive = await createDrive(userId, { name });
+    const newDrive = created.drive;
 
     await broadcastDriveEvent(
       createDriveEventPayload(newDrive.id, 'created', {

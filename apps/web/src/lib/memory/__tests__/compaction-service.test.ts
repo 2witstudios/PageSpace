@@ -1,6 +1,5 @@
-import { describe, it, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeAll, beforeEach, expect } from 'vitest';
 import { assert } from './riteway';
-import { memoryGate } from './memory-gate-double';
 
 /**
  * Compaction Service Tests
@@ -45,16 +44,35 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   BACKGROUND_HEAVY_MODEL: 'anthropic/claude-sonnet-5',
 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
-  // Awaited inside the credit hold, so the debit lands before the hold is released.
-  AIMonitoring: { trackUsage: vi.fn(async () => ({ persisted: true, creditsSettled: true })) },
-}));
-vi.mock('../memory-credit-gate', async () => ({
-  withMemoryCreditHold: (await import('./memory-gate-double')).fakeWithMemoryCreditHold,
+  AIMonitoring: { trackUsage: vi.fn() },
+  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module has to provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 vi.mock('ai', () => ({ generateText: vi.fn() }));
+
+const { mockReserve, mockReleaseMemoryHold } = vi.hoisted(() => {
+  const mockReleaseMemoryHold = vi.fn();
+  return {
+    mockReleaseMemoryHold,
+    mockReserve: vi.fn(async (_userId: string, _call: { provider: string; model: string; inputChars: number }) => ({ allowed: true as const, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold })),
+  };
+});
+vi.mock('../memory-credit', () => ({ reserveMemoryCall: mockReserve }));
+
+// The service's module graph (integration-service, the page mutation path) is loaded once here, outside any one
+// test's timeout, so the first test's verdict never depends on cold-load time.
+beforeAll(async () => {
+  await import('../compaction-service');
+}, 60_000);
 
 describe('needsCompaction', () => {
   it('leaves a page under its budget alone', async () => {
@@ -155,7 +173,6 @@ describe('budget coherence across the three consumers', () => {
 describe('checkAndCompactIfNeeded', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    memoryGate.reset();
     updatePersonalizationPage.mockResolvedValue({ written: true });
   });
 
@@ -193,7 +210,7 @@ describe('checkAndCompactIfNeeded', () => {
     });
   });
 
-  it('reserves one hold sized for every over-budget field, then writes each compaction', async () => {
+  it('reserves one hold per over-budget field, settles each once, then writes each compaction', async () => {
     readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500), rules: 'y'.repeat(3500) });
     const { generateText } = await import('ai');
     vi.mocked(generateText).mockResolvedValue({
@@ -203,15 +220,26 @@ describe('checkAndCompactIfNeeded', () => {
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
     vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
 
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
     const { checkAndCompactIfNeeded } = await import('../compaction-service');
     const result = await checkAndCompactIfNeeded('user-funded');
 
     assert({
       given: 'two pages over budget and a funded user',
-      should: 'take one two-call hold and compact both',
-      actual: { holds: memoryGate.holds, result },
+      should: 'reserve once per model call, settle each hold once, and compact both',
+      actual: {
+        reservedFor: mockReserve.mock.calls.map(([userId]) => userId),
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        settledHolds: vi.mocked(AIMonitoring.trackUsage).mock.calls.map(([usage]) => usage.holdId),
+        releases: mockReleaseMemoryHold.mock.calls.length,
+        result,
+      },
       expected: {
-        holds: [{ userId: 'user-funded', modelCalls: 2 }],
+        reservedFor: ['user-funded', 'user-funded'],
+        modelCalls: 2,
+        settledHolds: ['hold-m', 'hold-m'],
+        releases: 0,
         result: { compacted: true, fields: ['bio', 'rules'] },
       },
     });
@@ -219,9 +247,10 @@ describe('checkAndCompactIfNeeded', () => {
 
   it('compacts nothing and writes nothing when the credit gate refuses', async () => {
     readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500) });
-    memoryGate.refuseWith = 'out_of_credits';
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
     const { generateText } = await import('ai');
     const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
     const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
 
     const { checkAndCompactIfNeeded } = await import('../compaction-service');
@@ -233,17 +262,100 @@ describe('checkAndCompactIfNeeded', () => {
       actual: {
         result,
         writes: updatePersonalizationPage.mock.calls.length,
-        providersBuilt: vi.mocked(createAIProvider).mock.calls.length,
         modelCalls: vi.mocked(generateText).mock.calls.length,
         charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+        releases: mockReleaseMemoryHold.mock.calls.length,
       },
       expected: {
         result: { compacted: false, fields: [], creditRefusal: 'out_of_credits' },
         writes: 0,
-        providersBuilt: 0,
         modelCalls: 0,
         charges: 0,
+        releases: 0,
       },
     });
+  });
+
+  it('a refusal on a later field keeps the fields already compacted and stops the rest', async () => {
+    readMemoryPages.mockResolvedValue({ bio: 'x'.repeat(3500), rules: 'y'.repeat(3500) });
+    mockReserve
+      .mockResolvedValueOnce({ allowed: true, holdId: 'hold-m', walletId: 'w-root', release: mockReleaseMemoryHold } as never)
+      .mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({ text: 'short', usage: { inputTokens: 10, outputTokens: 5 } } as never);
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+
+    const { checkAndCompactIfNeeded } = await import('../compaction-service');
+    const result = await checkAndCompactIfNeeded('user-running-low');
+
+    assert({
+      given: 'two pages over budget and credit for only the first',
+      should: 'write the paid-for compaction once, touch the other page not at all, and report the refusal',
+      actual: {
+        result,
+        writtenFields: updatePersonalizationPage.mock.calls.map((call: unknown[]) => call[1]),
+        modelCalls: vi.mocked(generateText).mock.calls.length,
+        charges: vi.mocked(AIMonitoring.trackUsage).mock.calls.length,
+      },
+      expected: {
+        result: { compacted: true, fields: ['bio'], creditRefusal: 'out_of_credits' },
+        writtenFields: ['bio'],
+        modelCalls: 1,
+        charges: 1,
+      },
+    });
+  });
+});
+
+describe('compactField — the credit gate', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'anthropic', modelName: 'm' } as never);
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockResolvedValue({ text: 'short', usage: { inputTokens: 10, outputTokens: 5 } } as never);
+  });
+
+  it('SPEND-1 (partial) an exhausted person\'s memory compaction calls no model, charges nothing, and keeps the page as it was', async () => {
+    mockReserve.mockResolvedValueOnce({ allowed: false, reason: 'out_of_credits' } as never);
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
+    const original = 'x'.repeat(3500);
+
+    const result = await compactField('user-1', 'bio', original);
+
+    expect(result).toEqual({ creditRefusal: 'out_of_credits' });
+    expect(generateText).not.toHaveBeenCalled();
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-8 (partial) a funded memory compaction reserves before the model and settles once on that hold and wallet', async () => {
+    const { generateText } = await import('ai');
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
+
+    await compactField('user-1', 'bio', 'x'.repeat(3500));
+
+    expect(mockReserve).toHaveBeenCalledOnce();
+    expect(mockReserve).toHaveBeenCalledWith('user-1', expect.objectContaining({ provider: 'anthropic' }));
+    expect(mockReserve.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(generateText).mock.invocationCallOrder[0]);
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledOnce();
+    expect(vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0]).toMatchObject({ holdId: 'hold-m', walletId: 'w-root', source: 'memory' });
+    expect(mockReleaseMemoryHold).not.toHaveBeenCalled();
+  });
+
+  it('a model failure after the reservation releases it and keeps the page', async () => {
+    const { generateText } = await import('ai');
+    vi.mocked(generateText).mockRejectedValueOnce(new Error('down'));
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    const { compactField } = await import('../compaction-service');
+    const original = 'x'.repeat(3500);
+
+    expect(await compactField('user-1', 'bio', original)).toEqual({ content: original });
+    expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseMemoryHold).toHaveBeenCalledOnce();
   });
 });

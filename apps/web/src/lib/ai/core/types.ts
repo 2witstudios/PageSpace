@@ -5,15 +5,26 @@
 
 import { ModelCapabilities } from './model-capabilities';
 import type { CommandExecutionData } from './command-processor';
+import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface ToolExecutionContext {
   userId: string;
+  /**
+   * Who drives this turn, as the permission layer's actor (D-OW-45): the chat request's credential (with its
+   * ceremony evidence) or, for a workflow/trigger run, the automation running as its creator. Every tool access
+   * check asks the org sign-in policy (SEC-2/3) of it. Its userId is `userId`.
+   */
+  accessActor: AccessActor;
   conversationId?: string;
   // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
   timezone?: string;
   // AI attribution for activity logging
   aiProvider?: string;
   aiModel?: string;
+  // POL-8: this context belongs to a model run, whose tools are judged by the org allowlists against aiProvider/aiModel
+  // — set together with them by toolModelContext() (provider-factory.ts). A model run missing either is refused.
+  runsModel?: true;
   locationContext?: {
     currentPage?: {
       id: string;
@@ -48,6 +59,25 @@ export interface ToolExecutionContext {
   isAdmin?: boolean;
   subscriptionTier?: string;
   imageGenerationModel?: string | null;
+
+  // The wallet this turn spends (WAL-5, SPEND-1): the target its credit gate was given,
+  // naming the source the gate resolved, and the wallet the gate reserved on. A tool that
+  // gates its own model call (generate_image) names this same source, and a nested call
+  // that rides the turn's gate (an agent consulted inside it) settles on this wallet —
+  // never on a different one. Absent outside a gated turn: such a caller has no drive
+  // session and spends personal credits (SPEND-8).
+  // `userId` is the person that gate bound — the consumer whose caps the spend counts toward —
+  // when it is not this context's `userId`: a manual workflow Run is gated as the person who
+  // pressed it while the run reads content as the workflow's creator (review #2817 P2-3). Every
+  // model call riding this turn gates and records its usage as them; absent, the context's user.
+  // `automationRef` is the stored reference (automation-attribution's codec) of the automation a run
+  // with no person present spends for (SPEND-10, automationRefFor): every model call riding the run records it, so the drive lead sees
+  // that spend as the automation rather than merged into its creator.
+  //
+  // `reservedHoldId` is a hold the CALLER already took for exactly the one ask_agent call it is
+  // about to make (the channel mention responder's per-reply hold): that call settles on it
+  // instead of reserving a second time, and does not pass it on to anything nested inside it.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; automationRef?: string; reservedHoldId?: string };
 
   // MCP token drive-scope restriction. Empty/undefined = full access (session auth
   // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.

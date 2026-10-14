@@ -30,6 +30,8 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -212,6 +214,9 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
     // Provision the Home drive (idempotent)
     let isNewlyProvisioned = false;
     try {
@@ -232,7 +237,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -323,6 +331,7 @@ export async function POST(req: Request) {
       }
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -397,6 +406,7 @@ export async function POST(req: Request) {
       const iosDeviceId = deviceId || createId();
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -444,6 +454,7 @@ export async function POST(req: Request) {
     if (deviceId) {
       try {
         webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
           userAgent: req.headers.get('user-agent') || undefined,
@@ -456,7 +467,10 @@ export async function POST(req: Request) {
       }
     }
 
-    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
       returnUrl = `/dashboard/connections?connection_requested=1`;

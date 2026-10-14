@@ -2,7 +2,10 @@ import Link from 'next/link';
 import { MarketingLink } from '@/components/ui/MarketingLink';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
+import { cookies } from 'next/headers';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
+import { loadOrgInvitePage } from '@/lib/orgs/org-invite-page';
+import { OrgInviteCard } from '@/components/orgs/OrgInviteCard';
 import { isImagoEnabled } from '@/lib/imago/imago-enabled';
 import { InviteCardV3 } from './InviteCardV3';
 
@@ -13,6 +16,18 @@ interface InvitePageProps {
 export default async function InvitePage({ params }: InvitePageProps) {
   const { token } = await params;
   const resolution = await resolveInviteContext({ token, now: new Date() });
+
+  // ORG-3: an org invitation link opens here too; its screen depends on who is signed in.
+  // Asked before the Imago V3 card: an org token is not a user invite, and the generic
+  // resolver would answer NOT_FOUND for it.
+  const orgInvite = await loadOrgInvitePage({ token, cookieHeader: (await cookies()).toString(), now: new Date() });
+  if (orgInvite) {
+    return (
+      <AuthLayout>
+        <OrgInviteCard token={token} model={orgInvite} />
+      </AuthLayout>
+    );
+  }
 
   if (isImagoEnabled()) {
     return (

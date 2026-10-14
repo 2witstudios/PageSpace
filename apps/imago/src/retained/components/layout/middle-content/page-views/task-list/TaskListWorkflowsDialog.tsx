@@ -12,6 +12,7 @@ import {
 } from '@/retained/components/ui/dialog';
 import { Button } from '@/retained/components/ui/button';
 import { post, patch } from '@/retained/lib/auth/auth-fetch';
+import { useAutomationSpendContext } from '@/retained/hooks/useAutomationSpendContext';
 import { useWorkflows } from '@/retained/hooks/useWorkflows';
 import { WorkflowList } from '@/retained/components/workflows/WorkflowList';
 import { WorkflowForm, type WorkflowFormData } from '@/retained/components/workflows/WorkflowForm';
@@ -35,6 +36,7 @@ export function TaskListWorkflowsDialog({
   taskListTitle,
 }: TaskListWorkflowsDialogProps) {
   const { workflows, isLoading, mutate, runWorkflow, toggleWorkflow, deleteWorkflow } = useWorkflows(open ? driveId : '');
+  const spendContext = useAutomationSpendContext(open ? driveId : null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Workflow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
@@ -133,6 +135,7 @@ export function TaskListWorkflowsDialog({
               </div>
             ) : (
               <WorkflowList
+                spendContext={spendContext}
                 workflows={scoped}
                 onRun={handleRun}
                 onToggle={handleToggle}

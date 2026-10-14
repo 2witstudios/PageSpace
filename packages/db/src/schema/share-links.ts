@@ -1,9 +1,10 @@
 import { pgTable, text, timestamp, boolean, integer, jsonb, index } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
 import { driveRoles, memberRole, type GrantableMemberRole } from './members';
+import type { SuspensionKind } from './organizations';
 
 export type ShareLinkPermission = 'VIEW' | 'EDIT' | 'SHARE' | 'DELETE';
 
@@ -18,8 +19,11 @@ export const driveShareLinks = pgTable('drive_share_links', {
   expiresAt: timestamp('expires_at', { mode: 'date' }),
   isActive: boolean('is_active').notNull().default(true),
   useCount: integer('use_count').notNull().default(0),
+  // Set by the org's public-share-links policy (POL-1); the link stays as it was and is refused while set.
+  suspendedByPolicy: text('suspended_by_policy').$type<SuspensionKind>(),
 }, (table) => ({
   driveIdx: index('drive_share_links_drive_id_idx').on(table.driveId),
+  suspendedIdx: index('drive_share_links_suspended_by_policy_idx').on(table.driveId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
   expiresAtIdx: index('drive_share_links_expires_at_idx').on(table.expiresAt),
   activeIdx: index('drive_share_links_is_active_idx').on(table.isActive),
   customRoleIdx: index('drive_share_links_custom_role_id_idx').on(table.customRoleId),
@@ -44,8 +48,10 @@ export const pageShareLinks = pgTable('page_share_links', {
   expiresAt: timestamp('expires_at', { mode: 'date' }),
   isActive: boolean('is_active').notNull().default(true),
   useCount: integer('use_count').notNull().default(0),
+  suspendedByPolicy: text('suspended_by_policy').$type<SuspensionKind>(),
 }, (table) => ({
   pageIdx: index('page_share_links_page_id_idx').on(table.pageId),
+  suspendedIdx: index('page_share_links_suspended_by_policy_idx').on(table.pageId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
   expiresAtIdx: index('page_share_links_expires_at_idx').on(table.expiresAt),
   activeIdx: index('page_share_links_is_active_idx').on(table.isActive),
 }));

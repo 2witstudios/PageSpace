@@ -68,6 +68,7 @@ function fakeMeter() {
     stop: vi.fn(async () => {}),
     billedDollars: 0,
     stopped: false,
+    spend: { kind: 'personal' },
   } satisfies CallMeter;
 }
 
@@ -371,6 +372,34 @@ describe('startVoiceCallRuntime — tool dispatch', () => {
     expect(typeof (session.sent[0].item as { output: unknown }).output).toBe('string');
     // Without this the model holds the result and never speaks.
     expect(session.sent[1]).toEqual({ type: 'response.create' });
+  });
+
+  it('SPEND-1 (partial) given a call spending in a drive, every tool dispatch carries that pinned source so tools spend it too', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({
+      session,
+      bridge: bridge.client,
+      meter: { ...fakeMeter(), spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1' } },
+      secret: 'ek_1',
+      seed: [],
+    });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.dispatch()).toMatchObject({ kind: 'tool', spend: { driveId: 'drive-1', chosen: 'drive_wallet' } });
+  });
+
+  it('SPEND-8 (partial) given a personal call, a tool dispatch names no drive', async () => {
+    const session = fakeSession();
+    const bridge = fakeBridge();
+    startVoiceCallRuntime({ session, bridge: bridge.client, meter: fakeMeter(), secret: 'ek_1', seed: [] });
+
+    session.emit(responseDone({ output: [toolCall()] }));
+    await flush();
+
+    expect(bridge.dispatch()).not.toHaveProperty('spend');
   });
 
   it('given the call context, should forward timezone and location so tools resolve "this page"', async () => {

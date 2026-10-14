@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * The realtime logger, mocked so the two UNRECOVERABLE-charge paths can be
@@ -14,13 +15,16 @@ const mockRealtimeLogger = vi.hoisted(() => ({
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
 
-import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
+import { buildShellHandlers, regateResumedWindow, resumeBillingClock, settleAccruedWindow, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
 import type { TerminalSession } from '../terminal-session-map';
 import type { PtyShell, OpenPtyShellArgs } from '../sprites-shell';
 import { assert } from './riteway';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
+
+const OWNER_CHARGE: ComputeCharge = { kind: 'user', userId: 'owner-1' };
 
 /**
  * Fire the `onSessionId` callback the handler handed to `openShell` — i.e. do
@@ -47,7 +51,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 function makeSocket(id = 'sock1', userId = 'user1'): SocketLike & { emit: ReturnType<typeof vi.fn> } {
-  return { id, data: { user: { id: userId } }, emit: vi.fn() };
+  return { id, data: { user: { id: userId }, actor: credentialActor(userId, null) }, emit: vi.fn() };
 }
 
 /**
@@ -106,7 +110,8 @@ function makeAuthSuccess(over: Partial<{
   args: string[];
   commandOverride: string | null;
   cwd: string;
-  payerId: string;
+  /** null models an UNMETERED session (no charge resolved). */
+  charge: ComputeCharge | null;
   /** null models a GLOBAL-ASSISTANT session: no agent page, so usage attributes to the owner alone. */
   driveId: string | null;
 }> = {}) {
@@ -128,7 +133,7 @@ function makeAuthSuccess(over: Partial<{
   return {
     ok: true as const,
     sessionKey: over.sessionKey ?? 'shell:shl-1',
-    payerId: over.payerId ?? 'owner-1',
+    charge: over.charge === null ? undefined : (over.charge ?? OWNER_CHARGE),
     driveId: over.driveId === undefined ? 'drive-1' : over.driveId,
     resolveSandbox: vi.fn(async () => sandbox),
     sprite,
@@ -419,7 +424,7 @@ describe('buildShellHandlers', () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
-      expect(checkAuth).toHaveBeenCalledWith({ userId: 'user1', shellId: 'shl-1' });
+      expect(checkAuth).toHaveBeenCalledWith({ actor: credentialActor('user1', null), shellId: 'shl-1' });
     });
 
     it('given openShell throws, should emit shell:error, release the slot, and not store session', async () => {
@@ -598,12 +603,14 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
     });
 
-    it('given no authenticated user on the socket, should call checkAuth with an empty-string userId rather than throwing', async () => {
+    it('given no credential on the socket, should refuse the shell without calling checkAuth rather than throwing', async () => {
       socket.data.user = undefined;
+      socket.data.actor = undefined;
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: '' }));
+      expect(checkAuth).not.toHaveBeenCalled();
+      expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: 'Shell access denied: unauthenticated' }));
     });
 
     it('given a reconnect while a prior disconnect\'s idle timer is still pending, should cancel the pending reap so the session survives past the original timeout', async () => {
@@ -688,6 +695,177 @@ describe('buildShellHandlers', () => {
       expect(auth.resolveSandbox).toHaveBeenCalledTimes(1);
       expect(openShell).toHaveBeenCalledTimes(1);
       expect(socket.emit).toHaveBeenCalledWith('shell:ready', { connectionId: 'sock1', resumed: false });
+    });
+
+    /** Priya opens a metered org PTY (gate #1); Ben's socket attaches to it. Returns Ben's handlers. */
+    async function priyaOpensBenAttaches(gate: ReturnType<typeof vi.fn>) {
+      const ownerAuth = { ...makeAuthSuccess({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' } }), ownerId: 'user1', actorId: 'user1' };
+      checkAuth.mockResolvedValueOnce(ownerAuth);
+      const billing = {
+        ...makeBilling({ gate }),
+        resolveCharge: vi.fn(async ({ actorId }: { actorId: string }) => ({ kind: 'org' as const, orgId: 'org-1', userId: actorId })),
+      };
+      const priya = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await priya.onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user2' });
+      const benSocket = makeSocket('ben-sock', 'user2');
+      const ben = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: benSocket, persistSpriteExecId, billing });
+      await ben.onConnect(validPayload);
+      return { billing, priya, ben, benSocket, live: sessionMap.getByKey('shell:shl-1') };
+    }
+
+    it('WAL-2 (partial) review #2760 P2-3: a drive-mate who only WATCHES a live PTY is attached with no gate read and moves nothing — the window stays its typist\'s', async () => {
+      const gate = vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold-owner' });
+      const { billing, benSocket, live } = await priyaOpensBenAttaches(gate);
+
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:ready', expect.anything());
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(billing.resolveCharge).not.toHaveBeenCalledWith(expect.objectContaining({ actorId: 'user2' }));
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+    });
+
+    it('WAL-2 (partial) review #2760 P2-3: a drive-mate at their cap TYPING into a live PTY is refused with the cap message, the PTY never sees it, and the window stays its typist\'s', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValue({ allowed: false, reason: 'org_member_cap_reached', orgRefusal: 'org_member_cap_reached' });
+      const { billing, ben, benSocket, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'rm -rf build\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(billing.resolveCharge).toHaveBeenLastCalledWith(expect.objectContaining({ actorId: 'user2' }));
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/used your allowance/), recoverable: true }));
+      expect(shell.write).not.toHaveBeenCalledWith('rm -rf build\n');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+
+      // Typing on is refused without another gate read while the refusal is fresh.
+      ben.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(shell.write).not.toHaveBeenCalledWith('ls\n');
+    });
+
+    it('WAL-2 (partial) re-review P2-1: if settling the window so far FAILS, the typist\'s input is refused (retry message), their hold released, and the window stays put — never their input on someone else\'s window', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' });
+      const { billing, ben, benSocket, live } = await priyaOpensBenAttaches(gate);
+      billing.trackUsage.mockRejectedValueOnce(new Error('ledger down'));
+
+      ben.onInput({ data: 'make\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('make\n');
+      expect(benSocket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ message: expect.stringMatching(/briefly busy/), recoverable: true }));
+      expect(billing.releaseHold).toHaveBeenCalledWith('hold-mate');
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner']);
+    });
+
+    it('WAL-2 (partial) re-review P2-1: two typists on DIFFERENT connections typing at once take the window in turn — one live hold, every earlier hold settled', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-ben' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-chloe' });
+      const { billing, ben, live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user3' });
+      const chloe = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('chloe-sock', 'user3'), persistSpriteExecId, billing });
+      await chloe.onConnect(validPayload);
+
+      ben.onInput({ data: 'b' });
+      chloe.onInput({ data: 'c' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(live?.actorId).toBe('user3');
+      expect(live?.holdId).toBe('hold-chloe');
+      // Each superseded hold was consumed by its own window's settle — none left dangling.
+      const settledHolds = billing.trackUsage.mock.calls.map((c) => (c[0] as { holdId?: string }).holdId);
+      expect(settledHolds).toEqual(['hold-owner', 'hold-ben']);
+      expect(billing.releaseHold).not.toHaveBeenCalled();
+      expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['b', 'c']);
+    });
+
+    it('WAL-2 (partial) a typist refused WITHOUT an org reason (a personal payer out of credits) is told plainly, on their own pane, and typing on is refused from the memo', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+      const { ben, benSocket } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'ls\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+      ben.onInput({ data: 'pwd\n', connectionId: 'ben-sock' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const refusals = benSocket.emit.mock.calls.filter((c) => c[0] === 'shell:error').map((c) => c[1]);
+      expect(refusals).toEqual([
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+        { message: expect.stringMatching(/could not be charged to you/), recoverable: true },
+      ]);
+      expect(gate).toHaveBeenCalledTimes(2);
+      expect(shell.write).not.toHaveBeenCalled();
+    });
+
+    it('WAL-2 (partial) a typist\'s queued input is dropped if their session goes away while the claim waits', async () => {
+      let releaseGate = (_v: unknown) => {};
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockImplementationOnce(() => new Promise((resolve) => { releaseGate = resolve; }));
+      const { ben, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'a' });
+      ben.onInput({ data: 'b' });
+      await vi.advanceTimersByTimeAsync(0);
+      // Ben's pane closes while his claim is in flight: his binding goes, his queued keystrokes with it.
+      ben.onDisconnect({ connectionId: 'ben-sock' });
+      releaseGate({ allowed: true, holdId: 'hold-mate' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write).not.toHaveBeenCalledWith('a');
+      expect(shell.write).not.toHaveBeenCalledWith('b');
+      expect(live).toBeDefined();
+    });
+
+    it('input from a socket with no signed-in user moves no window', async () => {
+      const gate = vi.fn().mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' });
+      const { live } = await priyaOpensBenAttaches(gate);
+      checkAuth.mockResolvedValueOnce({ ...makeAuthSuccess(), ownerId: 'user1', actorId: 'user1' });
+      const anon = makeSocket('anon-sock', 'user1');
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: anon, persistSpriteExecId, billing: { ...makeBilling({ gate }), resolveCharge: vi.fn() } });
+      await handlers.onConnect(validPayload);
+      (anon.data as { user?: unknown }).user = undefined;
+
+      handlers.onInput({ data: 'echo\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(gate).toHaveBeenCalledTimes(1);
+      expect(live?.actorId).toBe('user1');
+      expect(shell.write).toHaveBeenCalledWith('echo\n');
+    });
+
+    it('WAL-2 (partial) review #2760 P2-3: THE TYPIST PAYS — a drive-mate\'s first keystroke takes the window (the opener\'s settles to the opener), keystrokes land in order, and the window moves back when the opener types again', async () => {
+      const gate = vi.fn()
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-mate' })
+        .mockResolvedValueOnce({ allowed: true, holdId: 'hold-owner-2' });
+      const { billing, priya, ben, live } = await priyaOpensBenAttaches(gate);
+
+      ben.onInput({ data: 'e' });
+      ben.onInput({ data: 'c' });
+      ben.onInput({ data: 'ho\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(shell.write.mock.calls.map((c) => c[0])).toEqual(['e', 'c', 'ho\n']);
+      expect([live?.actorId, live?.holdId, live?.charge]).toEqual(['user2', 'hold-mate', { kind: 'org', orgId: 'org-1', userId: 'user2' }]);
+      // Priya's window was settled to her, on her own hold; Ben's three keystrokes cost ONE claim.
+      expect(billing.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'org', orgId: 'org-1', userId: 'user1' }, holdId: 'hold-owner' }));
+      expect(gate).toHaveBeenCalledTimes(2);
+
+      // Priya types again: the window is hers again, and Ben's segment settled to Ben.
+      priya.onInput({ data: 'pwd\n' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect([live?.actorId, live?.holdId]).toEqual(['user1', 'hold-owner-2']);
+      expect(billing.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ charge: { kind: 'org', orgId: 'org-1', userId: 'user2' }, holdId: 'hold-mate' }));
+      expect(shell.write).toHaveBeenLastCalledWith('pwd\n');
     });
 
     it('given a denied user with a live session, should refuse and NOT reattach (auth gates the fast path)', async () => {
@@ -909,8 +1087,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user2' }) }));
     });
 
     it('given the creator has left and a DIFFERENT user is watching, should re-auth the remaining viewer, not the creator', async () => {
@@ -929,8 +1107,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockClear();
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user2' }));
-      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user2' }) }));
+      expect(checkAuth).not.toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
     it('given one of two attached users loses access, should evict ONLY that viewer — the other keeps streaming and the PTY survives (#2093)', async () => {
@@ -942,8 +1120,8 @@ describe('buildShellHandlers', () => {
       await handlers2.onConnect(validPayload); // user2 joins
 
       // user2's access is revoked; user1 still passes.
-      checkAuth.mockImplementation(async ({ userId }: { userId: string }) =>
-        userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
+      checkAuth.mockImplementation(async ({ actor }: { actor: { userId: string } }) =>
+        actor.userId === 'user2' ? { ok: false, reason: 'permission_revoked' } : makeAuthSuccess(),
       );
       await vi.advanceTimersByTimeAsync(60_000);
 
@@ -964,6 +1142,28 @@ describe('buildShellHandlers', () => {
       expect(shell.write).not.toHaveBeenCalledWith('rm -rf /\n');
     });
 
+    it('SEC-3 (partial) the re-auth tick checks each CREDENTIAL: a stale pane of a user is evicted while their fresh pane keeps the shell', async () => {
+      const fresh = credentialActor('user1', { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' });
+      const stale = credentialActor('user1', { authenticatedAtMs: Date.now() - 86_400_000, assurance: 'single_factor' });
+      socket.data.actor = fresh;
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
+      await onConnect(validPayload);
+      const staleSocket = makeSocket('sock2', 'user1');
+      staleSocket.data.actor = stale;
+      const staleHandlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: staleSocket, persistSpriteExecId });
+      await staleHandlers.onConnect(validPayload);
+
+      // The org's sign-in policy refuses the stale credential only (it reads as no access).
+      checkAuth.mockImplementation(async ({ actor }: { actor: unknown }) =>
+        actor === stale ? { ok: false, reason: 'drive_access_denied' } : makeAuthSuccess(),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(staleSocket.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock2' });
+      expect(shell.kill).not.toHaveBeenCalled();
+      expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+    });
+
     it('given the SOLE viewer loses access, should evict them AND tear the session down in the same tick — no grace for an unsupervised revoked process', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
@@ -976,7 +1176,7 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
-    it('given a DETACHED session whose checkAuth THROWS, should keep the session alive (fail-open in both tick shapes — no unhandled rejection)', async () => {
+    it('SEC-3 (partial) given a DETACHED session whose checkAuth THROWS, the re-auth tick fails closed: the unsupervised session is torn down (and the throw is caught — no unhandled rejection)', async () => {
       const { onConnect, onDisconnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
       onDisconnect(); // detach — the tick now checks lastViewerUserId
@@ -984,8 +1184,8 @@ describe('buildShellHandlers', () => {
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
-      expect(shell.kill).not.toHaveBeenCalled();
-      expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
+      expect(shell.kill).toHaveBeenCalledWith('forced-teardown');
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
     });
 
     it('given an authorized viewer who joins WHILE the detached tick\'s checkAuth is in flight, should not tear the session down under them', async () => {
@@ -1058,19 +1258,37 @@ describe('buildShellHandlers', () => {
       await vi.advanceTimersByTimeAsync(60_000);
 
       expect(checkAuth).toHaveBeenCalledTimes(1);
-      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user1' }));
+      expect(checkAuth).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'user1' }) }));
     });
 
-    it('given checkAuth THROWS for an attached viewer, should evict nobody this tick (fail-open — a DB blip is not a revocation)', async () => {
+    it('SEC-3 (partial) given checkAuth THROWS for an attached viewer, the re-auth tick fails closed: the viewer whose credential cannot be re-decided is evicted', async () => {
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
       await onConnect(validPayload);
 
       checkAuth.mockRejectedValue(new Error('db blip'));
       await vi.advanceTimersByTimeAsync(60_000);
 
+      expect(socket.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock1' });
+      expect(sessionMap.getBySocket(viewer('sock1'))).toBeUndefined();
+    });
+
+    it('SEC-3 (partial) given checkAuth THROWS for ONE of two credentials, the re-auth tick fails closed for that credential only: the other viewer keeps the shell', async () => {
+      const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId });
+      await onConnect(validPayload);
+      const socket2 = makeSocket('sock2', 'user2');
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: socket2, persistSpriteExecId });
+      await handlers2.onConnect(validPayload);
+
+      checkAuth.mockImplementation(async ({ actor }: { actor: { userId: string } }) => {
+        if (actor.userId === 'user2') throw new Error('db blip');
+        return makeAuthSuccess();
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(socket2.emit).toHaveBeenCalledWith('shell:error', { message: 'Session access revoked', connectionId: 'sock2' });
+      expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
       expect(shell.kill).not.toHaveBeenCalled();
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
-      expect(sessionMap.getBySocket(viewer('sock1'))).toBeDefined();
     });
   });
 
@@ -1585,14 +1803,14 @@ describe('buildShellHandlers', () => {
       expect(sessionMap.getByKey('shell:shl-1')).toBeDefined();
     });
 
-    it('places a hold for the resolved payerId BEFORE opening the shell', async () => {
+    it('places a hold for the resolved charge BEFORE opening the shell', async () => {
       const billing = makeBilling();
       const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
       await onConnect(validPayload);
 
-      expect(billing.gate).toHaveBeenCalledWith({ payerId: 'owner-1' });
+      expect(billing.gate).toHaveBeenCalledWith({ charge: OWNER_CHARGE });
       expect(openShell).toHaveBeenCalled();
-      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1', payerId: 'owner-1' });
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-1', charge: OWNER_CHARGE });
     });
 
     it('given the gate denies, emits shell:error, releases the slot, and never opens a shell', async () => {
@@ -1704,6 +1922,105 @@ describe('buildShellHandlers', () => {
       expect(session.connectedAt).toBeTypeOf('number'); // clock running again
     });
 
+    // Review #2761 P3-1: a window restarted at resume is RE-GATED at once — a fresh hold, or the
+    // session ends — never left running unheld until the next heartbeat.
+    it('given a keystroke resumes a quiesced shell, re-gates the payer AT THE KEYSTROKE and holds again', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // clock stops, no hold
+      const gatesWhileQuiet = billing.gate.mock.calls.length;
+      billing.gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-resume' });
+
+      shell.setQuiesced(false);
+      handlers.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(billing.gate).toHaveBeenCalledTimes(gatesWhileQuiet + 1);
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-resume' });
+    });
+
+    it('given a keystroke resumes a quiesced shell whose payer now REFUSES (a lapsed org), ends the session at once — no unheld tail', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      shell.setQuiesced(false);
+      handlers.onInput({ data: 'ls\n' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
+    it('given a viewer returns to a quiesced shell whose payer now REFUSES, ends the session on the reattach', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      handlers.onDisconnect();
+      shell.setQuiesced(false);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('sock2'), persistSpriteExecId, billing });
+      await handlers2.onConnect(validPayload); // tab-back -> attachToLiveSession -> resume -> re-gate
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
+    it('given a viewer returns to a quiesced shell, re-gates on the reattach and holds again', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      handlers.onDisconnect();
+      shell.setQuiesced(false);
+      billing.gate.mockResolvedValueOnce({ allowed: true, holdId: 'hold-rejoin' });
+
+      const handlers2 = buildShellHandlers({ sessionMap, openShell, checkAuth, socket: makeSocket('sock2'), persistSpriteExecId, billing });
+      await handlers2.onConnect(validPayload);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toMatchObject({ holdId: 'hold-rejoin' });
+    });
+
+    it('given a shell resumed through a path that did not restart the clock, the heartbeat backstop restarts it AND re-gates (a refusing payer is ended)', async () => {
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+
+      shell.setQuiesced(false); // woke without a keystroke or a join
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
+    it('given the backstop beat\'s settle FAILS, the backstop re-gate still ends a refusing payer on that beat — no unheld tail (review #2761 r3 P1)', async () => {
+      // The settle's failure branch returns before it gates the next window, so only the backstop's
+      // own re-gate refuses the payer on this beat; without it the session runs one more heartbeat unheld.
+      const billing = makeBilling();
+      const handlers = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+      await handlers.onConnect(validPayload);
+      shell.setQuiesced(true);
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS); // clock stops, no hold
+      billing.gate.mockResolvedValue({ allowed: false, reason: 'org_lapsed', orgRefusal: 'org_lapsed' });
+      billing.trackUsage.mockRejectedValueOnce(new Error('ledger unreachable'));
+
+      shell.setQuiesced(false); // woke without a keystroke or a join
+      await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+
+      expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined();
+    });
+
     it('given the END-of-session settle rejects, should log and still tear the session down (billing never blocks cleanup)', async () => {
       // The last settle is fire-and-forget: a billing/DB outage at the moment a
       // terminal closes must not strand the session in the map (leaking its slot
@@ -1759,7 +2076,7 @@ describe('buildShellHandlers', () => {
 
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
       expect(call.pageId).toBeUndefined();
       // First-class attribution: no drive to group under, but the session id
       // still rides top-level (never JSON-forensics-only).
@@ -1779,7 +2096,7 @@ describe('buildShellHandlers', () => {
       expect(billing.trackUsage).toHaveBeenCalledTimes(1);
       const call = billing.trackUsage.mock.calls[0][0];
       // No pageId: a session is drive-scoped, not page-anchored — usage has no page grouping.
-      expect(call).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+      expect(call).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
       expect((call as { pageId?: string }).pageId).toBeUndefined();
       // First-class drive/session attribution (Terminal Epic 3 usage-breakdown fix).
       expect(call.driveId).toBe('drive-1');
@@ -1804,7 +2121,7 @@ describe('buildShellHandlers', () => {
       expect(calls.length).toBeGreaterThanOrEqual(1);
       expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo(DETACHED_IDLE_MS / 1000, 0);
       for (const call of calls) {
-        expect(call.payerId).toBe('owner-1');
+        expect(call.charge).toEqual(OWNER_CHARGE);
         // No page grouping: a session is drive-scoped, not page-anchored.
         expect(call.pageId).toBeUndefined();
         expect(call.driveId).toBe('drive-1');
@@ -1827,7 +2144,7 @@ describe('buildShellHandlers', () => {
 
         expect(billing.trackUsage).toHaveBeenCalledTimes(1);
         const first = billing.trackUsage.mock.calls[0][0];
-        expect(first).toMatchObject({ payerId: 'owner-1', holdId: 'hold-1' });
+        expect(first).toMatchObject({ charge: OWNER_CHARGE, holdId: 'hold-1' });
         expect((first as { pageId?: string }).pageId).toBeUndefined();
         expect(first.driveId).toBe('drive-1');
         expect(first.workspaceId).toBe('conv-1');
@@ -2141,7 +2458,7 @@ describe('buildShellHandlers', () => {
 
       it('given a session with no resolved payer, heartbeats settle nothing (an unmetered session is not billable)', async () => {
         const billing = makeBilling();
-        checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ payerId: '' })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
+        checkAuth = vi.fn().mockResolvedValue(makeAuthSuccess({ charge: null })) as unknown as ReturnType<typeof vi.fn> & ShellCheckAuthFn;
         const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
         await onConnect(validPayload);
 
@@ -2786,7 +3103,7 @@ describe('ensureShellSession — headless start', () => {
 
   /** The headless shape: no viewer, no pane to abandon it, nothing to emit. */
   function headlessRequest(access: ReturnType<typeof makeAuthSuccess>) {
-    return { access, target, userId: 'user1', cols: 80, rows: 24, abandoned: () => false };
+    return { access, target, actor: credentialActor('user1', null), cols: 80, rows: 24, abandoned: () => false };
   }
 
   beforeEach(() => {
@@ -2937,9 +3254,9 @@ describe('ensureShellSession — headless start', () => {
       actual: {
         gated: billing.gate.mock.calls.map(([args]) => args),
         clockRunning: session?.connectedAt !== undefined,
-        payerId: session?.payerId,
+        charge: session?.charge,
       },
-      expected: { gated: [{ payerId: 'owner-1' }], clockRunning: true, payerId: 'owner-1' },
+      expected: { gated: [{ charge: OWNER_CHARGE }], clockRunning: true, charge: OWNER_CHARGE },
     });
   });
 
@@ -3180,6 +3497,29 @@ describe('ensureShellSession — headless start', () => {
     });
   });
 
+  it('WAL-9 (partial) given an ORG drive whose pool is empty, should refuse with the org message, open nothing and hand the slot back', async () => {
+    const orgCharge: ComputeCharge = { kind: 'org', orgId: 'org-northwind', userId: 'owner-1' };
+    const access = makeAuthSuccess({ charge: orgCharge });
+    const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_wallet_empty', orgRefusal: 'org_wallet_empty' }) });
+
+    const result = await ensureShellSession(
+      { sessionMap, openShell, checkAuth, persistSpriteExecId, billing },
+      headlessRequest(access),
+    );
+
+    assert({
+      given: 'an org drive whose pool cannot cover a new session',
+      should: 'refuse naming the org wallet, before opening a shell, releasing the slot once',
+      actual: { result, gated: billing.gate.mock.calls.map(([args]) => args), opened: openShell.mock.calls.length, slotReleased: access.releaseSlot.mock.calls.length },
+      expected: {
+        result: { kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty },
+        gated: [{ charge: orgCharge }],
+        opened: 0,
+        slotReleased: 1,
+      },
+    });
+  });
+
   it('given openShell throwing, should release the slot and the hold exactly once', async () => {
     const access = makeAuthSuccess();
     const billing = makeBilling();
@@ -3282,6 +3622,15 @@ describe('connectFailureMessage', () => {
     });
   });
 
+  it('WAL-9 (partial) given an org wallet refusal, should show the org message instead of the credits line', () => {
+    assert({
+      given: 'a create refused because the org pool is paused',
+      should: 'tell the user the organization wallet is paused',
+      actual: connectFailureMessage({ kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused }),
+      expected: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
+    });
+  });
+
   it('given a shell that would not open, should report the open failure', () => {
     assert({
       given: 'openShell throwing',
@@ -3314,5 +3663,113 @@ describe('latestActivityAt', () => {
 
   it('given neither, should report undefined rather than 0', () => {
     expect(latestActivityAt({ lastOutputAt: undefined, lastInputAt: undefined })).toBeUndefined();
+  });
+});
+
+describe('regateResumedWindow — a resumed window is re-held at once (review #2761 P3-1)', () => {
+  const CHARGE = { kind: 'org' as const, orgId: 'org-1', userId: 'user1' };
+  const stub = (over: Partial<TerminalSession> = {}) => ({ sessionKey: 'k1', charge: CHARGE, holdId: undefined, connectedAt: undefined, ...over }) as unknown as TerminalSession;
+  const mapOf = (session: TerminalSession | undefined) => ({ getByKey: (key: string) => (key === 'k1' ? session : undefined) }) as unknown as TerminalSessionMapLike;
+  type TerminalSessionMapLike = Parameters<typeof regateResumedWindow>[1];
+
+  it('resumeBillingClock restarts only a stopped, metered clock and says so', () => {
+    expect(resumeBillingClock(stub())).toBe(true);
+    expect(resumeBillingClock(stub({ connectedAt: 5 }))).toBe(false);
+    expect(resumeBillingClock(stub({ charge: undefined }))).toBe(false);
+  });
+
+  it('is inert without billing, for an unmetered session, or while a hold is already held', async () => {
+    const billing = makeBilling();
+    const end = vi.fn();
+    await regateResumedWindow({}, mapOf(stub()), stub(), 'k1', end);
+    await regateResumedWindow({ billing }, mapOf(stub()), stub({ charge: undefined }), 'k1', end);
+    await regateResumedWindow({ billing }, mapOf(stub()), stub({ holdId: 'held' }), 'k1', end);
+    expect(billing.gate).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('holds on an allowed gate; ends the session on a refusal', async () => {
+    const session = stub();
+    const end = vi.fn();
+    await regateResumedWindow({ billing: makeBilling() }, mapOf(session), session, 'k1', end);
+    expect(session.holdId).toBe('hold-1');
+    expect(end).not.toHaveBeenCalled();
+
+    const refused = stub();
+    await regateResumedWindow({ billing: makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) }) }, mapOf(refused), refused, 'k1', end);
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(refused.holdId).toBeUndefined();
+  });
+
+  it('releases a hold taken for a session that ended while the gate ran, and ends nothing', async () => {
+    const billing = makeBilling();
+    const end = vi.fn();
+    const session = stub();
+    await regateResumedWindow({ billing }, mapOf(undefined), session, 'k1', end);
+    expect(billing.releaseHold).toHaveBeenCalledWith('hold-1');
+    expect(session.holdId).toBeUndefined();
+    expect(end).not.toHaveBeenCalled();
+    // A refusal for a session already gone releases nothing and ends nothing.
+    const refusing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) });
+    await regateResumedWindow({ billing: refusing }, mapOf(undefined), stub(), 'k1', end);
+    expect(refusing.releaseHold).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('keeps the session when the billing read fails (the heartbeat re-gates it), for an Error and a non-Error alike', async () => {
+    const end = vi.fn();
+    for (const thrown of [new Error('ledger unreachable'), 'boom']) {
+      const session = stub();
+      await regateResumedWindow({ billing: makeBilling({ gate: vi.fn().mockRejectedValue(thrown) }) }, mapOf(session), session, 'k1', end);
+      expect(session.holdId).toBeUndefined();
+    }
+    expect(end).not.toHaveBeenCalled();
+  });
+
+  it('by default ends a refused session through the real teardown (removes it from the map)', async () => {
+    const map = createTerminalSessionMap();
+    const billing = makeBilling({ gate: vi.fn().mockResolvedValue({ allowed: false, reason: 'org_lapsed' }) });
+    const session = stub({ viewers: new Map(), command: { kill: vi.fn(), isQuiesced: () => false } } as unknown as Partial<TerminalSession>);
+    const getByKey = vi.spyOn(map, 'getByKey').mockReturnValue(session);
+    await regateResumedWindow({ billing }, map, session, 'k1');
+    expect(getByKey).toHaveBeenCalled();
+  });
+});
+
+describe('settleAccruedWindow — the payer is re-read at each window boundary', () => {
+  const PERSON: ComputeCharge = { kind: 'user', userId: 'owner-1' };
+  const ORG: ComputeCharge = { kind: 'org', orgId: 'org-1', userId: 'actor-1' };
+  const live = (session: TerminalSession) => ({ getByKey: () => session }) as unknown as Parameters<typeof settleAccruedWindow>[1];
+  const session = (charge: ComputeCharge) =>
+    ({ sessionKey: 'k1', charge, holdId: 'hold-1', connectedAt: Date.now() - 60_000, ownerId: 'owner-1', actorId: 'actor-1', driveId: 'drive-1' }) as unknown as TerminalSession;
+
+  it('WAL-9 (partial) adopts the new payer when the drive moved into an org, and opens the next window on it', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockResolvedValue(ORG) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(ORG);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: ORG });
+  });
+
+  it('keeps the payer it has when the re-resolve fails: a transient read never ends a live PTY', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue(new Error('db down')) };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+    expect(billing.gate).toHaveBeenCalledWith({ charge: PERSON });
+  });
+
+  it('a re-resolve that rejects with a non-Error is logged and the payer kept', async () => {
+    const s = session(PERSON);
+    const billing = { ...makeBilling(), resolveCharge: vi.fn().mockRejectedValue('timeout') };
+    expect(await settleAccruedWindow(billing as never, live(s), s, 'k1')).toBe(true);
+    expect(s.charge).toEqual(PERSON);
+  });
+
+  it('re-resolves nothing for a session with no owner to resolve from', async () => {
+    const s = { ...session(PERSON), ownerId: undefined } as unknown as TerminalSession;
+    const billing = { ...makeBilling(), resolveCharge: vi.fn() };
+    await settleAccruedWindow(billing as never, live(s), s, 'k1');
+    expect(billing.resolveCharge).not.toHaveBeenCalled();
   });
 });

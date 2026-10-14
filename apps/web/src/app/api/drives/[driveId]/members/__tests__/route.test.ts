@@ -23,6 +23,10 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   },
 }));
 
+vi.mock('@pagespace/lib/permissions/drive-member-labels', () => ({
+  listDrivePageLinkGuests: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
@@ -47,6 +51,7 @@ import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@page
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { listDrivePageLinkGuests } from '@pagespace/lib/permissions/drive-member-labels';
 
 // ============================================================================
 // Test Fixtures
@@ -85,6 +90,8 @@ const createDriveFixture = (overrides: {
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({
@@ -103,6 +110,8 @@ const createMemberFixture = (overrides: {
   id: overrides.id,
   userId: overrides.userId,
   role: overrides.role,
+  source: 'invite',
+  isGuest: false,
   invitedBy: null,
   invitedAt: new Date('2024-01-01'),
   acceptedAt: new Date('2024-01-01'),
@@ -129,6 +138,8 @@ const createOwnerMemberFixture = (userId: string): MemberWithDetails => ({
   id: `owner-${userId}`,
   userId,
   role: 'OWNER',
+  source: 'lead',
+  isGuest: false,
   invitedBy: null,
   invitedAt: null,
   acceptedAt: null,
@@ -239,7 +250,7 @@ describe('GET /api/drives/[driveId]/members', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveMembers with driveId', async () => {
@@ -488,6 +499,21 @@ describe('GET /api/drives/[driveId]/members', () => {
       const body = await response.json();
 
       expect(body.pendingInvites).toHaveLength(1);
+    });
+
+    it('UI-5 (partial) the lead sees D-OW-24 page-link guests listed apart, by name; a plain member gets an empty list', async () => {
+      const pia = { userId: 'u-pia', displayName: 'Pia Page', username: null, avatarUrl: null, acceptedAt: null, source: 'invite' as const, pageGrantCount: 1, pages: [{ pageId: 'p-roadmap', title: 'Roadmap', role: 'view' as const, expiresAt: null }] };
+      vi.mocked(listDrivePageLinkGuests).mockResolvedValue([pia]);
+      vi.mocked(listDriveMembers).mockResolvedValue([]);
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, isMember: true, drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }) }));
+      const lead = await (await GET(new Request(`https://example.com/api/drives/${mockDriveId}/members`), createContext(mockDriveId))).json();
+      expect(lead.guests).toEqual([pia]);
+
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: false, isAdmin: false, isMember: true, drive: createDriveFixture({ id: mockDriveId, name: 'Test' }) }));
+      const member = await (await GET(new Request(`https://example.com/api/drives/${mockDriveId}/members`), createContext(mockDriveId))).json();
+      expect(member.guests).toEqual([]);
     });
 
     it('returns empty pendingInvites for regular MEMBER (no leak)', async () => {

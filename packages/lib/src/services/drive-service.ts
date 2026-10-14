@@ -6,14 +6,21 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, ne, and, not, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
+import { eq, ne, and, not, or, gt, inArray, isNotNull, isNull, like, sql } from '@pagespace/db/operators';
 import { normalizeSubdomain } from '../validators/subdomain';
-import { drives, pages } from '@pagespace/db/schema/core';
+import { drives, pages, type OrgDriveVisibility } from '@pagespace/db/schema/core';
 import { allocateUniqueSubdomainWithRetry } from './subdomain-allocation';
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
 import { slugify } from '../utils/utils';
-import { customRoleBelongsToDrive, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
-import { isGuestRole } from '../permissions/guest-role';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../permissions/membership-queries';
+import { memberAccessWidens } from '../organizations/loosening-core';
+import { loadEffectiveDriveMembership, loadExplicitScopeAuthority, loadOrgRolesForUser, resolveEffectiveDriveMemberships } from '../permissions/org-drive-membership';
+import { decideExplicitDriveScope, decideListedDriveRole, type ExplicitScopeAuthority } from '../permissions/org-drive-resolution';
+import { driveMembershipRow } from '../permissions/drive-member-role';
+import type { AccessActor } from '../permissions/access-actor';
+import { checkActorDriveAuthentication, filterDrivesForActor } from '../permissions/actor-authentication';
+import { isDriveLead } from '../permissions/drive-relationship';
+import type { OpenRoleFloor } from '../organizations/policies-core';
 import { homeDriveActionError, isHomeDrive } from './drive-guards';
 
 // ============================================================================
@@ -42,6 +49,10 @@ export interface DriveWithAccess {
   canCreatePages: boolean;
   lastAccessedAt: Date | null;
   homePageId: string | null;
+  /** The owning org; null for a personal drive (picker grouping, DRV-9). */
+  orgId: string | null;
+  /** Meaningful only when orgId is set (DRV-4). */
+  orgVisibility: OrgDriveVisibility;
 }
 
 export interface ListDrivesOptions {
@@ -52,6 +63,8 @@ export interface ListDrivesOptions {
 
 export interface CreateDriveInput {
   name: string;
+  /** Initial drive context (workspace memory), e.g. set by the AI create_drive tool. */
+  drivePrompt?: string | null;
 }
 
 export interface UpdateDriveInput {
@@ -78,118 +91,139 @@ export interface DriveAccessInfo {
 /**
  * List all drives accessible to a user (owned + shared)
  * Handles deduplication when a drive appears in multiple sources
+ *
+ * The picker, the sidebar and accessible-drives all read this one list (DRV-9). It also lists the
+ * OPEN drives of the user's orgs and applies the org listing rules (decideListedDriveRole).
  */
 export async function listAccessibleDrives(
-  userId: string,
+  actor: AccessActor,
   options: ListDrivesOptions = {}
 ): Promise<DriveWithAccess[]> {
-  const { includeTrash = false, tokenScopable = false } = options;
+  const listed = await listAccessibleDrivesWithOrgs(actor.userId, options);
+  // SEC-2/3: an org drive whose sign-in policy the actor's credential fails is not listed (D-OW-45).
+  const allowed = await filterDrivesForActor(actor, listed.map((drive) => drive.id));
+  return listed.filter((drive) => allowed.has(drive.id));
+}
 
-  // 1. Get owned drives
+async function listAccessibleDrivesWithOrgs(
+  userId: string,
+  options: ListDrivesOptions
+): Promise<DriveWithAccess[]> {
+  const { includeTrash = false, tokenScopable = false } = options;
+  const trashFilter = includeTrash ? undefined : eq(drives.isTrashed, false);
+
   const ownedDrives = await db.query.drives.findMany({
-    where: includeTrash
-      ? eq(drives.ownerId, userId)
-      : and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)),
+    where: and(eq(drives.ownerId, userId), trashFilter),
   });
 
-  // 2. Get drives where user is a member (including last access time). A GUEST
-  // row is not a membership: its drive is reached, like any page collaborator's,
-  // through step 3 — never token-scopable, never drive-wide create.
-  const memberDrives = (await db
-    .selectDistinct({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, lastAccessedAt: driveMembers.lastAccessedAt })
+  const memberRows = await db
+    .select({
+      driveId: driveMembers.driveId,
+      role: driveMembers.role,
+      customRoleId: driveMembers.customRoleId,
+      source: driveMembers.source,
+      lastAccessedAt: driveMembers.lastAccessedAt,
+    })
     .from(driveMembers)
     .where(and(
       eq(driveMembers.userId, userId),
       isNotNull(driveMembers.acceptedAt),
-    ))).filter((d) => !isGuestRole(d.role));
+    ));
 
-  // 3. Get drives where user has page-level permissions
-  // Skip this if tokenScopable is true (only owned + member drives can be scoped to tokens)
   const permissionDrives = tokenScopable
     ? []
     : await db
         .selectDistinct({ driveId: pages.driveId })
         .from(pagePermissions)
         .leftJoin(pages, eq(pagePermissions.pageId, pages.id))
-        .where(and(eq(pagePermissions.userId, userId), eq(pagePermissions.canView, true)));
+        .where(and(
+          eq(pagePermissions.userId, userId),
+          eq(pagePermissions.canView, true),
+          // An expired share lists nothing, as it opens nothing (getUserAccessLevel, getDriveIdsForUser).
+          or(isNull(pagePermissions.expiresAt), gt(pagePermissions.expiresAt, new Date())),
+        ));
 
-  // 4. Build role map and lastAccessedAt map (membership role takes precedence)
-  const driveRoles = new Map<string, 'OWNER' | 'ADMIN' | 'MEMBER'>();
-  const driveLastAccessed = new Map<string, Date | null>();
-  const memberCustomRoleIds = new Map<string, string | null>();
-  const allSharedDriveIds = new Set<string>();
+  const orgRoles = await loadOrgRolesForUser(userId);
+  const openOrgDrives = orgRoles.size > 0
+    ? await db
+        .select({ id: drives.id })
+        .from(drives)
+        .where(and(inArray(drives.orgId, [...orgRoles.keys()]), eq(drives.orgVisibility, 'OPEN')))
+    : [];
 
-  for (const d of memberDrives) {
-    if (d.driveId) {
-      allSharedDriveIds.add(d.driveId);
-      driveRoles.set(d.driveId, d.role as 'OWNER' | 'ADMIN' | 'MEMBER');
-      memberCustomRoleIds.set(d.driveId, d.customRoleId ?? null);
-      driveLastAccessed.set(d.driveId, d.lastAccessedAt);
-    }
-  }
+  const rowByDrive = new Map(memberRows.map((r) => [r.driveId, r]));
+  const permissionDriveIds = new Set(
+    permissionDrives.map((d) => d.driveId).filter((id): id is string => id !== null),
+  );
+  const candidateIds = [...new Set([
+    ...rowByDrive.keys(),
+    ...permissionDriveIds,
+    ...openOrgDrives.map((d) => d.id),
+  ])];
 
-  for (const d of permissionDrives) {
-    if (d.driveId) {
-      allSharedDriveIds.add(d.driveId);
-      // Only set MEMBER if not already assigned a role from membership
-      if (!driveRoles.has(d.driveId)) {
-        driveRoles.set(d.driveId, 'MEMBER');
-      }
-    }
-  }
-
-  // 5. Fetch shared drive details (excluding owned drives)
-  const sharedDriveIds = Array.from(allSharedDriveIds);
-  const sharedDrives = sharedDriveIds.length
+  const sharedDrives = candidateIds.length
     ? await db.query.drives.findMany({
-        where: includeTrash
-          ? and(inArray(drives.id, sharedDriveIds), not(eq(drives.ownerId, userId)))
-          : and(
-              inArray(drives.id, sharedDriveIds),
-              not(eq(drives.ownerId, userId)),
-              eq(drives.isTrashed, false)
-            ),
+        where: and(inArray(drives.id, candidateIds), not(eq(drives.ownerId, userId)), trashFilter),
       })
     : [];
 
-  // 6. Drive-wide create permission (#2627): one resolver for the DTO flag.
-  // Owned drives enter as OWNER; shared drives only when the user holds an
-  // actual membership — page-collaborator-only drives are not memberships
-  // and fail closed below. Batched: a single custom-role query at most.
-  const ownedDriveIds = new Set(ownedDrives.map((drive) => drive.id));
-  const canCreatePagesMap = await resolveDriveWideCanEdit([
-    ...ownedDrives.map((drive) => ({ driveId: drive.id, role: 'OWNER' as const, customRoleId: null })),
-    ...memberDrives
-      .filter((d) => d.driveId && !ownedDriveIds.has(d.driveId))
-      .map((d) => ({
-        driveId: d.driveId as string,
-        role: d.role as 'OWNER' | 'ADMIN' | 'MEMBER',
-        customRoleId: memberCustomRoleIds.get(d.driveId as string) ?? null,
-      })),
-  ]);
+  const lastAccessed = (driveId: string) => rowByDrive.get(driveId)?.lastAccessedAt ?? null;
 
-  // 7. Combine and deduplicate (owned drives take precedence)
-  const allDrives: DriveWithAccess[] = [
-    ...ownedDrives.map((drive) => ({
-      ...drive,
-      isOwned: true,
-      role: 'OWNER' as const,
-      canCreatePages: true,
-      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
-    })),
-    ...sharedDrives.map((drive) => ({
+  // Drive-wide create permission (#2627) from the EFFECTIVE membership, so an implicit Open member
+  // is bounded by the drive's default custom role exactly as getUserAccessLevel bounds them. A drive
+  // listed through a page permission alone has no membership and fails closed.
+  const effective = await resolveEffectiveDriveMemberships(
+    sharedDrives.map((drive) => {
+      const row = rowByDrive.get(drive.id);
+      return {
+        userId,
+        drive,
+        row: driveMembershipRow(row),
+      };
+    }),
+    { audit: false },
+  );
+  const canCreatePagesMap = await resolveDriveWideCanEdit(
+    sharedDrives.flatMap((drive, i) => {
+      const membership = effective[i];
+      return membership
+        ? [{
+          driveId: drive.id,
+          role: membership.role === 'ADMIN' ? 'ADMIN' as const : 'MEMBER' as const,
+          customRoleId: membership.customRoleId,
+          openDriveFloor: membership.openDriveFloor,
+        }]
+        : [];
+    }),
+  );
+
+  const listed: DriveWithAccess[] = ownedDrives.map((drive) => ({
+    ...drive,
+    isOwned: true,
+    role: 'OWNER' as const,
+    canCreatePages: true,
+    lastAccessedAt: lastAccessed(drive.id),
+  }));
+
+  for (const drive of sharedDrives) {
+    const row = rowByDrive.get(drive.id);
+    const role = decideListedDriveRole({
+      drive: { orgId: drive.orgId, orgVisibility: drive.orgVisibility },
+      orgRole: drive.orgId ? orgRoles.get(drive.orgId) ?? null : null,
+      row: driveMembershipRow(row),
+      viaPagePermission: permissionDriveIds.has(drive.id),
+    });
+    if (role === null) continue;
+    listed.push({
       ...drive,
       isOwned: false,
-      role: driveRoles.get(drive.id) || ('MEMBER' as const),
+      role,
       canCreatePages: canCreatePagesMap.get(drive.id) ?? false,
-      lastAccessedAt: driveLastAccessed.get(drive.id) ?? null,
-    })),
-  ];
+      lastAccessedAt: lastAccessed(drive.id),
+    });
+  }
 
-  // Deduplicate by drive ID (first occurrence wins - owned drives first)
-  const uniqueDrives = Array.from(new Map(allDrives.map((d) => [d.id, d])).values());
-
-  return uniqueDrives;
+  return Array.from(new Map(listed.map((d) => [d.id, d])).values());
 }
 
 /**
@@ -210,6 +244,7 @@ export async function createDrive(
         name,
         slug,
         ownerId: userId,
+        drivePrompt: input.drivePrompt ?? null,
         isTrashed: false,
         trashedAt: null,
         updatedAt: new Date(),
@@ -244,44 +279,47 @@ export async function getDriveById(driveId: string) {
  */
 export async function getDriveAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessInfo> {
+  const { isOwner, isAdmin, isMember, role, customRoleId } = await getDriveAccessWithFloor(driveId, actor);
+  return { isOwner, isAdmin, isMember, role, customRoleId };
+}
+
+const NO_DRIVE_ACCESS = { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null, openDriveFloor: null } as const;
+
+/** getDriveAccess plus the membership's POL-6 floor, for the drive-wide edit flag (getDriveWithAccess). */
+async function getDriveAccessWithFloor(
+  driveId: string,
+  actor: AccessActor
+): Promise<DriveAccessInfo & { openDriveFloor: OpenRoleFloor | null }> {
   const drive = await getDriveById(driveId);
 
-  if (!drive) {
-    return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
-  }
+  if (!drive || !(await checkActorDriveAuthentication(actor, driveId)).allowed) return NO_DRIVE_ACCESS;
+  const { userId } = actor;
 
-  const isOwner = drive.ownerId === userId;
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
-    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null };
+    return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null, openDriveFloor: null };
   }
 
-  // Check membership
-  const membership = await db
-    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
+  // Check membership; an org Owner/Admin and an implicit Open-drive member resolve here too.
+  // Only ACCEPTED rows count: a pending invite grants nothing (#2672).
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
-  // A GUEST (redeemed page share link) is a page collaborator, not a member.
-  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
-    const role = membership[0].role as 'ADMIN' | 'MEMBER';
+  if (membership) {
+    const role = membership.role as 'ADMIN' | 'MEMBER';
     return {
       isOwner: false,
       isAdmin: role === 'ADMIN',
       isMember: true,
       role,
-      customRoleId: membership[0].customRoleId ?? null,
+      customRoleId: membership.customRoleId ?? null,
+      openDriveFloor: membership.openDriveFloor,
     };
   }
 
-  return { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null };
+  return NO_DRIVE_ACCESS;
 }
 
 export interface DriveScopeToValidate {
@@ -295,6 +333,12 @@ export interface DriveScopeValidationResult {
   unauthorizedRoles: string[];
   invalidCustomRoles: string[];
   unauthorizedCustomRoles: string[];
+  /**
+   * Org drives where an explicit role was asked for but the caller reaches the drive only through
+   * the org (org Owner/Admin power, implicit Open membership, an org-materialized row). An explicit
+   * role is never re-checked, so it must rest on a direct membership; these need an inheriting scope.
+   */
+  explicitRoleWithoutMembership: string[];
 }
 
 /**
@@ -304,23 +348,51 @@ export interface DriveScopeValidationResult {
  * and edit (PATCH) routes, which each format their own error responses from
  * the returned categorized ID lists.
  */
+/** Would a MEMBER scope with `requestedRoleId` (null: the plain role) give more than the caller's own custom role? */
+async function scopeWidensCaller(driveId: string, callerRoleId: string, requestedRoleId: string | null): Promise<boolean> {
+  const grantOf = async (roleId: string) => {
+    const role = await fetchCustomRolePermissions(roleId, driveId);
+    // An unresolvable role grants nothing.
+    return { permissions: role?.permissions ?? {}, driveWidePermissions: role?.driveWidePermissions ?? null };
+  };
+  return memberAccessWidens(
+    { role: 'MEMBER', customRole: await grantOf(callerRoleId) },
+    { role: 'MEMBER', customRole: requestedRoleId === null ? null : await grantOf(requestedRoleId) },
+  );
+}
+
 export async function validateDriveScopeAccess(
   scopes: DriveScopeToValidate[],
-  userId: string
+  actor: AccessActor
 ): Promise<DriveScopeValidationResult> {
+  const { userId } = actor;
   const invalidDriveIds: string[] = [];
   const unauthorizedRoles: string[] = [];
   const invalidCustomRoles: string[] = [];
   const unauthorizedCustomRoles: string[] = [];
+  const explicitRoleWithoutMembership: string[] = [];
 
   for (const scope of scopes) {
-    const access = await getDriveAccess(scope.id, userId);
+    const access = await getDriveAccess(scope.id, actor);
     if (!access.isOwner && !access.isMember) {
       invalidDriveIds.push(scope.id);
       continue;
     }
+    // An explicit role on an org drive rests only on a direct membership row, capped to it.
+    const explicit = scope.role === 'ADMIN' || scope.role === 'MEMBER';
+    const scopeDecision = decideExplicitDriveScope({
+      explicit,
+      isOwner: access.isOwner,
+      isAdmin: access.isAdmin,
+      authority: explicit && !access.isOwner ? await loadExplicitScopeAuthority(userId, scope.id) : { orgDrive: false },
+    });
+    if (!scopeDecision.ok) {
+      explicitRoleWithoutMembership.push(scope.id);
+      continue;
+    }
+    const { isAdmin } = scopeDecision;
     // A MEMBER cannot grant ADMIN — cap to caller's actual authority
-    if (scope.role === 'ADMIN' && !access.isAdmin) {
+    if (scope.role === 'ADMIN' && !isAdmin) {
       unauthorizedRoles.push(scope.id);
     }
     // Prevent using a custom role that belongs to a different drive
@@ -329,15 +401,33 @@ export async function validateDriveScopeAccess(
       continue;
     }
     // Non-admins can only use their own assigned custom role
-    if (scope.customRoleId && !access.isAdmin && !access.isOwner) {
+    if (scope.customRoleId && !isAdmin && !access.isOwner) {
       const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
       if (scope.customRoleId !== callerCustomRoleId) {
+        unauthorizedCustomRoles.push(scope.id);
+        continue;
+      }
+    }
+    // Review #2849 P1: a key never reaches past its owner. A member whose custom role restricts them may not mint (or
+    // re-scope to) the plain MEMBER role, or any scope that gives more than their own role; refused, never stored.
+    // (Resolution also intersects every explicit key with the owner's access: app-permissions.)
+    if (scope.role === 'MEMBER' && !isAdmin && !access.isOwner) {
+      const callerCustomRoleId = await getMemberCustomRoleId(scope.id, userId);
+      if (callerCustomRoleId && (await scopeWidensCaller(scope.id, callerCustomRoleId, scope.customRoleId ?? null))) {
         unauthorizedCustomRoles.push(scope.id);
       }
     }
   }
 
-  return { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles };
+  return { invalidDriveIds, unauthorizedRoles, invalidCustomRoles, unauthorizedCustomRoles, explicitRoleWithoutMembership };
+}
+
+/**
+ * Which membership may back an explicit-role token or OAuth drive scope on a drive the user does
+ * not own (explicitScopeAuthorityRow). `orgDrive: false` on a personal drive.
+ */
+export async function getExplicitScopeAuthority(driveId: string, userId: string): Promise<ExplicitScopeAuthority> {
+  return loadExplicitScopeAuthority(userId, driveId);
 }
 
 export interface DriveAccessWithDrive {
@@ -351,7 +441,7 @@ export interface DriveAccessWithDrive {
  */
 export async function getDriveAccessWithDrive(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<DriveAccessWithDrive | null> {
   const drive = await getDriveById(driveId);
 
@@ -359,7 +449,13 @@ export async function getDriveAccessWithDrive(
     return null;
   }
 
-  const isOwner = drive.ownerId === userId;
+  // SEC-2/3: a credential the drive's org refuses reads as no access to it.
+  if (!(await checkActorDriveAuthentication(actor, driveId)).allowed) {
+    return { drive, access: { isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null } };
+  }
+  const { userId } = actor;
+
+  const isOwner = isDriveLead(userId, drive);
 
   if (isOwner) {
     return {
@@ -368,20 +464,12 @@ export async function getDriveAccessWithDrive(
     };
   }
 
-  // Check membership
-  const membership = await db
-    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId })
-    .from(driveMembers)
-    .where(and(
-      eq(driveMembers.driveId, driveId),
-      eq(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt),
-    ))
-    .limit(1);
+  // Check membership; an org Owner/Admin and an implicit Open-drive member resolve here too.
+  // Only ACCEPTED rows count: a pending invite grants nothing (#2672).
+  const membership = await loadEffectiveDriveMembership(userId, drive);
 
-  // A GUEST (redeemed page share link) is a page collaborator, not a member.
-  if (membership.length > 0 && !isGuestRole(membership[0].role)) {
-    const role = membership[0].role as 'ADMIN' | 'MEMBER';
+  if (membership) {
+    const role = membership.role as 'ADMIN' | 'MEMBER';
     return {
       drive,
       access: {
@@ -389,7 +477,7 @@ export async function getDriveAccessWithDrive(
         isAdmin: role === 'ADMIN',
         isMember: true,
         role,
-        customRoleId: membership[0].customRoleId ?? null,
+        customRoleId: membership.customRoleId ?? null,
       },
     };
   }
@@ -405,7 +493,7 @@ export async function getDriveAccessWithDrive(
  */
 export async function getDriveWithAccess(
   driveId: string,
-  userId: string
+  actor: AccessActor
 ): Promise<(DriveWithAccess & { isMember: boolean }) | null> {
   const drive = await getDriveById(driveId);
 
@@ -413,7 +501,7 @@ export async function getDriveWithAccess(
     return null;
   }
 
-  const access = await getDriveAccess(driveId, userId);
+  const access = await getDriveAccessWithFloor(driveId, actor);
 
   if (!access.isOwner && !access.isMember) {
     return null;
@@ -424,6 +512,7 @@ export async function getDriveWithAccess(
       driveId,
       role: access.isOwner ? 'OWNER' : (access.role ?? 'MEMBER'),
       customRoleId: access.isMember && !access.isOwner ? access.customRoleId : null,
+      openDriveFloor: access.openDriveFloor,
     },
   ]);
 
@@ -584,12 +673,14 @@ export async function restoreDrive(driveId: string): Promise<typeof drives.$infe
 export async function updateDriveLastAccessed(userId: string, driveId: string): Promise<void> {
   const now = new Date();
 
-  const [drive] = await db.select({ ownerId: drives.ownerId })
+  const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
 
-  if (drive?.ownerId === userId) {
+  // Never on an org drive: its lead reaches it through drives.ownerId, the org Owner and Admins
+  // through the org, and an OWNER row there would outlive a lead reassignment (B7b).
+  if (drive && isDriveLead(userId, drive) && drive.orgId === null) {
     await db.insert(driveMembers)
       .values({
         driveId,

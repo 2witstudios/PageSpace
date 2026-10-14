@@ -25,6 +25,7 @@ vi.mock('@/lib/agent-accounts/account-authority-client', () => ({ getAccountAuth
 import { GET, POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const CANARY = 'sk_canary_route_7f3a9c1e5b2d4f6a';
 const safeAccount = { id: 'acct_1', kind: 'api_key', name: 'Weather', ownerKind: 'user', providerSlug: null, allowedOrigins: ['https://api.weather.example:443'], acknowledgment: 'dedicated_agent_account', status: 'active', upstreamRevocation: null, lastUsedAt: null, createdAt: 1, revokedAt: null, ready: true };
@@ -81,7 +82,7 @@ describe('GET /api/user/agent-accounts', () => {
     mockAuthority.listAccounts.mockResolvedValue([safeAccount]);
     const response = await GET(new Request('http://localhost/api/user/agent-accounts'));
     const actual = { body: await response.json(), owner: mockAuthority.listAccounts.mock.calls[0]?.[0] };
-    const expected = { body: { configured: true, accounts: [safeAccount] }, owner: { actorUserId: 'user_1', owner: { kind: 'user' } } };
+    const expected = { body: { configured: true, accounts: [safeAccount] }, owner: { actor: credentialActor('user_1', null), owner: { kind: 'user' } } };
     expect(actual).toEqual(expected);
   });
 

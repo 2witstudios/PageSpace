@@ -1,3 +1,4 @@
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 /**
  * Repository for the OAuth 2.1 provider's persistence (Phase 1 tasks 6-7).
  * Isolates DB access from the /api/oauth/authorize and /api/oauth/token
@@ -59,6 +60,7 @@ export async function ensureOAuthClientRow(client: RegisteredClient): Promise<st
 }
 
 export interface CreateAuthorizationCodeInput {
+  authentication?: VerifiedAuthentication | null;
   clientDbId: string;
   userId: string;
   redirectUri: string;
@@ -72,6 +74,8 @@ export interface CreateAuthorizationCodeInput {
 
 export async function createAuthorizationCode(input: CreateAuthorizationCodeInput): Promise<void> {
   await db.insert(oauthAuthorizationCodes).values({
+    authenticatedAt: input.authentication ? new Date(input.authentication.authenticatedAtMs) : null,
+    authenticationAssurance: input.authentication?.assurance ?? null,
     codeHash: input.codeHash,
     codePrefix: input.codePrefix,
     clientId: input.clientDbId,
@@ -200,7 +204,7 @@ function withGrantContext(
 
 async function applyKeyGrant(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  input: { userId: string; scopes: string[] },
+  input: { userId: string; scopes: string[]; authenticatedAt?: Date | null; authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null },
 ): Promise<KeyGrantResult> {
   const parsed = parseScopeList(input.scopes.join(' '));
   // Every branch below is gated on a successful parse; a scope array this
@@ -253,6 +257,8 @@ async function applyKeyGrant(
     await sessionRepository.createMcpTokenWithDriveScopes(
       {
         userId: input.userId,
+        authenticatedAt: input.authenticatedAt,
+        authenticationAssurance: input.authenticationAssurance,
         tokenHash,
         tokenPrefix,
         // Fallback is unreachable in practice: a mint-shaped grant with no
@@ -312,6 +318,8 @@ export async function exchangeAuthorizationCode(
   return db.transaction(async (tx) => {
     const rows = await tx
       .select({
+        authenticatedAt: oauthAuthorizationCodes.authenticatedAt,
+        authenticationAssurance: oauthAuthorizationCodes.authenticationAssurance,
         id: oauthAuthorizationCodes.id,
         clientId: oauthAuthorizationCodes.clientId,
         userId: oauthAuthorizationCodes.userId,
@@ -391,7 +399,7 @@ export async function exchangeAuthorizationCode(
     // Deliberately no `issuedFamilyId` on any of them: replaying a consumed
     // code then hits `already_consumed` above with nothing to revoke, which
     // is correct — no credential family was ever issued for it.
-    const keyGrant = await applyKeyGrant(tx, { userId: row.userId, scopes: row.scopes });
+    const keyGrant = await applyKeyGrant(tx, { ...row, userId: row.userId, scopes: row.scopes });
     if (keyGrant.outcome !== 'not_a_key_grant') {
       await tx
         .update(oauthAuthorizationCodes)
@@ -422,6 +430,8 @@ export async function exchangeAuthorizationCode(
 
     if (tokens.refreshToken !== undefined) {
       await tx.insert(oauthRefreshTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
         tokenHash: tokens.refreshTokenHash,
         tokenPrefix: tokens.refreshTokenPrefix,
         familyId: tokens.familyId,
@@ -435,6 +445,8 @@ export async function exchangeAuthorizationCode(
     }
 
     await tx.insert(oauthAccessTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
       tokenHash: tokens.accessTokenHash,
       tokenPrefix: tokens.accessTokenPrefix,
       familyId: tokens.familyId,
@@ -538,6 +550,8 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
   return db.transaction(async (tx) => {
     const rows = await tx
       .select({
+        authenticatedAt: oauthRefreshTokens.authenticatedAt,
+        authenticationAssurance: oauthRefreshTokens.authenticationAssurance,
         id: oauthRefreshTokens.id,
         userId: oauthRefreshTokens.userId,
         scopes: oauthRefreshTokens.scopes,
@@ -631,6 +645,8 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
 
     if (tokens.refreshToken !== undefined && newRefreshId !== null) {
       await tx.insert(oauthRefreshTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
         id: newRefreshId,
         tokenHash: tokens.refreshTokenHash,
         tokenPrefix: tokens.refreshTokenPrefix,
@@ -645,6 +661,8 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
     }
 
     await tx.insert(oauthAccessTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
       tokenHash: tokens.accessTokenHash,
       tokenPrefix: tokens.accessTokenPrefix,
       familyId: tokens.familyId,
@@ -776,6 +794,8 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
   return db.transaction(async (tx) => {
     const rows = await tx
       .select({
+        authenticatedAt: oauthDeviceCodes.authenticatedAt,
+        authenticationAssurance: oauthDeviceCodes.authenticationAssurance,
         id: oauthDeviceCodes.id,
         clientId: oauthDeviceCodes.clientId,
         userId: oauthDeviceCodes.userId,
@@ -839,7 +859,7 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     // outcome including the two `*_target_gone` failures — a target that
     // vanished between consent and redemption burns the code rather than
     // leaving it live for a retry.
-    const keyGrant = await applyKeyGrant(tx, { userId: decision.grant.userId, scopes: decision.grant.scopes });
+    const keyGrant = await applyKeyGrant(tx, { ...row, userId: decision.grant.userId, scopes: decision.grant.scopes });
     if (keyGrant.outcome !== 'not_a_key_grant') {
       await tx.update(oauthDeviceCodes).set({ redeemedAt: input.now }).where(eq(oauthDeviceCodes.id, row.id));
       return withGrantContext(keyGrant, decision.grant.userId, decision.grant.scopes);
@@ -856,6 +876,8 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
 
     if (tokens.refreshToken !== undefined) {
       await tx.insert(oauthRefreshTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
         tokenHash: tokens.refreshTokenHash,
         tokenPrefix: tokens.refreshTokenPrefix,
         familyId: tokens.familyId,
@@ -869,6 +891,8 @@ export async function pollDeviceToken(input: PollDeviceTokenInput): Promise<Poll
     }
 
     await tx.insert(oauthAccessTokens).values({
+        authenticatedAt: row.authenticatedAt,
+        authenticationAssurance: row.authenticationAssurance,
       tokenHash: tokens.accessTokenHash,
       tokenPrefix: tokens.accessTokenPrefix,
       familyId: tokens.familyId,
@@ -982,6 +1006,7 @@ export async function verifyDeviceUserCode(input: VerifyDeviceUserCodeInput): Pr
 }
 
 export interface RecordDeviceApprovalInput {
+  authentication?: VerifiedAuthentication | null;
   /** Already-normalized user code; hashed here. */
   userCode: string;
   action: DeviceApprovalAction;
@@ -1007,6 +1032,8 @@ export async function recordDeviceApproval(input: RecordDeviceApprovalInput): Pr
   return db.transaction(async (tx) => {
     const rows = await tx
       .select({
+        authenticatedAt: oauthDeviceCodes.authenticatedAt,
+        authenticationAssurance: oauthDeviceCodes.authenticationAssurance,
         id: oauthDeviceCodes.id,
         clientId: oauthDeviceCodes.clientId,
         userId: oauthDeviceCodes.userId,
@@ -1033,7 +1060,10 @@ export async function recordDeviceApproval(input: RecordDeviceApprovalInput): Pr
     if (decision.status === 'approved') {
       await tx
         .update(oauthDeviceCodes)
-        .set({ approvedAt: input.now, userId: input.userId })
+        .set({ approvedAt: input.now, userId: input.userId,
+          authenticatedAt: input.authentication ? new Date(input.authentication.authenticatedAtMs) : null,
+          authenticationAssurance: input.authentication?.assurance ?? null,
+        })
         .where(eq(oauthDeviceCodes.id, row.id));
       return { outcome: 'approved' };
     }

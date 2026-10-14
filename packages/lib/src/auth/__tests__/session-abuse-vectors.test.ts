@@ -277,6 +277,7 @@ describe('Session Abuse Vectors', () => {
   describe('session claims integrity', () => {
     it('given valid session, returned claims should include all required fields', async () => {
       const expiresAt = new Date(Date.now() + 3600000);
+      const authenticatedAt = new Date(Date.now() - 60_000);
       mockFindFirst.mockResolvedValue({
         id: 'session-full',
         tokenHash: 'hash-full',
@@ -289,6 +290,8 @@ describe('Session Abuse Vectors', () => {
         resourceType: 'page',
         resourceId: 'page-456',
         driveId: 'drive-789',
+        authenticatedAt,
+        authenticationAssurance: 'user_verified_passkey',
         revokedAt: null,
         user: {
           id: 'user-123',
@@ -313,6 +316,7 @@ describe('Session Abuse Vectors', () => {
         resourceType: 'page',
         resourceId: 'page-456',
         driveId: 'drive-789',
+        authentication: { authenticatedAtMs: authenticatedAt.getTime(), assurance: 'user_verified_passkey' },
       });
     });
 
@@ -378,7 +382,7 @@ describe('Session Abuse Vectors', () => {
       mockFindFirst.mockResolvedValue(null);
 
       await expect(
-        service.createSession({
+        service.createSession({ authentication: null,
           userId: 'user-nonexistent',
           type: 'user',
           scopes: ['*'],

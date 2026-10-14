@@ -1,18 +1,21 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core'
 import { slugify } from '@pagespace/lib/utils/utils';
 import { isReservedDriveName, isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { logDriveActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, allocatePublishSubdomain, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { getDriveAccessWithDrive, getDriveById, isValidDriveHomePage, updateDrive, listAccessibleDrives } from '@pagespace/lib/services/drive-service';
+import { createDriveForCaller } from '@/lib/drives/create-drive-for-caller';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { listAgentDrives } from '@pagespace/lib/services/drive-agent-service';
 import type { ToolExecutionContext } from '../core/types';
-import { resolveActingAgentId, filterDriveIdsByAppTokenScope, filterAgentDriveIdsByActorReach, driveDeniedByAppToken, isMcpScoped, canActorManageDrive } from './actor-permissions';
+import { resolveActingAgentId, filterDriveIdsByAppTokenScope, filterAgentDriveIdsByActorReach, driveDeniedByAppToken, isMcpScoped, canActorManageDrive, toolActor } from './actor-permissions';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { derivedCredentialEvidence } from '@pagespace/lib/permissions/access-actor';
 
 // Helper: Extract AI attribution context with actor info for activity logging
 async function getAiContextWithActor(context: ToolExecutionContext) {
@@ -91,7 +94,7 @@ export const driveTools = {
       try {
         // Full user-scoped reach: owned + member + page-permission drives,
         // excluding trashed ones (same source multi_drive_list_agents uses).
-        const accessibleDrives = await listAccessibleDrives(userId);
+        const accessibleDrives = await listAccessibleDrives(toolActor(context as ToolExecutionContext));
 
         // Ceiling a scoped MCP token to its allowed drives + its own role's
         // view access (no-op otherwise).
@@ -133,12 +136,13 @@ export const driveTools = {
    * Create a new workspace/drive
    */
   create_drive: tool({
-    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory.',
+    description: 'Create a new workspace/drive. Use when user explicitly requests a new workspace or when their project clearly doesn\'t fit existing drives — check existing drives (list_drives) first. Ask for confirmation before calling this unless the user was explicit about wanting a new workspace. Optionally set initial drive context to establish workspace memory. Pass orgId to create it in one of the user\'s organizations (it is then owned by that organization); omit it for a personal workspace.',
     inputSchema: z.object({
       name: z.string().describe('The name of the new drive/workspace'),
       context: z.string().max(10000).optional().describe('Optional initial drive context (workspace memory) - information about the project, conventions, or preferences'),
+      orgId: z.string().min(1).optional().describe('Optional organization id: create the workspace owned by this organization. The server checks the user may create drives there.'),
     }),
-    execute: async ({ name, context: driveContext }, { experimental_context: context }) => {
+    execute: async ({ name, context: driveContext, orgId }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -159,40 +163,13 @@ export const driveTools = {
       }
 
       try {
-        // Validate name
-        if (!name || name.trim().length === 0) {
-          throw new Error('Drive name is required');
-        }
-
-        if (isReservedDriveName(name)) {
-          throw new Error(`Cannot create a drive named "${name.trim()}"`);
-        }
-
-        // Generate slug from name
-        const slug = name.toLowerCase()
-          .replace(/[^a-z0-9\s-]/g, '')
-          .trim()
-          .replace(/\s+/g, '-')
-          .replace(/-+/g, '-');
-
-        // Create drive + allocate subdomain atomically — allocation failure after insert
-        // would leave a drive without a subdomain identity.
-        const newDrive = await db.transaction(async (tx) => {
-          const [created] = await tx.insert(drives).values({
-            name: name.trim(),
-            slug,
-            ownerId: userId,
-            drivePrompt: driveContext || null,
-            updatedAt: new Date(),
-          }).returning({
-            id: drives.id,
-            name: drives.name,
-            slug: drives.slug,
-            drivePrompt: drives.drivePrompt,
-          });
-          await allocatePublishSubdomain(created.id, slug, tx);
-          return created;
-        });
+        // DRV-3: the one create every door uses — personal, or org-owned from creation when orgId
+        // names an org the user may create drives in (decided server-side by createOrgDrive). The
+        // org's sign-in policy is judged on the turn's credential evidence (D-OW-45); an automation
+        // carries none, so an org that demands a strong or recent sign-in refuses it (fail closed).
+        const created = await createDriveForCaller({ userId, name, orgId, drivePrompt: driveContext || null, authentication: derivedCredentialEvidence(toolActor(context as ToolExecutionContext)) });
+        if (!created.ok) throw new Error(created.error);
+        const newDrive = created.drive;
 
         // Broadcast drive creation event (only creator receives for new drives)
         await broadcastDriveEvent(
@@ -279,13 +256,11 @@ export const driveTools = {
           throw new Error(`Cannot rename a drive to "${name.trim()}"`);
         }
 
-        // Find the drive and verify ownership
-        const drive = await db.query.drives.findFirst({
-          where: and(
-            eq(drives.id, driveId),
-            eq(drives.ownerId, userId)
-          ),
+        // Renaming takes lead authority: the lead, or on an org drive an org Owner/Admin (audited)
+        const found = await db.query.drives.findFirst({
+          where: eq(drives.id, driveId),
         });
+        const drive = found && (await loadDriveLeadAuthority(toolActor(context as ToolExecutionContext), found, 'rename')).allowed ? found : undefined;
 
         if (!drive) {
           throw new Error('Drive not found or you do not have permission to rename it');
@@ -393,7 +368,7 @@ This context persists across conversations and helps provide better assistance. 
 
       try {
         // Get drive and access info in a single operation (eliminates duplicate query)
-        const result = await getDriveAccessWithDrive(driveId, userId);
+        const result = await getDriveAccessWithDrive(driveId, toolActor(execContext as ToolExecutionContext));
 
         if (!result) {
           throw new Error('Drive not found');

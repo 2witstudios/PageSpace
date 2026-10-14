@@ -93,10 +93,12 @@ describe('ChatInput /btw interception', () => {
     value,
     isStreaming,
     onSideQuestion,
+    sendDisabled = false,
   }: {
     value: string;
     isStreaming: boolean;
     onSideQuestion?: () => void;
+    sendDisabled?: boolean;
   }) => {
     const onSend = vi.fn();
     const onChange = vi.fn();
@@ -108,6 +110,7 @@ describe('ChatInput /btw interception', () => {
         onStop={vi.fn()}
         onSideQuestion={onSideQuestion}
         isStreaming={isStreaming}
+        {...{ sendDisabled }}
       />
     );
     return { onSend, onChange };
@@ -116,6 +119,17 @@ describe('ChatInput /btw interception', () => {
   const pressEnter = () => {
     fireEvent.keyDown(screen.getByTestId('chat-textarea'), { key: 'Enter' });
   };
+
+  it.each(['ordinary message', '/btw why?'])('a paused source blocks click and Enter for %s while preserving an editable draft', (value) => {
+    const onSideQuestion = vi.fn();
+    const { onSend, onChange } = setup({ value, isStreaming: false, onSideQuestion, sendDisabled: true });
+    expect(screen.getByTestId('input-send')).toBeDisabled();
+    expect(screen.getByTestId('chat-textarea')).toBeEnabled();
+    pressEnter();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onSideQuestion).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
 
   it('routes a /btw line to onSideQuestion, not onSend, while streaming', () => {
     const onSideQuestion = vi.fn();

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { ExternalLink, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PLAN_ORDER, type PlanDefinition, type SubscriptionTier } from '@/lib/subscription/plans';
+import { planFacts } from '@pagespace/lib/billing/credit-copy';
 
 interface PlanCardProps {
   plan: PlanDefinition;
@@ -33,6 +34,9 @@ export function PlanCard({
   cancellingSchedule = false,
   className,
 }: PlanCardProps) {
+  // MON-6 / SEAT-2: price, seat terms, and per-seat credits from the same source as the
+  // marketing pricing page. Included credits stay on `plan`: withCreditOverrides may patch them.
+  const facts = planFacts(plan.id);
   const [isProcessing, setIsProcessing] = useState(false);
 
   const handleAction = async () => {
@@ -202,17 +206,35 @@ export function PlanCard({
           <CardTitle className="text-xl font-bold">{plan.displayName}</CardTitle>
         </div>
         <div className="pt-2">
-          <span className="text-3xl font-bold">{plan.price.formatted}</span>
-          {plan.price.monthly > 0 && (
-            <span className="text-sm text-muted-foreground">/month</span>
-          )}
+          <span className="text-3xl font-bold" data-testid="plan-price">{facts.priceCents > 0 ? facts.price : plan.price.formatted}</span>
+          {facts.period && <span className="text-sm text-muted-foreground">{facts.period}</span>}
         </div>
+        {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
+        {facts.org && (
+          <div className="space-y-0.5 text-xs text-muted-foreground">
+            <p data-testid="plan-seats">{facts.org.seatTerms}</p>
+            <p data-testid="plan-seat-credits">{facts.org.extraSeatCredits}</p>
+            <p data-testid="plan-checkout">{facts.org.checkout}</p>
+          </div>
+        )}
       </CardHeader>
 
       <CardContent className="flex-grow flex flex-col justify-between">
         <CardDescription className="text-center text-sm mb-4 h-10">
           {plan.description}
         </CardDescription>
+
+        {/* MON-6: included credits and the top-up rate as separate facts from the price. */}
+        <dl className="mb-4 space-y-1 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-muted-foreground">Included</dt>
+            <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.includedCredits}</dd>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <dt className="text-muted-foreground">Top up</dt>
+            <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.topUpRate}</dd>
+          </div>
+        </dl>
 
         <div className="mt-auto">
           {getActionButton()}

@@ -64,7 +64,7 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview/open', () => {
     const res = await openEnv(req(), envCtx);
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe(REDIRECT);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, userId: 'u1', sessionId: 'sess1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, actor: expect.objectContaining({ userId: 'u1' }), sessionId: 'sess1' });
   });
 
   it('is dark (404) when the feature is not configured, before authentication', async () => {
@@ -130,13 +130,13 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview/open', () => {
   it('authorizes as the session and mints for the session holder', async () => {
     const res = await openSession(req(), wsCtx);
     expect(res.status).toBe(302);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'workspace', id: 'ws1' }, userId: 'u1', sessionId: 'sess1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'workspace', id: 'ws1' }, actor: expect.objectContaining({ userId: 'u1' }), sessionId: 'sess1' });
   });
 
   it('for an env-bound session, authorizes as the session and mints for the ENV (the holder rule)', async () => {
     vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: 'env1' } as never);
     await openSession(req(), wsCtx);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'env', id: 'env1' }, userId: 'u1', sessionId: 'sess1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'env', id: 'env1' }, actor: expect.objectContaining({ userId: 'u1' }), sessionId: 'sess1' });
   });
 
   it('refuses a principal that is not a browser session, on BOTH routes — a grant with no session could never be revoked', async () => {

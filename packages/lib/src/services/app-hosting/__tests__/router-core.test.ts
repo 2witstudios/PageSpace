@@ -78,6 +78,13 @@ describe('decideAppRoute — the balance gate is the wake gate', () => {
 
 describe('decideAppRoute — status precedes the live balance read', () => {
   assert({
+    given: '[D-OW-28] an app parked because its publisher used their allowance of the org\'s credits',
+    should: 'say so (member_cap), not that a balance ran out — the pool is funded',
+    actual: route(app({ status: 'parked', parkedForMemberCap: true }), true),
+    expected: { kind: 'parked', reason: 'member_cap', driveId: 'drive1', envId: 'env1' },
+  });
+
+  assert({
     given: 'a parked app whose payer has since topped up',
     should: 'stay parked — un-parking belongs to the cron, not to a router that never writes',
     actual: route(app({ status: 'parked' }), true),

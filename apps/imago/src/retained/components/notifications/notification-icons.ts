@@ -1,7 +1,9 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   AtSign,
+  BotOff,
   FileText,
+  Gauge,
   ListTodo,
   Mail,
   MessageCircle,
@@ -10,6 +12,7 @@ import {
   UserCheck,
   UserPlus,
   Users,
+  WalletMinimal,
   X,
 } from 'lucide-react';
 import type { NotificationType } from '@pagespace/lib/notifications/types';
@@ -31,6 +34,9 @@ export const NOTIFICATION_ICONS: Record<NotificationType, LucideIcon> = {
   TOS_PRIVACY_UPDATED: FileText,
   MENTION: AtSign,
   TASK_ASSIGNED: ListTodo,
+  WALLET_CAP_ALERT: Gauge,
+  WALLET_DEBT: WalletMinimal,
+  AUTOMATION_SKIPPED: BotOff,
 };
 
 export function getNotificationIcon(type: string): LucideIcon {

@@ -81,18 +81,18 @@ describe('UserDropdown billing tier label', () => {
     expect(billingLabel()).toBe('Billing (Free)');
   });
 
-  it('shows Founder for the founder tier', () => {
+  it('A-9 shows Free for the retired founder value (outside the vocabulary)', () => {
     mockUseAuth.mockReturnValue(authUser('free'));
     mockUseSWR.mockReturnValue({ data: { subscriptionTier: 'founder' } });
     render(<UserDropdown />);
-    expect(billingLabel()).toBe('Billing (Founder)');
+    expect(billingLabel()).toBe('Billing (Free)');
   });
 
-  it('shows Business only for the business tier', () => {
+  it('does not advertise a retired personal Business tier', () => {
     mockUseAuth.mockReturnValue(authUser('free'));
     mockUseSWR.mockReturnValue({ data: { subscriptionTier: 'business' } });
     render(<UserDropdown />);
-    expect(billingLabel()).toBe('Billing (Business)');
+    expect(billingLabel()).toBe('Billing (Free)');
   });
 
   it('prefers the fresh fetch over the auth snapshot after an upgrade', () => {

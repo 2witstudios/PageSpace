@@ -510,6 +510,8 @@ export const MODEL_CONTEXT_WINDOWS = {
   'inclusionai/ling-3.0-flash-sante:free': 262144,
   'xiaomi/mimo-v2.6-pro': 1050000,
   'xiaomi/mimo-v2.6-flash': 1050000,
+  // Window unpublished at catalog time; the map's own default, not a measured value.
+  'apodex/apodex-1.1-mini:free': 200000,
 
   // Default
   'default': 200000 // Updated default for newer models

@@ -13,7 +13,7 @@ import { computeCronSignature } from '@/lib/auth/cron-auth';
  *
  * Key behaviors to test:
  * 1. Authentication via HMAC-SHA256 + nonce (see cron-auth.ts)
- * 2. Only processes paying users (pro, founder, business)
+ * 2. Only processes paying users (pro, business)
  * 3. Skips users with personalization disabled
  * 4. Handles errors for individual users without failing entire job
  * 5. Returns summary of processed/updated/errors
@@ -79,6 +79,7 @@ const mockMarkCandidatesPromoted = vi.fn();
 const mockMarkCandidatesRejected = vi.fn();
 const mockPruneStaleCandidates = vi.fn();
 const mockRedactSettledEvidence = vi.fn();
+const mockRecordMemoryOrgIds = vi.fn();
 
 vi.mock('@/lib/memory/candidate-service', () => ({
   upsertCandidates: (...args: unknown[]) => mockUpsertCandidates(...args),
@@ -87,6 +88,7 @@ vi.mock('@/lib/memory/candidate-service', () => ({
   markCandidatesRejected: (...args: unknown[]) => mockMarkCandidatesRejected(...args),
   pruneStaleCandidates: (...args: unknown[]) => mockPruneStaleCandidates(...args),
   redactSettledEvidence: (...args: unknown[]) => mockRedactSettledEvidence(...args),
+  recordMemoryOrgIds: (...args: unknown[]) => mockRecordMemoryOrgIds(...args),
 }));
 
 // Mock loggers
@@ -317,13 +319,14 @@ describe('memory cron route', () => {
    * being learned, with nothing in the profile to show it was ever considered.
    */
   describe('candidate settlement', () => {
-    const candidate = (id: string, field = 'rules') => ({
+    const candidate = (id: string, field = 'rules', orgIds: string[] = []) => ({
       id,
       userId: 'user-1',
       field,
       claim: `claim ${id}`,
       claimKey: `claim ${id}`,
       evidence: 'e',
+      orgIds,
       occurrences: 2,
       firstSeenAt: new Date('2026-03-01T00:00:00.000Z'),
       lastSeenAt: new Date('2026-03-02T00:00:00.000Z'),
@@ -353,6 +356,25 @@ describe('memory cron route', () => {
     }
 
     beforeEach(setupOneUser);
+
+    it('pk862snl: a user that fails on a Postgres FATAL logs the driver error Drizzle wrapped, not only "Failed query"', async () => {
+      const fatal = Object.assign(new Error('sorry, too many clients already'), { code: '53300' });
+      mockRunDiscoveryPasses.mockRejectedValue(Object.assign(new Error('Failed query: select "id" from "credit_holds"'), { cause: fatal }));
+      const { loggers } = await import('@pagespace/lib/logging/logger-config');
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'a Drizzle error whose cause is a Postgres FATAL',
+        should: 'log the cause chain with its SQLSTATE beside the outer message',
+        actual: vi.mocked(loggers.api.error).mock.calls.find(([message]) => String(message).startsWith('Memory cron: Error processing user'))?.[1],
+        expected: {
+          error: 'Failed query: select "id" from "credit_holds"',
+          cause: [{ name: 'Error', message: 'sorry, too many clients already', code: '53300' }],
+        },
+      });
+    });
 
     it('leaves every candidate pending when evaluation never reached a decision', async () => {
       // A provider outage must not retire a user's whole ready set. Before the
@@ -401,6 +423,29 @@ describe('memory cron route', () => {
           rejected: mockMarkCandidatesRejected.mock.calls[0]?.[0],
         },
         expected: { promoted: ['c1'], rejected: ['c2'] },
+      });
+    });
+
+    it('SEC-2 (partial) records every ready candidate\'s orgs on the memory before any page is rewritten', async () => {
+      // The evaluator saw both candidates, so the rewritten page may restate either: the memory takes both orgs, and
+      // takes them first, so no reader is served restated content its org was not yet recorded against.
+      mockFindPromotableCandidates.mockResolvedValue([candidate('c1', 'rules', ['org-a']), candidate('c2', 'rules', ['org-b'])]);
+      mockEvaluateAndIntegrate.mockResolvedValue({ ok: true, updates: { rules: 'new rules content' }, usedCandidateIds: ['c1'] });
+      const order: string[] = [];
+      mockRecordMemoryOrgIds.mockImplementation(async () => { order.push('record'); });
+      mockApplyIntegrationDecisions.mockImplementation(async () => {
+        order.push('write');
+        return { updated: true, fields: ['rules'], rejected: [] };
+      });
+
+      const { POST } = await import('../route');
+      await POST(createSignedCronRequest());
+
+      assert({
+        given: 'two ready candidates from different orgs, one cited, and a page rewrite',
+        should: 'record both orgs on the memory, before the write',
+        actual: { recorded: mockRecordMemoryOrgIds.mock.calls[0], order },
+        expected: { recorded: ['user-1', ['org-a', 'org-b']], order: ['record', 'write'] },
       });
     });
 
@@ -492,6 +537,7 @@ describe('memory cron route', () => {
       claim: `claim ${id}`,
       claimKey: `claim ${id}`,
       evidence: 'e',
+      orgIds: [],
       occurrences: 2,
       firstSeenAt: new Date('2026-03-01T00:00:00.000Z'),
       lastSeenAt: new Date('2026-03-02T00:00:00.000Z'),

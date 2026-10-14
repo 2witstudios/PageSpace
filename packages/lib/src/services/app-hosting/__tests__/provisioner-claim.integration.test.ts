@@ -44,6 +44,7 @@ const deps: ProvisionerDeps = {
   createFlyApp: async () => {},
   deleteFlyApp: async () => {},
   mintFlyDeployToken: async () => 'unused',
+  publishedAppsAllowed: async () => true,
 };
 
 /** Every env this file created, so a mid-suite failure cannot leak rows into the next run. */

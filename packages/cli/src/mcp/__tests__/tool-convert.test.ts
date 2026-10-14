@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
+  classifyHttpError,
   createCalendarEvent,
   createTask,
   defineOperation,
@@ -208,6 +209,29 @@ describe('formatSdkErrorResult — distinct, secret-free messages per SDK error 
     const result = formatSdkErrorResult(opWithScope, new FakePermissionDeniedError('nope'));
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain('drive:admin');
+  });
+
+  it.each([
+    ['org_strong_sign_in_required', /passkey/],
+    ['org_reauthentication_required', /recent sign-in/],
+  ] as const)('SEC-2 (partial) an org sign-in denial names the code (%s) and the fix (D-OW-45)', (code, fix) => {
+    const result = formatSdkErrorResult(opWithScope, classifyHttpError(403, {}, { error: 'Refused', code }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0]?.text).toContain(code);
+    expect(result.content[0]?.text).toMatch(fix);
+    expect(result.content[0]?.text).toContain('pagespace login');
+    expect(result.content[0]?.text).not.toContain('drive:admin');
+  });
+
+  it.each([
+    ['org_strong_sign_in_required', /passkey/],
+    ['org_reauthentication_required', /fresh sign-in/],
+  ] as const)('SEC-2 (partial) for an access key, a sign-in denial (%s) says to create a new key, not to log in (review #2866 B3)', (code, fix) => {
+    const result = formatSdkErrorResult(opWithScope, classifyHttpError(403, {}, { error: 'Refused', code }), 'key');
+    expect(result.content[0]?.text).toContain(code);
+    expect(result.content[0]?.text).toMatch(fix);
+    expect(result.content[0]?.text).toContain('Create a new key');
+    expect(result.content[0]?.text).not.toContain('pagespace login');
   });
 
   it('maps an authentication failure to an actionable message', () => {

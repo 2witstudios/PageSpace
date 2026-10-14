@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Stripe from 'stripe';
+import { stripeConfig } from '@/lib/stripe-config';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = vi.hoisted(() => {
+const { mockStripeWebhooksConstructEvent, mockListLineItems, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -11,19 +12,15 @@ const { mockStripeWebhooksConstructEvent, StripeError, mockGetTierFromPrice } = 
   };
   return {
     mockStripeWebhooksConstructEvent: vi.fn(),
+    mockListLineItems: vi.fn(),
     StripeError,
-    mockGetTierFromPrice: vi.fn((priceId: string, priceAmount?: number) => {
-      // Map price amounts to tiers for testing
-      if (priceAmount === 1500 || priceAmount === 2999) return 'pro';
-      if (priceAmount === 5000) return 'founder';
-      if (priceAmount === 10000 || priceAmount === 19999) return 'business';
-      return 'pro'; // Default fallback
-    }),
+    mockGetPersonalTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
   };
 });
 
 vi.mock('@/lib/stripe', () => ({
   stripe: {
+    invoices: { listLineItems: mockListLineItems },
     webhooks: {
       constructEvent: mockStripeWebhooksConstructEvent,
     },
@@ -31,7 +28,7 @@ vi.mock('@/lib/stripe', () => ({
   Stripe: {
     errors: { StripeError },
   },
-  getTierFromPrice: mockGetTierFromPrice,
+  getPersonalTierFromPrice: mockGetPersonalTierFromPrice,
 }));
 
 // Mock database
@@ -41,6 +38,7 @@ const mockInsertValues = vi.fn();
 const mockInsertOnConflictDoNothing = vi.fn();
 const mockInsertReturning = vi.fn();
 const mockTxInsertValues = vi.fn();
+const mockTxInsertOnConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
 const mockUpdateSet = vi.fn();
 const mockUpdateWhere = vi.fn();
 const mockUpdateReturning = vi.fn();
@@ -49,9 +47,10 @@ const mockDeleteWhere = vi.fn();
 vi.mock('@pagespace/db/db', () => {
   // Create a mock transaction function
   const mockTx = {
+    select: vi.fn(() => ({ from: () => ({ where: () => ({ for: async () => [{ id: 'user_123' }] }) }) })),
     insert: vi.fn(() => ({
       values: mockTxInsertValues.mockReturnValue({
-        onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+        onConflictDoUpdate: mockTxInsertOnConflictDoUpdate,
       }),
     })),
     update: vi.fn(() => ({
@@ -131,6 +130,24 @@ vi.mock('@pagespace/lib/billing/credit-funding', () => ({
   applyStripeFunding: mockApplyStripeFunding,
 }));
 
+// The org fork (SEAT-7): org-handlers resolves whose event it is and handles an org's.
+// It is tested against Postgres in org-webhook.integration.test.ts; here only the fork:
+// an org's event (route fn → true) never reaches the personal path, a person's
+// (→ false) takes it unchanged.
+const { mockRouteOrgSubscriptionEvent, mockRouteOrgInvoicePaid, mockRouteOrgInvoicePaymentFailed, mockOrgForStripeCustomer } =
+  vi.hoisted(() => ({
+    mockRouteOrgSubscriptionEvent: vi.fn(),
+    mockRouteOrgInvoicePaid: vi.fn(),
+    mockRouteOrgInvoicePaymentFailed: vi.fn(),
+    mockOrgForStripeCustomer: vi.fn(),
+  }));
+vi.mock('../org-handlers', () => ({
+  routeOrgSubscriptionEvent: mockRouteOrgSubscriptionEvent,
+  routeOrgInvoicePaid: mockRouteOrgInvoicePaid,
+  routeOrgInvoicePaymentFailed: mockRouteOrgInvoicePaymentFailed,
+  orgForStripeCustomer: mockOrgForStripeCustomer,
+}));
+
 // The receipt sender does its own I/O (Resend, optional Stripe payment-intent lookup)
 // and is unit-tested in isolation at send-payment-receipt-email.test.ts; here we only
 // assert the webhook calls it (or doesn't) with the right arguments.
@@ -168,6 +185,7 @@ const mockSubscription = (overrides: Partial<{
   customer: string;
   status: string;
   priceAmount: number;
+  priceId: string;
   cancelAtPeriodEnd: boolean;
 }> = {}): Stripe.Subscription => ({
   id: overrides.id ?? 'sub_123',
@@ -178,7 +196,7 @@ const mockSubscription = (overrides: Partial<{
     data: [{
       id: 'si_123',
       price: {
-        id: 'price_123',
+        id: overrides.priceId ?? 'price_pro',
         unit_amount: overrides.priceAmount ?? 1500, // Default: $15 Pro
       },
       current_period_start: Math.floor(Date.now() / 1000),
@@ -281,6 +299,11 @@ const mockUser = (overrides: Partial<{
 describe('POST /api/stripe/webhook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: the customer is no org's, so the personal path owns every event.
+    mockRouteOrgSubscriptionEvent.mockResolvedValue(false);
+    mockRouteOrgInvoicePaid.mockResolvedValue(false);
+    mockRouteOrgInvoicePaymentFailed.mockResolvedValue(false);
+    mockOrgForStripeCustomer.mockResolvedValue(null);
 
     // Set required environment variable
     process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_secret';
@@ -295,7 +318,7 @@ describe('POST /api/stripe/webhook', () => {
     // Default: the idempotency insert wins the race (fresh row) → event is processed.
     mockInsertReturning.mockResolvedValue([{ id: 'evt_test' }]);
     mockTxInsertValues.mockReturnValue({
-      onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+      onConflictDoUpdate: mockTxInsertOnConflictDoUpdate,
     });
     // update().set().where() is awaited directly (completion/error marks) and also
     // chains .returning() on the reclaim takeover path.
@@ -365,6 +388,31 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(body.received).toBe(true);
+    });
+
+    it('MON-2 replaying the same invoice.paid event (stripe_events dedupe) grants once: the duplicate is acked without re-funding', async () => {
+      const invoice = mockInvoice({ amountPaid: 1500 });
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const post = () => POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest);
+
+      // First delivery: the marker insert wins → the grant is applied once.
+      const first = await post();
+      expect(first.status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+
+      // Stripe replays the SAME event id: the marker conflicts and the prior attempt
+      // finished → duplicate-ack. Funding must not run a second time.
+      mockInsertReturning.mockResolvedValueOnce([]);
+      mockSelectLimit.mockResolvedValueOnce([{ processedAt: new Date('2026-09-15T00:00:00Z') }]);
+      const replay = await post();
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ received: true });
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
     });
 
     it('should return 500 (retry) for a duplicate whose prior attempt is still in flight (within lease)', async () => {
@@ -492,8 +540,19 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('should handle subscription.updated and update tier to founder', async () => {
-      const subscription = mockSubscription({ priceAmount: 5000 }); // $50 = Founder
+    it('a failed personal subscription transaction clears its claim for Stripe redelivery', async () => {
+      const event = mockStripeEvent('customer.subscription.updated', mockSubscription());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockTxInsertOnConflictDoUpdate.mockRejectedValueOnce(new Error('deadlock detected'));
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(500);
+      expect(mockDeleteWhere).toHaveBeenCalledWith(expect.objectContaining({ value: event.id }));
+    });
+
+    it('SEAT-2 (partial) a retired personal Business subscription cannot retain paid entitlement', async () => {
+      const subscription = mockSubscription({ priceAmount: 10000, priceId: 'price_retired_business' });
       const event = mockStripeEvent('customer.subscription.updated', subscription);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -512,7 +571,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'founder',
+          subscriptionTier: 'free',
         })
       );
     });
@@ -605,19 +664,36 @@ describe('POST /api/stripe/webhook', () => {
     });
   });
 
-  describe('Tier Detection from Price Amount', () => {
+  describe('Tier Detection from Price Identity', () => {
+    it.each(['unknown_extra', 'duplicate_pro', 'truncated'])('SEAT-2 (partial) personal subscription rejects ambiguous items (%s)', async (shape) => {
+      const subscription = mockSubscription({ priceId: 'price_pro' });
+      if (shape === 'truncated') subscription.items.has_more = true;
+      else subscription.items.data.push({ ...subscription.items.data[0], id: 'si_extra',
+        price: { ...subscription.items.data[0].price, id: shape === 'unknown_extra' ? 'price_unknown' : 'price_pro' },
+      });
+      const event = mockStripeEvent('customer.subscription.updated', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const response = await POST(new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as import('next/server').NextRequest);
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }));
+      expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        set: expect.objectContaining({ stripePriceId: '' }),
+      }));
+    });
+
     const tierPriceTests = [
-      { priceAmount: 1500, expectedTier: 'pro', description: '$15 = Pro (new)' },
-      { priceAmount: 2999, expectedTier: 'pro', description: '$29.99 = Pro (legacy)' },
-      { priceAmount: 5000, expectedTier: 'founder', description: '$50 = Founder (new)' },
-      { priceAmount: 10000, expectedTier: 'business', description: '$100 = Business (new)' },
-      { priceAmount: 19999, expectedTier: 'business', description: '$199.99 = Business (legacy)' },
-      { priceAmount: 999, expectedTier: 'pro', description: 'Fallback to pro for unknown price' },
+      { priceId: 'price_pro', priceAmount: 1500, expectedTier: 'pro', description: 'configured Pro' },
+      { priceId: 'price_pro', priceAmount: 999, expectedTier: 'pro', description: 'configured Pro with a different amount' },
+      ...[1500, 2999, 5000, 10000, 19999].map(priceAmount => ({
+        priceId: 'price_unknown', priceAmount, expectedTier: 'free', description: 'unknown identity at ' + priceAmount,
+      })),
     ];
 
-    for (const { priceAmount, expectedTier, description } of tierPriceTests) {
+    for (const { priceId, priceAmount, expectedTier, description } of tierPriceTests) {
       it(`should detect ${description}`, async () => {
-        const subscription = mockSubscription({ priceAmount });
+        const subscription = mockSubscription({ priceId, priceAmount });
         const event = mockStripeEvent('customer.subscription.created', subscription);
         mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -637,6 +713,9 @@ describe('POST /api/stripe/webhook', () => {
             subscriptionTier: expectedTier,
           })
         );
+        expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+          set: expect.objectContaining({ stripePriceId: priceId }),
+        }));
       });
     }
 
@@ -681,7 +760,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(response.status).toBe(200);
       expect(mockUpdateSet).toHaveBeenCalledWith(
         expect.objectContaining({
-          subscriptionTier: 'founder',
+          subscriptionTier: 'pro',
         })
       );
     });
@@ -751,7 +830,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(body.received).toBe(true);
     });
 
-    it('funds the monthly credit bucket on invoice.paid (passing a tier option)', async () => {
+    it('MON-2 a price-less invoice explicitly has no paid entitlement rather than reusing the cached tier', async () => {
       const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
 
@@ -765,9 +844,141 @@ describe('POST /api/stripe/webhook', () => {
 
       expect(response.status).toBe(200);
       expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
-      // Tier is derived from the invoice line; the bare mock invoice has no lines, so the
-      // option is undefined and the funding shell falls back to the stored user tier.
-      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: undefined });
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'free' });
+    });
+
+    it('MON-2 an unknown invoice price cannot reuse the stored paid tier', async () => {
+      const invoice = {
+        ...mockInvoice({ amountPaid: 1500 }),
+        lines: { data: [{ pricing: { price_details: { price: 'price_unknown' }, unit_amount_decimal: '1500' } }] },
+      } as Stripe.Invoice;
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      expect((await POST(request)).status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'free' });
+    });
+
+    it.each([false, true])('MON-2 (partial) configured subscription price resolves regardless of proration order (%s)', async (reverse) => {
+      const lines = ['price_retired', stripeConfig.priceIds.pro].map((price) => ({
+        amount: price === 'price_retired' ? -500 : 1500,
+        parent: { subscription_item_details: { subscription_item: 'si_personal' } },
+        pricing: { price_details: { price } },
+      }));
+      if (reverse) lines.reverse();
+      const invoice = { ...mockInvoice({ amountPaid: 1000 }), lines: { data: lines } } as Stripe.Invoice;
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(200);
+      expect(mockApplyStripeFunding).toHaveBeenCalledWith(event, { tier: 'pro' });
+    });
+
+    it.each([false, true])('loads all invoice lines before funding (org: %s)', async (org) => {
+      const firstLine = { id: 'il_pending', pricing: { price_details: { price: 'price_unknown' } } };
+      const proLine = {
+        id: 'il_pro', period: { start: 1700000000, end: 1702592000 },
+        parent: { subscription_item_details: { subscription_item: 'si_personal' } },
+        pricing: { price_details: { price: stripeConfig.priceIds.pro } },
+      };
+      const invoice = { ...mockInvoice({ amountPaid: 1500 }), lines: { data: [firstLine], has_more: true } };
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockRouteOrgInvoicePaid.mockResolvedValueOnce(org);
+      mockListLineItems.mockImplementationOnce(async function* () {
+        yield firstLine;
+        yield proLine;
+      });
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(200);
+      const completeInvoice = { ...invoice, lines: { data: [firstLine, proLine], has_more: false } };
+      expect(mockListLineItems).toHaveBeenCalledWith(invoice.id, { limit: 100 });
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledWith(completeInvoice, event.id);
+      if (org) expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      else expect(mockApplyStripeFunding).toHaveBeenCalledWith(
+        { ...event, data: { ...event.data, object: completeInvoice } }, { tier: 'pro' },
+      );
+      expect(invoice.lines.data).toEqual([firstLine]);
+    });
+
+    it('releases the event claim when a later invoice-line page fails', async () => {
+      const invoice = { ...mockInvoice(), lines: { data: [], has_more: true } };
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      mockListLineItems.mockImplementationOnce(async function* () {
+        yield { id: 'il_first' };
+        throw new Error('Stripe unavailable');
+      });
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      expect((await POST(request)).status).toBe(500);
+      expect(mockRouteOrgInvoicePaid).not.toHaveBeenCalled();
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockDeleteWhere).toHaveBeenCalled();
+    });
+
+    it('MON-3 (partial) SEAT-7 (partial) an org customer invoice.paid goes to the org fork and never reaches the personal funding path', async () => {
+      mockRouteOrgInvoicePaid.mockResolvedValueOnce(true);
+      const invoice = mockInvoice({ amountPaid: 8000 });
+      const event = mockStripeEvent('invoice.paid', invoice);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledTimes(1);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledWith(invoice, event.id);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockSendSubscriptionReceiptEmail).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-7 (partial) a personal customer invoice.paid asks the org fork first, then funds the personal wallet', async () => {
+      const event = mockStripeEvent('invoice.paid', mockInvoice({ amountPaid: 1500 }));
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgInvoicePaid).toHaveBeenCalledTimes(1);
+      expect(mockApplyStripeFunding).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns 500 (retryable) when the org fork throws on invoice.paid, and clears the claim so Stripe redelivers', async () => {
+      mockRouteOrgInvoicePaid.mockRejectedValueOnce(new Error('db boom'));
+      const event = mockStripeEvent('invoice.paid', mockInvoice());
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(500);
+      expect(mockApplyStripeFunding).not.toHaveBeenCalled();
+      expect(mockDeleteWhere).toHaveBeenCalled();
     });
 
     it('returns 500 (retryable) when funding throws on invoice.paid', async () => {
@@ -975,7 +1186,7 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockApplyStripeFunding).toHaveBeenCalledWith(event);
     });
 
-    it('sends a payment receipt on a credit-pack checkout, resolving the pack label', async () => {
+    it('MON-4/UI-12 sends a payment receipt on a credit-pack checkout, resolving the pack label as a credit count', async () => {
       const session = mockCheckoutSession({
         mode: 'payment',
         customerEmail: 'buyer@example.com',
@@ -996,7 +1207,8 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledTimes(1);
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledWith({
         session,
-        packLabel: '$25 credits',
+        // MON-4: pack_25 is 2,500 credits; the label is a credit count, never a dollar figure (UI-12).
+        packLabel: '2,500 credits',
         email: 'buyer@example.com',
         userName: 'Test User',
         eventId: event.id,
@@ -1169,12 +1381,12 @@ describe('POST /api/stripe/webhook', () => {
       );
     });
 
-    it('remaps a founder checkout to control-plane business instead of failing tenant-validation (#2148)', async () => {
+    it('forwards a business checkout to control-plane as business (the #2148 bridge, now without a founder remap)', async () => {
       const session = mockCheckoutSession({
         mode: 'subscription',
         customer: 'cus_new123',
         customerEmail: 'admin@acme.com',
-        metadata: { slug: 'acme', tier: 'founder' },
+        metadata: { slug: 'acme', tier: 'business' },
       });
       const event = mockStripeEvent('checkout.session.completed', session);
       mockStripeWebhooksConstructEvent.mockReturnValue(event);
@@ -1409,10 +1621,75 @@ describe('POST /api/stripe/webhook', () => {
 
       await POST(request);
 
+      // createdAt (the claim-lease anchor) is written by the app clock, not the column's session-local default.
       expect(mockInsertValues).toHaveBeenCalledWith({
         id: event.id,
         type: event.type,
+        createdAt: expect.any(Date),
       });
+    });
+  });
+
+  describe('org fork: org events before the personal handlers', () => {
+    const post = async (event: unknown) => {
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+      return POST(request);
+    };
+
+    it("SEAT-7 (partial) an org's customer.subscription.updated is handled by the org fork and never writes a person's tier", async () => {
+      mockRouteOrgSubscriptionEvent.mockResolvedValueOnce(true);
+      const subscription = mockSubscription({ customer: 'cus_org' });
+      const event = mockStripeEvent('customer.subscription.updated', subscription);
+      const response = await post(event);
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgSubscriptionEvent).toHaveBeenCalledWith(subscription, event.id);
+      expect(mockTxInsertValues).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: expect.anything() }));
+    });
+
+    it("SEAT-7 (partial) SEAT-9 (partial) an org's customer.subscription.deleted never downgrades a person to free", async () => {
+      mockRouteOrgSubscriptionEvent.mockResolvedValueOnce(true);
+      const response = await post(mockStripeEvent('customer.subscription.deleted', mockSubscription({ customer: 'cus_org', status: 'canceled' })));
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }));
+    });
+
+    it("SEAT-7 (partial) a person's subscription event asks the org fork, then takes the personal path unchanged", async () => {
+      const response = await post(mockStripeEvent('customer.subscription.updated', mockSubscription()));
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgSubscriptionEvent).toHaveBeenCalledTimes(1);
+      expect(mockTxInsertValues).toHaveBeenCalled();
+    });
+
+    it("SEAT-7 (partial) an org's invoice.payment_failed goes to the org fork, not the personal log path", async () => {
+      mockRouteOrgInvoicePaymentFailed.mockResolvedValueOnce(true);
+      const invoice = mockInvoice();
+      const event = mockStripeEvent('invoice.payment_failed', invoice);
+      const response = await post(event);
+      expect(response.status).toBe(200);
+      expect(mockRouteOrgInvoicePaymentFailed).toHaveBeenCalledWith(invoice, event.id);
+      expect(mockSelectWhere).not.toHaveBeenCalled();
+    });
+
+    it('SEAT-7 (partial) a failure in the org fork (owner lookup included) is retryable: 500 and the claim is cleared', async () => {
+      mockRouteOrgSubscriptionEvent.mockRejectedValueOnce(new Error('pool timeout'));
+      const response = await post(mockStripeEvent('customer.subscription.updated', mockSubscription({ customer: 'cus_org' })));
+      expect(response.status).toBe(500);
+      expect(mockDeleteWhere).toHaveBeenCalled();
+      expect(mockTxInsertValues).not.toHaveBeenCalled();
+    });
+
+    it("SEAT-1 (partial) checkout completed on an ORG's customer is never linked to the paying person", async () => {
+      mockOrgForStripeCustomer.mockResolvedValueOnce('org_northwind');
+      const session = mockCheckoutSession({ mode: 'subscription', customer: 'cus_org', customerEmail: 'jono@northwind.test' });
+      const response = await post(mockStripeEvent('checkout.session.completed', session));
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ stripeCustomerId: 'cus_org' }));
     });
   });
 });

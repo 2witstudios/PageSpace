@@ -48,7 +48,8 @@ describe('docker-images.yml admin-DB migrate step', () => {
   });
 
   it('given the admin migrations step, should use the same migrate image as the main step', () => {
-    expect(adminStep.run).toContain('pagespace-migrate:latest');
+    expect(adminStep.run).toContain('pagespace-migrate:$RELEASE_IMAGE_TAG');
+    expect(steps[mainIdx].run).toContain('pagespace-migrate:$RELEASE_IMAGE_TAG');
   });
 
   it('given the admin migrations step, should fail on failed/destroyed machine states like the main step', () => {

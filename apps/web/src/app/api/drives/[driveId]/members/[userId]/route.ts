@@ -6,10 +6,11 @@ import {
   checkDriveAccess,
   getDriveMemberDetails,
   getMemberPermissions,
-  updateMemberRole,
-  updateMemberPermissions,
+  updateMemberAccess,
   getDriveRecipientUserIds,
 } from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
 import {
   revokeAgentMembershipsGrantedBy,
   recapAgentMembershipsGrantedBy,
@@ -29,6 +30,8 @@ import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { mcpTokens } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -40,19 +43,19 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const currentUserId = auth.userId;
+    const actor = actorFromAuth(auth);
 
     const { driveId, userId } = await context.params;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Get member details
@@ -95,6 +98,7 @@ export async function PATCH(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const currentUserId = auth.userId;
 
     const { driveId, userId } = await context.params;
@@ -111,14 +115,14 @@ export async function PATCH(
     }
 
     // Check if user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can manage member settings' }, { status: 403 }));
     }
 
     // Verify member exists in drive
@@ -128,14 +132,20 @@ export async function PATCH(
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
-    // Update role and customRoleId if provided. `updateMemberRole` returns the
-    // pre-update values it read from the row (getDriveMemberDetails hardcodes
+    // Update role, customRoleId and page permissions in one transaction. It returns
+    // the pre-update values it read from the row (getDriveMemberDetails hardcodes
     // customRole: null, so it cannot be used to detect a custom-role change).
-    const { oldRole, oldCustomRoleId } = await updateMemberRole(driveId, userId, role, customRoleId);
+    // [D-OW-33] while the drive's org is lapsed a change that gives the member
+    // more is refused (402 org_lapsed) and nothing is written.
+    const { oldRole, oldCustomRoleId, permissionsUpdated } = await updateMemberAccess(driveId, userId, currentUserId, {
+      role,
+      customRoleId,
+      permissions,
+    });
 
     const roleChanged = Boolean(role) && role !== oldRole;
     // `customRoleId` is only meaningful when present in the request body;
-    // `updateMemberRole` coerces falsy values to null when clearing it, so a
+    // `updateMemberAccess` coerces falsy values to null when clearing it, so a
     // clear (customRoleId: null over a prior role) is a real change too.
     const customRoleChanged = customRoleId !== undefined && (customRoleId || null) !== oldCustomRoleId;
 
@@ -185,14 +195,6 @@ export async function PATCH(
       }
     }
 
-    // Update permissions
-    const permissionsUpdated = await updateMemberPermissions(
-      driveId,
-      userId,
-      currentUserId,
-      permissions
-    );
-
     if (permissions.length > 0) {
       auditRequest(request, { eventType: 'authz.permission.granted', userId: currentUserId, resourceType: 'drive', resourceId: driveId, details: { targetUserId: userId, permissionsUpdated: permissions.length } });
     }
@@ -203,6 +205,7 @@ export async function PATCH(
       permissionsUpdated
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating member permissions:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update member permissions' },
@@ -223,23 +226,24 @@ export async function DELETE(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const currentUserId = auth.userId;
 
     const { driveId, userId: targetUserId } = await context.params;
 
     // Check if current user is owner or admin
-    const access = await checkDriveAccess(driveId, currentUserId);
+    const access = await checkDriveAccess(driveId, actor);
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 });
+      return deniedResponse(actor, driveId, NextResponse.json({ error: 'Only drive owners and admins can remove members' }, { status: 403 }));
     }
 
     // Cannot remove the drive owner
-    if (targetUserId === access.drive.ownerId) {
+    if (isDriveLead(targetUserId, access.drive)) {
       return NextResponse.json({ error: 'Cannot remove the drive owner' }, { status: 400 });
     }
 

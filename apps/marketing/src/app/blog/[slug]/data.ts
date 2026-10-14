@@ -291,7 +291,7 @@ Look at everything you did not have to build: no AI model to choose and pay a se
     title:
       "Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
     description:
-      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
+      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up whenever you run low. Here's how it works, plus the infrastructure move that makes it scale.",
     image: "/blog/usage-based-pricing-and-built-for-scale.png",
     content: `
 ## Daily limits were a stopgap. We outgrew them.
@@ -304,12 +304,7 @@ So we put our big-boy pants on. AI in PageSpace is now usage-based: a pool of cr
 
 ## Credits, not call counts
 
-Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans:
-
-- **Free:** 5 credits to start
-- **Pro:** 15/month in credits
-- **Founder:** 50/month in credits
-- **Business:** 100/month in credits
+Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans. The current amount for each plan is on the [pricing page](/pricing).
 
 On paid plans each renewal adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
@@ -323,13 +318,13 @@ Here's the part daily limits could never give you: when billing is usage-based, 
 
 **Free** runs on fast, capable standard models: GPT-5.6 Luna by default, plus Claude Haiku 4.5, Gemini 3.5 Flash Lite, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your credits stretch a long way across them.
 
-**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
+**Pro and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
 
 ## When you run low
 
 If your balance runs out, you're not locked out until tomorrow. Top up.
 
-You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
+You can add a custom amount in one click, or grab one of the quick-pick packs; the [pricing page](/pricing) lists the packs and the top-up range. Top-up credits never expire, so anything you add during a busy week carries over.
 
 Run low, top up, keep going. No more waiting out a daily reset.
 

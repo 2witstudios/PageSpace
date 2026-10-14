@@ -26,14 +26,14 @@
  *       verbatim evidence of ones settled 90+ days ago. Runs on EVERY exit
  *       path, including the failure ones.
  *
- * Credits: discovery, evaluation and compaction each take a credit hold BEFORE
- * building a model (see @/lib/memory/memory-credit-gate), and every call
- * settles once through AIMonitoring.trackUsage → consumeCredits. A refused step
+ * Credits: every discovery, evaluation and compaction model call reserves the
+ * user's own credits BEFORE it runs (see @/lib/memory/memory-credit), and
+ * settles that one hold once through AIMonitoring.trackUsage. A refused step
  * runs no model, charges nothing and writes nothing; the user's pass carries on
  * without it (candidates stay pending, pages stay as they are) and the refusal
  * is reported in `creditSkipped`. One user's refusal never touches another's.
  *
- * Paying users only — gated on MEMORY_PAYING_TIERS, the same constant the
+ * Paying personal users only — gated on the canonical personal tiers the
  * settings UI uses, so the two cannot disagree about who gets Memory.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
@@ -48,7 +48,9 @@ import { sessions } from '@pagespace/db/schema/sessions';
 import { userPersonalization } from '@pagespace/db/schema/personalization';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { personalTiers } from '@pagespace/lib/billing/subscription-tiers';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { isMemoryAvailable } from '@pagespace/lib/billing/automation-preferences';
 import { runDiscoveryPasses } from '@/lib/memory/discovery-service';
 import {
   getCurrentPersonalizationPages,
@@ -56,16 +58,18 @@ import {
   applyIntegrationDecisions,
 } from '@/lib/memory/integration-service';
 import { checkAndCompactIfNeeded } from '@/lib/memory/compaction-service';
-import type { MemoryGateRefusal } from '@/lib/memory/memory-credit-gate';
+import type { MemoryGateRefusal } from '@/lib/memory/memory-credit';
 import {
   upsertCandidates,
   findPromotableCandidates,
   markCandidatesPromoted,
+  recordMemoryOrgIds,
   markCandidatesRejected,
   pruneStaleCandidates,
   redactSettledEvidence,
   type MemoryField,
 } from '@/lib/memory/candidate-service';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 /**
  * Reuses the constant the settings UI gates on rather than restating it.
@@ -75,7 +79,7 @@ import {
  * have anything learned, or the reverse — learning for users the product says
  * cannot have it. Neither failure is visible from either side alone.
  */
-const PAYING_TIERS = [...MEMORY_PAYING_TIERS];
+const memoryEligiblePersonalTiers = () => personalTiers().filter((tier) => isMemoryAvailable(resolvePersonalCapabilityTier(tier)));
 
 const DELAY_BETWEEN_USERS_MS = 1000;
 
@@ -101,7 +105,7 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, PAYING_TIERS)
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);
@@ -171,9 +175,8 @@ export async function POST(request: Request) {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Memory cron: Error processing user ${userId}`, {
-          error: errorMsg,
-        });
+        // The cause chain too: Drizzle wraps the driver error (e.g. a Postgres FATAL) on .cause.
+        loggers.api.error(`Memory cron: Error processing user ${userId}`, errorLogFields(error));
         results.errors.push(`${userId}: ${errorMsg}`);
       }
     }
@@ -235,8 +238,8 @@ async function processUserMemory(
 }> {
   const creditRefusals: CreditRefusal[] = [];
 
-  // Step 1: Run discovery passes. A refusal returns no claims, so there is
-  // nothing to stage; the steps below gate themselves and refuse too.
+  // Step 1: Run discovery passes. A refused pass returns no claims, so it
+  // stages nothing; every later model call reserves for itself and refuses too.
   const discoveryResult = await runDiscoveryPasses(userId);
   if (discoveryResult.creditRefusal) {
     creditRefusals.push({ step: 'discovery', reason: discoveryResult.creditRefusal });
@@ -248,7 +251,7 @@ async function processUserMemory(
   // outage are already corroborated and still deserve evaluation, and a quiet
   // week would otherwise strand them indefinitely.
   if (discovered > 0) {
-    await upsertCandidates(userId, discoveryResult.claims);
+    await upsertCandidates(userId, discoveryResult.claims, discoveryResult.orgIds);
   }
 
   // Step 3: Find candidates that have cleared the corroboration bar
@@ -294,6 +297,13 @@ async function processUserMemory(
       pruned,
       creditRefusals,
     };
+  }
+
+  // SEC-2/3 (D-OW-62): the evaluator saw every ready candidate, so any page it rewrites may restate any of them. The
+  // memory takes on all their orgs BEFORE a page is written, so no reader is ever served restated content its org
+  // has not yet been recorded against (a write that then fails only over-attributes, which withholds, never leaks).
+  if (Object.keys(evaluation.updates).length > 0) {
+    await recordMemoryOrgIds(userId, promotable.flatMap((candidate) => candidate.orgIds));
   }
 
   // Step 6: Apply updates with guards

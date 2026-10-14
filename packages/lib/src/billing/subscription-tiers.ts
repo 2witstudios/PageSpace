@@ -5,18 +5,27 @@
  * derives from this module — apps/web plans + routes, apps/admin tier types,
  * apps/marketing pricing copy, apps/control-plane tenant validation, apps/e2e
  * seeding, and the lib storage/billing enforcement paths. Do NOT re-declare
- * `'free' | 'pro' | 'founder' | 'business'` (or any limit number below)
- * anywhere else; import from here instead.
+ * `'free' | 'pro' | 'business'` (or any limit number below) anywhere else;
+ * import from here instead.
  *
- * Deliberately dependency-free and side-effect-free so it is safe in client
- * bundles (plan cards, the marketing site) and in services with their own
- * deploys (control-plane, admin).
+ * SEAT-2 / A-9: Free and Pro are personal; Business belongs to an organization.
+ * Founder and personal Business are retired by the verified one-time cutover.
  */
 
 /** Canonical tier vocabulary, in ascending plan order (lowest → highest). */
-export const TIERS = ['free', 'pro', 'founder', 'business'] as const;
+export const TIERS = ['free', 'pro', 'business'] as const;
 
 export type SubscriptionTier = (typeof TIERS)[number];
+
+/** Resolve a paid plan only from an unambiguous configured price identity. */
+export function tierFromConfiguredPrice(
+  priceId: string,
+  prices: Readonly<Record<Exclude<SubscriptionTier, 'free'>, string>>,
+): SubscriptionTier {
+  if (!priceId) return 'free';
+  const matches = TIERS.filter((tier) => tier !== 'free').filter((tier) => prices[tier] === priceId);
+  return matches.length === 1 ? matches[0] : 'free';
+}
 
 export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
   return typeof value === 'string' && (TIERS as readonly string[]).includes(value);
@@ -28,6 +37,13 @@ export function isSubscriptionTier(value: unknown): value is SubscriptionTier {
  */
 export function toSubscriptionTier(value: string | null | undefined): SubscriptionTier {
   return isSubscriptionTier(value) ? value : 'free';
+}
+
+export type PersonalSubscriptionTier = Exclude<SubscriptionTier, 'business'>;
+
+/** Stored personal accounts cannot acquire organization Business entitlement. */
+export function toPersonalSubscriptionTier(value: string | null | undefined): PersonalSubscriptionTier {
+  return value === 'pro' ? 'pro' : 'free';
 }
 
 /**
@@ -71,6 +87,16 @@ export interface TierPlanLimits {
   canChooseSubdomain: boolean;
   /** Whether the tier can use premium "Pro" AI models. */
   proModels: boolean;
+  /**
+   * Whether this tier is bought by an ORGANIZATION rather than a person (SEAT-2).
+   * An org plan is never offered to a lone user in a plan UI: buying it creates
+   * the org. Personal plan pickers filter on this flag (see personalTiers()).
+   */
+  isOrgPlan: boolean;
+  /** Seats bundled into the monthly price (0 for a personal plan). */
+  includedSeats: number;
+  /** Monthly list price in whole USD per seat beyond includedSeats (0 for a personal plan). */
+  extraSeatUsd: number;
 }
 
 /**
@@ -92,6 +118,9 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
     maxCustomDomains: 0,
     canChooseSubdomain: false,
     proModels: false,
+    isOrgPlan: false,
+    includedSeats: 0,
+    extraSeatUsd: 0,
   },
   pro: {
     name: 'Pro',
@@ -103,21 +132,15 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
     maxCustomDomains: 1,
     canChooseSubdomain: true,
     proModels: true,
+    isOrgPlan: false,
+    includedSeats: 0,
+    extraSeatUsd: 0,
   },
-  founder: {
-    name: 'Founder',
-    priceMonthlyUsd: 50,
-    quotaBytes: 10 * GB,
-    maxFileSize: 500 * MB,
-    maxConcurrentUploads: 5,
-    maxFileCount: 500,
-    maxCustomDomains: 3,
-    canChooseSubdomain: true,
-    proModels: true,
-  },
+  // The organization plan (SEAT-2, A-5, A-8): $50 a month with 5 seats
+  // included and $10 per extra seat. Not sold to a lone user.
   business: {
     name: 'Business',
-    priceMonthlyUsd: 100,
+    priceMonthlyUsd: 50,
     quotaBytes: 50 * GB,
     maxFileSize: 1 * GB,
     maxConcurrentUploads: 10,
@@ -125,8 +148,21 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
     maxCustomDomains: 10,
     canChooseSubdomain: true,
     proModels: true,
+    isOrgPlan: true,
+    includedSeats: 5,
+    extraSeatUsd: 10,
   },
 };
+
+/** Whether `tier` is bought by an organization rather than a person (SEAT-2). */
+export function isOrgPlanTier(tier: SubscriptionTier): boolean {
+  return TIER_PLAN_LIMITS[tier].isOrgPlan;
+}
+
+/** Personal plans in rank order; organization tiers never appear here. */
+export function personalTiers(): PersonalSubscriptionTier[] {
+  return TIERS.filter((tier) => tier !== 'business');
+}
 
 /**
  * Format a tier limit byte value the way plan copy displays it ("500MB",

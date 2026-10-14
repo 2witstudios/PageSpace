@@ -27,7 +27,7 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
@@ -53,6 +53,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -79,6 +80,17 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
     createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the source drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
@@ -138,6 +150,8 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import {
   findProtectedMemoryPages,
   MEMORY_PAGE_MOVE_ERROR,
@@ -150,6 +164,7 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const { txUpdate, txUpdateSet, txQueryPagesFindMany, txQueryPagesFindFirst, txQueryDrivesFindFirst, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
@@ -203,7 +218,20 @@ const validBody = {
   targetParentId: null,
 };
 
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
+/** The non-lead relationship loadDriveRelationship answers; the lead (drives.ownerId) is always LEAD. */
+let nonLead: DriveRelationship = NONE;
+const setRelationship = (rel: DriveRelationship) => { nonLead = rel; };
+
 function setupSuccessScenario() {
+  nonLead = NONE;
+  vi.mocked(loadDriveRelationship).mockImplementation(async (actor, drive) =>
+    drive.ownerId === actor.userId ? { isOwner: true, membership: null } : nonLead);
+
   // Auth
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
   vi.mocked(checkMCPDriveScope).mockReturnValue(null);
@@ -350,7 +378,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('allows when user is drive ADMIN member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN' } as never);
+      setRelationship(asMember('ADMIN'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -361,7 +389,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('allows when user is drive OWNER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'OWNER' } as never);
+      setRelationship(asMember('OWNER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -372,7 +400,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('returns 403 when user is only a VIEWER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'VIEWER' } as never);
+      setRelationship(asMember('MEMBER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -383,7 +411,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('returns 403 when user has no membership', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -399,18 +427,35 @@ describe('POST /api/pages/bulk-move', () => {
     // composes isNotNull(driveMembers.acceptedAt).
     it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-move-into-unaccepted-drive path', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      // Simulate the gate filtering out the pending row (post-fix, the DB
-      // returns nothing for an acceptedAt IS NULL membership).
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      // The org-aware relationship reads ACCEPTED rows only: a pending ADMIN invitation is no
+      // membership (proven against Postgres in drive-gate-primitives.integration.test.ts).
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
 
       expect(response.status).toBe(403);
-      // Force the route to compose the gate; without isNotNull on
-      // driveMembers.acceptedAt, the regression test cannot detect a
-      // future drift back to the old predicate.
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row moves pages into an org drive', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'PRIVATE' } as never);
+      setRelationship(asMember('ADMIN'));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockTargetDriveId, orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'OPEN' } as never);
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN', source: 'org' } as never);
+      setRelationship(NONE);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(403);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });
 

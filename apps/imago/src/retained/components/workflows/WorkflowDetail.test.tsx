@@ -132,3 +132,16 @@ describe('WorkflowDetailView', () => {
     });
   });
 });
+
+test('a workflow whose creator left cannot run or be enabled', () => {
+  const html = renderToString(<WorkflowDetailView {...props({ workflow: { ...workflow, ownerLeftAt: '2026-09-30T00:00:00Z' } })} />);
+  const node = document.createElement('div'); node.innerHTML = html;
+  const toggle = node.querySelector('[role="switch"]');
+  const run = [...node.querySelectorAll('button')].find(button => button.textContent?.includes('Run workflow'));
+  assert({ given: 'a departed automation creator', should: 'show Owner left, disable Run and turn off and disable its Enabled switch', actual: { ownerLeft: node.textContent?.includes('Owner left'), canRun: !run?.hasAttribute('disabled'), canEnable: !toggle?.hasAttribute('disabled'), enabled: toggle?.getAttribute('aria-checked') }, expected: { ownerLeft: true, canRun: false, canEnable: false, enabled: 'false' } });
+});
+
+test('workflow detail names the creator and source wallet', () => {
+  const html = renderToString(<WorkflowDetailView {...props()} spendContext={{ creatorNames: { u1: 'Jono' }, walletLabel: 'Product wallet', orgName: 'Northwind' }} />).replaceAll('<!-- -->', '');
+  assert({ given: 'a workflow spending in an organization drive', should: 'name its creator and drive wallet', actual: { creator: html.includes('Created by Jono'), wallet: html.includes('Product wallet') }, expected: { creator: true, wallet: true } });
+});

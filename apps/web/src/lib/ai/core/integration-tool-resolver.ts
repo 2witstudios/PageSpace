@@ -26,6 +26,7 @@ import {
 import { listGrantsByAgent } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getConfig } from '@pagespace/lib/integrations/repositories/config-repository';
 import { type DriveRole, type GlobalAssistantConfigData } from '@pagespace/lib/integrations/types';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { suppressGithubIntegrationTools } from './tool-filtering';
 import { findBuiltinAgentOwner, loadImagoAgentContext } from './imago-agent-context';
 
@@ -68,15 +69,16 @@ function toSortedAISDKTools(
 
 /**
  * The drive whose integrations a user-level assistant may draw on, and the
- * user's role there: `driveId` only when the user is a member of it (a page
- * share alone grants no drive integrations), else `null` with no role.
+ * user's role there: `driveId` only when the caller is a member of it (a page
+ * share alone grants no drive integrations), else `null` with no role. Asked
+ * through the caller's actor, so an org drive's sign-in policy applies (D-OW-45).
  */
 export async function resolveIntegrationDriveScope(
-  userId: string,
+  actor: AccessActor,
   driveId: string | null
 ): Promise<{ driveId: string | null; userDriveRole: DriveRole | null }> {
   if (!driveId) return { driveId: null, userDriveRole: null };
-  const access = await getDriveAccess(driveId, userId);
+  const access = await getDriveAccess(driveId, actor);
   return access.isMember ? { driveId, userDriveRole: access.role } : { driveId: null, userDriveRole: null };
 }
 
@@ -111,13 +113,15 @@ export async function resolveIntegrationDriveScope(
  */
 export async function resolvePageAgentIntegrationTools(params: {
   agentId: string;
-  userId: string;
+  /** The caller: their credential decides the drive-in-view's integrations (D-OW-45). */
+  actor: AccessActor;
   driveId: string;
   currentTools: Record<string, unknown>;
   contextDriveId?: string | null;
   allowedDriveIds?: readonly string[];
 }): Promise<Record<string, CoreTool>> {
-  const { agentId, userId, driveId, currentTools, contextDriveId = null, allowedDriveIds = [] } = params;
+  const { agentId, actor, driveId, currentTools, contextDriveId = null, allowedDriveIds = [] } = params;
+  const userId = actor.userId;
 
   const builtinOwnerId = await findBuiltinAgentOwner(agentId);
   if (builtinOwnerId !== null) {
@@ -129,7 +133,7 @@ export async function resolvePageAgentIntegrationTools(params: {
       !imagoContext.excludedDriveIds.has(contextDriveId) &&
       (allowedDriveIds.length === 0 || allowedDriveIds.includes(contextDriveId));
     return resolveAssistantIntegrationTools({
-      userId,
+      actor,
       agentId,
       driveInView: inScope ? contextDriveId : null,
       currentTools,
@@ -155,7 +159,8 @@ export async function resolvePageAgentIntegrationTools(params: {
  * the drive-level ones of `driveInView` when the user is a member there
  * (`resolveIntegrationDriveScope`).
  *
- * @param params.userId - The authenticated user's ID
+ * @param params.actor - The authenticated caller: their credential decides the
+ *   drive-in-view's integrations (org sign-in policy included, D-OW-45)
  * @param params.agentId - The Imago agent's page ID (recorded on audit
  *   entries), null for the Global Assistant
  * @param params.driveInView - The drive in view (null on the dashboard). An
@@ -169,14 +174,15 @@ export async function resolvePageAgentIntegrationTools(params: {
  * @returns AI SDK tool objects ready for merging into the tool set
  */
 export async function resolveAssistantIntegrationTools(params: {
-  userId: string;
+  actor: AccessActor;
   agentId: string | null;
   driveInView: string | null;
   currentTools: Record<string, unknown>;
 }): Promise<Record<string, CoreTool>> {
-  const { userId, agentId, driveInView, currentTools } = params;
-  // A drive the user is not a member of resolves no drive-scoped integrations.
-  const { driveId, userDriveRole } = await resolveIntegrationDriveScope(userId, driveInView);
+  const { actor, agentId, driveInView, currentTools } = params;
+  const userId = actor.userId;
+  // A drive the caller is not a member of resolves no drive-scoped integrations.
+  const { driveId, userDriveRole } = await resolveIntegrationDriveScope(actor, driveInView);
   const grants = await resolveGlobalAssistantIntegrations(
     createResolutionDeps(),
     userId,

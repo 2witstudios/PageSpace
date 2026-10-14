@@ -61,6 +61,7 @@ const connection = (callId: string) => ({
   callId,
   attached: true,
   maxDurationMs: undefined,
+  spendFallback: null,
   microphone: { getTracks: () => [], getAudioTracks: () => [] },
   setMicrophoneEnabled: vi.fn(),
   stop: stopSpy,

@@ -1,0 +1,121 @@
+/**
+ * Org billing status (Spec SEAT-9) — the ONE check every org-only capability uses:
+ * inviting, creating org drives, the org pool and allocations, publishing from org
+ * drives, sandbox and environments in org drives, and (when Wave E lands) policy
+ * changes. The decision is pure (status-core.ts); this reads the stored subscription
+ * the Stripe webhook mirrors (org_subscriptions) and the deployment's billing gate.
+ *
+ * A lapse is a READ, never a write: nothing here or in any caller deletes, moves or
+ * reallocates a drive, a member or a credit. Leaving lapse (the webhook mirrors an
+ * `active` subscription, or the Owner resubscribes) restores every capability with
+ * everything exactly where it was.
+ */
+import { db } from '@pagespace/db/db';
+import { and, eq, sql } from '@pagespace/db/operators';
+import { organizations, orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
+import { isBillingEnabled } from '../deployment-mode';
+import {
+  decideOrgMayLoosen,
+  deriveOrgStatus,
+  orgBillingNotice,
+  orgStatusAllows,
+  type OrgBillingNotice,
+  type OrgCapabilityCheck,
+  type OrgLapsedRefusal,
+  type OrgStatusResult,
+  type OrgSubscriptionState,
+} from './status-core';
+
+export {
+  decideOrgMayLoosen,
+  ORG_LAPSED_CODE,
+  ORG_LAPSED_MESSAGE,
+  ORG_LAPSED_REFUSAL,
+  type OrgLapsedRefusal,
+  type OrgBillingNotice,
+  type OrgCapabilityCheck,
+  type OrgStatus,
+  type OrgStatusResult,
+} from './status-core';
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Executor = typeof db | Tx;
+
+/**
+ * The org's status: active | lapsed (with why), derived from the stored subscription the
+ * webhook mirrors. An org that does not exist reads as lapsed (fail closed); callers check
+ * existence themselves.
+ */
+export async function getOrgStatus(orgId: string, opts: { executor?: Executor } = {}): Promise<OrgStatusResult> {
+  const billingEnabled = isBillingEnabled();
+  if (!billingEnabled) return { status: 'active', reason: null };
+  const [row] = await (opts.executor ?? db)
+    .select({
+      status: orgSubscriptions.status,
+      collectionMethod: orgSubscriptions.collectionMethod,
+      hasVerifiedFunding: sql<boolean>`${orgSubscriptionFunding.id} IS NOT NULL`,
+    })
+    .from(organizations)
+    .leftJoin(orgSubscriptions, eq(orgSubscriptions.orgId, organizations.id))
+    .leftJoin(orgSubscriptionFunding, and(eq(orgSubscriptionFunding.orgId, organizations.id), eq(orgSubscriptionFunding.stripeSubscriptionId, orgSubscriptions.stripeSubscriptionId)))
+    .where(eq(organizations.id, orgId))
+    .limit(1);
+  if (!row) return { status: 'lapsed', reason: 'no_subscription' };
+  const subscription: OrgSubscriptionState | null =
+    row.status === null || row.collectionMethod === null
+      ? null
+      : { status: row.status, collectionMethod: row.collectionMethod, hasVerifiedFunding: row.hasVerifiedFunding };
+  return deriveOrgStatus({ billingEnabled, subscription });
+}
+
+/**
+ * SEAT-9 / WAL-8: whether a drive's org is lapsed right now — false for a personal drive (or none)
+ * with no read. What every compute-tier caller passes as `orgLapsed` (review #2761).
+ */
+export async function isOrgLapsedForDrive(drive: { orgId: string | null } | null | undefined): Promise<boolean> {
+  return drive?.orgId ? !(await isOrgActive(drive.orgId)) : false;
+}
+
+/** SEAT-9: may the org use its org-only capabilities right now? False only while lapsed. */
+export async function isOrgActive(orgId: string, opts: { executor?: Executor } = {}): Promise<boolean> {
+  return (await getOrgStatus(orgId, opts)).status !== 'lapsed';
+}
+
+/**
+ * SEAT-9 / SEAT-6: the billing notice the org surfaces show this caller — Owner and Admins
+ * see plan detail (reactivate with the reason), a member
+ * only the read-only notice while lapsed. Null where billing is off (onprem, tenant: the
+ * billing gate hides it entirely) and whenever there is nothing to show.
+ */
+export async function getOrgBillingNotice(
+  orgId: string,
+  role: 'OWNER' | 'ADMIN' | 'MEMBER',
+  opts: { executor?: Executor } = {},
+): Promise<OrgBillingNotice | null> {
+  if (!isBillingEnabled()) return null;
+  return orgBillingNotice({ result: await getOrgStatus(orgId, opts), role });
+}
+
+/** SEAT-9: the refusal an org-only capability returns (`{ ok: false, code: 'org_lapsed', message }`) or ok. */
+export async function checkOrgActive(orgId: string, opts: { executor?: Executor } = {}): Promise<OrgCapabilityCheck> {
+  return orgStatusAllows(await getOrgStatus(orgId, opts));
+}
+
+/**
+ * [D-OW-33] the lapse a loosening write reads: whether the org is lapsed right now, read with the write's
+ * executor (pass the transaction). Under READ COMMITTED this is the subscription as committed when the read
+ * runs; no lock is taken, so a lapse that commits after the read is not seen by this write. That is the same
+ * read every lapse gate makes (#2817): the write then serializes as one made just before the lapse, which is
+ * allowed (the webhook mirror writes only org_subscriptions, and a lapse by time has no writer at all).
+ */
+export async function readOrgLapsed(orgId: string, executor: Executor = db): Promise<boolean> {
+  return !(await isOrgActive(orgId, { executor }));
+}
+
+/**
+ * [D-OW-33] the guard at a write site that loosens access in an org: reads the lapse in `executor` only when the
+ * change loosens, and answers the SEAT-9 lapse refusal or null (decideOrgMayLoosen).
+ */
+export async function checkOrgMayLoosen(executor: Executor, orgId: string, loosens: boolean): Promise<OrgLapsedRefusal | null> {
+  return decideOrgMayLoosen({ orgLapsed: loosens && (await readOrgLapsed(orgId, executor)), loosens });
+}

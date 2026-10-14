@@ -30,7 +30,8 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   applyPageMutation,
@@ -38,7 +39,6 @@ import {
 } from '@/services/api/page-mutation-service';
 
 import { MAX_FIELD_LENGTH, type MemoryField } from './budgets';
-import { withMemoryCreditHold, type MemoryGateRefusal } from './memory-credit-gate';
 
 export type { MemoryField };
 
@@ -285,35 +285,10 @@ Return JSON with this structure:
 
 Remember: You are writing the COMPLETE page, not just additions. Preserve what matters, remove what doesn't.`;
 
-  // Taken BEFORE the model is built. A refusal is an evaluator that never
-  // reached a decision: the caller leaves every candidate pending and writes
-  // no page, exactly as for a provider outage.
-  const gated = await withMemoryCreditHold(userId, 1, () =>
-    runEvaluator(userId, candidates, byField, current, EVALUATOR_SYSTEM_PROMPT)
-  );
-
-  if (!gated.ran) {
-    loggers.api.info('Memory integration: skipped (credit gate refused)', {
-      userId,
-      reason: gated.reason,
-    });
-    return { ok: false, reason: `credit gate refused: ${gated.reason}`, creditRefusal: gated.reason };
-  }
-  return gated.value;
-}
-
-/** The evaluator's model call. Only ever run under the caller's credit hold. */
-async function runEvaluator(
-  userId: string,
-  candidates: typeof personalizationCandidates.$inferSelect[],
-  byField: Record<MemoryField, typeof candidates>,
-  current: Record<MemoryField, string>,
-  systemPrompt: string
-): Promise<EvaluationOutcome> {
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory integration: provider error', {
@@ -357,31 +332,45 @@ CURRENT RULES:
 ${current.rules || '(empty)'}
 `;
 
-    const result = await generateText({
-      model: providerResult.model,
-      system: systemPrompt,
-      messages: [
-        {
-          role: 'user',
-          content: `Evaluate these newly-learned insights against the current profile and produce updated page content where appropriate.
+    const userPrompt = `Evaluate these newly-learned insights against the current profile and produce updated page content where appropriate.
 
 ${currentProfileText}
 
 ${candidatesByField}
 
-Return JSON with the full new content for each field that should change. Use null for unchanged fields.`,
-        },
-      ],
+Return JSON with the full new content for each field that should change. Use null for unchanged fields.`;
+
+    // Reserve before the model (SPEND-1). Refused: no decision is reached, so every
+    // candidate stays pending for the next run, as when the provider is unavailable.
+    const reservation = await reserveMemoryCall(userId, {
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputChars: EVALUATOR_SYSTEM_PROMPT.length + userPrompt.length,
+    });
+    if (!reservation.allowed) {
+      loggers.api.info('Memory integration: skipped, credit gate refused', { userId, reason: reservation.reason });
+      return { ok: false, reason: `credit gate refused: ${reservation.reason}`, creditRefusal: reservation.reason };
+    }
+
+    const result = await generateText({
+      model: providerResult.model,
+      system: EVALUATOR_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.2,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
-    // Awaited so the debit lands while the evaluator's credit hold is still held.
-    await AIMonitoring.trackUsage({
+    // Settles the reservation once (trackUsage takes the hold).
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage
@@ -389,7 +378,7 @@ Return JSON with the full new content for each field that should change. Use nul
         : undefined,
       success: true,
       metadata: { feature: 'memory_integration' },
-    });
+    }));
 
     const text = result.text.trim();
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);

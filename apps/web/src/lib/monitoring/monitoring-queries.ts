@@ -7,12 +7,16 @@ import { getBackendProvider } from '@/lib/ai/core/ai-providers-config'
 import { sql, eq, and, or, gt, gte, lte, asc, desc, count, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { apiMetrics, userActivities, aiUsageLogs, systemLogs, errorLogs } from '@pagespace/db/schema/monitoring';
-import { creditLedger, creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import type { SQL } from '@pagespace/db/operators';
 import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
-import { computeBalanceDrift, isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { walletDriftAlerts, type DriftWalletKind } from '@pagespace/lib/billing/wallet-reconcile';
 import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
+import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
 import { getTierFromPrice } from '@/lib/stripe/price-config';
 import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
@@ -604,7 +608,7 @@ export async function getPerformanceMetrics(startDate?: Date, endDate?: Date) {
 //   - creditLedger.realCostCents   — our REAL provider cost, pre-markup (cents)
 //   - creditLedger.amountCents      — full intended charge to the user (signed)
 //   - creditLedger.appliedCents     — actually debited from the balance (signed)
-//   - credit_balances.debtCents     — CURRENT outstanding overage (point-in-time). NOT
+//   - wallets.debtCents (personal root wallets)     — CURRENT outstanding overage (point-in-time). NOT
 //                                     the historical 'adjustment' ledger rows: debt is
 //                                     repaid by top-ups and forgiven at renewal directly
 //                                     on debtCents, so only the live balance is accurate.
@@ -693,7 +697,7 @@ export function computeMarginPct(realCostCents: number, chargedCents: number): n
 // unchanged; only purged rows newly contribute their retained cost.
 const realCostSum = sql<number>`ROUND(COALESCE(SUM(
   CASE
-    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * 100
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * ${CENTS_PER_DOLLAR}
     ELSE ${creditLedger.realCostCents}
   END
 ), 0))::int`;
@@ -735,14 +739,15 @@ export async function getUnitEconomicsSummary(
     .where(and(...usageConditions(startDate, endDate)));
 
   // Outstanding debt is the CURRENT liability — a point-in-time snapshot of the live
-  // credit_balances.debtCents, NOT a sum of historical 'adjustment' incurrence rows.
+  // wallets.debtCents (personal root wallets), NOT a sum of historical 'adjustment' incurrence rows.
   // Debt is paid down by top-ups and forgiven at renewal directly on debtCents without
   // offsetting ledger rows, so summing adjustment history would keep counting overage
   // the user has already repaid or had forgiven. Period-independent (like the prepaid
   // liability metric); the start/end window scopes the usage flows above, not this stock.
   const debt = await db
-    .select({ debtCents: sql<number>`COALESCE(SUM(${creditBalances.debtCents}), 0)::int` })
-    .from(creditBalances);
+    .select({ debtCents: sql<number>`COALESCE(SUM(${wallets.debtCents}), 0)::int` })
+    .from(wallets)
+    .where(isPersonalRootWallet());
 
   const realCostCents = usage[0]?.realCostCents ?? 0;
   const chargedCents = usage[0]?.chargedCents ?? 0;
@@ -843,7 +848,8 @@ export async function getTopSpendersByMargin(
 ): Promise<TopSpenderRow[]> {
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -855,7 +861,7 @@ export async function getTopSpendersByMargin(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .orderBy(desc(chargedSum))
     .limit(limit);
 
@@ -870,21 +876,21 @@ export async function getTopSpendersByMargin(
 
 /**
  * Users currently carrying outstanding overage — a point-in-time snapshot of the live
- * credit_balances.debtCents (NOT historical 'adjustment' rows, which would still count
+ * wallets.debtCents (personal root wallets) (NOT historical 'adjustment' rows, which would still count
  * debt already repaid by a top-up or forgiven at renewal). Period-independent.
  */
 export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
   const rows = await db
     .select({
-      userId: creditBalances.userId,
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
-      debtCents: creditBalances.debtCents,
+      debtCents: wallets.debtCents,
     })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .where(gt(creditBalances.debtCents, 0))
-    .orderBy(desc(creditBalances.debtCents))
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .where(and(isPersonalRootWallet(), gt(wallets.debtCents, 0)))
+    .orderBy(desc(wallets.debtCents))
     .limit(limit);
 
   return decryptUserDisplayFields(
@@ -898,78 +904,52 @@ export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRo
 }
 
 export interface BalanceDriftRow {
-  userId: string;
+  walletId: string;
+  /** A person's root, an org's pool, or a drive's wallet (WAL-5: reconciliation is keyed on wallet). */
+  walletKind: DriftWalletKind;
+  /** The person a personal wallet belongs to; null for an org's. */
+  userId: string | null;
   userName: string | null;
   userEmail: string | null;
-  expectedSpendableCents: number;
-  materializedSpendableCents: number;
+  orgId: string | null;
+  /** The drive a drive wallet funds; null for a root. */
+  subjectId: string | null;
+  expectedNetCents: number;
+  materializedNetCents: number;
   driftCents: number;
   debtCents: number;
 }
 
 /**
- * Accounts whose MATERIALIZED spendable buckets diverge from the ledger-implied amount
- * beyond tolerance — a drift smell detector for the admin panel (see computeBalanceDrift;
- * rollover carry-forwards / debt-forgiveness make this approximate, hence a generous
- * tolerance; with rollover there are no silent per-period drops to explain away).
- * Aggregates the whole ledger per user (drift is a stock, not a period flow), joins the
- * live balance, and returns only flagged rows, worst drift first.
+ * Wallets whose net (monthly + top-up − debt) disagrees with their OWN ledger rows beyond tolerance
+ * (WAL-5): every personal root, org pool and drive wallet, every money-moving entry type counted,
+ * through the one lib reader (walletDriftAlerts). Every balance change is a row — forgiveness at a
+ * renewal (debt_forgiven), netting at an allocation reset (allocation_reset), the cutover's
+ * opening_balance — so any drift is a change that bypassed the ledger. Worst drift first.
  */
 export async function getBalanceDriftAlerts(
   toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
   limit = 50,
 ): Promise<BalanceDriftRow[]> {
-  const rows = await db
-    .select({
-      userId: creditBalances.userId,
-      userName: users.name,
-      userEmail: users.email,
-      materializedSpendableCents: sql<number>`(${creditBalances.monthlyRemainingCents} + ${creditBalances.topupRemainingCents})::int`,
-      debtCents: creditBalances.debtCents,
-      grantCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} IN ('monthly_grant', 'topup_purchase') THEN ${creditLedger.amountCents} ELSE 0 END), 0)::int`,
-      appliedUsageCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'usage' THEN ABS(${creditLedger.appliedCents}) ELSE 0 END), 0)::int`,
-      adjustmentCents: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.entryType} = 'adjustment' THEN COALESCE(${creditLedger.appliedCents}, 0) ELSE 0 END), 0)::int`,
-    })
-    .from(creditBalances)
-    .innerJoin(users, eq(creditBalances.userId, users.id))
-    .leftJoin(creditLedger, eq(creditLedger.userId, creditBalances.userId))
-    .groupBy(
-      creditBalances.userId,
-      users.name,
-      users.email,
-      creditBalances.monthlyRemainingCents,
-      creditBalances.topupRemainingCents,
-      creditBalances.debtCents,
-    );
-
-  const flagged = rows
-    .map((r): BalanceDriftRow | null => {
-      const drift = computeBalanceDrift(
-        {
-          grantCents: r.grantCents,
-          appliedUsageCents: r.appliedUsageCents,
-          adjustmentCents: r.adjustmentCents,
-          materializedSpendableCents: r.materializedSpendableCents,
-          debtCents: r.debtCents,
-        },
-        toleranceCents,
-      );
-      if (!drift.flagged) return null;
-      return {
-        userId: r.userId,
-        userName: r.userName,
-        userEmail: r.userEmail,
-        expectedSpendableCents: drift.expectedSpendableCents,
-        materializedSpendableCents: r.materializedSpendableCents,
-        driftCents: drift.driftCents,
-        debtCents: r.debtCents,
-      };
-    })
-    .filter((r): r is BalanceDriftRow => r !== null)
-    .sort((a, b) => Math.abs(b.driftCents) - Math.abs(a.driftCents))
-    .slice(0, limit);
-
-  return decryptUserDisplayFields(flagged);
+  const alerts = await walletDriftAlerts({ toleranceCents, limit });
+  const userIds = [...new Set(alerts.map((a) => a.userId).filter((id): id is string => id !== null))];
+  const people = userIds.length > 0
+    ? await decryptUserDisplayFields(await db.select({ userId: users.id, userName: users.name, userEmail: users.email }).from(users).where(inArray(users.id, userIds)))
+    : [];
+  const byId = new Map(people.map((p) => [p.userId, p]));
+  return alerts.map((a) => ({
+    walletId: a.walletId,
+    walletKind: a.kind,
+    userId: a.userId,
+    userName: a.userId ? byId.get(a.userId)?.userName ?? null : null,
+    userEmail: a.userId ? byId.get(a.userId)?.userEmail ?? null : null,
+    orgId: a.orgId,
+    subjectId: a.subjectId,
+    expectedNetCents: a.expectedNetCents,
+    materializedNetCents: a.materializedNetCents,
+    driftCents: a.driftCents,
+    debtCents: a.debtCents,
+  }));
 }
 
 export interface NegativeMarginRow {
@@ -1000,7 +980,8 @@ export async function getNegativeMarginAccounts(
   const floorBps = Math.max(0, marginFloorBps);
   const rows = await db
     .select({
-      userId: creditLedger.userId,
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
       userName: users.name,
       userEmail: users.email,
       realCostCents: realCostSum,
@@ -1011,7 +992,7 @@ export async function getNegativeMarginAccounts(
     .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .innerJoin(users, eq(creditLedger.userId, users.id))
     .where(and(...usageConditions(startDate, endDate)))
-    .groupBy(creditLedger.userId, users.name, users.email)
+    .groupBy(users.id, users.name, users.email)
     .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${floorBps}::numeric / 10000)`)
     .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
     .limit(limit);
@@ -1112,7 +1093,9 @@ export interface SubscriptionsByTierRow {
 }
 
 export interface CreditLiability {
+  /** Grants outstanding: personal roots' and org pools' monthly buckets (MON-7). */
   monthlyRemainingCents: number;
+  /** Purchased or moved-in credit on every wallet: root top-ups and drive-wallet legs. */
   topupRemainingCents: number;
   totalLiabilityCents: number;
   userCount: number;
@@ -1373,26 +1356,17 @@ export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTie
 }
 
 /**
- * Outstanding prepaid liability: the sum of every user's spendable balance
- * (monthly + top-up remaining) — credit value we owe service against.
- * Point-in-time, not windowed.
+ * Outstanding prepaid liability across every wallet kind — personal roots, org pools,
+ * and drive-wallet funding legs (credit-liability.ts decides what counts) — credit
+ * value we owe service against. Point-in-time, not windowed.
  */
 export async function getCreditLiability(): Promise<CreditLiability> {
-  const rows = await db
-    .select({
-      monthlyRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.monthlyRemainingCents}), 0)::double precision`,
-      topupRemainingCents: sql<number>`COALESCE(SUM(${creditBalances.topupRemainingCents}), 0)::double precision`,
-      userCount: count(),
-    })
-    .from(creditBalances);
-
-  const monthlyRemainingCents = rows[0]?.monthlyRemainingCents ?? 0;
-  const topupRemainingCents = rows[0]?.topupRemainingCents ?? 0;
+  const r = await readCreditLiability();
   return {
-    monthlyRemainingCents,
-    topupRemainingCents,
-    totalLiabilityCents: monthlyRemainingCents + topupRemainingCents,
-    userCount: rows[0]?.userCount ?? 0,
+    monthlyRemainingCents: r.includedCreditLiabilityCents,
+    topupRemainingCents: r.topupRemainingCents,
+    totalLiabilityCents: r.totalLiabilityCents,
+    userCount: r.userCount,
   };
 }
 

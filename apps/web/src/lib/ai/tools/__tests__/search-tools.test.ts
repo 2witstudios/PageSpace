@@ -43,6 +43,7 @@ vi.mock('@pagespace/db/operators', () => ({
   asc: vi.fn((field) => ({ op: 'asc', field })),
 }));
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorAccessDrive: mockCanActorAccessDrive,
   getActorAccessiblePagesInDrive: mockGetActorAccessiblePagesInDrive,
 }));

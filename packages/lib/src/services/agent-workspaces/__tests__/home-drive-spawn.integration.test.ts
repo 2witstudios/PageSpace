@@ -31,7 +31,8 @@ import { drives } from '@pagespace/db/schema/core';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { provisionHomeDriveIfNeeded } from '../../../onboarding/home-drive';
-import { resolveSessionPayerId, lookupDriveOwnerId } from '../../../billing/sandbox-payer';
+import { resolveSessionPayer, lookupDriveBillingFacts } from '../../../billing/sandbox-payer';
+import { credentialActor } from '../../../permissions/access-actor';
 import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
 import { resolveSessionTenantId } from '../agent-workspace-tenant';
 import { createDbAgentSessionStore, type AgentSessionRecord, type AgentSessionStore } from '../agent-workspaces-store';
@@ -69,7 +70,7 @@ function spawnDeps(): SpawnAgentSessionDeps {
 }
 
 async function spawnGlobal(ownerId: string): Promise<AgentSessionRecord> {
-  const result = await spawnAgentSession({ ownerId, driveId: null, name: 'Global Assistant', deps: spawnDeps() });
+  const result = await spawnAgentSession({ owner: credentialActor(ownerId, null), driveId: null, name: 'Global Assistant', deps: spawnDeps() });
   if (!result.ok) throw new Error(`spawn failed: ${JSON.stringify(result)}`);
   return result.session;
 }
@@ -143,7 +144,7 @@ describe("global-assistant spawn — the owner's Home drive", () => {
   });
 
   it('given a drive spawn, should keep the drive it was given', async () => {
-    const result = await spawnAgentSession({ ownerId: homedOwnerId, driveId: homedOwnerDriveId, deps: spawnDeps() });
+    const result = await spawnAgentSession({ owner: credentialActor(homedOwnerId, null), driveId: homedOwnerDriveId, deps: spawnDeps() });
     if (!result.ok) throw new Error('expected ok');
     expect(result.session.driveId).toBe(homedOwnerDriveId);
   });
@@ -164,11 +165,11 @@ describe('Home-drive row vs the null-drive row it replaces — same Sprite key, 
   it('should resolve the payer to the owner, exactly as a null-drive row did', async () => {
     const session = await spawnGlobal(homelessOwnerId);
 
-    const asHome = await resolveSessionPayerId({ driveId: session.driveId, ownerId: session.ownerId, lookupDriveOwnerId });
-    const asNull = await resolveSessionPayerId({ driveId: null, ownerId: session.ownerId, lookupDriveOwnerId });
+    const asHome = await resolveSessionPayer({ driveId: session.driveId, ownerId: session.ownerId, lookupDriveBillingFacts });
+    const asNull = await resolveSessionPayer({ driveId: null, ownerId: session.ownerId, lookupDriveBillingFacts });
 
-    expect(asHome).toBe(homelessOwnerId);
-    expect(asHome).toBe(asNull);
+    expect(asHome).toEqual({ kind: 'user', userId: homelessOwnerId });
+    expect(asHome).toEqual(asNull);
   });
 
   it('should provision the SAME Sprite key a null-drive row would have folded', async () => {
@@ -182,7 +183,7 @@ describe('Home-drive row vs the null-drive row it replaces — same Sprite key, 
     const ensured = await ensureAgentSessionSandbox({
       row: { ...session, workspaceId: session.id },
       intent: 'ensure',
-      actor: { userId: session.ownerId, tenantId: tenant.tenantId },
+      actor: { access: credentialActor(session.ownerId, null), tenantId: tenant.tenantId },
       deps: {
         store,
         host: host.host,
@@ -217,7 +218,7 @@ describe('Home-drive row vs the null-drive row it replaces — same Sprite key, 
 describe('no spawn path inserts a null driveId', () => {
   it('given every spawn shape, should leave zero null-drive rows for these owners', async () => {
     await spawnGlobal(homedOwnerId);
-    await spawnAgentSession({ ownerId: homedOwnerId, driveId: homedOwnerDriveId, deps: spawnDeps() });
+    await spawnAgentSession({ owner: credentialActor(homedOwnerId, null), driveId: homedOwnerDriveId, deps: spawnDeps() });
 
     const nullRows = await db
       .select({ id: agentWorkspaces.id })

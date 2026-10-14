@@ -39,4 +39,17 @@ describe('creditGateErrorResponse', () => {
     expect(res.status).toBe(402);
     expect((await res.json()).error).toBe('out_of_credits');
   });
+
+  it('WAL-2 (partial) SPEND-4 (partial) a seat refused by its monthly allowance says so — not "cannot cover it", since the org pool may be full', async () => {
+    const res = creditGateErrorResponse('source_refused', { source: 'seat_allowance', reason: 'source_cap_reached', options: ['own_credits'] });
+    const body = await res.json();
+    expect(res.status).toBe(402);
+    expect(body).toMatchObject({ error: 'spend_source_refused', source: 'seat_allowance', refusalReason: 'source_cap_reached', options: ['own_credits'] });
+    expect(body.message).toBe("You've reached the limit of your seat allowance. Choose another source to continue.");
+  });
+
+  it('SPEND-4 (partial) any other refused source keeps the general refusal copy', async () => {
+    const res = creditGateErrorResponse('source_refused', { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] });
+    expect((await res.json()).message).toBe('The credit source for this request cannot cover it. Choose another source to continue.');
+  });
 });

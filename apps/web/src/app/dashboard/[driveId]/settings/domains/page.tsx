@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChevronLeft, Shield, Globe, Trash2, Plus, RefreshCw, CheckCircle2, XCircle, Lock, Loader2, Star, Image as ImageIcon, FileWarning } from 'lucide-react';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
@@ -107,6 +108,8 @@ export default function DomainsSettingsPage() {
   }, [fetchDrives]);
 
   const drive = drives.find((d) => d.id === driveId);
+  // [D-OW-33] a lapsed org's drive takes no new domain (published content on a new host) until it pays.
+  const lapsed = useOrgLapsed(drive?.orgId);
   const canManage = drive?.isOwned || drive?.role === 'ADMIN';
   const { user } = useAuth();
   // Platform admin (users.role === 'admin') — distinct from drive-level admin.
@@ -488,6 +491,7 @@ export default function DomainsSettingsPage() {
         settingTargetId={settingTargetId}
         verifyReasons={verifyReasons}
         isPlatformAdmin={isPlatformAdmin}
+        lapsed={lapsed}
       />
 
       <UploadableImageSettingCard
@@ -826,19 +830,21 @@ interface CustomDomainsCardProps {
   settingTargetId: string | null;
   verifyReasons: Record<string, string | undefined>;
   isPlatformAdmin: boolean;
+  /** [D-OW-33] the drive's org is unpaid: no new domain; existing ones can still be removed. */
+  lapsed?: boolean;
 }
 
 const EDGE_IPV4 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV4 ?? '';
 const EDGE_IPV6 = process.env.NEXT_PUBLIC_PUBLISH_EDGE_IPV6 ?? '';
 const CNAME_TARGET = process.env.NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET ?? '';
 
-function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, onSetTarget, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, settingTargetId, verifyReasons, isPlatformAdmin }: CustomDomainsCardProps) {
+function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDomainChange, onAdd, onRemove, onVerify, onRefreshCert, onSetPrimary, onSetLandingPage, onSetNotFoundPage, onSetTarget, isAdding, removingId, verifyingId, refreshingCertId, settingPrimaryId, savingLandingPageId, savingNotFoundPageId, settingTargetId, verifyReasons, isPlatformAdmin, lapsed = false }: CustomDomainsCardProps) {
   // A platform admin keeps the input usable regardless of the drive's plan tier
   // — the backend's platform-domain path skips the subscription cap, and a
   // non-platform hostname over cap still gets the server's 403 + toast.
   const atCap = limit !== null && limit > 0 && domains.length >= limit && !isPlatformAdmin;
   const notAvailable = limit === 0 && !isPlatformAdmin;
-  const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable;
+  const addDisabled = isAdding || !newDomain.trim() || atCap || notAvailable || lapsed;
   // "Make primary" only matters once there's a choice to make between domains.
   const showPrimaryControls = domains.length > 1;
   // Any in-flight mutation (add/verify/cert/primary/remove/page-override) locks
@@ -913,6 +919,12 @@ function CustomDomainsCard({ driveId, domains, limit, apps, newDomain, onNewDoma
               Add
             </Button>
           </div>
+        )}
+
+        {lapsed && (
+          <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+            Adding a domain is paused. {LAPSED_LOOSEN_NOTE}
+          </p>
         )}
 
         {atCap && !notAvailable && (

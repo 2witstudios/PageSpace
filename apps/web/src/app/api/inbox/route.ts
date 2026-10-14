@@ -4,12 +4,14 @@ import { sql } from '@pagespace/db/operators';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { toISOTimestamp } from '@/lib/utils/timestamp';
 import type { ChannelRow, DMRow } from '@/types/messaging';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -18,6 +20,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
@@ -44,6 +47,10 @@ export async function GET(request: Request) {
 
     const items: InboxItem[] = [];
 
+    // Channel candidate drives: the ones the user is a member of, owned or joined (org-aware).
+    // getBatchPagePermissions below stays the access decision.
+    const memberDriveIds = type === 'dm' ? [] : await getMemberDriveIds(actor, { includeTrashed: true });
+
     if (driveId) {
       // Parse cursor - can be ISO timestamp or "id:<channelId>" for null timestamps
       const isIdCursor = cursor !== null && cursor.startsWith('id:');
@@ -60,7 +67,6 @@ export async function GET(request: Request) {
             d.name as drive_name
           FROM pages p
           INNER JOIN drives d ON d.id = p."driveId"
-          LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
           -- Candidate filter only; getBatchPagePermissions below is the access
           -- decision. An explicit grant beats membership there, so a channel
           -- shared with someone outside the drive must survive to be asked
@@ -76,8 +82,7 @@ export async function GET(request: Request) {
             AND p."isTrashed" = false
             AND p."driveId" = ${driveId}
             AND (
-              d."ownerId" = ${userId}
-              OR dm."userId" IS NOT NULL
+              p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
               OR pp."userId" IS NOT NULL
             )
         ),
@@ -127,7 +132,7 @@ export async function GET(request: Request) {
       `);
 
       const channelPermissions = await getBatchPagePermissions(
-        userId,
+        actor,
         channelResults.rows.map((row) => row.id)
       );
       // Permission-filter BEFORE decrypting: a non-viewable channel's sender
@@ -250,8 +255,7 @@ export async function GET(request: Request) {
               d.name as drive_name
             FROM pages p
             INNER JOIN drives d ON d.id = p."driveId"
-            LEFT JOIN drive_members dm ON dm."driveId" = d.id AND dm."userId" = ${userId}
-            -- Candidate filter only. Same join and predicate as the drive-scoped
+            -- Candidate filter only. Same member-drive set and predicate as the drive-scoped
             -- query above and as countChannelUnread in
             -- apps/web/src/app/api/sidebar/badges/route.ts, which is why the nav
             -- badge and these pills agree about which channels exist; change one
@@ -264,8 +268,7 @@ export async function GET(request: Request) {
             WHERE p.type = 'CHANNEL'
               AND p."isTrashed" = false
               AND (
-                d."ownerId" = ${userId}
-                OR dm."userId" IS NOT NULL
+                p."driveId" = ANY(${sql.param(memberDriveIds)}::text[])
                 OR pp."userId" IS NOT NULL
               )
           ),
@@ -314,7 +317,7 @@ export async function GET(request: Request) {
           LIMIT ${fetchLimit}
         `);
         const channelPermissions = await getBatchPagePermissions(
-          userId,
+          actor,
           channelResults.rows.map((row) => row.id)
         );
         // Permission-filter BEFORE decrypting: a non-viewable channel's sender

@@ -10,7 +10,6 @@ import {
 describe('isMemoryAvailable', () => {
   it('is true only for paid tiers', () => {
     expect(isMemoryAvailable('pro')).toBe(true);
-    expect(isMemoryAvailable('founder')).toBe(true);
     expect(isMemoryAvailable('business')).toBe(true);
   });
   it('is false for free', () => {

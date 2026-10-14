@@ -34,6 +34,8 @@ const mocks = vi.hoisted(() => ({
   streamText: vi.fn(),
   calculateCost: vi.fn(),
   requiresPro: vi.fn(),
+  sessionDrive: vi.fn(),
+  entitlement: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -69,7 +71,8 @@ vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
   createSubscriptionRequiredResponse: () => new Response(JSON.stringify({ error: 'Subscription required' }), { status: 403 }),
   requiresProSubscription: mocks.requiresPro,
 }));
-vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate }));
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mocks.gate, resolveEntitlementTier: mocks.entitlement }));
+vi.mock('@/lib/ai/core/session-spend', () => ({ conversationSessionDriveId: mocks.sessionDrive }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mocks.releaseHold }));
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8, MARKUP_BPS: 15000 }));
 vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: (provider: string) => provider === 'glm' }));
@@ -89,6 +92,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 vi.mock('ai', () => ({ streamText: mocks.streamText }));
 
 import { POST } from '../route';
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 
 const post = () => POST(new Request('http://test/api/ai/btw', {
   method: 'POST',
@@ -112,9 +116,69 @@ describe('POST /api/ai/btw credit gate', () => {
     mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1' });
     mocks.releaseHold.mockResolvedValue(undefined);
     mocks.trackUsage.mockResolvedValue({ status: 'recorded' });
-    mocks.streamText.mockReturnValue({ toTextStreamResponse: () => new Response('side') });
+    mocks.streamText.mockReturnValue({ toTextStreamResponse: (init?: ResponseInit) => new Response('side', init) });
     mocks.calculateCost.mockReturnValue(0.002);
     mocks.requiresPro.mockReturnValue(false);
+    mocks.sessionDrive.mockResolvedValue('d1');
+    // By default the funding tier is the caller's own; a test that needs a funder's tier overrides this.
+    mocks.entitlement.mockImplementation(async (_userId: string, tier: string) => tier);
+  });
+
+  it('SPEND-7 (partial) SPEND-3 (partial) names the drive of the conversation the side question asks about, and that conversation (whose stored source the gate reads); the route chooses nothing', async () => {
+    await post();
+    expect(mocks.sessionDrive).toHaveBeenCalledWith({ userId: 'u1', isShared: false, type: 'page', contextId: 'p1' });
+    const spend = { kind: 'drive', driveId: 'd1', chosen: null, conversationId: 'c1' };
+    expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend }));
+    expect(mocks.entitlement).toHaveBeenCalledWith('u1', 'free', spend);
+  });
+
+  it('SPEND-4 (partial) a drive rule that moved the side question to another source is reported on its stream, from and to', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-own', spendSource: 'own_credits', fallback: { from: 'seat_allowance', to: 'own_credits' } });
+    const response = await post();
+    expect(readSpendFallbackHeaders(response.headers)).toEqual({ from: 'seat_allowance', to: 'own_credits', walletId: 'w-own' });
+  });
+
+  it('SPEND-4 (partial) a side question that spent the source it named carries no fallback headers', async () => {
+    const response = await post();
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
+  });
+
+  it('SPEND-8 (partial) a global conversation has no drive, so the side question spends personal credits', async () => {
+    mocks.sessionDrive.mockResolvedValue(null);
+    await post();
+    expect(mocks.gate).toHaveBeenCalledWith('u1', 'free', expect.objectContaining({ spend: { kind: 'personal' } }));
+  });
+
+  it('SPEND-4 (partial) a refused source answers 402 naming it and the options, and never builds the model', async () => {
+    mocks.gate.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['own_credits'] },
+    });
+    const response = await post();
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({
+      error: 'spend_source_refused',
+      source: 'drive_wallet',
+      refusalReason: 'source_empty',
+      options: ['own_credits'],
+    });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('WAL-8 (partial) the pro-model admission reads the tier of whoever funds the source the gate HELD — never a separate pre-read that could judge another source', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-product', entitlementTier: 'business' });
+    await post();
+    expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'business', false);
+    expect(mocks.entitlement).not.toHaveBeenCalled();
+  });
+
+  it('WAL-5 (partial) settles on the wallet the gate reserved on', async () => {
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-product' });
+    await post();
+    await streamOptions().onFinish?.({ totalUsage: { inputTokens: 900, outputTokens: 100, totalTokens: 1000 }, steps: [billedStep] });
+    expect(mocks.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold_1', walletId: 'w-product' }));
   });
 
   it('refuses an out-of-credit user with the shared 402 shape and never builds or calls the model', async () => {
@@ -170,13 +234,15 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.releaseHold).not.toHaveBeenCalled();
   });
 
-  it('refuses a paid-tier model for a user whose tier does not include it, before the gate (chat admission)', async () => {
+  it('WAL-8 (partial) refuses a paid-tier model the held source\'s funder is not entitled to: judged after the gate, the hold freed, the model never built', async () => {
     mocks.requiresPro.mockReturnValue(true);
+    mocks.gate.mockResolvedValue({ allowed: true, holdId: 'hold_1', walletId: 'w-own', entitlementTier: 'free' });
     const response = await post();
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: 'Subscription required' });
     expect(mocks.requiresPro).toHaveBeenCalledWith('openrouter', 'openai/gpt-5.4-nano', 'free', false);
-    expect(mocks.gate).not.toHaveBeenCalled();
+    expect(mocks.releaseHold).toHaveBeenCalledWith('hold_1');
+    expect(mocks.provider).not.toHaveBeenCalled();
     expect(mocks.streamText).not.toHaveBeenCalled();
   });
 

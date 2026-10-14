@@ -1,12 +1,14 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { sql, eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
 import { markPageNotificationsRead } from '@pagespace/lib/notifications/notifications';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -31,9 +33,9 @@ export async function POST(
     return NextResponse.json({ error: 'Channel not found' }, { status: 404 });
   }
 
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   // Upsert the read status

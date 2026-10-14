@@ -1,4 +1,5 @@
-import { describe, test } from 'vitest';
+import { useOrgReauthStore } from '@/retained/stores/useOrgReauthStore';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { LOGOUT_ENDPOINT, signOut } from './sign-out';
 
@@ -101,4 +102,29 @@ describe('signOut()', () => {
       expected: ['/auth/signin'],
     });
   });
+});
+
+
+afterEach(() => vi.unstubAllGlobals());
+test('sign-out removes saved organization setup data before leaving, even on network failure', async () => {
+  const values = new Map([['pagespace.orgSetup.user.org', 'private invitations'], ['unrelated', 'keep']]);
+  vi.stubGlobal('localStorage', {
+    get length() { return values.size; },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    removeItem: (key: string) => values.delete(key),
+  });
+  await signOut({
+    fetch: async () => { throw new Error('offline'); },
+    navigate: () => {
+      expect(values.has('pagespace.orgSetup.user.org')).toBe(false);
+      expect(values.get('unrelated')).toBe('keep');
+    },
+  });
+});
+
+test('sign-out clears pending organization authentication denials before navigating', async () => {
+  useOrgReauthStore.getState().report({ code: 'org_reauthentication_required', orgId: 'northwind' });
+  await signOut({ fetch: async () => new Response(null, { status: 200 }), navigate: () => {
+    expect(useOrgReauthStore.getState().denials).toEqual([]);
+  } });
 });

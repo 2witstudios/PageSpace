@@ -13,22 +13,20 @@ import {
   estimateChatHoldCents,
   holdExpiresAt,
   computeMonthlyRefill,
+  forgivenAtRefillCents,
   applyPaymentToDebt,
-  validateTopupAmountCents,
   classifyStripeEvent,
   computeBackfillActions,
+  decideSettleTarget,
+  orphanSpendKind,
   computeCostDrift,
-  computeBalanceDrift,
   isNegativeMargin,
 } from '../credit-core';
-import type { SubscriptionTier } from '../../services/subscription-utils';
 
-const ALLOWANCE: Record<SubscriptionTier, number> = {
-  free: 50,
-  pro: 1500,
-  founder: 5000,
-  business: 10000,
-};
+// MON-2: computeMonthlyRefill takes the DERIVED allowance in cents; these fixtures
+// stand in for allowanceCentsForPaidCents / tierAllowanceCents results.
+const PRO_ALLOWANCE = 1500;
+const BUSINESS_ALLOWANCE = 10000;
 
 describe('markupCents', () => {
   it('marks up real cost by 1.5x and returns whole cents', () => {
@@ -366,22 +364,22 @@ describe('holdExpiresAt', () => {
   });
 });
 
-// 500¢-per-tier fixture used by debt-netting tests so the arithmetic is readable.
-const FLAT_ALLOWANCE: Record<SubscriptionTier, number> = { free: 500, pro: 500, founder: 500, business: 500 };
+// 500¢ fixture used by debt-netting tests so the arithmetic is readable.
+const FLAT_ALLOWANCE = 500;
 
 describe('computeMonthlyRefill', () => {
   it('with no prior balance (default 0) returns the full tier allowance — backward compat', () => {
-    expect(computeMonthlyRefill('pro', ALLOWANCE)).toEqual({
+    expect(computeMonthlyRefill(PRO_ALLOWANCE)).toEqual({
       monthlyRemainingCents: 1500,
       monthlyAllowanceCents: 1500,
       debtCents: 0,
     });
-    expect(computeMonthlyRefill('business', ALLOWANCE).monthlyAllowanceCents).toBe(10000);
-    expect(computeMonthlyRefill('business', ALLOWANCE).debtCents).toBe(0);
+    expect(computeMonthlyRefill(BUSINESS_ALLOWANCE).monthlyAllowanceCents).toBe(10000);
+    expect(computeMonthlyRefill(BUSINESS_ALLOWANCE).debtCents).toBe(0);
   });
 
   it('with explicit 0 remaining returns just the tier allowance — backward compat explicit 0', () => {
-    expect(computeMonthlyRefill('pro', ALLOWANCE, 0)).toEqual({
+    expect(computeMonthlyRefill(PRO_ALLOWANCE, 0)).toEqual({
       monthlyRemainingCents: 1500,
       monthlyAllowanceCents: 1500,
       debtCents: 0,
@@ -390,7 +388,7 @@ describe('computeMonthlyRefill', () => {
 
   it('accumulates: adds the tier allowance to the current remaining balance (rollover)', () => {
     // 600 carried forward + 1500 pro allowance = 2100
-    expect(computeMonthlyRefill('pro', ALLOWANCE, 600)).toEqual({
+    expect(computeMonthlyRefill(PRO_ALLOWANCE, 600)).toEqual({
       monthlyRemainingCents: 2100,
       monthlyAllowanceCents: 1500,
       debtCents: 0,
@@ -398,13 +396,13 @@ describe('computeMonthlyRefill', () => {
   });
 
   it('debtCents is 0 in the return — debt is netted into monthlyRemainingCents', () => {
-    expect(computeMonthlyRefill('pro', ALLOWANCE, 600).debtCents).toBe(0);
-    expect(computeMonthlyRefill('pro', ALLOWANCE, 9999).debtCents).toBe(0);
+    expect(computeMonthlyRefill(PRO_ALLOWANCE, 600).debtCents).toBe(0);
+    expect(computeMonthlyRefill(PRO_ALLOWANCE, 9999).debtCents).toBe(0);
   });
 
   it('nets debt against carried balance: 100¢ remaining, 200¢ debt, 500¢ allowance → 400¢', () => {
     // netCarried = 100 − 200 = −100; monthly = −100 + 500 = 400
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 200)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 100, 200)).toEqual({
       monthlyRemainingCents: 400,
       monthlyAllowanceCents: 500,
       debtCents: 0,
@@ -413,7 +411,7 @@ describe('computeMonthlyRefill', () => {
 
   it('nets debt against carried balance: 100¢ remaining, 300¢ debt, 500¢ allowance → 300¢', () => {
     // netCarried = 100 − 300 = −200; monthly = −200 + 500 = 300
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 300)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 100, 300)).toEqual({
       monthlyRemainingCents: 300,
       monthlyAllowanceCents: 500,
       debtCents: 0,
@@ -422,13 +420,13 @@ describe('computeMonthlyRefill', () => {
 
   it('clamps to 0 when debt exceeds remaining + allowance (DB constraint: monthlyRemainingCents >= 0)', () => {
     // 100¢ remaining, 700¢ debt, 500¢ allowance → net = 100 − 700 + 500 = −100 → clamped to 0
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 700)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 100, 700)).toEqual({
       monthlyRemainingCents: 0,
       monthlyAllowanceCents: 500,
       debtCents: 0,
     });
     // 0 remaining, 1000¢ debt, 500¢ allowance → −500 → 0
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 0, 1000)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 0, 1000)).toEqual({
       monthlyRemainingCents: 0,
       monthlyAllowanceCents: 500,
       debtCents: 0,
@@ -436,31 +434,33 @@ describe('computeMonthlyRefill', () => {
   });
 
   it('backward compat: omitting currentDebtCents is identical to passing 0 (no debt = pure rollover)', () => {
-    const withDefault = computeMonthlyRefill('pro', ALLOWANCE, 600);
-    const withZero = computeMonthlyRefill('pro', ALLOWANCE, 600, 0);
+    const withDefault = computeMonthlyRefill(PRO_ALLOWANCE, 600);
+    const withZero = computeMonthlyRefill(PRO_ALLOWANCE, 600, 0);
     expect(withDefault).toEqual(withZero);
   });
 
-  it('falls back to the free allowance for an unknown tier', () => {
-    expect(computeMonthlyRefill('enterprise' as SubscriptionTier, ALLOWANCE))
-      .toEqual({ monthlyRemainingCents: 50, monthlyAllowanceCents: 50, debtCents: 0 });
+  it('MON-2 never looks a tier up: a negative or non-finite allowance grants nothing', () => {
+    expect(computeMonthlyRefill(-500, 100)).toEqual({ monthlyRemainingCents: 100, monthlyAllowanceCents: 0, debtCents: 0 });
+    expect(computeMonthlyRefill(Number.NaN, 100)).toEqual({ monthlyRemainingCents: 100, monthlyAllowanceCents: 0, debtCents: 0 });
+    // A fractional derivation result is floored to whole cents.
+    expect(computeMonthlyRefill(740.4, 0).monthlyAllowanceCents).toBe(740);
   });
 
   it('treats a negative debt input as no debt (no phantom credit from a negative)', () => {
     // A negative debt must not inflate the carry. netCarried = max(0, -100) ignored →
     // 100 remaining + 500 allowance = 600, identical to passing 0 debt.
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, -100)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 100, -100)).toEqual({
       monthlyRemainingCents: 600,
       monthlyAllowanceCents: 500,
       debtCents: 0,
     });
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, -100))
-      .toEqual(computeMonthlyRefill('free', FLAT_ALLOWANCE, 100, 0));
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 100, -100))
+      .toEqual(computeMonthlyRefill(FLAT_ALLOWANCE, 100, 0));
   });
 
   it('exactly nets debt to zero carry, then adds the allowance (period rollover boundary)', () => {
     // 500¢ remaining exactly cancels 500¢ debt → net carry 0 → 0 + 500 allowance = 500.
-    expect(computeMonthlyRefill('free', FLAT_ALLOWANCE, 500, 500)).toEqual({
+    expect(computeMonthlyRefill(FLAT_ALLOWANCE, 500, 500)).toEqual({
       monthlyRemainingCents: 500,
       monthlyAllowanceCents: 500,
       debtCents: 0,
@@ -469,11 +469,25 @@ describe('computeMonthlyRefill', () => {
 
   it('rolls a large carried balance forward across the period (accumulation, no cap)', () => {
     // Credits never expire: 100_000¢ carried + 1500 pro allowance = 101_500.
-    expect(computeMonthlyRefill('pro', ALLOWANCE, 100_000)).toEqual({
+    expect(computeMonthlyRefill(PRO_ALLOWANCE, 100_000)).toEqual({
       monthlyRemainingCents: 101_500,
       monthlyAllowanceCents: 1500,
       debtCents: 0,
     });
+  });
+});
+
+describe('forgivenAtRefillCents — the debt a refill clamps away (it is ledgered)', () => {
+  it('WAL-5 (partial) is exactly what the clamp drops: debt past the carried balance plus the allowance, else nothing', () => {
+    expect(forgivenAtRefillCents(1500, 100, 200)).toBe(0);
+    expect(forgivenAtRefillCents(1500, 100, 1600)).toBe(0);
+    expect(forgivenAtRefillCents(1500, 100, 2000)).toBe(400);
+    expect(forgivenAtRefillCents(-5, 0, 300)).toBe(300);
+    for (const [allowance, rem, debt] of [[1500, 100, 2000], [0, 0, 70], [500, 900, 50]] as const) {
+      const r = computeMonthlyRefill(allowance, rem, debt);
+      // net after − net before = allowance + forgiven: the grant row and the forgiveness row.
+      expect(r.monthlyRemainingCents - r.debtCents - (rem - debt)).toBe(Math.max(0, allowance) + forgivenAtRefillCents(allowance, rem, debt));
+    }
   });
 });
 
@@ -514,32 +528,6 @@ describe('applyPaymentToDebt', () => {
   it('throws on a negative or non-finite payment', () => {
     expect(() => applyPaymentToDebt(0, 0, -100)).toThrow();
     expect(() => applyPaymentToDebt(0, 0, Number.NaN)).toThrow();
-  });
-});
-
-describe('validateTopupAmountCents', () => {
-  const MIN = 500;
-  const MAX = 20000;
-
-  it('accepts an in-range integer and returns it normalized', () => {
-    expect(validateTopupAmountCents(1234, MIN, MAX)).toBe(1234);
-  });
-
-  it('accepts the exact bounds', () => {
-    expect(validateTopupAmountCents(MIN, MIN, MAX)).toBe(MIN);
-    expect(validateTopupAmountCents(MAX, MIN, MAX)).toBe(MAX);
-  });
-
-  it('rejects amounts below the min or above the max', () => {
-    expect(validateTopupAmountCents(MIN - 1, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(MAX + 1, MIN, MAX)).toBeNull();
-  });
-
-  it('rejects non-integer, non-finite, or negative amounts', () => {
-    expect(validateTopupAmountCents(1000.5, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(Number.NaN, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(Number.POSITIVE_INFINITY, MIN, MAX)).toBeNull();
-    expect(validateTopupAmountCents(-1000, MIN, MAX)).toBeNull();
   });
 });
 
@@ -593,17 +581,94 @@ describe('classifyStripeEvent', () => {
   });
 });
 
+describe('computeBackfillActions — orphan wallet and spend kind', () => {
+  it("WAL-9 (partial) an orphaned org-pool compute charge re-settles on the recorded wallet with its compute kind — never the person's own wallet", () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'aul_org', userId: 'lead', costDollars: 0.02, source: 'terminal', walletId: 'pool-1', metadata: { spendKind: 'compute' } }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'aul_org', userId: 'lead', costDollars: 0.02, walletId: 'pool-1', spendKind: 'compute' });
+  });
+
+  it('WAL-6 (partial) an orphan that named no wallet is charged to NOBODY: it is left unattributed for reconciliation, never defaulted onto the person', () => {
+    for (const walletId of [null, undefined, '']) {
+      const [action] = computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId, metadata: {} }], {});
+      expect(action).toEqual({ kind: 'unattributed_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1 });
+    }
+  });
+
+  it('WAL-6 (partial) an orphan whose call fell back carries the chosen wallet it moved off into the re-settle, so its overshoot lands there and not on the consumer', () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', metadata: { fallbackFromWalletId: 'w-drive' } }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', spendKind: 'ai', fallbackFromWalletId: 'w-drive' });
+    // A malformed marker carries nothing.
+    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-own', metadata: { fallbackFromWalletId: 7 } }], {})[0])
+      .not.toHaveProperty('fallbackFromWalletId');
+  });
+
+  it('SPEND-10 (partial) an orphan an automation ran keeps its workflow on the re-settle, so the lead still sees it as the automation', () => {
+    const [action] = computeBackfillActions(
+      [],
+      [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: 'workflow:wf-1' }],
+      {},
+    );
+    expect(action).toEqual({ kind: 'apply_orphan', aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', spendKind: 'ai', automationRef: 'workflow:wf-1' });
+    expect(computeBackfillActions([], [{ aiUsageLogId: 'a', userId: 'u', costDollars: 1, walletId: 'w-drive', automationRef: null }], {})[0])
+      .not.toHaveProperty('automationRef');
+  });
+});
+
+describe('decideSettleTarget — the wallet a settle charges (ledger attribution)', () => {
+  it('WAL-6 (partial) a live hold names the wallet, and its fallback origin wins over a carried one', () => {
+    expect(decideSettleTarget({ hold: { walletId: 'w-own', fallbackFromWalletId: 'w-drive' }, requestedWalletId: undefined, carriedFallbackFromWalletId: 'w-other' }))
+      .toEqual({ kind: 'charge', walletId: 'w-own', fallbackFromWalletId: 'w-drive' });
+    expect(decideSettleTarget({ hold: { walletId: 'w-own', fallbackFromWalletId: null }, requestedWalletId: 'w-own', carriedFallbackFromWalletId: 'w-drive' }))
+      .toEqual({ kind: 'charge', walletId: 'w-own', fallbackFromWalletId: 'w-drive' });
+  });
+
+  it('a charge naming another wallet than its live hold is refused: neither is charged', () => {
+    expect(decideSettleTarget({ hold: { walletId: 'w-pool', fallbackFromWalletId: null }, requestedWalletId: 'w-own', carriedFallbackFromWalletId: null }))
+      .toEqual({ kind: 'mismatch', holdWalletId: 'w-pool', requestedWalletId: 'w-own' });
+  });
+
+  it('with no live hold the wallet the caller names is charged, carrying its fallback origin', () => {
+    expect(decideSettleTarget({ hold: null, requestedWalletId: 'w-drive', carriedFallbackFromWalletId: null }))
+      .toEqual({ kind: 'charge', walletId: 'w-drive', fallbackFromWalletId: null });
+  });
+
+  it('WAL-6 (partial) with no live hold and no wallet named, the settle FAILS CLOSED: nothing is charged, never the person\'s own wallet by default', () => {
+    for (const requestedWalletId of [undefined, '']) {
+      expect(decideSettleTarget({ hold: null, requestedWalletId, carriedFallbackFromWalletId: 'w-drive' })).toEqual({ kind: 'unattributed' });
+    }
+  });
+});
+
+describe('orphanSpendKind', () => {
+  it('reads only the explicit compute marker', () => {
+    expect(orphanSpendKind({ spendKind: 'compute' })).toBe('compute');
+    // A drive accrual re-settles as one, so a recovered org app's storage never lands on the lead's seat.
+    expect(orphanSpendKind({ spendKind: 'drive_compute' })).toBe('drive_compute');
+    expect(orphanSpendKind({ spendKind: 'other' })).toBe('ai');
+    expect(orphanSpendKind(null)).toBe('ai');
+    expect(orphanSpendKind('compute')).toBe('ai');
+  });
+});
+
 describe('computeBackfillActions', () => {
   it('plans a retry for each pending ledger row and an apply for each orphan usage row', () => {
     const actions = computeBackfillActions(
       [{ id: 'led_1' }, { id: 'led_2' }],
-      [{ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5 }],
+      [{ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, walletId: 'w1' }],
       { terminal: 15000 },
     );
     expect(actions).toEqual([
       { kind: 'retry_pending', ledgerId: 'led_1' },
       { kind: 'retry_pending', ledgerId: 'led_2' },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -618,11 +683,11 @@ describe('computeBackfillActions', () => {
     // rather than silently falling back to the general AI markup.
     const actions = computeBackfillActions(
       [],
-      [{ aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' }],
+      [{ aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal', walletId: 'w1' }],
       { terminal: 20000 }, // a distinct value from the general markup, so passthrough is provable
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -632,14 +697,14 @@ describe('computeBackfillActions', () => {
     const actions = computeBackfillActions(
       [],
       [
-        { aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal' },
-        { aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, source: 'voice' },
+        { aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, source: 'terminal', walletId: 'w1' },
+        { aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, source: 'voice', walletId: 'w1' },
       ],
       { terminal: 20000, voice: 18000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000 },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_term', userId: 'u1', costDollars: 0.02, markupBpsOverride: 20000, walletId: 'w1', spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_voice', userId: 'u1', costDollars: 0.02, markupBpsOverride: 18000, walletId: 'w1', spendKind: 'ai' },
     ]);
   });
 
@@ -647,14 +712,14 @@ describe('computeBackfillActions', () => {
     const actions = computeBackfillActions(
       [],
       [
-        { aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, source: 'chat' },
-        { aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+        { aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, source: 'chat', walletId: 'w1' },
+        { aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, walletId: 'w1' },
       ],
       { terminal: 20000 },
     );
     expect(actions).toEqual([
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5 },
-      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5 },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_chat', userId: 'u1', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
+      { kind: 'apply_orphan', aiUsageLogId: 'aul_none', userId: 'u2', costDollars: 0.5, walletId: 'w1', spendKind: 'ai' },
     ]);
     expect(actions[0]).not.toHaveProperty('markupBpsOverride');
     expect(actions[1]).not.toHaveProperty('markupBpsOverride');
@@ -674,8 +739,7 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 
-  const ALLOW: Record<SubscriptionTier, number> = { free: 500, pro: 1500, founder: 5000, business: 10000 };
-  const TIERS: SubscriptionTier[] = ['free', 'pro', 'founder', 'business'];
+  const ALLOWANCES = [500, 1500, 5000, 10000];
 
   it('debt and buckets stay >= 0 across 5000 random spend/pay/refill sequences', () => {
     const rand = mulberry32(0xc0ffee);
@@ -704,7 +768,7 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
         expect(debt + topup).toBe(before + payment);
       } else {
         // REFILL (renewal): debt netted against carry, allowance added, monthly clamped >= 0.
-        const refill = computeMonthlyRefill(TIERS[Math.floor(rand() * TIERS.length)], ALLOW, monthly, debt);
+        const refill = computeMonthlyRefill(ALLOWANCES[Math.floor(rand() * ALLOWANCES.length)], monthly, debt);
         monthly = refill.monthlyRemainingCents;
         debt = refill.debtCents;
       }
@@ -716,22 +780,6 @@ describe('credit-core debt invariants (property-based, seeded)', () => {
     }
   });
 
-  it('validateTopupAmountCents accepts a value iff it is an integer within [min,max]', () => {
-    const rand = mulberry32(0x1234);
-    const MIN = 500;
-    const MAX = 20000;
-    for (let i = 0; i < 2000; i++) {
-      const cents = Math.floor(rand() * 30000) - 1000; // range spans below 0, in-band, and above max
-      const result = validateTopupAmountCents(cents, MIN, MAX);
-      if (cents >= MIN && cents <= MAX) {
-        expect(result).toBe(cents);
-      } else {
-        expect(result).toBeNull();
-      }
-      // A fractional amount is always rejected, in or out of band.
-      expect(validateTopupAmountCents(cents + 0.5, MIN, MAX)).toBeNull();
-    }
-  });
 });
 
 describe('computeCostDrift', () => {
@@ -767,47 +815,6 @@ describe('computeCostDrift', () => {
     expect(r.deltaRealCostCents).toBe(-20);
     // refund charge: −(0.20 × 1.5 × 100_000) = −30_000 millicents.
     expect(r.deltaChargeMillicents).toBe(-30_000);
-  });
-});
-
-describe('computeBalanceDrift', () => {
-  it('does not flag when materialized buckets match the ledger-implied amount', () => {
-    // grants 1000 − usage 300 + adjustments 0 = 700 expected; materialized 700.
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 700, debtCents: 0 },
-      10,
-    );
-    expect(r).toEqual({ expectedSpendableCents: 700, driftCents: 0, flagged: false });
-  });
-
-  it('does not flag a divergence within tolerance', () => {
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 705, debtCents: 0 },
-      10,
-    );
-    expect(r.driftCents).toBe(5);
-    expect(r.flagged).toBe(false);
-  });
-
-  it('flags a divergence beyond tolerance (either sign)', () => {
-    expect(computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 800, debtCents: 0 },
-      10,
-    ).flagged).toBe(true);
-    expect(computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0, materializedSpendableCents: 600, debtCents: 0 },
-      10,
-    ).flagged).toBe(true);
-  });
-
-  it('folds applied adjustments into the expected amount', () => {
-    // grants 1000 − usage 300 + adjustments −15 (a reconcile debit) = 685 expected.
-    const r = computeBalanceDrift(
-      { grantCents: 1000, appliedUsageCents: 300, adjustmentCents: -15, materializedSpendableCents: 685, debtCents: 0 },
-      10,
-    );
-    expect(r.expectedSpendableCents).toBe(685);
-    expect(r.flagged).toBe(false);
   });
 });
 

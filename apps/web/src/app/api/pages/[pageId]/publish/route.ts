@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
 import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { PublishHiddenError } from '@pagespace/lib/organizations/published-visibility';
 import { deletePageFromCustomHosts, getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
@@ -13,6 +14,7 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -177,7 +179,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 }));
   }
 
   if (process.env.CANVAS_PUBLISHING_DISABLED === 'true') {
@@ -217,7 +219,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     let ogImageUrl = parsedBody?.ogImageUrl;
     if (parsedBody?.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, driveId: pageCheck.driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, driveId: pageCheck.driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }
@@ -227,7 +229,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const result = await publishCanvasPage({
       pageId,
       driveId: pageCheck.driveId,
-      userId,
+      actor: actorFromAuth(auth),
       path: parsedBody?.path,
       subdomain: parsedBody?.subdomain,
       title: parsedBody?.title,
@@ -252,7 +254,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : 'Failed to publish page';
-    const statusCode = error instanceof PublishError ? error.statusCode : 500;
+    // POL-4: a write refused because the org's policy hides this site answers 403, like the up-front refusal.
+    const statusCode = error instanceof PublishError || error instanceof PublishHiddenError ? error.statusCode : 500;
     return NextResponse.json({ error: message }, { status: statusCode });
   }
 }
@@ -271,7 +274,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to unpublish this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to unpublish this page' }, { status: 403 }));
   }
 
   try {

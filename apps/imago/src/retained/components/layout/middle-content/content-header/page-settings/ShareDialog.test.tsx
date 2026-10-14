@@ -3,6 +3,15 @@ import { describe, it, expect, vi, afterEach } from "vitest"
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react"
 import { ShareDialog } from "./ShareDialog"
 
+const orgState = vi.hoisted(() => ({ lapsed: false }))
+vi.mock("@/retained/hooks/useOrgLapsed", () => ({
+  useOrgLapsed: () => orgState.lapsed,
+  LAPSED_LOOSEN_NOTE: "Removing access and lowering roles still work.",
+}))
+vi.mock("@/retained/hooks/useDrive", () => ({
+  useDriveStore: (selector: (state: { drives: { id: string; orgId: string }[] }) => unknown) => selector({ drives: [{ id: "studio", orgId: "northwind" }] }),
+}))
+
 vi.mock("@/retained/hooks/usePage", () => ({
   usePageStore: (selector: (state: { pageId: string }) => unknown) => selector({ pageId: "plan" }),
 }))
@@ -93,4 +102,20 @@ describe("ShareDialog (re-skinned share dialog)", () => {
     await waitFor(() => expect(screen.getByText("Full access")).toBeTruthy())
     expect(screen.queryByText("Guest")).toBeNull()
   })
+
+  it("SEAT-9 (partial) a lapsed org pauses granting access and new share links while privacy restriction remains available", async () => {
+    orgState.lapsed = true
+    try {
+      render(<ShareDialog pageId="plan" />)
+      fireEvent.click(screen.getByRole("button", { name: /Share/ }))
+      await screen.findByRole("dialog")
+      expect(screen.getByRole("button", { name: "Grant Access" }).hasAttribute("disabled")).toBe(true)
+      expect(screen.getByRole("button", { name: "New share link" }).hasAttribute("disabled")).toBe(true)
+      expect(screen.getByRole("switch", { name: "Toggle page privacy" }).hasAttribute("disabled")).toBe(false)
+      expect(screen.getByText(/Sharing more is paused/)).toBeTruthy()
+    } finally {
+      orgState.lapsed = false
+    }
+  })
+
 })

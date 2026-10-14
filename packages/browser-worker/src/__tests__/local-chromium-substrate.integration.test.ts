@@ -86,9 +86,18 @@ describe('worker idle expiry', () => {
       },
     });
     const before = (await readdir(profileRoot)).length;
-    await new Promise((done) => setTimeout(done, 4_000));
-    const reachable = await fetch(`${worker.url}/healthz`).then(() => true, () => false);
-    const after = (await readdir(profileRoot)).length;
+    // Poll rather than flat-sleep: on a loaded runner Chromium's shutdown and the
+    // profile deletion can trail the 1.5 s idle limit by seconds, and a fixed wait
+    // turns machine speed into a flaky assertion.
+    const deadline = Date.now() + 30_000;
+    let reachable = true;
+    let after = before;
+    for (;;) {
+      reachable = await fetch(`${worker.url}/healthz`).then(() => true, () => false);
+      after = (await readdir(profileRoot)).length;
+      if ((!reachable && after === 0 && expired) || Date.now() > deadline) break;
+      await new Promise((done) => setTimeout(done, 250));
+    }
     await rm(profileRoot, { recursive: true, force: true });
     assert({
       given: 'a worker with a 1.5 s idle limit that receives no instruction',

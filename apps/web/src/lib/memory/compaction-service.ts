@@ -12,11 +12,11 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
 import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
-import { withMemoryCreditHold, type MemoryGateRefusal } from './memory-credit-gate';
 
 export type { MemoryField };
 
@@ -86,21 +86,23 @@ export function needsCompaction(
   return content.length > MAX_FIELD_LENGTH[field];
 }
 
+/** A field's compaction: its (possibly unchanged) content, or the credit refusal that stopped it. */
+type CompactionOutcome = { content: string } | { creditRefusal: MemoryGateRefusal };
+
 /**
- * Compact a single personalization field. Not exported: its model call is only
- * ever made under checkAndCompactIfNeeded's credit hold.
+ * Compact a single personalization field under its own credit reservation.
  */
-async function compactField(
+export async function compactField(
   userId: string,
   field: MemoryField,
   content: string
-): Promise<string> {
+): Promise<CompactionOutcome> {
   const compactTo = compactionTarget(field);
 
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory compaction: provider error', {
@@ -108,7 +110,19 @@ async function compactField(
       field,
       error: providerResult.error,
     });
-    return content;
+    return { content };
+  }
+
+  // Reserve before the model (SPEND-1). Refused: the page keeps its content, as when the
+  // provider is unavailable, and nothing is charged.
+  const reservation = await reserveMemoryCall(userId, {
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputChars: content.length,
+  });
+  if (!reservation.allowed) {
+    loggers.api.info('Memory compaction: skipped, credit gate refused', { userId, field, reason: reservation.reason });
+    return { creditRefusal: reservation.reason };
   }
 
   try {
@@ -131,14 +145,19 @@ Compact this by deleting anything that does not change AI behaviour. Output only
       ],
       temperature: 0.3,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
-    // Awaited so the debit lands while the compaction's credit hold is still held.
-    await AIMonitoring.trackUsage({
+    // Settles the reservation once (trackUsage takes the hold).
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage
@@ -146,7 +165,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         : undefined,
       success: true,
       metadata: { feature: 'memory_compaction', field },
-    });
+    }));
 
     const compactedContent = result.text.trim();
 
@@ -155,7 +174,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         userId,
         field,
       });
-      return content;
+      return { content };
     }
 
     if (compactedContent.length >= content.length) {
@@ -165,7 +184,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         originalLength: content.length,
         compactedLength: compactedContent.length,
       });
-      return content;
+      return { content };
     }
 
     loggers.api.info('Memory compaction: field compacted', {
@@ -176,14 +195,14 @@ Compact this by deleting anything that does not change AI behaviour. Output only
       reduction: `${Math.round((1 - compactedContent.length / content.length) * 100)}%`,
     });
 
-    return compactedContent;
+    return { content: compactedContent };
   } catch (error) {
     loggers.api.error('Memory compaction: generation error', {
       userId,
       field,
       error,
     });
-    return content;
+    return { content };
   }
 }
 
@@ -212,39 +231,19 @@ export async function checkAndCompactIfNeeded(
     fields: fieldsToCompact,
   });
 
-  // One hold for every field over budget, taken BEFORE any model is built. A
-  // refusal compacts nothing and writes nothing: each page stays exactly as the
-  // user and the evaluator left it, and the next run tries again.
-  const gated = await withMemoryCreditHold(userId, fieldsToCompact.length, () =>
-    compactFields(userId, fieldsToCompact, current)
-  );
-
-  if (!gated.ran) {
-    loggers.api.info('Memory compaction: skipped (credit gate refused)', {
-      userId,
-      fields: fieldsToCompact,
-      reason: gated.reason,
-    });
-    return { compacted: false, fields: [], creditRefusal: gated.reason };
-  }
-
-  return {
-    compacted: gated.value.length > 0,
-    fields: gated.value,
-  };
-}
-
-/** Compact and write each field; returns the fields whose write landed. */
-async function compactFields(
-  userId: string,
-  fieldsToCompact: MemoryField[],
-  current: Partial<Record<MemoryField, string>>
-): Promise<MemoryField[]> {
   const compactedFields: MemoryField[] = [];
 
   for (const field of fieldsToCompact) {
     const originalContent = current[field] ?? '';
-    const compactedContent = await compactField(userId, field, originalContent);
+    // Each field's model call reserves its own credits first (reserveMemoryCall). A
+    // refusal compacts and writes nothing for that field, and stops the remaining
+    // fields: their pages stay exactly as the user and the evaluator left them, and
+    // the next run tries again. Fields already compacted were paid for and keep.
+    const outcome = await compactField(userId, field, originalContent);
+    if ('creditRefusal' in outcome) {
+      return { compacted: compactedFields.length > 0, fields: compactedFields, creditRefusal: outcome.creditRefusal };
+    }
+    const compactedContent = outcome.content;
 
     if (compactedContent === originalContent) continue;
 
@@ -266,5 +265,8 @@ async function compactFields(
     }
   }
 
-  return compactedFields;
+  return {
+    compacted: compactedFields.length > 0,
+    fields: compactedFields,
+  };
 }

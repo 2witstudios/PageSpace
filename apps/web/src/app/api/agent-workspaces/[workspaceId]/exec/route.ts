@@ -24,6 +24,7 @@ import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unava
 import { isWorkspaceInCredentialScope } from '@/lib/agent-workspaces/credential-scope';
 import { canPrincipalRunCodeInDrive } from '@/lib/agent-workspaces/principal-code-exec-access';
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '@/lib/agent-workspaces/workspace-exec-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -35,9 +36,20 @@ type RouteContext = { params: Promise<{ workspaceId: string }> };
 const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   kill_switch_off: 403,
   tier_ineligible: 403,
+  // WAL-9: the org pool is missing or paused (the org must act), or cannot cover the run.
+  org_wallet_unavailable: 402,
+  org_wallet_paused: 402,
+  org_wallet_empty: 402,
+  // SEAT-9: the org is lapsed — payment required to reactivate.
+  org_lapsed: 402,
+  // WAL-2: the member's allowance of the pool is used up — the member waits, or an admin raises it.
+  org_member_cap_reached: 402,
+  // WAL-9: the session's drive cannot be resolved (mid-delete), so no one can be billed.
+  payer_unresolved: 409,
   no_drive_access: 403,
   insufficient_role: 403,
   no_agent_access: 403,
+  org_policy: 403,
   local_bind_denied: 403,
   credit_exhausted: 402,
   concurrency_limit: 429,
@@ -87,7 +99,7 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     auditSessionAccessDenial(request, auth.userId, workspaceId, access.reason, ROUTE);
     return notFound();
@@ -115,7 +127,7 @@ export async function POST(request: Request, context: RouteContext) {
     const ctx = await resolveWorkspaceExecActorContext(session, auth.userId);
     if ('error' in ctx) return NextResponse.json({ error: ctx.error, reason: 'no_drive_access' }, { status: 403 });
 
-    const result = await execInWorkspace({ session, ctx, ...parsed.data });
+    const result = await execInWorkspace({ session, ctx, actor: actorFromAuth(auth), ...parsed.data });
     if (!result.success) {
       const { error, reason } = result;
       const retryAfter = 'retryAfter' in result ? result.retryAfter : undefined;

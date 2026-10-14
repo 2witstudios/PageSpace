@@ -17,6 +17,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
 import { factories } from '@pagespace/db/test/factories';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { provisionImagoAgents } from '@pagespace/lib/agents/provision-imago-agents';
 import { setImagoDriveAccess } from '@pagespace/lib/agents/imago-drive-access';
 import { transferDriveOwnership } from '@pagespace/lib/services/drive-service';
@@ -52,7 +53,7 @@ async function transferred() {
   await factories.createDriveMember(drive.id, to.id, { role: 'ADMIN', acceptedAt: new Date() });
   await provisionImagoAgents(from.id);
   await provisionImagoAgents(to.id);
-  expect((await setImagoDriveAccess(from.id, drive.id, false)).ok).toBe(true);
+  expect((await setImagoDriveAccess(credentialActor(from.id, null), drive.id, false)).ok).toBe(true);
   await transferDriveOwnership(drive.id, from.id, to.id);
   return { from, to, drive };
 }
@@ -123,7 +124,7 @@ describe('ownership_transfer rollback and redo (real Postgres)', () => {
 
   it("given a rolled-back transfer, should restore the owner and leave both users' Imago choices alone", async () => {
     const { from, to, drive } = await transferred();
-    expect((await setImagoDriveAccess(to.id, drive.id, false)).ok).toBe(true);
+    expect((await setImagoDriveAccess(credentialActor(to.id, null), drive.id, false)).ok).toBe(true);
 
     await rollbackDriveChange(defaultRollbackDeps(), transferActivity(drive.id, from.id, to.id), context(from.id));
 
@@ -136,7 +137,7 @@ describe('ownership_transfer rollback and redo (real Postgres)', () => {
     const { from, to, drive } = await transferred();
     const activity = transferActivity(drive.id, from.id, to.id);
     await rollbackDriveChange(defaultRollbackDeps(), activity, context(from.id));
-    expect((await setImagoDriveAccess(from.id, drive.id, true)).ok).toBe(true);
+    expect((await setImagoDriveAccess(credentialActor(from.id, null), drive.id, true)).ok).toBe(true);
 
     await redoDriveChange(defaultRollbackDeps(), activity, { ownerId: to.id }, 'ownership_transfer', context(from.id));
 

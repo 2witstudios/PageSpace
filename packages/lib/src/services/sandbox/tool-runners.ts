@@ -48,6 +48,7 @@ import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types
 import { LocalEnvUnsupportedError } from './sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -91,6 +92,11 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
+  /**
+   * SPEND-10: the automation (its stored reference, automation-attribution) this turn runs for when no person is present, so compute
+   * its tools meter (a browser session) is listed under that automation, not its creator.
+   */
+  automationRef?: string;
 }
 
 export interface SandboxQuotaDeps {
@@ -118,12 +124,25 @@ export interface SandboxBillingDeps {
    * ACQUIRED SESSION's own `driveId`/`ownerId` (drive owner when it has one,
    * else the session's own owner), never the caller's surface drive or agent
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
-   * `resolveSessionPayerId` — the same rule `storageBillingTarget` applies for
-   * storage attribution.
+   * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
+   * storage attribution. An org drive's payer is the org: the charge is its POOL
+   * wallet (WAL-9), recorded under `actorId` — THE PERSON WHO CAUSES the run (the user whose
+   * chat turn or command runs, the attacher of a terminal), never the session's owner, so the
+   * per-member cap binds whoever is actually spending (WAL-2). A drive session is shared with
+   * the drive's members: charging its owner would let a member at their cap keep running in a
+   * drive-mate's session. Required, so no caller can silently default to the owner.
    */
-  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
-  /** Places a flat-estimate hold for this payer before the machine run begins. */
-  gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge | null>;
+  /**
+   * Places a flat-estimate hold on the charge's wallet before the machine run begins.
+   * `orgRefusal` names why an org pool refused (missing, paused, empty).
+   */
+  gate: (input: { charge: ComputeCharge }) => Promise<{
+    allowed: boolean;
+    holdId?: string;
+    reason?: string;
+    orgRefusal?: OrgComputeGateRefusal;
+  }>;
   /**
    * Settles the hold to the real active-window cost. Only called on a
    * successful run. `pageId` is the AI-tool-runner path's calling-surface
@@ -138,7 +157,8 @@ export interface SandboxBillingDeps {
    * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
-    payerId: string;
+    /** The charge the hold was placed for — settled against the same wallet. */
+    charge: ComputeCharge;
     holdId?: string;
     activeSeconds: number;
     /** The referenced agent page, for the per-agent usage-breakdown grouping — purely descriptive, never the payer source. */
@@ -364,7 +384,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'org_lapsed', 'org_member_cap_reached', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -387,9 +407,21 @@ export interface SandboxReconnectPrincipal {
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** WAL-9: the drive's org pays, and its pool wallet is missing, paused, or cannot cover the run. Nothing started. */
+  | 'org_wallet_unavailable'
+  | 'org_wallet_paused'
+  | 'org_wallet_empty'
+  /** SEAT-9: the drive's org is lapsed — its pool spends nothing until an Owner or Admin reactivates billing. Nothing started. */
+  | 'org_lapsed'
+  /** WAL-2: the member has used their allowance of the org pool (AI and compute share it). Nothing started. */
+  | 'org_member_cap_reached'
+  /** WAL-9: the session's drive cannot be resolved, so nobody can be billed for the run. Nothing started. */
+  | 'payer_unresolved'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  /** POL-10: the drive's org has turned cloud sandboxes off. Nothing started. */
+  | 'org_policy'
   | 'no_machine'
   | 'session_runtime_exceeded'
   | 'credit_exhausted'
@@ -476,9 +508,16 @@ export type EditFileToolResult =
 export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
+  org_wallet_unavailable: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable,
+  org_wallet_paused: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
+  org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
+  org_lapsed: ORG_COMPUTE_REFUSAL_MESSAGES.org_lapsed,
+  org_member_cap_reached: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached,
+  payer_unresolved: "This session's drive could not be found, so there is no one to bill for the run and nothing was started.",
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
+  org_policy: "This organization doesn't allow cloud sandboxes.",
   no_machine: 'No machine is configured for this run.',
   session_runtime_exceeded:
     "This session's sandbox has been running continuously for too long. Wait for it to go idle, or switch to a different session.",
@@ -679,12 +718,21 @@ export async function withMachineBilling<S>(
   if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
   if (!billingSession) return run();
 
-  const payerId = await billing.resolvePayerId({
+  const charge = await billing.resolveCharge({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
+    // The person whose turn runs this tool, not the session's owner: a drive session is shared.
+    actorId: ctx.userId,
   });
-  const gate = await billing.gate({ payerId });
-  if (!gate.allowed) return fail('credit_exhausted');
+  // WAL-9: a session whose drive cannot be resolved has no payer — refused, never billed to a person.
+  if (charge === null) return fail('payer_unresolved');
+  // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
+  // refuses here, before any machine is touched, and names the org state — it never
+  // falls back to holding on a person's wallet.
+  const gate = await billing.gate({ charge });
+  if (!gate.allowed) {
+    return fail(gate.orgRefusal !== undefined && isOrgComputeRefusal(gate.orgRefusal) ? gate.orgRefusal : 'credit_exhausted');
+  }
 
   const holdId = gate.holdId;
   const startedAt = deps.now().getTime();
@@ -694,7 +742,7 @@ export async function withMachineBilling<S>(
     if (result.success) {
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
       const settle = await billing.trackUsage({
-        payerId,
+        charge,
         holdId,
         activeSeconds,
         // Purely descriptive (which agent page this run was for) — never the

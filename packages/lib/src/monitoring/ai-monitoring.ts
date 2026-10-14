@@ -8,12 +8,15 @@ export { MODEL_CONTEXT_WINDOWS, getContextWindow } from '../ai/model-context-win
 import { db } from '@pagespace/db/db';
 import { sql, and, eq, gte, lte } from '@pagespace/db/operators';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import type { SpendKind } from '@pagespace/db/schema/credits';
 import { writeAiUsage } from '../logging/logger-database';
-import { consumeCredits, releaseHold } from '../billing/credit-consume';
+import { consumeCredits, holdSettleFacts, releaseHold } from '../billing/credit-consume';
+import { isBillingEnabled } from '../deployment-mode';
 import { CACHE_READ_DISCOUNT_FACTOR_BPS } from '../billing/credit-pricing';
 import { loggers } from '../logging/logger-config';
 import { normalizeUsageSource, type AIUsageSource } from './usage-source';
 import { isMeteringExempt } from '../ai/model-defaults';
+import { errorLogFields } from '../logging/error-cause';
 
 /**
  * Providers NOT served through OpenRouter. Everything else is a cloud vendor
@@ -579,6 +582,10 @@ export const AI_PRICING = {
 
   'xiaomi/mimo-v2.6-flash': { input: 0.14, output: 0.28 },
 
+  // Free-tier catalog model (#2758). Priced at $0 explicitly: an id missing here is
+  // "unknown" to chat-pricing and would hold and abort-guard at the fallback cost.
+  'apodex/apodex-1.1-mini:free': { input: 0, output: 0 },
+
   // Default/Unknown models
   'default': { input: 0, output: 0 }
 } as const;
@@ -795,6 +802,25 @@ export interface AIUsageData {
   // route → here → consumeCredits. Absent for un-gated calls (e.g. cron paths).
   holdId?: string;
 
+  // The wallet that hold was placed on (CreditGateResult.walletId, WAL-5), threaded with
+  // it so the charge settles against the wallet the call named, never re-derived from the
+  // user. Absent for un-gated calls, which charge the personal root wallet.
+  walletId?: string;
+
+  // WAL-6b: for a call with no hold of its own, the chosen wallet its turn's fallback moved off
+  // (spendFallbackFromWalletId of the turn's target), so its overshoot never lands on the person.
+  fallbackFromWalletId?: string;
+
+  // SPEND-10: the automation (its stored reference, automation-attribution) this call ran for with no person present
+  // (automationRefFor). Recorded on the usage row and the ledger claim, so the drive lead
+  // sees the spend as the automation rather than merged into its creator.
+  automationRef?: string;
+
+  // What the spend is FOR: an AI call (the default) or compute (WAL-9). Written on the
+  // ledger rows and stamped into metadata.spendKind, so the orphan recovery re-settles
+  // with the same kind; compute on an org pool never counts toward a seat.
+  spendKind?: SpendKind;
+
   // Override the cost provenance stamped into metadata.costSource (which the admin
   // panel reads to classify coverage). Defaults to 'openrouter' when a finite
   // providerCostDollars is given, else 'estimate'. Voice routes pass 'list_price'
@@ -971,6 +997,31 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
     // log AND the charge — and with no aiUsageLogs row the reconcile cron's orphan
     // sweep has nothing to recover from. Awaiting makes the write durable before
     // the request returns. Still never throws into the AI request (see catch).
+    // FAIL CLOSED (review 5343636479 P1-1): a charge that names a wallet other than the
+    // one its hold reserves on is refused BEFORE anything is written — no usage row (so no
+    // sweep can bill it later), no charge to either wallet. The caller keeps its window
+    // open; a meter whose payer changed mid-window releases and re-acquires the hold on the
+    // right wallet first (app-lifecycle-metering, awake-meter), so this is the backstop.
+    // Only where money moves: a billing-off deployment charges no wallet at all.
+    // WAL-5 / WAL-6b: the wallet and fallback origin are read from the LIVE hold now and written
+    // on the usage row itself, so a settle that fails here is recovered by the orphan sweep on
+    // exactly that wallet with exactly that origin — never re-derived onto the person later.
+    const heldFacts = isBillingEnabled() && data.holdId ? await holdSettleFacts(data.holdId).catch(() => null) : null;
+    const settleWalletId = data.walletId ?? heldFacts?.walletId;
+    const settleFallbackFromWalletId = heldFacts?.fallbackFromWalletId ?? data.fallbackFromWalletId;
+    if (heldFacts !== null && data.walletId !== undefined) {
+      const held = heldFacts.walletId;
+      if (held !== data.walletId) {
+        loggers.ai.error('AI usage settle REFUSED: the charge names a different wallet than its hold — nothing written, nothing charged', new Error('hold wallet mismatch'), {
+          holdId: data.holdId,
+          holdWalletId: held,
+          requestedWalletId: data.walletId,
+          model: data.model,
+          source: data.source,
+        });
+        return { persisted: false, creditsSettled: false };
+      }
+    }
     try {
       const aiUsageLogId = await writeAiUsage({
         userId: data.userId,
@@ -1014,7 +1065,16 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           // when present (OpenRouter calls); the cron reads these to fetch authoritative
           // /generation costs and correct billing drift.
           ...(generationIds.length > 0 ? { generationIds } : {}),
+          // Explicit for the orphan recovery: a usage row whose settle never landed is
+          // re-settled with this kind (credit-backfill), never guessed from its source.
+          ...(data.spendKind !== undefined && data.spendKind !== 'ai' ? { spendKind: data.spendKind } : {}),
+          // WAL-6b: the chosen wallet a fallback moved this call off, for the orphan recovery.
+          ...(settleFallbackFromWalletId ? { fallbackFromWalletId: settleFallbackFromWalletId } : {}),
         },
+        // WAL-5: the wallet this call is charged to, recorded WITH the usage row so the
+        // orphan recovery re-settles on it — never re-derived onto the person's own wallet.
+        ...(settleWalletId !== undefined ? { walletId: settleWalletId } : {}),
+        ...(data.automationRef ? { automationRef: data.automationRef } : {}),
         reconcileStatus,
       });
       // `writeAiUsage` CATCHES its own failure and returns null rather than
@@ -1065,13 +1125,19 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
           userId: data.userId,
           costDollars: cost,
           holdId: data.holdId,
+          // The wallet and origin read from the live hold above (or named by the caller): the same
+          // ones written on the usage row, so the in-line settle and any recovery agree.
+          walletId: settleWalletId,
+          ...(settleFallbackFromWalletId ? { fallbackFromWalletId: settleFallbackFromWalletId } : {}),
+          ...(data.automationRef ? { automationRef: data.automationRef } : {}),
+          spendKind: data.spendKind,
           // Scope the live balance push so the per-conversation usage monitor
           // refreshes the right view; the navbar widget updates regardless.
           conversationId: data.conversationId,
           pageId: data.pageId,
           markupBpsOverride: data.markupBpsOverride,
         }).catch((error) => {
-          loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          loggers.ai.warn('credit consume failed', errorLogFields(error));
           return 'deferred' as const;
         });
         if (settle !== 'settled') {
@@ -1118,9 +1184,7 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
       return USAGE_TRACKING_LOST;
     }
   } catch (error) {
-    loggers.ai.debug('AI usage calculation failed', {
-      error: (error as Error).message
-    });
+    loggers.ai.warn('AI usage calculation failed', errorLogFields(error));
     // Same reasoning as the inner catch above: a stranded hold outlives its TTL
     // suppressing the payer's balance for nothing, and nothing on this path could
     // have confirmed a charge against it.

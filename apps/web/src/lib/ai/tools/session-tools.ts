@@ -82,6 +82,8 @@ import { MAX_SIBLINGS } from '@pagespace/lib/agent-workspaces/workspace-node-val
 import type { ToolExecutionContext } from '../core/types';
 import { nullableDriveDeniedForActor } from './actor-permissions';
 import type { AgentToolSurface } from '../core/agent-tool-surface';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { toolActor } from './actor-permissions';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
 export const MAX_SESSION_INPUT_BYTES = 4000;
@@ -493,7 +495,7 @@ export interface SessionToolsDeps {
    * forever, while every HTTP route 404s her. Without this check the tool
    * surface stayed open after the HTTP surface closed.
    */
-  checkWorkspaceAccess: (userId: string, workspaceId: string) => Promise<{ allowed: boolean }>;
+  checkWorkspaceAccess: (actor: AccessActor, workspaceId: string) => Promise<{ allowed: boolean }>;
   /**
    * The END-SESSION decision (`decideAgentSessionEndAccess`): the worker's owner
    * always, otherwise drive owner/admin AND the code-execution capability.
@@ -507,7 +509,7 @@ export interface SessionToolsDeps {
    * visible act on someone else's work, and reusing the existing decision keeps
    * one rule rather than inventing a second, weaker one next to it.
    */
-  checkWorkspaceEndAccess: (userId: string, workspaceId: string) => Promise<{ allowed: boolean }>;
+  checkWorkspaceEndAccess: (actor: AccessActor, workspaceId: string) => Promise<{ allowed: boolean }>;
   /**
    * Relabel a workspace the caller OWNS.
    *
@@ -525,7 +527,7 @@ export interface SessionToolsDeps {
    * empty and reaches everything it owns.
    */
   renameWorkspace: (input: {
-    userId: string;
+    actor: AccessActor;
     workspaceId: string;
     name: string;
     allowedDriveIds: string[];
@@ -555,7 +557,7 @@ export interface SessionToolsDeps {
    * denies an owner removed from the workspace's drive.
    */
   listOwnWorkspaces: (input: {
-    userId: string;
+    actor: AccessActor;
     excludeWorkspaceId?: string;
   }) => Promise<OwnWorkspaceSummary[]>;
   /**
@@ -568,7 +570,7 @@ export interface SessionToolsDeps {
    * caller's OWN set, this one has no structural per-owner ceiling behind it.
    */
   listSharedWorkspaces: (input: {
-    userId: string;
+    actor: AccessActor;
     excludeWorkspaceId?: string;
   }) => Promise<SharedWorkspaceSummary[]>;
   /** One worker conversation's identity slice, or null. */
@@ -585,7 +587,7 @@ export interface SessionToolsDeps {
    * Whether the CALLER may spawn a worker under this agent page — the same
    * view permission any agent consult requires. Never called for null (global).
    */
-  canUseAgent: (userId: string, agentPageId: string) => Promise<boolean>;
+  canUseAgent: (actor: AccessActor, agentPageId: string) => Promise<boolean>;
   /**
    * What that agent's stored tool config will ACTUALLY become in the worker's
    * turn, with a sentence per divergence (`../core/agent-tool-surface.ts`).
@@ -617,7 +619,7 @@ export interface SessionToolsDeps {
    */
   describeWorkerComputeShortfall: (input: {
     workspaceId: string;
-    userId: string;
+    actor: AccessActor;
     /**
      * What the worker's agent grants, or `null` for "unrestricted" — an agent
      * with no allowlist, or a global worker, which reaches the whole registry.
@@ -632,7 +634,8 @@ export interface SessionToolsDeps {
     conversationId: string;
     /** The caller's conversation — the workspace default when `workspace` is omitted. */
     callerConversationId: string;
-    ownerId: string;
+    /** The caller, who owns the new worker: placement and minting are authorized through their credential. */
+    actor: AccessActor;
     agentPageId: string | null;
     name: string;
     /**
@@ -666,7 +669,8 @@ export interface SessionToolsDeps {
     conversationId: string;
     agentPageId: string | null;
     input: string;
-    userId: string;
+    /** The dispatching caller: the worker runs as them, carrying their credential's ceremony evidence (SEC-2/3). */
+    actor: AccessActor;
     /** The dispatched run executes one level deeper than the caller. */
     depth: number;
     wait: boolean;
@@ -703,14 +707,15 @@ export interface SessionToolsDeps {
   /** Lazily ensure the CALLER's own session row + sandbox — the shell family's first touch. */
   ensureOwnSessionSandbox: (input: {
     conversationId: string;
-    userId: string;
+    actor: AccessActor;
     agentPageId: string | null;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
   /** Reserve a shell row (auto-label via the pure planner) AND the pane that shows it. Never starts a PTY. */
   spawnShell: (input: {
     /** The CALLER's conversation — the runtime resolves its workspace; shells hang off that. */
     conversationId: string;
-    ownerId: string;
+    /** The caller, who owns the shell. */
+    actor: AccessActor;
     name?: string;
   }) => Promise<{ ok: true; shell: ShellDTO; panes: ToolPaneState } | { ok: false; reason: string }>;
   /** A shell's identity + cold-tail record, or null. */
@@ -730,17 +735,17 @@ export interface SessionToolsDeps {
    */
   killShell: (input: {
     shellId: string;
-    actingUserId: string;
+    actor: AccessActor;
   }) => Promise<{ ok: true; killed: boolean; panes: ToolPaneState | null } | { ok: false; reason: string }>;
   /** PTY IO against the realtime service that owns the stream — see shell-io.ts. */
   shellIo: {
     read: (input: {
       shellId: string;
       lines: number;
-      userId: string;
+      actor: AccessActor;
       cold?: { tail: string; at: Date; hasOutput: boolean };
     }) => Promise<ShellReadOutcome>;
-    send: (input: { shellId: string; keystrokes: string; userId: string }) => Promise<ShellSendOutcome>;
+    send: (input: { shellId: string; keystrokes: string; actor: AccessActor }) => Promise<ShellSendOutcome>;
   };
   /**
    * The caller's workspace's LAYOUT, as `list_panes` reports it (issue #2208) —
@@ -748,7 +753,7 @@ export interface SessionToolsDeps {
    * binding for the model to tell one rectangle from another. `null` for a
    * workspace whose layout has never been opened.
    */
-  readPaneGrid?: (workspaceId: string, viewerId: string) => Promise<PaneGridListing | null>;
+  readPaneGrid?: (workspaceId: string, viewer: AccessActor) => Promise<PaneGridListing | null>;
   /**
    * Apply ONE layout command to the caller's workspace, through the same single
    * writer the `/nodes` route uses — same per-workspace lock, same validation,
@@ -766,7 +771,7 @@ export interface SessionToolsDeps {
    */
   applyLayoutCommand?: (input: {
     workspaceId: string;
-    actingUserId: string;
+    actor: AccessActor;
     command: LayoutCommand;
   }) => Promise<{ ok: true; changed: boolean } | { ok: false; reason: string }>;
   /** Fresh conversation ids (client-mint discipline: the id exists before the row). */
@@ -844,8 +849,8 @@ function readContext(options: unknown): ToolExecutionContext | undefined {
   return (options as { experimental_context?: ToolExecutionContext })?.experimental_context;
 }
 
-function readActor(context: ToolExecutionContext | undefined): { userId: string } | undefined {
-  return context?.userId ? { userId: context.userId } : undefined;
+function readActor(context: ToolExecutionContext | undefined): AccessActor | undefined {
+  return context?.userId ? toolActor(context) : undefined;
 }
 
 /** How deep in an agent-to-agent chain this call already is. */
@@ -1140,7 +1145,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // workspace-less refusal below is what makes it non-null, and callers that
     // need the workspace (kill's END check) should read that from the TYPE
     // rather than re-asserting an invariant that could be reordered away.
-    | { ok: true; actor: { userId: string }; row: WorkerRow & { workspaceId: string } }
+    | { ok: true; actor: AccessActor; row: WorkerRow & { workspaceId: string } }
     | { ok: false; error: { success: false; error: string } }
   > => {
     const actor = readActor(context);
@@ -1165,7 +1170,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
       if (row.workspaceId === null) {
         return { ok: false, error: notYourSession(conversationId) };
       }
-      const access = await deps.checkWorkspaceAccess(actor.userId, row.workspaceId);
+      const access = await deps.checkWorkspaceAccess(actor, row.workspaceId);
       if (!access.allowed) {
         return { ok: false, error: notYourSession(conversationId) };
       }
@@ -1217,7 +1222,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
   const openOwnGrid = async (
     context: ToolExecutionContext | undefined,
   ): Promise<
-    | { ok: true; workspaceId: string; viewerId: string }
+    | { ok: true; workspaceId: string; viewer: AccessActor }
     | { ok: false; error: { success: false; error: string } }
   > => {
     const actor = readActor(context);
@@ -1232,9 +1237,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
     // GRID_ACCESS_LOST: nothing was lost, it was never in scope, and the
     // less specific answer is the fail-closed one.
     if (!(await withinCredentialScope(context, workspace.driveId))) return { ok: false, error: NO_GRID };
-    const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
+    const access = await deps.checkWorkspaceAccess(actor, workspace.workspaceId);
     if (!access.allowed) return { ok: false, error: GRID_ACCESS_LOST };
-    return { ok: true, workspaceId: workspace.workspaceId, viewerId: actor.userId };
+    return { ok: true, workspaceId: workspace.workspaceId, viewer: actor };
   };
 
   /**
@@ -1265,7 +1270,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
       workspaceId: opened.workspaceId,
       // The ACTING USER, whose own authority gates any binding this touches —
       // never the model's word for who is asking.
-      actingUserId: opened.viewerId,
+      actor: opened.viewer,
       command,
     });
     if (!result.ok) {
@@ -1311,7 +1316,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
   ): Promise<
     | {
         ok: true;
-        actor: { userId: string };
+        actor: AccessActor;
         shell: NonNullable<Awaited<ReturnType<SessionToolsDeps['findShell']>>>;
       }
     | { ok: false; error: { success: false; error: string } }
@@ -1334,7 +1339,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
     }
     // Revocation check, before the shell row is read: a caller who may no
     // longer use this workspace learns nothing about which shells are in it.
-    const access = await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId);
+    const access = await deps.checkWorkspaceAccess(actor, workspace.workspaceId);
     if (!access.allowed) return { ok: false, error: notYourShell(shellId) };
     const shell = await deps.findShell(shellId);
     // Shells target ONLY the caller's own workspace's sandbox — a shell of
@@ -1384,7 +1389,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const workspace =
           boundWorkspace &&
           (await withinCredentialScope(context, boundWorkspace.driveId)) &&
-          (await deps.checkWorkspaceAccess(actor.userId, boundWorkspace.workspaceId)).allowed
+          (await deps.checkWorkspaceAccess(actor, boundWorkspace.workspaceId)).allowed
             ? boundWorkspace
             : null;
         // Own and member-visible sets in parallel, both minus the workspace
@@ -1401,8 +1406,8 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // reason for the refusal, and for any `deps` implementation.
         const excludeWorkspaceId = boundWorkspace?.workspaceId;
         const [ownWorkspaces, memberWorkspaces] = await Promise.all([
-          deps.listOwnWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
-          deps.listSharedWorkspaces({ userId: actor.userId, excludeWorkspaceId }),
+          deps.listOwnWorkspaces({ actor, excludeWorkspaceId }),
+          deps.listSharedWorkspaces({ actor, excludeWorkspaceId }),
         ]);
         // Both listings resolve from the USER's drive relationships
         // (`getDriveIdsForUser`), which is the right question for a session and
@@ -1502,7 +1507,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // An explicit agent must be one the caller can actually consult;
         // the caller's own agent (or the global assistant) needs no check.
         const agentPageId = plan.agentId ?? callerAgentPageId(context);
-        if (plan.agentId !== null && !(await deps.canUseAgent(actor.userId, plan.agentId))) {
+        if (plan.agentId !== null && !(await deps.canUseAgent(actor, plan.agentId))) {
           return {
             success: false,
             error: `There is no agent "${plan.agentId}" you can use. Call list_agents to see the available agents.`,
@@ -1607,7 +1612,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const created = await deps.createWorkerSession({
           conversationId,
           callerConversationId,
-          ownerId: actor.userId,
+          actor,
           agentPageId,
           name: plan.name,
           workspace: targetWorkspace,
@@ -1629,7 +1634,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const shortfall = await deps
           .describeWorkerComputeShortfall({
             workspaceId: created.workspaceId,
-            userId: actor.userId,
+            actor,
             granted: grantedForComputeCheck,
           })
           .catch(() => null);
@@ -1655,7 +1660,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           conversationId,
           agentPageId,
           input: plan.prompt,
-          userId: actor.userId,
+          actor,
           depth: plan.childDepth,
           wait: wait === true,
           scope: readDispatchScope(context),
@@ -1705,7 +1710,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           conversationId,
           agentPageId: opened.row.agentPageId,
           input,
-          userId: opened.actor.userId,
+          actor: opened.actor,
           depth: readDepth(context) + 1,
           wait: wait === true,
           scope: readDispatchScope(context),
@@ -1774,7 +1779,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // protect and the refusal can say exactly what is missing.
         if (opened.row.ownerId !== opened.actor.userId) {
           const canEnd = await deps.checkWorkspaceEndAccess(
-            opened.actor.userId,
+            opened.actor,
             opened.row.workspaceId,
           );
           if (!canEnd.allowed) return cannotStopOthersWorker(sessionId);
@@ -1833,7 +1838,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         }
 
         const renamed = await deps.renameWorkspace({
-          userId: actor.userId,
+          actor,
           workspaceId: targetId,
           name: trimmed,
           // The ceiling travels with the call; the runtime compares it to the
@@ -1878,12 +1883,12 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         const ensured = await deps.ensureOwnSessionSandbox({
           conversationId,
-          userId: actor.userId,
+          actor,
           agentPageId: callerAgentPageId(context),
         });
         if (!ensured.ok) return { success: false, error: ensured.error };
 
-        const spawned = await deps.spawnShell({ conversationId, ownerId: actor.userId, name });
+        const spawned = await deps.spawnShell({ conversationId, actor, name });
         if (!spawned.ok) {
           return {
             success: false,
@@ -1928,7 +1933,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const opened = await openOwnShell(readContext(options), shellId);
         if (!opened.ok) return opened.error;
 
-        const sent = await deps.shellIo.send({ shellId, keystrokes, userId: opened.actor.userId });
+        const sent = await deps.shellIo.send({ shellId, keystrokes, actor: opened.actor });
         if (!sent.ok) return { success: false, error: sent.error };
         return {
           success: true,
@@ -1953,7 +1958,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const read = await deps.shellIo.read({
           shellId,
           lines: tail ?? DEFAULT_SHELL_TAIL_LINES,
-          userId: opened.actor.userId,
+          actor: opened.actor,
           cold: opened.shell.cold,
         });
         if (!read.ok) return { success: false, error: read.error };
@@ -1992,7 +1997,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         const workspace = await deps.findOwnWorkspace(conversationId);
         const stillAllowed =
           workspace && (await withinCredentialScope(context, workspace.driveId))
-            ? (await deps.checkWorkspaceAccess(actor.userId, workspace.workspaceId)).allowed
+            ? (await deps.checkWorkspaceAccess(actor, workspace.workspaceId)).allowed
             : false;
         const shell = await deps.findShell(shellId);
         // Already gone is SUCCESS (planKillTarget's rule): teardown callers
@@ -2001,7 +2006,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           return { success: true, shellId, killed: false, note: 'That shell was already gone.' };
         }
 
-        const killed = await deps.killShell({ shellId, actingUserId: actor.userId });
+        const killed = await deps.killShell({ shellId, actor });
         if (!killed.ok) {
           // The MODEL reads the sentence, not the reason code. Telling it to
           // retry a refusal that is a permanent property of the machine's
@@ -2049,7 +2054,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         // Labels are a permissioned join (review HIGH 1) — the read says who
         // is reading, so the model sees exactly what this user's own GET would.
-        const layout = await deps.readPaneGrid(opened.workspaceId, opened.viewerId);
+        const layout = await deps.readPaneGrid(opened.workspaceId, opened.viewer);
         // A workspace whose layout has never been opened is a real, reportable
         // state — not an error, and not the same as having no workspace.
         if (!layout) {

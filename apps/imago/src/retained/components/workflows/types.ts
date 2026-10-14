@@ -33,6 +33,8 @@ export interface Workflow {
   cronExpression: string | null;
   timezone: string;
   isEnabled: boolean;
+  /** Creator departure disables execution until ownership is reassigned. */
+  ownerLeftAt?: string | null;
   nextRunAt: string | null;
   lastRun: WorkflowLastRun | null;
   createdAt: string;

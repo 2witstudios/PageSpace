@@ -11,6 +11,9 @@ import { toast } from 'sonner';
 import { post, patch } from '@/retained/lib/auth/auth-fetch';
 import { ROLE_COLORS } from '@/retained/lib/utils';
 import { PermissionsGrid } from '@/retained/components/members/PermissionsGrid';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/retained/hooks/useOrgLapsed';
+import { roleGrantWidens } from '@pagespace/lib/organizations/loosening-core';
 
 interface Role {
   id: string;
@@ -49,6 +52,13 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
     role?.driveWidePermissions ?? null
   );
   const [saving, setSaving] = useState(false);
+  const driveOrgId = useDriveStore((state) => state.drives.find((drive) => drive.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
+  const editedGrant = { permissions: Object.fromEntries(permissions), driveWidePermissions: driveWidePerms };
+  const widens = isEditing && role
+    ? roleGrantWidens({ permissions: role.permissions, driveWidePermissions: role.driveWidePermissions ?? null }, editedGrant) || (isDefault && !role.isDefault)
+    : isDefault;
+  const lapsedBlocksSave = lapsed && widens;
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
     setPermissions(prev => {
@@ -224,7 +234,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         <Button variant="outline" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={saving}>
+        {lapsedBlocksSave && (
+          <p className="mr-auto self-center text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+            Widening a role or making it the default is paused. {LAPSED_LOOSEN_NOTE}
+          </p>
+        )}
+        <Button onClick={handleSave} disabled={saving || lapsedBlocksSave}>
           {saving ? 'Saving…' : 'Save role'}
         </Button>
       </div>

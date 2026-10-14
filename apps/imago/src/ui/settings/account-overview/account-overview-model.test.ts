@@ -11,7 +11,7 @@ import {
 } from './account-overview-model';
 import { accountNav, type NavContext } from '../settings-nav/settings-nav';
 
-const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, orgs: false };
+const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, hasOrganizations: false };
 
 describe('accountOf()', () => {
   test('the viewer identity from GET /api/account', () => {

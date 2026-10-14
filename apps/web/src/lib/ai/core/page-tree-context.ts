@@ -11,6 +11,7 @@ import { pages, drives } from '@pagespace/db/schema/core';
 import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildTree, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess } from '@pagespace/lib/content/tree-utils';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 interface TreeNode {
   id: string;
@@ -50,26 +51,28 @@ interface PageTreeOptions {
   pageId?: string;  // Required when scope is 'children'
   driveId: string;
   maxNodes?: number;
+  allowedDriveIds?: readonly string[];
 }
 
 /**
  * Builds the page tree context for an AI agent's system prompt.
  *
- * @param userId - The authenticated user's ID
+ * @param actor - The authenticated caller (their credential decides org access)
  * @param options - Tree scope and drive/page context
  * @returns A formatted markdown tree string, or empty string if access denied
  */
 export async function getPageTreeContext(
-  userId: string,
+  actor: AccessActor,
   options: PageTreeOptions
 ): Promise<string> {
   const { scope, pageId, driveId, maxNodes = 200 } = options;
+  if (options.allowedDriveIds?.length && !options.allowedDriveIds.includes(driveId)) return '';
 
   try {
     // Check user has access to drive
-    const hasAccess = await getUserDriveAccess(userId, driveId);
+    const hasAccess = await getUserDriveAccess(actor, driveId);
     if (!hasAccess) {
-      loggers.ai.debug('User lacks drive access for page tree', { userId, driveId });
+      loggers.ai.debug('User lacks drive access for page tree', { userId: actor.userId, driveId });
       return '';
     }
 
@@ -89,13 +92,13 @@ export async function getPageTreeContext(
     // drive-role grants on private pages and custom-role denials of otherwise-
     // public pages — so the tree exactly matches what the user can actually see.
     // Ancestor-gated: an inaccessible page hides its whole subtree.
-    const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+    const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(actor, driveId);
     const accessibleIds = new Set(accessiblePages.map(p => p.id));
     const beforeFilter = nodes.length;
     nodes = filterTreeNodesByAccess(nodes, accessibleIds);
     loggers.ai.debug('Filtered page tree by per-page access', {
       driveId,
-      userId,
+      userId: actor.userId,
       beforeFilter,
       afterFilter: nodes.length,
     });
@@ -122,12 +125,12 @@ export async function getPageTreeContext(
  * Builds a summary of accessible drives for dashboard context
  * (when no specific drive is selected).
  *
- * @param userId - The authenticated user's ID
+ * @param actor - The authenticated caller (their credential decides org access)
  * @returns A formatted list of accessible drives
  */
 export async function getDriveListSummary(
-  userId: string,
-  options: { excludedDriveIds?: ReadonlySet<string> } = {},
+  actor: AccessActor,
+  options: { excludedDriveIds?: ReadonlySet<string>; allowedDriveIds?: readonly string[] } = {},
 ): Promise<string> {
   try {
     // Get all non-trashed drives, minus any the caller's agent is kept out of
@@ -135,14 +138,15 @@ export async function getDriveListSummary(
       .select({ id: drives.id, name: drives.name })
       .from(drives)
       .where(eq(drives.isTrashed, false)))
-      .filter((drive) => !options.excludedDriveIds?.has(drive.id));
+      .filter((drive) => !options.excludedDriveIds?.has(drive.id) &&
+        (!options.allowedDriveIds?.length || options.allowedDriveIds.includes(drive.id)));
 
     // Filter to drives the user has access to (parallel permission checks)
     const accessChecks = await Promise.all(
       allDrives.map(async (drive) => ({
         id: drive.id,
         name: drive.name,
-        hasAccess: await getUserDriveAccess(userId, drive.id)
+        hasAccess: await getUserDriveAccess(actor, drive.id)
       }))
     );
     const accessibleDrives = accessChecks.filter(d => d.hasAccess);

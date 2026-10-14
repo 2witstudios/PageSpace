@@ -54,7 +54,7 @@ vi.mock('@/lib/auth', () => ({
   // test's getDriveAccess fixture so existing fixtures keep driving 403/200.
   isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
     const { getDriveAccess } = await import('@pagespace/lib/services/drive-service');
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, credentialActor(auth.userId, null));
     return Boolean(access && (access.isOwner || access.isAdmin));
   }),
 }));
@@ -69,6 +69,8 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
+
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: vi.fn().mockResolvedValue(['user-123', 'user-456']),
 }));
@@ -77,6 +79,8 @@ import { getDriveById, getDriveAccess, getDriveWithAccess, updateDrive, trashDri
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -112,6 +116,8 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 // Drive with access info fixture
@@ -133,6 +139,8 @@ const createDriveWithAccessFixture = (
   canCreatePages: overrides.canCreatePages ?? true,
   lastAccessedAt: overrides.lastAccessedAt ?? null,
   homePageId: overrides.homePageId ?? null,
+  orgId: overrides.orgId ?? null,
+  orgVisibility: overrides.orgVisibility ?? 'OPEN',
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
@@ -201,7 +209,7 @@ describe('GET /api/drives/[driveId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}`);
       await GET(request, createContext(mockDriveId));
 
-      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(getDriveWithAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call getDriveById when getDriveWithAccess returns null', async () => {
@@ -1114,5 +1122,73 @@ describe('DELETE /api/drives/[driveId] — Home drive guard', () => {
     expect(response.status).toBe(403);
     expect(body.error).toBe('Your Home drive cannot be moved to trash or deleted.');
     expect(trashDrive).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH (rename) and DELETE (trash) /api/drives/[driveId]: org power is audited (point-guard ruling on #2689)', () => {
+  // The owner-or-admin gate reads the org-aware resolver: an org Owner or Admin is ADMIN on an org
+  // drive, an org MEMBER is a plain member, a non-member and a personal drive's non-owner are nothing.
+  const accessFor = (orgRole: string | null, drive: 'org' | 'personal', userId: string) => {
+    if (userId === LEAD_ACTION_DRIVES[drive].ownerId) return createAccessFixture({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+    if (drive === 'org' && (orgRole === 'OWNER' || orgRole === 'ADMIN')) return createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' });
+    if (drive === 'org' && orgRole === 'MEMBER') return createAccessFixture({ isMember: true, role: 'MEMBER' });
+    return createAccessFixture();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    leadAuthority.reset();
+    vi.mocked(isAuthError).mockReturnValue(false);
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) rename by $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(userId));
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES[drive] } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(accessFor(orgRole, drive, userId));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Renamed' }) as never);
+
+    const response = await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) }), createContext('drive_abc'));
+
+    expect(response.status).toBe(allowed ? 200 : 403);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive_abc', action: 'rename' })] : []);
+  });
+
+  it('a drive ADMIN through an invited row (no org power) renames without an org-power audit event', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('omar'));
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES.org } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' }));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Renamed' }) as never);
+
+    const response = await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }) }), createContext('drive_abc'));
+
+    expect(response.status).toBe(200);
+    expect(leadAuthority.audited).toEqual([]);
+  });
+
+  it('a settings change that is not a rename writes no rename event', async () => {
+    leadAuthority.orgRoles.set('priya', 'ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('priya'));
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES.org } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isAdmin: true, isMember: true, role: 'ADMIN' }));
+    vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }) as never);
+
+    await PATCH(new Request('https://example.com/api/drives/drive_abc', { method: 'PATCH', body: JSON.stringify({ drivePrompt: 'Be brief.' }) }), createContext('drive_abc'));
+
+    expect(leadAuthority.audited).toEqual([]);
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) trash by $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(userId));
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    vi.mocked(getDriveById).mockResolvedValue({ ...createRawDriveFixture({ id: 'drive_abc', name: 'Finance' }), ...LEAD_ACTION_DRIVES[drive] } as never);
+    vi.mocked(getDriveAccess).mockResolvedValue(accessFor(orgRole, drive, userId));
+    vi.mocked(trashDrive).mockResolvedValue(null);
+
+    const response = await DELETE(new Request('https://example.com/api/drives/drive_abc', { method: 'DELETE' }), createContext('drive_abc'));
+
+    expect(response.status).toBe(allowed ? 200 : 403);
+    expect(vi.mocked(trashDrive).mock.calls.length > 0).toBe(allowed);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive_abc', action: 'trash' })] : []);
   });
 });

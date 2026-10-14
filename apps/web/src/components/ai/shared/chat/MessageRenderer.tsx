@@ -12,10 +12,11 @@ import { TodoListMessage } from './TodoListMessage';
 import { ErrorBoundary } from '@/components/ai/shared/ErrorBoundary';
 import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isSpendFallbackPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
 import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
+import { SpendFallbackNotice } from '@/components/messages/SpendFallbackNotice';
 
 interface TextBlockProps {
   parts: TextPart[];
@@ -325,6 +326,12 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
             return (
               <div key={`${message.id}-command-${index}`} className="mr-2 sm:mr-8">
                 <CommandExecutionIndicator data={group.data} />
+              </div>
+            );
+          } else if (isSpendFallbackPart(group)) {
+            return (
+              <div key={`${message.id}-spend-fallback-${index}`} className="mr-2 sm:mr-8">
+                <SpendFallbackNotice data={group.data} />
               </div>
             );
           }

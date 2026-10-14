@@ -17,6 +17,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
     listAccessibleDrives: vi.fn(),
     createDrive: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({
+  createOrgDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
+  orgDriveServiceDeps: { marker: 'production-deps' },
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
     auditRequest: vi.fn(),
@@ -68,6 +74,7 @@ vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
   resolveDriveWideCanEdit: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -75,6 +82,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 
 import { listAccessibleDrives, createDrive } from '@pagespace/lib/services/drive-service'
+import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
+import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -83,6 +92,7 @@ import { getAppDriveMembership, hasAppDriveMembership } from '@pagespace/lib/per
 import { resolveDriveWideCanEdit } from '@pagespace/lib/permissions/membership-queries';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -116,6 +126,8 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   role: overrides.role ?? 'OWNER',
   lastAccessedAt: overrides.lastAccessedAt ?? null,
   homePageId: overrides.homePageId ?? null,
+  orgId: overrides.orgId ?? null,
+  orgVisibility: overrides.orgVisibility ?? 'OPEN',
   canCreatePages: overrides.canCreatePages ?? true,
 });
 
@@ -162,21 +174,21 @@ describe('GET /api/drives', () => {
       const request = new Request('https://example.com/api/drives');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: false });
     });
 
     it('should pass includeTrash=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?includeTrash=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: true, tokenScopable: false });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: true, tokenScopable: false });
     });
 
     it('should pass tokenScopable=true when query param is set', async () => {
       const request = new Request('https://example.com/api/drives?tokenScopable=true');
       await GET(request);
 
-      expect(listAccessibleDrives).toHaveBeenCalledWith(mockUserId, { includeTrash: false, tokenScopable: true });
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrash: false, tokenScopable: true });
     });
   });
 
@@ -415,6 +427,123 @@ describe('POST /api/drives', () => {
     });
   });
 
+  describe('create in an org', () => {
+    const orgDriveRow = {
+      id: 'drive_eng',
+      name: 'Engineering',
+      slug: 'engineering',
+      ownerId: mockUserId,
+      kind: 'STANDARD' as const,
+      orgId: 'org-northwind',
+      orgVisibility: 'OPEN' as const,
+      isTrashed: false,
+      trashedAt: null,
+      drivePrompt: null,
+      createdAt: new Date('2026-09-17T00:00:00.000Z'),
+      updatedAt: new Date('2026-09-17T00:00:00.000Z'),
+      publishSubdomain: 'engineering',
+      homePageId: null,
+      publishDefaultOgImageUrl: null,
+      notFoundPageId: null,
+      publishFaviconUrl: null,
+    };
+
+    const post = (body: unknown) =>
+      POST(new Request('https://example.com/api/drives', { method: 'POST', body: JSON.stringify(body) }));
+
+    it('DRV-3 (partial) a drive created with an orgId goes through createOrgDrive with the production deps and answers 201 as its owner', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(201);
+      expect(createOrgDrive).toHaveBeenCalledWith(
+        mockUserId,
+        { name: 'Engineering', orgId: 'org-northwind', orgVisibility: undefined, authentication: null },
+        orgDriveServiceDeps
+      );
+      expect(createDrive).not.toHaveBeenCalled();
+      expect(await response.json()).toMatchObject({ id: 'drive_eng', orgId: 'org-northwind', isOwned: true, role: 'OWNER', canCreatePages: true });
+    });
+
+    it('DRV-3 (partial) a refused org create returns the verdict and creates nothing', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({
+        ok: false,
+        code: 'NOT_ORG_MEMBER',
+        status: 403,
+        message: 'You must be a member of the organization to create a drive in it.',
+      });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('NOT_ORG_MEMBER');
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('POL-5 an org that lets only Owners and Admins create drives: the refusal is relayed 403 with its code and nothing is created', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({
+        ok: false,
+        code: 'POLICY_FORBIDS_CREATE',
+        status: 403,
+        message: 'Only organization Owners and Admins can create drives in this organization.',
+      });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'POLICY_FORBIDS_CREATE', error: expect.stringContaining('Owners and Admins') });
+      expect(createDrive).not.toHaveBeenCalled();
+    });
+
+    it('DRV-4 (partial) a chosen visibility is passed through and an unknown one is a 400', async () => {
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: { ...orgDriveRow, orgVisibility: 'PRIVATE' } });
+
+      await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE' });
+      expect(createOrgDrive).toHaveBeenCalledWith(
+        mockUserId,
+        { name: 'Finance', orgId: 'org-northwind', orgVisibility: 'PRIVATE', authentication: null },
+        orgDriveServiceDeps
+      );
+
+      expect((await post({ name: 'Finance', orgId: 'org-northwind', orgVisibility: 'SECRET' })).status).toBe(400);
+    });
+
+    it('X-1 (partial) DRV-3 (partial) an unscoped token may create a drive in an org (D-OW-26 forbids only money moves); the same org decision runs', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        ...mockWebAuth(mockUserId),
+        tokenType: 'mcp',
+      } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValue({ ok: true, drive: orgDriveRow });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(201);
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind' }), orgDriveServiceDeps);
+    });
+
+    it('DRV-3 (partial) the asking credential\'s sign-in evidence goes to createOrgDrive, which judges the org\'s sign-in policy after membership; its refusal is relayed', async () => {
+      const authentication = { authenticatedAtMs: 1, assurance: 'single_factor' as const };
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...mockWebAuth(mockUserId), authentication } as unknown as SessionAuthResult);
+      vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: false, code: 'org_strong_sign_in_required', status: 403, message: 'This organization requires a stronger or more recent sign-in.' });
+
+      const response = await post({ name: 'Engineering', orgId: 'org-northwind' });
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('org_strong_sign_in_required');
+      expect(createOrgDrive).toHaveBeenCalledWith(mockUserId, expect.objectContaining({ orgId: 'org-northwind', authentication }), orgDriveServiceDeps);
+    });
+
+    it('a drive created without an orgId stays personal', async () => {
+      vi.mocked(createDrive).mockResolvedValue(createDriveFixture({ id: 'drive_personal', name: 'Notes' }));
+
+      await post({ name: 'Notes' });
+
+      expect(createDrive).toHaveBeenCalledWith(mockUserId, { name: 'Notes' });
+      expect(createOrgDrive).not.toHaveBeenCalled();
+    });
+  });
+
   describe('service integration', () => {
     it('should call createDrive with userId and name', async () => {
       const newDrive = createDriveFixture({ id: 'drive_new', name: 'New Project' });
@@ -624,7 +753,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', role: 'MEMBER', canCreatePages: true });
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null },
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: null, openDriveFloor: null },
     ]);
   });
 
@@ -638,7 +767,7 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
     expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
-      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view' },
+      { driveId: 'drive_scoped', role: 'MEMBER', customRoleId: 'role_view', openDriveFloor: null },
     ]);
   });
 
@@ -651,6 +780,15 @@ describe('GET /api/drives — scoped MCP canCreatePages', () => {
 
     expect(response.status).toBe(200);
     expect(body[0]).toMatchObject({ id: 'drive_scoped', canCreatePages: false });
-    expect(getUserAccessLevel).toHaveBeenCalledWith('user_123', 'drive_scoped');
+    expect(getUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'drive_scoped');
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    getPrincipalAccessLevel: (auth: { userId: string }, resourceId: string) => permissions.getUserAccessLevel(credentialActor(auth.userId, null), resourceId),
+  };
 });

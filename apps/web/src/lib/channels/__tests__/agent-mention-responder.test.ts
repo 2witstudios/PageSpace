@@ -1,10 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-// Billing is covered by agent-mention-responder-credit-gate.test.ts; here the
-// mentioner is always funded so the gate never stands between a test and its reply.
-vi.mock('@/lib/ai/core/user-credit-hold', () => ({
-  acquireUserCreditHold: vi.fn(async () => ({ allowed: true, release: () => {} })),
-}));
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -38,10 +35,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -97,6 +96,14 @@ vi.mock('@/lib/websocket/socket-utils', () => ({
   broadcastThreadReplyCountUpdated: (...args: unknown[]) => mockBroadcastThreadReplyCountUpdated(...args),
 }));
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own); here it is a recording fake.
+const mockAcquireMentionCreditHold = vi.fn();
+const mockReleaseMentionHold = vi.fn();
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: (...args: unknown[]) => mockAcquireMentionCreditHold(...args),
+}));
+
 import { db } from '@pagespace/db/db';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions';
@@ -107,6 +114,7 @@ import {
   triggerMentionedAgentResponses,
   type TriggerMentionedAgentResponsesParams,
 } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -170,7 +178,7 @@ const createSendChannelSuccess = () => ({
 });
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',
@@ -207,6 +215,44 @@ describe('agent-mention-responder', () => {
     mockListChannelThreadFollowers.mockResolvedValue([]);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockAcquireMentionCreditHold.mockResolvedValue({
+      allowed: true,
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+      release: mockReleaseMentionHold,
+    });
+  });
+
+  it('SPEND-6 (partial) a mentioned agent\'s reply is gated on the channel\'s drive before its model call and settles on the drive wallet', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockAcquireMentionCreditHold).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1' });
+    expect(mockAcquireMentionCreditHold.mock.invocationCallOrder[0]).toBeLessThan(mockAskAgentExecute.mock.invocationCallOrder[0]);
+    const askContext = mockAskAgentExecute.mock.calls[0][1].experimental_context;
+    expect(askContext.creditSpend).toEqual({ spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' });
+    expect(mockReleaseMentionHold).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.invocationCallOrder[0]).toBeLessThan(mockReleaseMentionHold.mock.invocationCallOrder[0]);
+  });
+
+  it('SPEND-6 (partial) with only the sender funded and the drive wallet empty the agent reply is skipped: no model call, no message', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+    mockAcquireMentionCreditHold.mockResolvedValue({ allowed: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+    expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the reply hold is released even when the agent call throws', async () => {
+    mockPagesFindMany.mockResolvedValue([{ id: 'agent-1', title: 'Budget Agent', enabledTools: ['send_channel_message'] }]);
+    mockAskAgentExecute.mockRejectedValue(new Error('provider down'));
+
+    await triggerMentionedAgentResponses({ ...baseParams, content: 'Thoughts? @[Budget Agent](agent-1:page)' });
+
+    expect(mockReleaseMentionHold).toHaveBeenCalledTimes(1);
   });
 
   it('given message with no mentions, should not query agents or post responses', async () => {

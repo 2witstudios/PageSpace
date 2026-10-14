@@ -12,6 +12,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST, DELETE } from '../route';
 import { getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { PublishHiddenError } from '@pagespace/lib/organizations/published-visibility';
+import { ORG_LAPSED_MESSAGE, ORG_LAPSED_REFUSAL } from '@pagespace/lib/organizations/status-core';
+
+// SEAT-9 and POL-4: an org drive asks the org's billing status and publishing policy before it publishes.
+const checkOrgActive = vi.hoisted(() => vi.fn());
+const getOrgPolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/status', () => ({ checkOrgActive }));
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getOrgPolicies }));
 
 vi.mock('server-only', () => ({}));
 
@@ -27,6 +36,7 @@ vi.mock('@/lib/auth', () => ({
 const canUserEditPage = vi.fn();
 const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: (...args: unknown[]) => canUserEditPage(...args),
 }));
 
@@ -130,6 +140,8 @@ const params = Promise.resolve({ pageId: 'page-1' });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  checkOrgActive.mockResolvedValue({ ok: true });
+  getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES });
   authenticateRequestWithOptions.mockResolvedValue({ userId: 'user-1' });
   canUserEditPage.mockResolvedValue(true);
   canUserViewPage.mockResolvedValue(true);
@@ -148,6 +160,34 @@ beforeEach(() => {
 });
 
 describe('POST /api/pages/[pageId]/publish', () => {
+  it('POL-4 (partial) X-6 (partial) publishing OFF for the drive\'s org answers 403 with the policy message, and nothing is published', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'T', content: '<p>x</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', kind: 'STANDARD', publishSubdomain: 'acme', homePageId: null, orgId: 'org-1' });
+    findFirstPublished.mockResolvedValue(undefined);
+    getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES, publishWeb: false });
+
+    const res = await POST(makeReq({}), { params });
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/publishing to the web/i);
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) publishing from a lapsed org\'s drive answers 402 with the lapse copy, and uploads and writes nothing', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'T', content: '<p>x</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', kind: 'STANDARD', publishSubdomain: 'acme', homePageId: null, orgId: 'org-1' });
+    findFirstPublished.mockResolvedValue(undefined);
+    checkOrgActive.mockResolvedValue(ORG_LAPSED_REFUSAL);
+
+    const res = await POST(makeReq({}), { params });
+
+    expect(checkOrgActive).toHaveBeenCalledWith('org-1');
+    expect(res.status).toBe(402);
+    expect((await res.json()).error).toBe(ORG_LAPSED_MESSAGE);
+    expect(putPublishedArtifact).not.toHaveBeenCalled();
+    expect(onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
   it('returns 403 when the user cannot edit the page', async () => {
     canUserEditPage.mockResolvedValue(false);
     const res = await POST(makeReq({}), { params });
@@ -210,6 +250,17 @@ describe('POST /api/pages/[pageId]/publish', () => {
     expect(onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
+  it('POL-4 (partial) a write the storage layer refuses because the org hides this site (a race past the up-front check) is a 403, not a 500', async () => {
+    findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'T', content: '<p>x</p>', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'acme', kind: 'STANDARD', publishSubdomain: 'acme', homePageId: null });
+    findFirstPublished.mockResolvedValue(undefined);
+    putPublishedArtifact.mockRejectedValueOnce(new PublishHiddenError('acme'));
+
+    const res = await POST(makeReq({}), { params });
+
+    expect(res.status).toBe(403);
+  });
+
   it('first-publish: allocates the subdomain, uploads, upserts the row, returns the url', async () => {
     findFirstPage.mockResolvedValue({ id: 'page-1', type: 'CANVAS', title: 'Welcome', content: '<p>hi</p>', driveId: 'drive-1' });
     findFirstDrive.mockResolvedValue({ id: 'drive-1', slug: 'Acme', publishSubdomain: null });
@@ -224,7 +275,7 @@ describe('POST /api/pages/[pageId]/publish', () => {
     // writes through this mocked `update` path — it's owned by the allocator).
     expect(updateWhere).toHaveBeenCalledTimes(1);
 
-    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', userId: 'user-1', db: expect.any(Object) });
+    expect(rewriteCanvasAssets).toHaveBeenCalledWith({ html: '<p>hi</p>', actor: expect.objectContaining({ userId: 'user-1' }), db: expect.any(Object) });
     expect(renderPublishedPage).toHaveBeenCalledWith(expect.objectContaining({ html: '<p>hi</p>', title: 'Welcome', assetBaseUrl: 'https://test-publish.t3.tigrisfiles.io', faviconBaseUrl: 'https://pagespace.ai', pageUrl: 'https://acme.pagespace.site/welcome', description: 'hi' }));
     // With no noindex override, the resolver forwards the explicit index default.
     const firstCallArg = renderPublishedPage.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -715,6 +766,19 @@ describe('DELETE /api/pages/[pageId]/publish', () => {
     canUserEditPage.mockResolvedValue(false);
     const res = await DELETE(makeReq(), { params });
     expect(res.status).toBe(403);
+  });
+
+  it('SEAT-9 (partial) a lapsed org\'s published page can still be unpublished: the artifact and row are removed', async () => {
+    checkOrgActive.mockResolvedValue(ORG_LAPSED_REFUSAL);
+    findFirstPublished.mockResolvedValue({ id: 'pub-1', artifactKey: 'published/acme/welcome/index.html', driveId: 'drive-1' });
+    findFirstDrive.mockResolvedValue({ homePageId: 'other-page' });
+
+    const res = await DELETE(makeReq(), { params });
+
+    expect(res.status).toBe(200);
+    expect(deletePublishedArtifact).toHaveBeenCalledWith('published/acme/welcome/index.html');
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
+    expect(await res.json()).toEqual({ unpublished: true });
   });
 
   it('removes the artifact and row, returns 200', async () => {

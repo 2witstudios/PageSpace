@@ -8,6 +8,8 @@ import { Switch } from '@/components/ui/switch';
 import { Loader2, Network, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 
 interface AgentDrive {
   driveId: string;
@@ -47,6 +49,12 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
   const [adding, setAdding] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  // [D-OW-33] everyone who can run the agent reads a drive it joins: a lapsed org's drive takes no new agent and no
+  // newly carried context until it pays (removing the agent and turning context off still work).
+  const storeDrives = useDriveStore((state) => state.drives);
+  const { orgById } = useMyOrganizations();
+  const driveLapsed = (driveId: string) => orgById(storeDrives.find((d) => d.id === driveId)?.orgId)?.lapsed === true;
 
   const agentDrives = useMemo(() => data?.drives ?? [], [data]);
   const memberIds = useMemo(() => new Set(agentDrives.map((d) => d.driveId)), [agentDrives]);
@@ -146,7 +154,7 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
                     <div className="flex items-center gap-2">
                       <Switch
                         checked={drive.includeContext}
-                        disabled={togglingId === drive.driveId}
+                        disabled={togglingId === drive.driveId || (!drive.includeContext && driveLapsed(drive.driveId))}
                         onCheckedChange={(checked) => handleToggleIncludeContext(drive.driveId, checked)}
                         aria-label={`Carry ${drive.driveName}'s workspace instructions into this agent`}
                       />
@@ -180,8 +188,8 @@ export function AgentDrivesCard({ agentPageId }: { agentPageId: string }) {
             </SelectTrigger>
             <SelectContent>
               {available.map((drive) => (
-                <SelectItem key={drive.id} value={drive.id}>
-                  {drive.name}
+                <SelectItem key={drive.id} value={drive.id} disabled={driveLapsed(drive.id)}>
+                  {drive.name}{driveLapsed(drive.id) ? ' (paused while unpaid)' : ''}
                 </SelectItem>
               ))}
             </SelectContent>

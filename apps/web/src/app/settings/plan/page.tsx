@@ -14,12 +14,30 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
-import { getAllPlans, getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/lib/subscription/plans';
+import {
+  getPersonalPlans,
+  getPlan,
+  getTierFromPriceId,
+  withCreditOverrides,
+  type SubscriptionTier,
+  type PlanDefinition,
+} from '@/lib/subscription/plans';
 import { creditsCellPhrase } from '@/lib/subscription/credits';
 import type { AppliedPromo } from '@/components/billing/PromoCodeInput';
 
 interface SubscriptionData {
   subscriptionTier: SubscriptionTier;
+  /**
+   * MON-2 / D-OW-17: the server's included-credit figure, per tier, in whole
+   * cents. The ratio is a literal in money-model.ts, identical in every
+   * process, so this client bundle could derive the same number itself — there is no longer a value only the
+   * server can see. Patching it from the server response anyway keeps this
+   * page correct even if a FUTURE change ever makes the included-credit
+   * figure depend on something genuinely server-only (a per-user grant, a
+   * promo override); see withCreditOverrides in @/lib/subscription/plans.
+   * Patched onto `plans` below.
+   */
+  planCredits?: Partial<Record<SubscriptionTier, number>>;
   subscription?: {
     status: string;
     currentPeriodStart: string;
@@ -296,7 +314,15 @@ export default function PlanPage() {
     );
   }
 
-  const plans = getAllPlans();
+  // SEAT-2: personal settings offer Free and Pro; Business belongs to an org.
+  // MON-2 / D-OW-17: patch each plan's credit-derived fields with the server's
+  // planCredits (see the SubscriptionData.planCredits doc comment above for
+  // why this still runs even though the client could now compute the same
+  // number itself under the compile-time constant).
+  const plans = withCreditOverrides(
+    getPersonalPlans(),
+    subscriptionData?.planCredits,
+  );
   const currentPlan = subscriptionData ? getPlan(subscriptionData.subscriptionTier) : getPlan('free');
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
@@ -396,7 +422,7 @@ export default function PlanPage() {
 
       {/* Plan Cards - Only show when not in checkout */}
       {!checkoutPlan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 pt-6 pb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 pt-6 pb-4">
           {plans.map((plan) => (
             <PlanCard
               key={plan.id}

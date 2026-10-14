@@ -1,9 +1,14 @@
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { TerminalSessionMap, TerminalSession, TerminalViewer } from './terminal-session-map';
 import { DETACHED_IDLE_MS, appendScrollback, broadcastOutput, broadcastClosed } from './terminal-session-map';
 import type { OpenPtyShellArgs, PtyShell } from './sprites-shell';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import type { SandboxBillingDeps } from '@pagespace/lib/services/sandbox/tool-runners';
+import { inProcessWindowClaimLock, type WindowClaimLock, type WindowClaimLockResult } from './window-claim-lock';
+
+type ClaimResult = { ok: true } | { ok: false; message?: string };
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, sameCharge, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import { parseShellConnectPayload } from './validation';
 import { clampShellDimensions, type ShellConnectPayload } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -100,8 +105,15 @@ export type ShellCheckAuthResult =
   | {
       ok: true;
       sessionKey: string;
-      /** The session's resolved payer — metering attribution, present regardless of whether `billing` is wired. */
-      payerId: string;
+      /**
+       * What the session's runtime charges — metering attribution, present regardless of whether
+       * `billing` is wired. An org drive's session charges the org pool (WAL-9), never a person.
+       */
+      charge: ComputeCharge;
+      /** The session's owner: the payer's no-drive fallback, re-resolved from at each heartbeat settle. */
+      ownerId: string;
+      /** The person connecting, who runs the compute: an org charge is recorded under and capped against them (WAL-2). */
+      actorId: string;
       /** Billing attribution scope: the session's drive, or null (owner-attributed) for a global-assistant session. */
       driveId: string | null;
       /**
@@ -116,7 +128,7 @@ export type ShellCheckAuthResult =
     }
   | { ok: false; reason: string };
 
-export type ShellCheckAuthFn = (args: { userId: string; shellId: string }) => Promise<ShellCheckAuthResult>;
+export type ShellCheckAuthFn = (args: { actor: AccessActor; shellId: string }) => Promise<ShellCheckAuthResult>;
 
 /** An authorized connect — the `ok` arm of a check-auth result. */
 export type ShellAccessGranted = Extract<ShellCheckAuthResult, { ok: true }>;
@@ -160,7 +172,7 @@ export type OpenShellFn = (args: OpenPtyShellArgs) => PtyShell;
 
 export type SocketLike = {
   id: string;
-  data: { user?: { id: string } };
+  data: { user?: { id: string }; actor?: AccessActor };
   emit(event: string, payload?: unknown): void;
 };
 
@@ -226,6 +238,11 @@ export type ShellSessionDeps = {
   persistSpriteExecId: (args: { shellId: string; spriteExecId: string }) => Promise<void>;
   /** Metering seam — see module doc. Omitted -> unmetered. */
   billing?: SandboxBillingDeps;
+  /**
+   * The lock billing-window claims run under (re-review P2-1). Production passes the cross-process
+   * Postgres advisory lock (`pgWindowClaimLock`); omitted -> the in-process per-session chain.
+   */
+  windowClaimLock?: WindowClaimLock;
   /**
    * Best-effort: persists a bounded tail of this session's scrollback on
    * teardown (issue #2205), so a `read_shell` after the PTY has died can still
@@ -363,7 +380,7 @@ function endShellSession(
     session.taskHold.end();
     session.taskHold = undefined;
   }
-  if (deps.billing && session.payerId && session.connectedAt !== undefined) {
+  if (deps.billing && session.charge && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
     // Fire-and-forget by necessity: teardown has no next tick to retry on, so this
     // is the last chance to bill the tail and there is nothing to keep open. The
@@ -373,7 +390,7 @@ function endShellSession(
     // anyone could act on it.
     void deps.billing
       .trackUsage({
-        payerId: session.payerId,
+        charge: session.charge,
         holdId: session.holdId,
         activeSeconds,
         driveId: session.driveId,
@@ -469,7 +486,7 @@ function removeViewer(
   sessionMap.detach(viewerKey);
   if (session.viewers.size > 0) return;
   // The last viewer out is who the detached re-auth tick keeps checking.
-  if (viewer) session.lastViewerUserId = viewer.userId;
+  if (viewer) session.lastViewerActor = viewer.actor;
   // No viewer is left watching this PTY: stop the shell's watchdog reconnect
   // loop (sprites-shell.ts's `planWatchdogResponse`) so an idle detached shell
   // stops waking the Sprite every ~45s for nobody. This only quiets OUR exec
@@ -560,6 +577,32 @@ function evictViewer(
 }
 
 /**
+ * Re-resolve the session's payer and adopt it when it differs from the charge the window just
+ * settled on (a drive moved into or out of an org, or changed hands). Adopts nothing when the
+ * session has no owner to resolve from, the drive cannot be resolved, or the read fails: a
+ * transient billing read must never end a live PTY, so the session keeps the charge it has and
+ * the next heartbeat looks again.
+ */
+async function rechargeAfterDrift(billing: SandboxBillingDeps, session: TerminalSession, sessionKey: string): Promise<void> {
+  const { ownerId, actorId } = session;
+  if (!session.charge || !ownerId || !actorId) return;
+  try {
+    const next = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId, actorId });
+    if (next === null || sameCharge(session.charge, next)) return;
+    loggers.realtime.warn('Shell session payer changed mid-session: the next window is held and settled on the new payer', {
+      sessionKey,
+      from: session.charge.kind,
+      to: next.kind,
+    });
+    session.charge = next;
+  } catch (error) {
+    loggers.realtime.error('Shell session payer re-resolve failed; keeping the current payer', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+  }
+}
+
+/**
  * Heartbeat settle for a live metered session: settles the window accrued since
  * `connectedAt` against the current hold, rebases the window start to now, and
  * places a fresh hold for the next interval. The rebase happens SYNCHRONOUSLY
@@ -576,15 +619,15 @@ function evictViewer(
  * session down. Infra errors keep the session alive (fail-open): killing a
  * live PTY over a transient billing outage is worse than a delayed settle.
  */
-async function settleAccruedWindow(
+export async function settleAccruedWindow(
   billing: SandboxBillingDeps,
   sessionMap: TerminalSessionMap,
   session: TerminalSession,
   sessionKey: string,
   { stopClock = false }: { stopClock?: boolean } = {},
 ): Promise<boolean> {
-  if (!session.payerId || session.connectedAt === undefined) return true;
-  const payerId = session.payerId;
+  if (!session.charge || session.connectedAt === undefined) return true;
+  const charge = session.charge;
   const holdId = session.holdId;
   const windowStart = session.connectedAt;
   session.connectedAt = Date.now();
@@ -592,7 +635,7 @@ async function settleAccruedWindow(
   const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
   try {
     const settle = await billing.trackUsage({
-      payerId,
+      charge,
       holdId,
       activeSeconds,
       driveId: session.driveId,
@@ -638,7 +681,7 @@ async function settleAccruedWindow(
       // unrecoverable, and it must not be the one silent site in the file.
       void billing
         .trackUsage({
-          payerId,
+          charge,
           holdId,
           activeSeconds,
           driveId: session.driveId,
@@ -658,6 +701,13 @@ async function settleAccruedWindow(
     return true;
   }
   if (sessionMap.getByKey(sessionKey) !== session) return true;
+  // WAL-9: who pays is re-read at every window boundary, never fixed for the session's life. The
+  // window just settled went to the payer it opened under (the tail belongs to whoever owed it,
+  // on the hold that payer's wallet carried); if the drive moved into or out of an org since, the
+  // NEXT window opens on the new payer, and the hold is placed there below. Without this an open
+  // PTY, which can stay attached indefinitely, keeps billing the old payer for the new one's
+  // compute. The old hold was consumed by the settle above, so there is none to release.
+  await rechargeAfterDrift(billing, session, sessionKey);
   // The shell quiesced: its exec socket is deliberately down and its Sprite is
   // free to pause (the task hold was released with it — see
   // `startTaskHoldHeartbeat`). A paused sandbox costs us nothing, so billing the
@@ -685,7 +735,7 @@ async function settleAccruedWindow(
     return true;
   }
   try {
-    const gate = await billing.gate({ payerId });
+    const gate = await billing.gate({ charge: session.charge ?? charge });
     if (!gate.allowed) return false;
     // Re-check liveness: the session may have ended while the gate ran, and a
     // hold assigned to a dead session would leak until its TTL expiry.
@@ -702,6 +752,111 @@ async function settleAccruedWindow(
   return true;
 }
 
+/** How long a refused typist's input is refused without another gate read (review 5407898542 P2-3). */
+export const TYPIST_REFUSAL_MEMO_MS = 10_000;
+
+/**
+ * WAL-2 (fe9db1nm review P1; review 5407898542 P2-3): compute is charged to, and capped against,
+ * THE PERSON WHO CAUSES IT — in a shared PTY, THE TYPIST. Any member of the drive may attach to a
+ * live PTY, and watching moves nothing; the window moves when someone OTHER than its actor sends
+ * input (a keystroke over the socket, `onInput`, or a web-tier send on their behalf, shell-io):
+ *   1. the typist's OWN charge is gated first; a refusal (their cap reached, the pool empty or
+ *      paused) refuses the input and changes nothing — so a member at their cap cannot run compute
+ *      in ANY session, their own or a drive-mate's;
+ *   2. the window so far is settled to its actor (`settleAccruedWindow`);
+ *   3. the next window is held on, and recorded under, the typist.
+ * So a window is CUT at every change of typist and each segment is charged wholly to the one
+ * person typing in it — never split, never estimated by keystroke counts. Time between keystrokes
+ * (a command running) belongs to whoever typed last: the command's author.
+ * If the settle in (2) fails, the window stays with its actor (rolled back for the next heartbeat),
+ * the typist's hold is released and their input is refused (recoverable): a transient billing
+ * outage never ends a live PTY, and never runs one person's input on another's window.
+ * Claims on one session are SERIALIZED (`lock`; production passes the cross-process Postgres
+ * advisory lock, `pgWindowClaimLock`), so two typists racing each other become two segments in
+ * turn — never two holds on one window (re-review P2-1). A billing READ failure refuses the input: an
+ * unanswerable cap is not a pass. Inert for an unmetered session or the window's own actor.
+ */
+export async function claimBillingWindow(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  actorId: string,
+  lock: WindowClaimLock = inProcessWindowClaimLock,
+): Promise<{ ok: true } | { ok: false; message?: string }> {
+  if (!session.charge || !session.ownerId || session.actorId === actorId) return { ok: true };
+  // Re-entrant claims on ONE session run one at a time (re-review P2-1): read-window → settle →
+  // hold → write-window under the session's lock, so a second typist sees the first's window.
+  let locked: WindowClaimLockResult<ClaimResult>;
+  try {
+    locked = await lock(session.sessionKey, () => claimBillingWindowLocked(billing, sessionMap, session, actorId));
+  } catch (error) {
+    loggers.realtime.error('Shell billing window claim failed', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey: session.sessionKey,
+    });
+    return { ok: false, message: CLAIM_RETRY_MESSAGE };
+  }
+  return locked.acquired ? locked.result : { ok: false, message: CLAIM_RETRY_MESSAGE };
+}
+
+/** Said when the session's drive cannot be resolved, so there is no one to bill: the input was NOT sent. */
+const PAYER_UNRESOLVED_MESSAGE = "This terminal's drive could not be found, so there is no one to bill and your input was not sent.";
+
+/** Said when a claim could not run (lock not taken, settle failed): the input was NOT sent. */
+const CLAIM_RETRY_MESSAGE = 'Billing for this terminal is briefly busy, so your input was not sent. Try again.';
+
+async function claimBillingWindowLocked(
+  billing: SandboxBillingDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  actorId: string,
+): Promise<{ ok: true } | { ok: false; message?: string }> {
+  const sessionKey = session.sessionKey;
+  // Asked again under the lock: a claim that ran while this one waited may have ended the
+  // session, or already moved the window to this very actor (their other connection).
+  if (sessionMap.getByKey(sessionKey) !== session) return { ok: false };
+  if (!session.charge || !session.ownerId || session.actorId === actorId) return { ok: true };
+  let next: ComputeCharge;
+  let held: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
+  try {
+    const resolved = await billing.resolveCharge({ driveId: session.driveId ?? null, ownerId: session.ownerId, actorId });
+    // WAL-9: a session whose drive cannot be resolved has no payer — the joining actor's input
+    // is not sent, and nobody (least of all the session's owner) is billed for it.
+    if (resolved === null) return { ok: false, message: PAYER_UNRESOLVED_MESSAGE };
+    next = resolved;
+    held = await billing.gate({ charge: next });
+  } catch (error) {
+    loggers.realtime.error('Shell billing window could not be claimed for a joining actor', error instanceof Error ? error : new Error(String(error)), {
+      sessionKey,
+    });
+    return { ok: false };
+  }
+  if (!held.allowed) {
+    const orgRefusal = held.orgRefusal;
+    return { ok: false, ...(orgRefusal !== undefined && isOrgComputeRefusal(orgRefusal) ? { message: ORG_COMPUTE_REFUSAL_MESSAGES[orgRefusal] } : {}) };
+  }
+  const release = () => {
+    if (held.holdId) void billing.releaseHold(held.holdId).catch(() => {});
+  };
+  if (session.connectedAt !== undefined) {
+    await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: true });
+    // A failed settle rolled the window back onto its actor; keep it there, and do NOT pass
+    // this typist's input — it would run on someone else's window (re-review P2-1).
+    if (session.connectedAt !== undefined) {
+      release();
+      return { ok: false, message: CLAIM_RETRY_MESSAGE };
+    }
+  }
+  if (sessionMap.getByKey(sessionKey) !== session) {
+    release();
+    return { ok: false };
+  }
+  session.charge = next;
+  session.actorId = actorId;
+  session.holdId = held.holdId;
+  session.connectedAt = Date.now();
+  return { ok: true };
+}
+
 /**
  * Restart the billing clock a quiesced window stopped (`settleAccruedWindow`'s
  * `stopClock`). Called at the very instant the shell resumes — a keystroke, or a
@@ -709,14 +864,49 @@ async function settleAccruedWindow(
  * (ten minutes) away, and a session that resumed nine minutes before its next
  * tick would have those nine minutes billed as free.
  *
- * Idempotent, and inert for an unmetered session (no `payerId`) or one whose
+ * Idempotent, and inert for an unmetered session (no `charge`) or one whose
  * clock is already running — `connectedAt` is only ever `undefined` here because
  * a quiesce stopped it.
  */
-export function resumeBillingClock(session: TerminalSession): void {
-  if (!session.payerId) return;
-  if (session.connectedAt !== undefined) return;
+export function resumeBillingClock(session: TerminalSession): boolean {
+  if (!session.charge) return false;
+  if (session.connectedAt !== undefined) return false;
   session.connectedAt = Date.now();
+  return true;
+}
+
+/**
+ * Review #2761 (P3-1): a window restarted at resume is RE-GATED at once — a fresh hold on the
+ * payer's charge — rather than running unheld until the next heartbeat (up to SETTLE_HEARTBEAT_MS).
+ * A payer that can no longer pay (an org that lapsed while the shell sat quiesced, an empty pool, a
+ * member at their cap) is torn down here, exactly as the heartbeat would, so nothing runs on a
+ * refused payer. Inert without billing, for an unmetered session, or while a hold is already held.
+ * A billing READ failure keeps the session (the heartbeat re-gates it), as the heartbeat does.
+ */
+export async function regateResumedWindow(
+  deps: SessionEndDeps,
+  sessionMap: TerminalSessionMap,
+  session: TerminalSession,
+  sessionKey: string,
+  endSession: () => void = () => teardownShellSession(deps, sessionMap, session, sessionKey, -2),
+): Promise<void> {
+  const billing = deps.billing;
+  if (!billing || !session.charge || session.holdId !== undefined) return;
+  try {
+    const gate = await billing.gate({ charge: session.charge });
+    if (sessionMap.getByKey(sessionKey) !== session) {
+      if (gate.allowed && gate.holdId) void billing.releaseHold(gate.holdId).catch(() => {});
+      return;
+    }
+    if (!gate.allowed) {
+      loggers.realtime.info('Shell session ended (payer refused at resume)', { sessionKey, sandboxId: session.sandboxId });
+      endSession();
+      return;
+    }
+    session.holdId = gate.holdId;
+  } catch (error) {
+    loggers.realtime.error('Shell resume re-hold failed', error instanceof Error ? error : new Error(String(error)), { sessionKey });
+  }
 }
 
 /**
@@ -747,7 +937,8 @@ function startSettleHeartbeat(
       // sites: if a socket came back through some path that did not restart the
       // clock, this beat notices and restarts it rather than letting the session
       // run on free forever.
-      if (!quiesced) resumeBillingClock(session);
+      if (!quiesced && resumeBillingClock(session)) await regateResumedWindow({ billing, persistColdTail }, sessionMap, session, sessionKey);
+      if (sessionMap.getByKey(sessionKey) !== session) return;
       const solvent = await settleAccruedWindow(billing, sessionMap, session, sessionKey, { stopClock: quiesced });
       if (!solvent && sessionMap.getByKey(sessionKey) === session) {
         loggers.realtime.info('Shell session ended (payer out of credits at heartbeat)', {
@@ -908,11 +1099,11 @@ export interface ShellTarget {
 }
 
 export interface EnsureShellSessionRequest {
-  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `payerId`, `driveId`, and the uncalled `resolveSandbox` thunk. */
+  /** The ALREADY-GRANTED access verdict for this target — `sessionKey`, `charge`, `driveId`, and the uncalled `resolveSandbox` thunk. */
   access: ShellAccessGranted;
   target: ShellTarget;
-  /** Who this session is being started FOR — the re-auth tick's identity while nobody is attached. */
-  userId: string;
+  /** Who this session is being started FOR (their credential) — the re-auth tick's identity while nobody is attached. */
+  actor: AccessActor;
   /** Already clamped by the caller (the contract schema clamps on parse). */
   cols: number;
   rows: number;
@@ -985,7 +1176,7 @@ export async function ensureShellSession(
   request: EnsureShellSessionRequest,
 ): Promise<EnsureShellSessionResult> {
   const { sessionMap, openShell, checkAuth, persistSpriteExecId, billing, createTaskHold, persistColdTail } = deps;
-  const { access, target, userId, cols, rows, viewer } = request;
+  const { access, target, actor, cols, rows, viewer } = request;
   const { shellId } = target;
   const { sessionKey } = access;
   /** Bundled once — see `SessionEndDeps`. Every teardown-path call below threads this through instead of `billing` alone. */
@@ -1076,14 +1267,18 @@ export async function ensureShellSession(
       // replica until the process restarts.
       let gateResult: Awaited<ReturnType<SandboxBillingDeps['gate']>>;
       try {
-        gateResult = await billing.gate({ payerId: access.payerId });
+        gateResult = await billing.gate({ charge: access.charge });
       } catch (error) {
         releaseSlot();
         throw error;
       }
       if (!gateResult.allowed) {
         releaseSlot();
-        return { kind: 'failed', reason: 'insolvent' };
+        // WAL-9: an org pool that is missing, paused or empty says so — nothing was opened.
+        const orgRefusal = gateResult.orgRefusal;
+        return orgRefusal !== undefined && isOrgComputeRefusal(orgRefusal)
+          ? { kind: 'failed', reason: 'insolvent', message: ORG_COMPUTE_REFUSAL_MESSAGES[orgRefusal] }
+          : { kind: 'failed', reason: 'insolvent' };
       }
       holdId = gateResult.holdId;
     }
@@ -1141,10 +1336,12 @@ export async function ensureShellSession(
       command: null as unknown as PtyShell,
       sandboxId,
       sessionKey,
-      lastViewerUserId: userId,
+      lastViewerActor: actor,
       spriteExecId: attachSessionId,
       releaseSlot,
-      payerId: access.payerId,
+      charge: access.charge,
+      ownerId: access.ownerId,
+      actorId: access.actorId,
       holdId,
       connectedAt,
       // First-class attribution (Terminal Epic 3 usage-breakdown fix): the
@@ -1347,13 +1544,15 @@ export async function ensureShellSession(
     // session is torn down IMMEDIATELY — no one-tick grace for an
     // unsupervised revoked process.
     //
-    // A `checkAuth` that THROWS (a transient DB blip) revokes nobody this
-    // tick — deliberately fail-open, in BOTH the attached and detached
-    // shapes: revocation is a verdict, not an error, and a blip must not
-    // kick live viewers or kill a detached session. (An uncaught throw here
-    // would be worse than a wrong verdict: an async interval callback's
+    // A `checkAuth` that THROWS fails CLOSED (SEC-3), in BOTH the attached and
+    // detached shapes: a credential whose access cannot be re-decided is
+    // treated as revoked — the viewer is evicted, and a detached session whose
+    // last attacher cannot be re-decided is torn down. A shell is code
+    // execution; keeping it open on an unverifiable credential is the wrong
+    // default, and the viewer can simply reconnect once the DB is back. The
+    // throw is still CAUGHT here, never rethrown: an async interval callback's
     // rejection is unhandled, and this process installs no unhandledRejection
-    // hook, so one DB blip would take down every session on the replica.)
+    // hook, so one DB blip would otherwise take down every session on the replica.
     //
     // `reauthing` mirrors `startSettleHeartbeat`'s `settling` guard: an
     // async interval body can outlive its own cadence when the DB is slow,
@@ -1367,20 +1566,22 @@ export async function ensureShellSession(
       reauthing = true;
       try {
         const attachedViewers = [...liveSession.viewers.entries()];
-        const userIds = attachedViewers.length > 0
-          ? [...new Set(attachedViewers.map(([, v]) => v.userId))]
-          : [liveSession.lastViewerUserId];
+        // Each distinct CREDENTIAL is checked, not each user: two panes of one person can hold different
+        // credentials (a fresh sign-in and a stale one), and an org's sign-in policy (SEC-2/3) refuses per credential.
+        const actors = attachedViewers.length > 0
+          ? [...new Set(attachedViewers.map(([, v]) => v.actor))]
+          : [liveSession.lastViewerActor];
 
-        const revoked = new Set<string>();
+        const revoked = new Set<AccessActor>();
         await Promise.all(
-          userIds.map(async (uid) => {
+          actors.map(async (actor) => {
             try {
-              const result = await checkAuth({ userId: uid, shellId });
-              if (!result.ok) revoked.add(uid);
+              const result = await checkAuth({ actor, shellId });
+              if (!result.ok) revoked.add(actor);
             } catch (error) {
-              // Fail-open — see above. Absent from `revoked` can only ever
-              // mean "not revoked", so an error needs no sentinel encoding.
-              loggers.realtime.warn('Shell re-auth check failed; keeping viewer this tick', {
+              // Fail closed — see above.
+              revoked.add(actor);
+              loggers.realtime.warn('Shell re-auth check failed; revoking the credential (fail closed)', {
                 sessionKey,
                 error: error instanceof Error ? error.message : String(error),
               });
@@ -1398,7 +1599,7 @@ export async function ensureShellSession(
         }
 
         for (const [viewerKey, attached] of attachedViewers) {
-          if (!revoked.has(attached.userId)) continue;
+          if (!revoked.has(attached.actor)) continue;
           // Still the SAME viewer entry? It may have detached during the await —
           // and a same-key rejoin is a fresh object, checked next tick.
           if (liveSession.viewers.get(viewerKey) !== attached) continue;
@@ -1415,7 +1616,7 @@ export async function ensureShellSession(
         // harm the multi-viewer change removed. If viewers exist now, they
         // were either checked this tick (and the revoked ones evicted) or
         // they joined mid-check and are checked next tick.
-        if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerUserId)) {
+        if (liveSession.viewers.size === 0 && revoked.has(liveSession.lastViewerActor)) {
           teardownShellSession(sessionEndDeps, sessionMap, liveSession, sessionKey, -2);
         }
       } finally {
@@ -1473,7 +1674,7 @@ export function connectFailureMessage(failure: Extract<EnsureShellSessionResult,
         ? 'Your plan\'s limit for running sandboxes is already in use — stop one before starting another.'
         : `Shell access denied: ${failure.message ?? 'unknown'}`;
     case 'insolvent':
-      return 'Insufficient credits to open a shell session.';
+      return failure.message ?? 'Insufficient credits to open a shell session.';
     case 'open_failed':
       return 'Failed to open shell session';
   }
@@ -1501,6 +1702,7 @@ export function buildShellHandlers({
   billing,
   createTaskHold,
   persistColdTail,
+  windowClaimLock,
 }: ShellHandlerDeps): ShellHandlers {
   /** Bundled once per handler build — see `SessionEndDeps`. Every teardown-path call threads this through instead of `billing` alone. */
   const sessionEndDeps: SessionEndDeps = { billing, persistColdTail };
@@ -1589,8 +1791,8 @@ export function buildShellHandlers({
    * payload shapes, the connectionId tag the client routes panes by) is
    * spelled exactly once and joiner panes can never drift from creator panes.
    */
-  const makeViewer = (connectionId: string, userId: string): TerminalViewer => ({
-    userId,
+  const makeViewer = (connectionId: string, actor: AccessActor): TerminalViewer => ({
+    actor,
     emitOutput: (data) => socket.emit('shell:output', { data, connectionId }),
     emitClosed: (exitCode) => socket.emit('shell:closed', { exitCode, connectionId }),
     emitError: (message) => socket.emit('shell:error', { message, connectionId }),
@@ -1609,7 +1811,7 @@ export function buildShellHandlers({
    * and a cold-path racer that lost a double-mount (see `onConnect`) — both are
    * "someone else's PTY is already live under this key; join it".
    */
-  function attachToLiveSession(session: TerminalSession, connectionId: string, viewerUserId: string) {
+  function attachToLiveSession(session: TerminalSession, connectionId: string, viewerActor: AccessActor) {
     // Registration first, and all three tracking structures in one
     // uninterrupted block: the registry entry, its socket binding, and this
     // socket's connection set are pure Map/Set writes that cannot throw, so
@@ -1621,7 +1823,7 @@ export function buildShellHandlers({
     // `viewers.size` never returns to zero and the last-viewer transition —
     // the reap, the slot release, the billing settle behind it — never fires
     // for the life of the process.
-    session.viewers.set(socketKey(connectionId), makeViewer(connectionId, viewerUserId));
+    session.viewers.set(socketKey(connectionId), makeViewer(connectionId, viewerActor));
     sessionMap.addBinding(session.sessionKey, socketKey(connectionId));
     activeConnectionIds.add(connectionId);
     if (session.idleTimer !== undefined) {
@@ -1631,7 +1833,7 @@ export function buildShellHandlers({
     // The most recent attacher — the identity the re-auth tick falls back to
     // while the session is detached. Attached viewers are each checked
     // individually off the registry entry added above.
-    session.lastViewerUserId = viewerUserId;
+    session.lastViewerActor = viewerActor;
     // A viewer is here: let the shell reattach lazily if its watchdog went quiet
     // while detached (sprites-shell.ts's `setViewerAttached`) — a no-op when a
     // live viewer already has the connection up, since output is already flowing.
@@ -1642,8 +1844,9 @@ export function buildShellHandlers({
     // wakes the Sprite — so the payer is consuming a sandbox again and the
     // billing clock (stopped at the quiesce — see `settleAccruedWindow`'s
     // `stopClock`) restarts HERE, not at the next ten-minute heartbeat. A no-op
-    // for a session that never quiesced: its clock never stopped.
-    resumeBillingClock(session);
+    // for a session that never quiesced: its clock never stopped. A restarted window is re-gated at
+    // once (review #2761): a payer that cannot pay now — a lapsed org — gets no unheld tail.
+    if (resumeBillingClock(session)) void regateResumedWindow(sessionEndDeps, sessionMap, session, session.sessionKey);
     // A viewer is back AND the `setViewerAttached(true)` above has just resumed
     // the shell's socket, so the hold (deleted while idle) is re-created
     // immediately rather than waiting out a heartbeat interval. Derived, not
@@ -1676,11 +1879,78 @@ export function buildShellHandlers({
    * connection in `connectingConnectionIds` for the whole of it — every path out
    * of here either binds a session (and settles any abandonment) or binds nothing.
    */
+  /** Deliver accepted input to the PTY. */
+  function writeInput(session: TerminalSession, data: string) {
+    // Input is activity for the task hold: a typed prompt is work in
+    // progress even before the agent's first byte of output.
+    session.lastInputAt = Date.now();
+    // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
+    // pays back the swallowed watchdog trip), which wakes the Sprite and
+    // re-takes the platform hold — so the payer starts consuming a sandbox
+    // again, and the billing clock has to start with it. Done here, at the
+    // instant of the keystroke, rather than at the next heartbeat: that is
+    // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
+    // minutes would otherwise be billed as free. A restarted window is re-gated at once
+    // (review #2761), so a payer that cannot pay now gets no unheld tail.
+    if (resumeBillingClock(session)) void regateResumedWindow(sessionEndDeps, sessionMap, session, session.sessionKey);
+    session.command.write(data);
+  }
+
+  /**
+   * Input waiting on a typist's billing claim, per connection, so keystrokes are written in the
+   * order they were typed while the claim's gate is in flight (review 5407898542 P2-3).
+   */
+  const pendingInput = new Map<string, Promise<void>>();
+  /** A refused typist's input is refused without re-asking the gate until this instant. */
+  const typingRefusedUntil = new Map<string, { until: number; message?: string }>();
+
+  /** Whether `typist` sending input would move the window: a metered session someone else holds. */
+  function typingMovesWindow(session: TerminalSession, typist: string): boolean {
+    return billing !== undefined && session.charge !== undefined && typist !== '' && session.actorId !== typist;
+  }
+
+  function refuseInput(connectionId: string, message: string | undefined) {
+    socket.emit('shell:error', {
+      message: message ?? 'Shell input refused: compute could not be charged to you',
+      // The PTY never saw it, so the binding is still good (see the oversized-input refusal).
+      recoverable: true,
+      ...(connectionId !== socket.id ? { connectionId } : {}),
+    });
+  }
+
+  /**
+   * The typist takes the window before their input reaches the PTY (claimBillingWindow). Refused:
+   * the input is dropped and the pane told why, and for TYPIST_REFUSAL_MEMO_MS further input from
+   * that connection is refused without another gate read — a capped person typing is not a query
+   * per keystroke.
+   */
+  async function claimTypingWindow(session: TerminalSession, connectionId: string, typist: string): Promise<boolean> {
+    if (!billing) return true;
+    const memo = typingRefusedUntil.get(connectionId);
+    if (memo && Date.now() < memo.until) {
+      refuseInput(connectionId, memo.message);
+      return false;
+    }
+    const claim = await claimBillingWindow(billing, sessionMap, session, typist, windowClaimLock);
+    if (claim.ok) {
+      typingRefusedUntil.delete(connectionId);
+      return true;
+    }
+    typingRefusedUntil.set(connectionId, { until: Date.now() + TYPIST_REFUSAL_MEMO_MS, ...(claim.message ? { message: claim.message } : {}) });
+    refuseInput(connectionId, claim.message);
+    return false;
+  }
+
   async function establishConnection(value: ShellConnectPayload, connectionId: string) {
     // Dimensions were clamped by the contract schema on parse.
     const { shellId, cols, rows } = value;
 
-    const userId = socket.data.user?.id ?? '';
+    // The connecting credential (SEC-2/3): its org sign-in policy decides here and on every re-auth tick.
+    const actor = socket.data.actor;
+    if (!actor) {
+      socket.emit('shell:error', { message: 'Shell access denied: unauthenticated', connectionId });
+      return;
+    }
 
     // The access check is DB-only, reserves no concurrency slot, and the
     // session key derives from the shellId without the Sprite — so the live
@@ -1688,7 +1958,7 @@ export function buildShellHandlers({
     // woken or written policy to a Sprite. A tab-back inside the detached
     // grace window is therefore decided on the strength of the access check
     // alone: milliseconds, not the seconds a sandbox resolution costs.
-    const accessResult = await checkAuth({ userId, shellId });
+    const accessResult = await checkAuth({ actor, shellId });
     const existingSession = accessResult.ok ? sessionMap.getByKey(accessResult.sessionKey) : undefined;
     const plan = planConnect({ accessResult, existingSession });
 
@@ -1705,7 +1975,9 @@ export function buildShellHandlers({
       // away from whoever has it (a live pane, or a pending reap) on behalf of a
       // socket that no longer exists — see `abandoned`.
       if (abandoned(connectionId)) return;
-      attachToLiveSession(plan.session, connectionId, userId);
+      // WAL-2 (review 5407898542 P2-3): watching a live PTY moves no money — the window moves to
+      // whoever TYPES (onInput / claimTypingWindow), gated against their own cap then.
+      attachToLiveSession(plan.session, connectionId, actor);
       return;
     }
 
@@ -1719,10 +1991,10 @@ export function buildShellHandlers({
       {
         access: plan.access,
         target: { shellId },
-        userId,
+        actor,
         cols,
         rows,
-        viewer: { key: socketKey(connectionId), viewer: makeViewer(connectionId, userId) },
+        viewer: { key: socketKey(connectionId), viewer: makeViewer(connectionId, actor) },
         abandoned: () => abandoned(connectionId),
         // Synchronous with the install, so `ready` cannot be overtaken by the
         // shell's own first output — see `onStarted`. This is also where the
@@ -1761,7 +2033,7 @@ export function buildShellHandlers({
       // reattach path above: a pane that has left must not take the session the
       // creator is watching. The creator settles its own abandonment.
       if (abandoned(connectionId)) return;
-      attachToLiveSession(outcome.session, connectionId, userId);
+      attachToLiveSession(outcome.session, connectionId, actor);
       return;
     }
 
@@ -1855,20 +2127,26 @@ export function buildShellHandlers({
         });
         return;
       }
-      {
-        // Input is activity for the task hold: a typed prompt is work in
-        // progress even before the agent's first byte of output.
-        session.lastInputAt = Date.now();
-        // A keystroke also RESUMES a quiesced shell (sprites-shell.ts's `write`
-        // pays back the swallowed watchdog trip), which wakes the Sprite and
-        // re-takes the platform hold — so the payer starts consuming a sandbox
-        // again, and the billing clock has to start with it. Done here, at the
-        // instant of the keystroke, rather than at the next heartbeat: that is
-        // ten minutes away (`SETTLE_HEARTBEAT_MS`), and every one of those
-        // minutes would otherwise be billed as free.
-        resumeBillingClock(session);
-        session.command.write(p.data);
+      // WAL-2 (review 5407898542 P2-3): THE TYPIST PAYS. Input from someone other than the
+      // window's actor first moves the window to them (gated on their own cap); input queued behind
+      // that claim waits for it, so keystrokes reach the PTY in the order they were typed.
+      const typist = socket.data.user?.id ?? '';
+      const queued = pendingInput.get(connectionId);
+      if (queued || typingMovesWindow(session, typist)) {
+        const data = p.data;
+        const run = (queued ?? Promise.resolve()).then(async () => {
+          if (sessionMap.getBySocket(socketKey(connectionId)) !== session) return;
+          if (typingMovesWindow(session, typist) && !(await claimTypingWindow(session, connectionId, typist))) return;
+          if (sessionMap.getBySocket(socketKey(connectionId)) !== session) return;
+          writeInput(session, data);
+        });
+        pendingInput.set(connectionId, run);
+        void run.finally(() => {
+          if (pendingInput.get(connectionId) === run) pendingInput.delete(connectionId);
+        });
+        return;
       }
+      writeInput(session, p.data);
     },
 
     onResize(payload: unknown) {

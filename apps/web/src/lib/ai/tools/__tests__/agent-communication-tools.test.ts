@@ -23,10 +23,12 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
     getUserAccessLevel: vi.fn(),
 }));
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorViewPage: vi.fn(),
   canActorConsultAgent: vi.fn(),
   canActorEditPage: vi.fn(),
@@ -168,6 +170,12 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
     createConversation: vi.fn().mockResolvedValue(undefined),
   },
 }));
+// The pro-model gate for the funder's tier (WAL-8, POL-8). Default: entitled.
+const modelEntitlement = vi.hoisted(() => vi.fn(async (_input: { userId: string; provider: string; model: string; spend: unknown }) => ({ allowed: true } as { allowed: true } | { allowed: false; reason: 'provider_admin_only' | 'subscription_required' })));
+vi.mock('@/lib/ai/core/model-entitlement', () => ({
+  modelEntitlement,
+  MODEL_ENTITLEMENT_MESSAGES: { provider_admin_only: 'admin only', subscription_required: 'This model is available on paid plans, and whoever pays for this run is not on one.' },
+}));
 vi.mock('../../core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(() => false),
@@ -181,6 +189,11 @@ vi.mock('../../core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
   DEFAULT_MODEL: 'openai/gpt-5.4-nano',
 }));
+
+const mockGateUserCall = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/core/user-credit-hold', () => ({ gateUserCall: mockGateUserCall }));
+const mockReleaseHold = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
 
 import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
 import { db } from '@pagespace/db/db';
@@ -196,6 +209,7 @@ import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { prepareHistoryForModel, finishModelRequest } from '../../core/context-assembly';
 import { runCompaction } from '../../core/compaction/compaction-service';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockCanActorViewPage = vi.mocked(canActorViewPage);
@@ -238,7 +252,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await agentCommunicationTools.list_agents!.execute!(
@@ -278,7 +292,7 @@ describe('agent-communication-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -309,7 +323,7 @@ describe('agent-communication-tools', () => {
         toolCallId: '1',
         messages: [],
         experimental_context: {
-          userId: 'user_1',
+          userId: 'user_1', accessActor: credentialActor('user_1', null),
           chatSource: { type: 'page' as const, agentPageId: 'agent_1' },
         } as ToolExecutionContext,
       };
@@ -320,7 +334,7 @@ describe('agent-communication-tools', () => {
       );
 
       expect(listAgentDrives).not.toHaveBeenCalled();
-      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
       // Not just owned drives — a drive reached only via membership/page-permission
       // must be scanned too (the bug this test guards against): both d1 and d2
       // must reach the per-drive agent scan, not just the owned one.
@@ -339,7 +353,7 @@ describe('agent-communication-tools', () => {
       const context = {
         toolCallId: '1',
         messages: [],
-        experimental_context: { userId: 'user_1' } as ToolExecutionContext,
+        experimental_context: { userId: 'user_1' , accessActor: credentialActor('user_1', null)} as ToolExecutionContext,
       };
 
       await agentCommunicationTools.multi_drive_list_agents!.execute!(
@@ -348,7 +362,7 @@ describe('agent-communication-tools', () => {
       );
 
       expect(listAgentDrives).not.toHaveBeenCalled();
-      expect(listAccessibleDrives).toHaveBeenCalledWith('user_1');
+      expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_1' }));
     });
 
   });
@@ -376,6 +390,7 @@ describe('agent-communication-tools', () => {
       } as unknown as ReturnType<typeof generateText> extends Promise<infer T> ? T : never);
       vi.mocked(messageRepository.savePageMessage).mockResolvedValue({ saved: true, rev: 1 });
       vi.mocked(AIMonitoring.trackUsage).mockClear();
+      mockGateUserCall.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-ask', walletId: 'w-drive-1' });
     });
 
     it('requires user authentication', async () => {
@@ -398,7 +413,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeAskAgent(
@@ -430,7 +445,7 @@ describe('agent-communication-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await executeAskAgent(
@@ -464,7 +479,7 @@ describe('agent-communication-tools', () => {
       mockCanActorConsultAgent.mockResolvedValue(true);
 
       const experimental_context = {
-        userId: 'user-123',
+        userId: 'user-123', accessActor: credentialActor('user-123', null),
         locationContext: { currentDrive: { id: 'drive-1', name: 'D', slug: 'd' } },
       } as ToolExecutionContext;
 
@@ -489,7 +504,7 @@ describe('agent-communication-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           agentCallDepth: 2, // MAX_AGENT_DEPTH
         } as ToolExecutionContext & { agentCallDepth: number },
       };
@@ -532,7 +547,7 @@ describe('agent-communication-tools', () => {
           {
             toolCallId: '1',
             messages: [],
-            experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+            experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
           }
         );
         const call = vi.mocked(generateText).mock.calls.at(-1)?.[0] as { tools?: Record<string, unknown> };
@@ -582,7 +597,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
           } as ToolExecutionContext,
         };
 
@@ -611,13 +626,28 @@ describe('agent-communication-tools', () => {
         );
       });
 
+      it('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the funder tier on the consult\'s spend, and refusal runs no model', async () => {
+        const spend = { kind: 'drive' as const, driveId: 'drive-1', chosen: null };
+        modelEntitlement.mockResolvedValueOnce({ allowed: false, reason: 'subscription_required' });
+        vi.mocked(AIMonitoring.trackUsage).mockClear();
+
+        const result = await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123', creditSpend: { spend } } as ToolExecutionContext },
+        );
+
+        expect(modelEntitlement).toHaveBeenCalledWith({ userId: 'user-123', provider: 'openai', model: 'openai/gpt-5.4-nano', spend });
+        expect(JSON.stringify(result)).toContain('paid plans');
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+      });
+
       it('should set parentAgentId from calling agent location context', async () => {
         const parentAgentPageId = 'parent-agent-page-123';
         const context = {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: parentAgentPageId, title: 'Parent Agent', type: 'AI_CHAT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -649,7 +679,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentChain: ['root-agent'],
           } as ToolExecutionContext,
         };
@@ -678,7 +708,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
           } as ToolExecutionContext,
         };
 
@@ -706,7 +736,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             conversationId: parentConversationId,
           } as ToolExecutionContext,
         };
@@ -736,7 +766,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentChain: existingChain,
           } as ToolExecutionContext,
         };
@@ -765,7 +795,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             // No agentChain
           } as ToolExecutionContext,
         };
@@ -793,7 +823,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             agentCallDepth: 1,
           } as ToolExecutionContext & { agentCallDepth: number },
         };
@@ -840,7 +870,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: sourceAgentPageId, title: 'Global Assistant', type: 'AI_CHAT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -873,7 +903,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             locationContext: {
               currentPage: { id: 'doc-page-id', title: 'Some Document', type: 'DOCUMENT' },
               currentDrive: { id: 'drive-1', name: 'Test Drive', slug: 'test' },
@@ -906,7 +936,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             // No locationContext
           } as ToolExecutionContext,
         };
@@ -953,7 +983,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -976,7 +1006,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1053,7 +1083,7 @@ describe('agent-communication-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
@@ -1082,6 +1112,7 @@ describe('agent-communication-tools', () => {
           userId: 'user-123',
           provider: 'openai',
           model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'personal' as const },
           plan: {
             reason: 'over-soft-threshold' as const,
             cutBeforeIndex: 0,
@@ -1104,7 +1135,7 @@ describe('agent-communication-tools', () => {
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
         await executeAskAgent(
           { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
@@ -1112,6 +1143,168 @@ describe('agent-communication-tools', () => {
         );
 
         expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
+      });
+
+      it('SPEND-6 (partial) the compaction a mention reply schedules is gated on the drive the reply was gated on, never the sender', async () => {
+        const pendingCompaction = {
+          conversationId: 'channel:channel-1:agent:agent-1',
+          source: 'page' as const,
+          pageId: 'agent-1',
+          userId: 'user-123',
+          provider: 'openai',
+          model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'automation' as const, driveId: 'drive-1' },
+          plan: {
+            reason: 'over-soft-threshold' as const,
+            cutBeforeIndex: 0,
+            estimatedTailTokens: 100,
+            messagesToSummarize: [],
+            compactedUpToMessageId: null,
+            compactedUpToCreatedAt: null,
+            currentSummaryVersion: null,
+            previousSummary: null,
+          },
+        };
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
+          messages: [] as never,
+          summaryText: '',
+          stableBoundaryIndex: 0,
+          pendingCompaction,
+          scheduleCompaction: vi.fn(),
+        });
+
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: {
+              userId: 'user-123', accessActor: credentialActor('user-123', null),
+              creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+            } as ToolExecutionContext,
+          },
+        );
+
+        // History preparation names the reply's own target, so the compaction it plans
+        // reserves on the drive wallet (runCompaction gates on it) or does not run.
+        expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'automation', driveId: 'drive-1' });
+        expect(runCompaction).toHaveBeenCalledWith(pendingCompaction);
+      });
+
+      it('SPEND-6 (partial) WAL-7 (partial) inside a manual Run, ask_agent records its usage AND schedules its compaction as the person who pressed Run, not the workflow\'s creator (review #2817 P3-A)', async () => {
+        const pendingCompaction = {
+          conversationId: 'conv-sub',
+          source: 'page' as const,
+          pageId: 'agent-1',
+          userId: 'user-creator',
+          provider: 'openai',
+          model: 'openai/gpt-5.4-nano',
+          spend: { kind: 'automation' as const, driveId: 'drive-1' },
+          plan: {
+            reason: 'over-soft-threshold' as const,
+            cutBeforeIndex: 0,
+            estimatedTailTokens: 100,
+            messagesToSummarize: [],
+            compactedUpToMessageId: null,
+            compactedUpToCreatedAt: null,
+            currentSummaryVersion: null,
+            previousSummary: null,
+          },
+        };
+        vi.mocked(prepareHistoryForModel).mockResolvedValueOnce({
+          messages: [] as never,
+          summaryText: '',
+          stableBoundaryIndex: 0,
+          pendingCompaction,
+          scheduleCompaction: vi.fn(),
+        });
+
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: {
+              userId: 'user-creator', accessActor: credentialActor('user-creator', null),
+              creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1', userId: 'user-presser' },
+            } as ToolExecutionContext,
+          },
+        );
+
+        expect(runCompaction).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-creator', billedUserId: 'user-presser' }));
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-presser', walletId: 'w-drive-1' }));
+      });
+
+      it('SPEND-8 (partial) an ask_agent call with no gated caller plans its compaction on personal credits', async () => {
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext },
+        );
+        expect(vi.mocked(prepareHistoryForModel).mock.calls[0][0].spend).toEqual({ kind: 'personal' });
+      });
+    });
+
+    describe('its own reservation', () => {
+      const turnTarget = { kind: 'drive' as const, driveId: 'drive-1', chosen: 'drive_wallet' as const, followOn: true as const };
+      const run = () => executeAskAgent(
+        { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+        {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123', creditSpend: { spend: turnTarget, walletId: 'w-drive-1' } } as ToolExecutionContext,
+        },
+      );
+
+      it('WAL-6 (partial) SPEND-1 (partial) the sub-agent reserves against its turn\'s target BEFORE its tool loop runs, and settles exactly that hold on that wallet', async () => {
+        const order: string[] = [];
+        mockGateUserCall.mockImplementationOnce(async () => { order.push('gate'); return { allowed: true, reason: 'ok', holdId: 'hold-ask', walletId: 'w-drive-1' }; });
+        vi.mocked(generateText).mockImplementationOnce((async () => { order.push('model'); return { text: 'ok', steps: [], totalUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } }; }) as never);
+
+        await run();
+
+        expect(order).toEqual(['gate', 'model']);
+        expect(mockGateUserCall).toHaveBeenCalledWith('user-123', { spend: turnTarget, estCostCents: expect.any(Number) });
+        expect(mockGateUserCall.mock.calls[0][1].estCostCents).toBeGreaterThan(0);
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-ask', walletId: 'w-drive-1' }));
+        expect(mockReleaseHold).not.toHaveBeenCalled();
+      });
+
+      it('WAL-6 (partial) a wallet that cannot cover the sub-agent refuses the consultation: no model call, nothing charged', async () => {
+        mockGateUserCall.mockResolvedValueOnce({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: [] } });
+
+        const result = await run();
+
+        expect(result).toMatchObject({ success: false, refusal: { source: 'drive_wallet', reason: 'source_empty' } });
+        expect(generateText).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+      });
+
+      it('WAL-6 (partial) a channel mention reply is reserved ONCE: the responder\'s hold is settled by the reply, never doubled by a second reservation, and nothing nested inside reuses it', async () => {
+        // The wallet can afford the reply once: a second reservation would be refused.
+        mockGateUserCall.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_empty', options: [] } });
+        const mentionSpend = { kind: 'automation' as const, driveId: 'drive-1', personPresent: true as const };
+
+        const result = await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1', messages: [],
+            experimental_context: { userId: 'user-123', creditSpend: { spend: mentionSpend, walletId: 'w-drive-1', reservedHoldId: 'hold-mention' } } as ToolExecutionContext,
+          },
+        );
+
+        expect(result).toMatchObject({ success: true });
+        expect(mockGateUserCall).not.toHaveBeenCalled();
+        expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ holdId: 'hold-mention', walletId: 'w-drive-1' }));
+        const nested = (vi.mocked(generateText).mock.calls[0][0] as { experimental_context: ToolExecutionContext }).experimental_context;
+        expect(nested.creditSpend?.reservedHoldId).toBeUndefined();
+        expect(nested.creditSpend?.walletId).toBe('w-drive-1');
+      });
+
+      it('a sub-agent run that fails before the settle releases its hold at once', async () => {
+        vi.mocked(generateText).mockRejectedValueOnce(new Error('provider down'));
+
+        const result = await run();
+
+        expect(result).toMatchObject({ success: false });
+        expect(mockReleaseHold).toHaveBeenCalledWith('hold-ask');
+        expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
       });
     });
 
@@ -1141,7 +1334,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1164,7 +1357,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         // Should not throw — error is caught and logged
@@ -1220,7 +1413,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1249,7 +1442,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1294,7 +1487,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             mcpAllowedDriveIds: ['drive-1'],
           } as ToolExecutionContext,
         };
@@ -1317,7 +1510,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1353,7 +1546,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1408,7 +1601,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1451,7 +1644,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1499,7 +1692,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1517,7 +1710,7 @@ describe('agent-communication-tools', () => {
         const context = {
           toolCallId: '1',
           messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         await executeAskAgent(
@@ -1539,7 +1732,7 @@ describe('agent-communication-tools', () => {
           toolCallId: '1',
           messages: [],
           experimental_context: {
-            userId: 'user-123',
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
             mcpAllowedDriveIds: ['drive-home'],
           } as ToolExecutionContext,
         };

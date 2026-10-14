@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GET, POST } from '../route';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 
 vi.mock('server-only', () => ({}));
 
@@ -49,7 +50,7 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId' },
+  drives: { id: 'col_drives_id', ownerId: 'col_drives_ownerId', orgId: 'col_orgId' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'col_users_id', subscriptionTier: 'col_subscriptionTier', role: 'col_role' },
@@ -63,12 +64,30 @@ vi.mock('@/lib/canvas/custom-domain-mirror', () => ({
 vi.mock('@/lib/subscription/plans', () => ({
   getPlan: vi.fn((tier: string) => ({
     limits: {
-      maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : tier === 'founder' ? 3 : 10,
+      maxCustomDomains: tier === 'free' ? 0 : tier === 'pro' ? 1 : 10,
     },
   })),
 }));
 
+// POL-4: the route reads the drive's org policies; these tests are about a drive with none unless one sets it.
+const getDrivePolicies = vi.fn();
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({
+  getDrivePolicies: (...args: unknown[]) => getDrivePolicies(...args),
+}));
+
+const isOrgLapsedForDrive = vi.fn();
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: (...args: unknown[]) => isOrgLapsedForDrive(...args),
+}));
+
 const reconcileCustomDomainCert = vi.fn();
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@/lib/canvas/reconcile-cert', () => ({
   reconcileCustomDomainCert: (...args: unknown[]) => reconcileCustomDomainCert(...args),
 }));
@@ -124,6 +143,7 @@ function mockPlatformAdmin() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  isOrgLapsedForDrive.mockResolvedValue(false);
   authenticateRequestWithOptions.mockResolvedValue(mockAuth);
   checkMCPDriveScope.mockReturnValue(null);
   isPrincipalDriveOwnerOrAdmin.mockResolvedValue(true);
@@ -135,6 +155,8 @@ beforeEach(() => {
     limit: vi.fn().mockResolvedValue([{ tier: 'pro' }]),
   }));
   mirrorDriveToCustomHost.mockResolvedValue(undefined);
+  getDrivePolicies.mockResolvedValue(null);
+  checkDriveMayLoosen.mockResolvedValue(null);
   // Default reconcile: no-op echoing the input status (overridden per-test).
   reconcileCustomDomainCert.mockImplementation(async (d: { status: string }) => ({ status: d.status, action: null }));
   // Default transaction: pass a tx stub that delegates to the same dbSelect/dbInsert mocks.
@@ -188,6 +210,25 @@ describe('GET /api/drives/[driveId]/domains', () => {
     expect(body.domains).toHaveLength(1);
     expect(body.domains[0].hostname).toBe('acme.com');
     expect(body.limit).toBe(1); // pro tier = 1
+  });
+
+  it.each(['free', 'pro'])('SEAT-8 (partial) gives an active org its Business domain limit with a personal %s lead', async (tier) => {
+    let calls = 0;
+    dbSelect.mockImplementation(() => ++calls === 1
+      ? { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) }
+      : { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier, orgId: 'org_1' }]) });
+    const response = await GET(makeReq(), ctx());
+    expect(response.status).toBe(200);
+    expect((await response.json()).limit).toBe(10);
+  });
+
+  it('SEAT-9 (partial) a lapsed org does not inherit its personal Pro lead domain capability', async () => {
+    isOrgLapsedForDrive.mockResolvedValue(true);
+    let calls = 0;
+    dbSelect.mockImplementation(() => ++calls === 1
+      ? { from: vi.fn().mockReturnThis(), where: vi.fn().mockResolvedValue([]) }
+      : { from: vi.fn().mockReturnThis(), innerJoin: vi.fn().mockReturnThis(), where: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue([{ tier: 'pro', orgId: 'org_1' }]) });
+    expect((await (await GET(makeReq(), ctx())).json()).limit).toBe(0);
   });
 
   it('returns 500 on unexpected db error', async () => {
@@ -372,15 +413,6 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(body.error).toMatch(/maximum of 1 custom domain/i);
   });
 
-  it('returns 403 when the drive is at the founder tier cap (3 domains)', async () => {
-    mockPostSelects({ ownerTier: 'founder', domainCount: 3 });
-
-    const res = await POST(makeReq({ hostname: 'fourth.com' }), ctx());
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body.error).toMatch(/maximum of 3 custom domains/i);
-  });
-
   it('normalizes the hostname before insert (strips scheme/path)', async () => {
     mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
@@ -404,8 +436,20 @@ describe('POST /api/drives/[driveId]/domains', () => {
     expect(body.domain.hostname).toBe('acme.com');
   });
 
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed a new domain is refused (402 org_lapsed) inside the insert transaction and nothing is inserted', async () => {
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
+    checkDriveMayLoosen.mockResolvedValue({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' });
+
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(expect.anything(), DRIVE_ID, true);
+    expect(dbInsert).not.toHaveBeenCalled();
+  });
+
   it('calls auditRequest on success', async () => {
-    mockPostSelects({ ownerTier: 'business', domainCount: 0 });
+    mockPostSelects({ ownerTier: 'pro', domainCount: 0 });
     const inserted = { id: 'dom-1', driveId: DRIVE_ID, hostname: 'acme.com', status: 'pending', createdAt: new Date() };
     dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([inserted]) }) });
 
@@ -493,4 +537,45 @@ describe('POST /api/drives/[driveId]/domains', () => {
     const res = await POST(makeReq({ hostname: 'pagespace.ai' }), ctx());
     expect(res.status).toBe(409);
   });
+describe('POST /api/drives/[driveId]/domains under the org policies', () => {
+  const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
+
+  it('POL-4 X-6 (partial) custom domains OFF refuses the add with the policy named, before anything is stored', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({ customDomains: false }));
+    mockPostSelects();
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    const body = await res.json();
+    expect(res.status).toBe(403);
+    expect(body).toMatchObject({ code: 'org_policy', policy: 'customDomains' });
+    expect(dbInsert).not.toHaveBeenCalled();
+    expect(dbTransaction).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) publishing OFF refuses the add too, naming publishing', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({ publishWeb: false }));
+    const res = await POST(makeReq({ hostname: 'acme.com' }), ctx());
+    expect(res.status).toBe(403);
+    expect((await res.json()).policy).toBe('publishWeb');
+    expect(dbInsert).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) a platform-owned alias follows publishing only: allowed with custom domains OFF, refused with publishing OFF', async () => {
+    mockPlatformAdmin();
+    getDrivePolicies.mockResolvedValue(orgPolicies({ customDomains: false }));
+    dbInsert.mockReturnValue({ values: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'd1', driveId: DRIVE_ID, hostname: 'pagespace.ai', status: 'active' }]) }) });
+    expect((await POST(makeReq({ hostname: 'pagespace.ai' }), ctx())).status).toBe(201);
+
+    dbInsert.mockClear();
+    getDrivePolicies.mockResolvedValue(orgPolicies({ publishWeb: false }));
+    expect((await POST(makeReq({ hostname: 'pagespace.ai' }), ctx())).status).toBe(403);
+    expect(dbInsert).not.toHaveBeenCalled();
+  });
+
+  it('POL-4 (partial) with both switches on (or no org) the add proceeds as before', async () => {
+    getDrivePolicies.mockResolvedValue(orgPolicies({}));
+    mockPostSelects();
+    expect([201, 403]).toContain((await POST(makeReq({ hostname: 'acme.com' }), ctx())).status);
+    expect(getDrivePolicies).toHaveBeenCalledWith(DRIVE_ID);
+  });
+});
 });

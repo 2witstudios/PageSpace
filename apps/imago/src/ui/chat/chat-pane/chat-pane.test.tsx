@@ -22,8 +22,11 @@ vi.mock('@/retained-adapters/retained-provider', () => ({ RetainedSurface: ({ ch
 vi.mock('@/retained/components/ai/chat/input/ProviderModelSelector', () => ({ ProviderModelSelector: () => <div data-model-selector="" /> }));
 // The drive's tree names an agent's folder in its picker row.
 vi.mock('@/retained/hooks/usePageTree', () => ({ usePageTree: () => ({ tree: [{ id: 'f-launch', title: 'Launch', children: [] }] }) }));
+const sourceRead = vi.hoisted(() => vi.fn());
+vi.mock('@/retained/hooks/useConversationSpend', () => ({ useConversationSpend: (conversationId: string | null, scope: unknown) => { sourceRead(conversationId, scope); return { spend: { options: [{ source: 'own_credits', walletId: 'own', label: 'Your credits', remainingCredits: '900' }], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }, choose: vi.fn(), isPending: false }; }, useDriveSpend: () => ({ spend: null }) }));
+import { useSpendContextStore } from '@/retained/stores/useSpendContextStore';
 const { ChatPane } = await import('./chat-pane');
-beforeEach(() => { setUiState(createInitialState()); host.props = null; useRetainedChatSelection.getState().select(null); });
+beforeEach(() => { useSpendContextStore.setState({ entries: [], active: null }); setUiState(createInitialState()); host.props = null; useRetainedChatSelection.getState().select(null); });
 afterEach(unmountAll);
 const settle = async () => { await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); }); };
 function show(path = '/d1', conversations = [agentConversation('c1')]) {
@@ -142,4 +145,12 @@ describe('History and New chat in the head', () => {
     expect(home.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
     expect(files.querySelector('aside > header > span:not(.flex-1)')?.textContent).toBe('Files');
   });
+});
+
+it('the header names the active conversation source rather than the open route drive', async () => {
+  useSpendContextStore.getState().register('focused-other', { conversationId: 'c-other', driveId: 'd-other', isGlobal: false });
+  const { container } = show('/d1'); await settle();
+  const chip = container.querySelector('aside > header [data-testid="spend-source-chip"]');
+  expect(chip).not.toBeNull();
+  expect(sourceRead).toHaveBeenCalledWith('c-other', { driveId: 'd-other', isGlobal: false });
 });

@@ -119,7 +119,8 @@ const MOCK_TRIGGER = {
 const MOCK_WORKFLOW = {
   id: 'wf_1',
   driveId: 'drive_1',
-  createdBy: 'user_1',
+  createdBy: 'user_1' as string | null,
+  ownerLeftAt: null as Date | null,
   name: 'task-trigger-due_date-task_1',
   agentPageId: 'agent_1',
   prompt: 'Do the thing',
@@ -335,7 +336,7 @@ describe('POST /api/cron/task-triggers', () => {
       return response.json();
     };
 
-    it('hands the executor the credit gate as its admit hook, gating the owner as a scheduled run', async () => {
+    it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
       const admit = async () => ({ admitted: true as const, release: () => {} });
       mockCreditAdmission.mockReturnValue(admit);
       vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 50 });
@@ -346,6 +347,8 @@ describe('POST /api/cron/task-triggers', () => {
       expect(options?.admit).toBe(admit);
       expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
       expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(MOCK_WORKFLOW.driveId);
     });
 
     it('does not gate a trigger that is skipped for its task (no model would run)', async () => {
@@ -357,6 +360,23 @@ describe('POST /api/cron/task-triggers', () => {
       await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }));
 
       expect(mockCreditAdmission).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['flagged owner-left', { ownerLeftAt: new Date() }],
+      ['whose creator deleted their account', { createdBy: null }],
+    ])('SPEND-6 (partial) a trigger on a workflow %s retires with owner_left before any gate or hold, counted as skipped ([D-OW-36])', async (_label, overrides) => {
+      pushDiscoveryRows([MOCK_TRIGGER]);
+      mockReturning.mockResolvedValueOnce([MOCK_TRIGGER]);
+      pushLookupRows([{ ...MOCK_WORKFLOW, ...overrides }]);
+      pushLookupRows([MOCK_TASK]);
+      const body = await (await POST(new Request('https://example.com/api/cron/task-triggers', { method: 'POST' }))).json();
+
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(mockCreditAdmission).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith({ isEnabled: false, lastFireError: expect.stringContaining('owner_left') });
+      expect(body).toMatchObject({ skipped: 1, executed: 0 });
+      expect(body.errors).toBeUndefined();
     });
 
     it('a refused fire retires the one-shot trigger with the reason and counts as skipped, not as a failure', async () => {

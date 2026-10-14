@@ -27,12 +27,13 @@ vi.mock('@/lib/auth', () => ({
     auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -81,6 +82,11 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
+  // POL-8: the real mapping's shape — an error carrying an org-policy refusal becomes its 403 body.
+  orgModelPolicyErrorResponse: (error: unknown) => {
+    const refusal = (error as { refusal?: { message: string; code: string; policy: string; status: 403 } } | null)?.refusal;
+    return refusal ? { body: { error: refusal.message, code: refusal.code, policy: refusal.policy }, status: refusal.status } : null;
+  },
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {
     currentRevision: number;
     expectedRevision?: number;
@@ -107,6 +113,7 @@ import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';

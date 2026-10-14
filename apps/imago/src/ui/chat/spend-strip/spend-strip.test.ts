@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { CREDITS, formatCredits, spendSourceOf } from './spend-strip-model';
+import { CREDITS, creditsLabel, spendSourceOf } from './spend-strip-model';
 
 describe('spendSourceOf() (IMC-2.4)', () => {
   test('personal credits', () => {
@@ -35,17 +35,17 @@ describe('spendSourceOf() (IMC-2.4)', () => {
   });
 });
 
-describe('formatCredits()', () => {
+describe('creditsLabel()', () => {
   test('whole numbers, never dollars or decimals', () => {
     assert({
       given: 'balances of 1120, 1482.7, 0 and -14.2',
       should: 'read as whole credits with thousands separators',
-      actual: [1120, 1482.7, 0, -14.2].map(formatCredits),
-      expected: ['1,120 credits', '1,482 credits', '0 credits', '-14 credits'],
+      actual: [1120, 1482.7, 0, -14.2].map(creditsLabel),
+      expected: ['1,120 credits', '1,483 credits', '0 credits', '-14 credits'],
     });
   });
 
   test('one credit', () => {
-    assert({ given: 'a balance of 1', should: 'say credit', actual: formatCredits(1), expected: '1 credit' });
+    assert({ given: 'a balance of 1', should: 'say credit', actual: creditsLabel(1), expected: '1 credit' });
   });
 });

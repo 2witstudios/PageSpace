@@ -144,7 +144,7 @@ const applySecurityHeaders = (
   response.headers.set('Permissions-Policy', permissionsPolicy());
   // Classic exempts its Stripe-dependent billing/plan routes from COEP.
   // Mirror only their native equivalents when cloud billing is enabled.
-  const stripePage = isStripeEnabled() && (pathname === '/account/billing' || pathname === '/account/plan');
+  const stripePage = isStripeEnabled() && (pathname === '/account/billing' || pathname === '/account/plan' || pathname === '/account/organizations' || /^\/orgs\/[^/]+\/settings\/billing$/.test(pathname ?? ''));
   if (!isAPIRoute && !stripePage) {
     response.headers.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }

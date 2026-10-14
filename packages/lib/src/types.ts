@@ -102,6 +102,10 @@ export interface Drive {
   // Drive-wide favicon override for published pages lacking their own <link rel="icon">.
   // Optional: predates the field on zustand-persisted Drive objects.
   publishFaviconUrl?: string | null;
+  // The owning org, null for a personal drive (picker grouping, DRV-9). Optional: predates the
+  // field on zustand-persisted Drive objects; consumers treat undefined as personal.
+  orgId?: string | null;
+  orgVisibility?: 'OPEN' | 'RESTRICTED' | 'PRIVATE';
   // Server-computed effective permission for root-level page create (the
   // drive-wide canEdit rule, custom-role bounded). Optional: zustand-persisted
   // Drive objects predate this field; the UI fails closed when absent (#2627).

@@ -10,7 +10,8 @@ import { CompactTodoListMessage } from './CompactTodoListMessage';
 import { ErrorBoundary } from '@/retained/components/ai/shared/ErrorBoundary';
 import { useMessageRendererState } from './useMessageRendererState';
 import type { ConversationMessage, TextPart } from './message-types';
-import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isToolRunGroupPart } from './message-types';
+import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isSpendFallbackPart, isToolRunGroupPart } from './message-types';
+import { SpendFallbackNotice } from '@/retained/components/messages/SpendFallbackNotice';
 import { CommandExecutionIndicator } from '@/retained/components/messages/CommandExecutionIndicator';
 import { ImageMessageContent } from './ImageMessageContent';
 import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
@@ -321,6 +322,12 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
             return (
               <div key={`${message.id}-command-${index}`} className="mt-1">
                 <CommandExecutionIndicator data={group.data} />
+              </div>
+            );
+          } else if (isSpendFallbackPart(group)) {
+            return (
+              <div key={`${message.id}-spend-fallback-${index}`} className="mt-1">
+                <SpendFallbackNotice data={group.data} />
               </div>
             );
           }

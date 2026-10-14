@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
@@ -5,6 +6,7 @@ import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND, spendDriveId } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { IMAGE_GEN_HOLD_ESTIMATE_CENTS, resolveImageCost } from '@pagespace/lib/billing/credit-pricing';
@@ -13,6 +15,7 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
 import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
+import { createImageProvider, isProviderError } from '../core/provider-factory';
 import { isImageGenerationAllowed } from '../core/image-gen-access';
 import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
@@ -33,7 +36,7 @@ async function loadUserGating(userId: string): Promise<{ isAdmin: boolean; tier:
     .limit(1);
   return {
     isAdmin: rows[0]?.role === 'admin',
-    tier: (rows[0]?.tier ?? 'free') as SubscriptionTier,
+    tier: resolvePersonalCapabilityTier(rows[0]?.tier),
   };
 }
 
@@ -175,8 +178,24 @@ restricted to app administrators.`,
 
       const model = context?.imageGenerationModel || DEFAULT_IMAGE_MODEL;
 
+      // POL-8: the image model is built by the provider factory, which judges it against the org allowlists of the
+      // drive the turn runs in and of the drive the image lands in. Refused before any credit is reserved.
+      const imageProvider = await createImageProvider({ model }, {
+        driveId: spendDriveId(context?.creditSpend?.spend ?? PERSONAL_SPEND),
+        contentDriveIds: target.targetDriveId ? [target.targetDriveId] : [],
+      });
+      if (isProviderError(imageProvider)) {
+        return { success: false, error: imageProvider.error };
+      }
+
       // Reserve credits for the call (image-sized estimate; real cost settles at trackUsage).
-      const gate = await canConsumeAI(userId, (tier ?? 'free') as SubscriptionTier, {
+      // The image spends the wallet the turn it runs in already named (WAL-5, SPEND-4):
+      // the same drive and source, never a different one. Outside a gated turn there is
+      // no drive session, so it spends personal credits (SPEND-8).
+      // Gated and recorded as the consumer the turn's gate bound (a manual Run's presser), else the caller.
+      const billedUserId = context?.creditSpend?.userId ?? userId;
+      const gate = await canConsumeAI(billedUserId, (tier ?? 'free') as SubscriptionTier, {
+        spend: context?.creditSpend?.spend ?? PERSONAL_SPEND,
         estCostCents: IMAGE_GEN_HOLD_ESTIMATE_CENTS,
       });
       if (!gate.allowed) {
@@ -186,6 +205,7 @@ restricted to app administrators.`,
         };
       }
       const holdId = gate.holdId;
+      const walletId = gate.walletId;
 
       /**
        * Settle the reserved hold against real provider spend.
@@ -213,13 +233,16 @@ restricted to app administrators.`,
       }) => {
         const resolved = resolveImageCost(args.providerCostDollars);
         const settle = await AIMonitoring.trackUsage({
-          userId,
+          userId: billedUserId,
           provider: 'openrouter',
           model,
           providerCostDollars: resolved.costDollars,
           costSource: resolved.costSource,
           openrouterGenerationIds: args.generationIds,
           holdId,
+          walletId,
+          // SPEND-10: an image an automation run generates is that automation's spend.
+          automationRef: context?.creditSpend?.automationRef,
           success: true,
           source: 'image_generation',
           conversationId: context?.conversationId,
@@ -285,7 +308,7 @@ restricted to app administrators.`,
 
       let image;
       try {
-        image = await generateImageBytes({ prompt, model, aspectRatio });
+        image = await generateImageBytes({ prompt, model, aspectRatio }, { client: imageProvider.client });
       } catch (error) {
         // A completed-but-empty generation was still billed by OpenRouter → settle it, but
         // ONLY against an AUTHORITATIVE cost (`usage.cost`, including a legitimate $0 from a

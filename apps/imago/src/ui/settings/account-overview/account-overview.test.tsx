@@ -8,7 +8,7 @@ import { overviewGroups } from './account-overview-model';
 
 afterEach(unmountAll);
 
-const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, orgs: false };
+const cloud: NavContext = { isDesktop: false, showBilling: true, isNative: false, onPrem: false, hasOrganizations: false };
 
 const view = (overrides: Partial<Parameters<typeof AccountOverviewView>[0]> = {}) =>
   mount(

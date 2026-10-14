@@ -1,12 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@pagespace/db/db', () => ({
-  db: { select: vi.fn(), insert: vi.fn(), delete: vi.fn(), update: vi.fn() },
-}));
+vi.mock('@pagespace/db/db', () => {
+  const db: Record<string, unknown> = { select: vi.fn(), insert: vi.fn(), delete: vi.fn(), update: vi.fn() };
+  // The membership writes run in a transaction (the lapse guard reads in it): the tx is the same mock.
+  db.transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(db));
+  return { db };
+});
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the drive (proven against real Postgres in
+// org-lapse-loosening.integration.test.ts).
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('../../permissions/org-lapse-guard', () => ({ checkDriveMayLoosen }));
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
@@ -26,12 +43,14 @@ vi.mock('@pagespace/db/schema/members', () => ({
 vi.mock('../../permissions/permissions', () => ({
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),
-  getUserDriveAccess: vi.fn(),
+  holdsDriveAccess: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('../../permissions/membership-queries', () => ({
   customRoleBelongsToDrive: vi.fn(),
   fetchCustomRolePermissions: vi.fn(),
+  // Real-Postgres proof of the GUEST read: share-link-guest.integration.test.ts.
+  holdsAcceptedGuestRow: vi.fn(async () => false),
 }));
 
 // ---------------------------------------------------------------------------
@@ -47,11 +66,13 @@ import {
   setAgentDriveIncludeContext,
 } from '../drive-agent-service';
 import { db } from '@pagespace/db/db';
+import { getDrivePolicies } from '../../organizations/policy-reader';
 import { eq, ne } from '@pagespace/db/operators';
 import { driveAgentMembers } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
-import { canUserEditPage, getUserDriveAccess, isDriveOwnerOrAdmin } from '../../permissions/permissions';
-import { customRoleBelongsToDrive, fetchCustomRolePermissions } from '../../permissions/membership-queries';
+import { canUserEditPage, holdsDriveAccess, isDriveOwnerOrAdmin } from '../../permissions/permissions';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, holdsAcceptedGuestRow } from '../../permissions/membership-queries';
+import { credentialActor } from '../../permissions/access-actor';
 
 const USER = 'user_aaaaaaaaaaaaaaaaaaaaaa';
 const AGENT = 'agent_bbbbbbbbbbbbbbbbbbbbbb';
@@ -82,20 +103,21 @@ function stubInsert(captured: Record<string, unknown>[], opts: { duplicate?: boo
   } as unknown as ReturnType<typeof db.insert>);
 }
 
-const AI_CHAT_PAGE = [{ id: AGENT, type: 'AI_CHAT' }];
+const AI_CHAT_PAGE = [{ id: AGENT, type: 'AI_CHAT', driveId: DRIVE }];
+const FOREIGN_AGENT_PAGE = [{ id: AGENT, type: 'AI_CHAT', driveId: 'drive_elsewhereeeeeeeeeeeeee' }];
 
 describe('addAgentToDrive', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('404 when the agent page does not exist', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 404 });
   });
 
   it('400 when the page is not an AI_CHAT page', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, type: 'FOLDER' }]));
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 400 });
   });
 
@@ -105,10 +127,10 @@ describe('addAgentToDrive', () => {
   it('403 when the user can only view (not edit) the agent', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect(AI_CHAT_PAGE));
     vi.mocked(canUserEditPage).mockResolvedValue(false);
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 403 });
     // Drive access must never be consulted once the agent gate fails.
-    expect(getUserDriveAccess).not.toHaveBeenCalled();
+    expect(holdsDriveAccess).not.toHaveBeenCalled();
   });
 
   it('403 when the user has no access to the target drive', async () => {
@@ -117,8 +139,8 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
       .mockReturnValueOnce(stubSelect([]));                           // no membership
     vi.mocked(canUserEditPage).mockResolvedValue(true);
-    vi.mocked(getUserDriveAccess).mockResolvedValue(false);
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    vi.mocked(holdsDriveAccess).mockResolvedValue(false);
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 403 });
   });
 
@@ -130,7 +152,7 @@ describe('addAgentToDrive', () => {
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
 
     expect(res).toMatchObject({
       ok: false,
@@ -148,9 +170,52 @@ describe('addAgentToDrive', () => {
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ role: 'ADMIN', driveId: DRIVE, agentPageId: AGENT, addedBy: USER });
+  });
+
+  describe('cross-drive agents under the org policy', () => {
+    const owner = () => {
+      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      const captured: Record<string, unknown>[] = [];
+      stubInsert(captured);
+      return captured;
+    };
+
+    it('POL-9 refuses an agent from another drive when the org turns cross-drive agents off, and writes nothing', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
+      expect(res).toMatchObject({ ok: false, status: 403 });
+      expect(captured).toHaveLength(0);
+    });
+
+    it('POL-9 allows it while the policy is on', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: true } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(FOREIGN_AGENT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
+      expect(res.ok).toBe(true);
+      expect(captured).toHaveLength(1);
+    });
+
+    it('POL-9 an agent from THIS drive is not cross-drive, whatever the policy', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { crossDriveAgents: false } } as never);
+      vi.mocked(db.select)
+        .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
+        .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+      const captured = owner();
+      const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
+      expect(res.ok).toBe(true);
+      expect(getDrivePolicies).not.toHaveBeenCalled();
+      expect(captured).toHaveLength(1);
+    });
   });
 
   it('defaults includeContext to false when not provided', async () => {
@@ -161,9 +226,24 @@ describe('addAgentToDrive', () => {
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ includeContext: false });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the target drive\'s org is lapsed an agent is not added (402 org_lapsed, nothing inserted)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))
+      .mockReturnValueOnce(stubSelect([{ ownerId: USER }]));
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+    checkDriveMayLoosen.mockResolvedValueOnce({ ok: false, code: 'org_lapsed', status: 402, message: 'lapsed copy' });
+
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
+    expect(res).toEqual({ ok: false, status: 402, error: 'lapsed copy', code: 'org_lapsed' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(db, DRIVE, true);
+    expect(captured).toHaveLength(0);
   });
 
   it('persists includeContext=true when explicitly requested', async () => {
@@ -174,7 +254,7 @@ describe('addAgentToDrive', () => {
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ includeContext: true });
   });
@@ -185,13 +265,30 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
       .mockReturnValueOnce(stubSelect([]));                           // no drive membership
     vi.mocked(canUserEditPage).mockResolvedValue(true);
-    vi.mocked(getUserDriveAccess).mockResolvedValue(true); // page-level access
+    vi.mocked(holdsDriveAccess).mockResolvedValue(true); // page-level access
     const captured: Record<string, unknown>[] = [];
     stubInsert(captured);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res.ok).toBe(true);
     expect(captured[0]).toMatchObject({ role: 'MEMBER' });
+  });
+
+  it('D-OW-24 refuses a GUEST granter (redeemed page share link) even though its page grant opens the drive', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect(AI_CHAT_PAGE))                 // agent lookup
+      .mockReturnValueOnce(stubSelect([{ ownerId: 'someone_else' }])) // drive lookup
+      .mockReturnValueOnce(stubSelect([]));                           // the effective membership reads a GUEST row as none
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(holdsDriveAccess).mockResolvedValue(true); // its page grant
+    vi.mocked(holdsAcceptedGuestRow).mockResolvedValueOnce(true);
+    const captured: Record<string, unknown>[] = [];
+    stubInsert(captured);
+
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
+    expect(res).toMatchObject({ ok: false, status: 403 });
+    expect(holdsAcceptedGuestRow).toHaveBeenCalledWith(DRIVE, USER);
+    expect(captured).toEqual([]);
   });
 
   it('rejects a request to grant ADMIN when the granter is only a MEMBER', async () => {
@@ -201,7 +298,7 @@ describe('addAgentToDrive', () => {
       .mockReturnValueOnce(stubSelect([{ role: 'MEMBER', customRoleId: null }])); // member
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, requestedRole: 'ADMIN' });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, requestedRole: 'ADMIN' });
     expect(res).toMatchObject({ ok: false, status: 403 });
   });
 
@@ -213,7 +310,7 @@ describe('addAgentToDrive', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
 
     const res = await addAgentToDrive({
-      actingUserId: USER,
+      actor: credentialActor(USER, null),
       agentPageId: AGENT,
       driveId: DRIVE,
       requestedCustomRoleId: 'role_x',
@@ -229,7 +326,7 @@ describe('addAgentToDrive', () => {
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     stubInsert([], { duplicate: true });
 
-    const res = await addAgentToDrive({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE });
+    const res = await addAgentToDrive({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE });
     expect(res).toMatchObject({ ok: false, status: 409 });
   });
 });
@@ -605,15 +702,40 @@ describe('getAgentContextDrives', () => {
 describe('setAgentDriveIncludeContext', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  const LAPSED = { ok: false, code: 'org_lapsed', status: 402, message: 'lapsed copy' };
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed, turning context ON is refused (402 org_lapsed, nothing written); turning it OFF only restricts and applies', async () => {
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]))
+      .mockReturnValueOnce(stubSelect([{ includeContext: false }]));
+    checkDriveMayLoosen.mockImplementation(async (_tx: unknown, _driveId: unknown, loosens: unknown) => (loosens ? LAPSED : null));
+    const set = vi.fn(() => ({ where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'm', includeContext: false }]) }) }));
+    vi.mocked(db.update).mockReturnValue({ set } as unknown as ReturnType<typeof db.update>);
+
+    const on = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    expect(on).toEqual({ ok: false, status: 402, error: 'lapsed copy', code: 'org_lapsed' });
+    expect(checkDriveMayLoosen).toHaveBeenLastCalledWith(db, DRIVE, true);
+    expect(set).not.toHaveBeenCalled();
+
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]))
+      .mockReturnValueOnce(stubSelect([{ includeContext: true }]));
+    const off = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: false });
+    expect(off).toMatchObject({ ok: true });
+    expect(checkDriveMayLoosen).toHaveBeenLastCalledWith(db, DRIVE, false);
+    checkDriveMayLoosen.mockImplementation(async () => null);
+  });
+
   it('404 when the agent page does not exist', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([]));
-    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
     expect(res).toMatchObject({ ok: false, status: 404 });
   });
 
   it("400 when the target drive is the agent's home drive", async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: DRIVE }]));
-    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
     expect(res).toMatchObject({ ok: false, status: 400 });
   });
 
@@ -621,12 +743,14 @@ describe('setAgentDriveIncludeContext', () => {
     vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
     vi.mocked(canUserEditPage).mockResolvedValue(false);
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(false);
-    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
     expect(res).toMatchObject({ ok: false, status: 403 });
   });
 
   it('updates includeContext and returns the updated member', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]))
+      .mockReturnValueOnce(stubSelect([{ includeContext: false }]));
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     const captured: Record<string, unknown>[] = [];
     const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'member_1', includeContext: true }]) });
@@ -637,21 +761,23 @@ describe('setAgentDriveIncludeContext', () => {
       }),
     } as unknown as ReturnType<typeof db.update>);
 
-    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
 
     expect(res).toMatchObject({ ok: true, member: { id: 'member_1', includeContext: true } });
     expect(captured[0]).toEqual({ includeContext: true });
   });
 
   it('404 when the membership row does not exist', async () => {
-    vi.mocked(db.select).mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]));
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ id: AGENT, driveId: 'other_drive' }]))
+      .mockReturnValueOnce(stubSelect([]));
     vi.mocked(canUserEditPage).mockResolvedValue(true);
     const where = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([]) });
     vi.mocked(db.update).mockReturnValue({
       set: vi.fn(() => ({ where })),
     } as unknown as ReturnType<typeof db.update>);
 
-    const res = await setAgentDriveIncludeContext({ actingUserId: USER, agentPageId: AGENT, driveId: DRIVE, includeContext: true });
+    const res = await setAgentDriveIncludeContext({ actor: credentialActor(USER, null), agentPageId: AGENT, driveId: DRIVE, includeContext: true });
     expect(res).toMatchObject({ ok: false, status: 404 });
   });
 });

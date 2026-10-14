@@ -33,6 +33,11 @@ describe('decideRetry', () => {
     },
   );
 
+  it('given an idempotent class and a timeout AFTER send with the budget exhausted, should report upstream_failed and stop retrying', () => {
+    const actual = decideRetry({ operationClass: 'read', failure: { kind: 'timeout_after_send' }, attempt: 3, maxAttempts: 3 });
+    expect(actual).toEqual({ action: 'report', outcome: { kind: 'upstream_failed', upstreamStatus: null } });
+  });
+
   it('given an upstream status after send, should report upstream_failed with that status (the write is known to have been received)', () => {
     const actual = decideRetry({ operationClass: 'write', failure: { kind: 'upstream_status', status: 503 }, attempt: 1, maxAttempts: 3 });
     expect(actual).toEqual({ action: 'report', outcome: { kind: 'upstream_failed', upstreamStatus: 503 } });

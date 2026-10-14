@@ -98,6 +98,7 @@ services:
       - ADMIN_PROCESSOR_PASSWORD=admin-processor-password
       - ADMIN_READER_PASSWORD=admin-reader-password
       - ADMIN_ERASER_PASSWORD=admin-eraser-password
+      - BILLING_CUTOVER_OFFLINE=${BILLING_CUTOVER_OFFLINE:-false}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&

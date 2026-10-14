@@ -1,0 +1,412 @@
+import { pgTable, text, integer, timestamp, boolean, index, uniqueIndex, check, primaryKey, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { relations, sql, and, eq, isNull, type SQL } from 'drizzle-orm';
+import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
+import { organizations } from './organizations';
+import { drives } from './core';
+
+/**
+ * wallets — every balance in PageSpace (Spec WAL-1, WAL-2; X-5).
+ *
+ * X-5: this IS the table that used to be `credit_balances`. Migration 0300 renamed it
+ * in place, so every per-user balance row became that user's PERSONAL ROOT WALLET
+ * without a copy: same row, same cents. There is no second balance store.
+ *
+ * Shapes (WAL-2):
+ *   - personal root wallet: ownerType 'user', no subject, no parent. One per user.
+ *   - org pool:             ownerType 'org', no subject, no parent. One per org.
+ *   - drive wallet:         a drive subject, normally a parent (the org
+ *                           pool for org drives, the owner's personal wallet for
+ *                           personal drives).
+ *
+ * Money columns (whole cents of credit value, never negative, as credit_balances was):
+ *   - monthlyRemainingCents: a ROOT wallet's allowance bucket (credit-core `Balance`).
+ *                            Paid tiers accumulate it across periods (rollover).
+ *   - monthlyAllowanceCents: the monthly allocation. On a root wallet, the tier grant;
+ *                            on a child wallet, the budget drawn against the parent as
+ *                            spend happens (WAL-3, wallet-core `WalletFunds`).
+ *   - spentCents:            how much of a CHILD wallet's allocation this period has
+ *                            drawn. Always 0 on a root wallet, whose spend lands in
+ *                            monthlyRemainingCents instead.
+ *   - topupRemainingCents:   funds moved in that last until spent (WAL-3).
+ *   - debtCents:             overage owed, a non-negative magnitude (WAL-6).
+ *   - pendingMillicents:     the sub-cent carry, always in [0, 1000).
+ * Net spendable of a root wallet = monthlyRemaining + topupRemaining − debt, exactly the
+ * credit_balances formula.
+ *
+ * The owner is two nullable foreign keys rather than one polymorphic id, so deleting a
+ * user still cascades their personal wallet exactly as it cascaded their credit_balances
+ * row (and an org's with the org). `ownerType` names which one is set; a CHECK keeps the
+ * two in agreement. The subject is a soft link (subjectType + subjectId): its lifecycle
+ * belongs to the drive (D-OW-59: a drive is the only subject a wallet has).
+ */
+
+export const WALLET_OWNER_TYPES = ['user', 'org'] as const;
+export type WalletOwnerType = (typeof WALLET_OWNER_TYPES)[number];
+
+/** D-OW-59: a drive is the only wallet subject; there are no agent-page wallets. */
+export const WALLET_SUBJECT_TYPES = ['drive'] as const;
+export type WalletSubjectType = (typeof WALLET_SUBJECT_TYPES)[number];
+
+/** WAL-1. `paused` is the kill switch (WAL-7); `over` carries debt (WAL-6e). Mirrors wallet-core `WalletStatus`. */
+export const WALLET_STATUSES = ['active', 'paused', 'over'] as const;
+export type WalletStatusValue = (typeof WALLET_STATUSES)[number];
+
+/** POL-7. Mirrors wallet-core `FallbackRule`; null on a wallet means none set. */
+export const WALLET_FALLBACK_RULES = ['refuse', 'seat_allowance', 'own_credits'] as const;
+export type WalletFallbackRuleValue = (typeof WALLET_FALLBACK_RULES)[number];
+
+/**
+ * WAL-6c. Mirrors wallet-core `OvershootFunderChoice`: where a CHILD wallet's actual-cost
+ * overshoot lands, chosen by its funder — absorbed into the parent's debt (the org pool or the
+ * owner's balance, D20.2, the default when unset) or carried as this wallet's own debt, netted
+ * from its next allocation.
+ */
+export const OVERSHOOT_FUNDER_CHOICES = ['absorb_to_parent', 'wallet_debt'] as const;
+export type OvershootFunderChoiceValue = (typeof OVERSHOOT_FUNDER_CHOICES)[number];
+
+/**
+ * SPEND-1/SPEND-3. Mirrors wallet-core `SpendSourceKind`: the three sources an AI call
+ * inside a drive can spend from. Stored as a DEFAULT (wallets.defaultSpendSource), never as
+ * the source of a call: the call's own source is the wallet chosen for its conversation.
+ */
+export const SPEND_SOURCE_KINDS = ['drive_wallet', 'seat_allowance', 'own_credits'] as const;
+export type SpendSourceKindValue = (typeof SPEND_SOURCE_KINDS)[number];
+
+export const wallets = pgTable('wallets', {
+  // Existing credit_balances rows receive their id from the database default when 0302
+  // adds the column; application inserts mint a cuid as every other table does. The
+  // default is cuid-shaped (a letter, then 23 lowercase alphanumerics) so an id minted by
+  // either path passes the same id validators.
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => createId())
+    .default(sql`('w' || substr(md5(random()::text || clock_timestamp()::text), 1, 23))`),
+  ownerType: text('ownerType').$type<WalletOwnerType>().default('user').notNull(),
+  userId: text('userId').references(() => users.id, { onDelete: 'cascade' }),
+  orgId: text('orgId').references(() => organizations.id, { onDelete: 'cascade' }),
+  subjectType: text('subjectType').$type<WalletSubjectType>(),
+  subjectId: text('subjectId'),
+  parentWalletId: text('parentWalletId').references((): AnyPgColumn => wallets.id),
+  monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
+  monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
+  spentCents: integer('spentCents').default(0).notNull(),
+  topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
+  debtCents: integer('debtCents').default(0).notNull(),
+  // Sub-cent carry: a single AI call can cost a fraction of a cent. We charge in
+  // millicents and bank the leftover fraction here so those calls don't silently round
+  // to $0. Always in [0, 1000). Never a float — integer millicents only.
+  pendingMillicents: integer('pendingMillicents').default(0).notNull(),
+  // The UTC period (WAL-1). A root wallet's billing window; a child wallet's allocation
+  // period, which follows its governing parent (D-OW-12).
+  monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date', withTimezone: true }),
+  monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date', withTimezone: true }),
+  status: text('status').$type<WalletStatusValue>().default('active').notNull(),
+  // WAL-4: the drive lead can turn donations off. On by default.
+  donationsEnabled: boolean('donationsEnabled').default(true).notNull(),
+  // D-OW-4: whether the drive's GUESTS (drive members outside its org, DRV-8) may spend this drive
+  // wallet. Off by default; when on, a guest is still always bound by per-consumer caps (WAL-7).
+  // Meaningful only on a drive wallet: the CHECK refuses it on a root wallet.
+  guestSpendEnabled: boolean('guestSpendEnabled').default(false).notNull(),
+  fallbackRule: text('fallbackRule').$type<WalletFallbackRuleValue>(),
+  // SPEND-3 preselection. On a DRIVE wallet it is the drive's default (set by whoever
+  // administers the wallet); on a PERSONAL ROOT wallet it is the person's own default from
+  // Settings. NULL means no default: nothing is preselected from this row, and where a person
+  // has more than one source the gate refuses until one is chosen (SPEND-4). Meaningless on
+  // an org pool, which no one spends "by default" — the CHECK refuses one there.
+  defaultSpendSource: text('defaultSpendSource').$type<SpendSourceKindValue>(),
+  // SPEND-5 "Always my own credits", the ONE global switch (D20.7). Set only on a PERSONAL
+  // ROOT wallet (the person's own Settings, like defaultSpendSource); the CHECK refuses it
+  // anywhere else. When on, every call this person makes spends their own credits or is
+  // refused — never a drive wallet or a seat, never a fallback. The per-drive switch is a
+  // row in drive_spend_overrides.
+  alwaysOwnCredits: boolean('alwaysOwnCredits').default(false).notNull(),
+  // WAL-6c: the funder's overshoot choice for a CHILD wallet (OVERSHOOT_FUNDER_CHOICES). NULL is
+  // the default, absorb into the parent's debt (D20.2); the CHECK refuses it on a root wallet,
+  // which has no parent to absorb into.
+  overshootChoice: text('overshootChoice').$type<OvershootFunderChoiceValue>(),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  // One personal root wallet per user, one pool per org. These are the arbiters every
+  // upsert of a personal balance names (see PERSONAL_ROOT_WALLET_ARBITER).
+  personalRootUnique: uniqueIndex('wallets_personal_root_unique')
+    .on(table.userId)
+    .where(sql`"ownerType" = 'user' AND "subjectType" IS NULL AND "parentWalletId" IS NULL`),
+  orgPoolUnique: uniqueIndex('wallets_org_pool_unique')
+    .on(table.orgId)
+    .where(sql`"ownerType" = 'org' AND "subjectType" IS NULL AND "parentWalletId" IS NULL`),
+  // A drive has at most one wallet.
+  subjectUnique: uniqueIndex('wallets_subject_unique')
+    .on(table.subjectType, table.subjectId)
+    .where(sql`"subjectId" IS NOT NULL`),
+  parentIdx: index('wallets_parent_idx').on(table.parentWalletId),
+
+  ownerTypeValid: check('wallets_owner_type_valid', sql`${table.ownerType} IN ('user', 'org')`),
+  // Exactly the owner ownerType names, and never both.
+  ownerMatchesType: check(
+    'wallets_owner_matches_type',
+    sql`(${table.ownerType} = 'user' AND ${table.userId} IS NOT NULL AND ${table.orgId} IS NULL) OR (${table.ownerType} = 'org' AND ${table.orgId} IS NOT NULL AND ${table.userId} IS NULL)`,
+  ),
+  subjectTypeValid: check(
+    'wallets_subject_type_valid',
+    sql`${table.subjectType} IS NULL OR ${table.subjectType} = 'drive'`,
+  ),
+  // Both or neither: a subject type without an id (or the reverse) names nothing.
+  subjectComplete: check('wallets_subject_complete', sql`(${table.subjectType} IS NULL) = (${table.subjectId} IS NULL)`),
+  notOwnParent: check('wallets_not_own_parent', sql`${table.parentWalletId} IS NULL OR ${table.parentWalletId} <> ${table.id}`),
+  statusValid: check('wallets_status_valid', sql`${table.status} IN ('active', 'paused', 'over')`),
+  fallbackRuleValid: check(
+    'wallets_fallback_rule_valid',
+    sql`${table.fallbackRule} IS NULL OR ${table.fallbackRule} IN ('refuse', 'seat_allowance', 'own_credits')`,
+  ),
+  overshootChoiceValid: check(
+    'wallets_overshoot_choice_valid',
+    sql`${table.overshootChoice} IS NULL OR (${table.overshootChoice} IN ('absorb_to_parent', 'wallet_debt') AND ${table.parentWalletId} IS NOT NULL)`,
+  ),
+
+  defaultSpendSourceValid: check(
+    'wallets_default_spend_source_valid',
+    // A known kind, and never on an org pool: no one spends a pool "by default" (the seat is
+    // a source, the pool is not a place a default can live).
+    sql`${table.defaultSpendSource} IS NULL OR (${table.defaultSpendSource} IN ('drive_wallet', 'seat_allowance', 'own_credits') AND NOT (${table.ownerType} = 'org' AND ${table.subjectType} IS NULL))`,
+  ),
+
+  guestSpendOnSubjectWallet: check(
+    'wallets_guest_spend_subject_wallet',
+    sql`NOT ${table.guestSpendEnabled} OR ${table.subjectType} IS NOT NULL`,
+  ),
+
+  alwaysOwnCreditsOnPersonalRoot: check(
+    'wallets_always_own_credits_personal_root',
+    sql`NOT ${table.alwaysOwnCredits} OR (${table.ownerType} = 'user' AND ${table.subjectType} IS NULL AND ${table.parentWalletId} IS NULL)`,
+  ),
+
+  // The credit_balances invariants, carried over unchanged: a single bad write can't
+  // manufacture a negative bucket or an inverted billing window.
+  monthlyNonNeg: check('wallets_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
+  allowanceNonNeg: check('wallets_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
+  spentNonNeg: check('wallets_spent_cents_nonneg', sql`${table.spentCents} >= 0`),
+  topupNonNeg: check('wallets_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
+  debtNonNeg: check('wallets_debt_cents_nonneg', sql`${table.debtCents} >= 0`),
+  pendingRange: check('wallets_pending_millicents_range', sql`${table.pendingMillicents} >= 0 AND ${table.pendingMillicents} < 1000`),
+  periodOrder: check(
+    'wallets_period_order',
+    sql`${table.monthlyPeriodStart} IS NULL OR ${table.monthlyPeriodEnd} IS NULL OR ${table.monthlyPeriodStart} <= ${table.monthlyPeriodEnd}`,
+  ),
+}));
+
+/**
+ * Every personal root wallet: user-owned, no subject, no parent. Each is the row that was
+ * one user's credit_balances row. Reports that were "per user balance" filter on this.
+ */
+export function isPersonalRootWallet(): SQL {
+  return and(eq(wallets.ownerType, 'user'), isNull(wallets.subjectType), isNull(wallets.parentWalletId)) as SQL;
+}
+
+/**
+ * The personal root wallet of `userId`: the row that was their credit_balances row.
+ * Every read or write of a person's own balance goes through this predicate, never a
+ * bare `userId` match, which would also match drive wallets that person owns.
+ */
+export function personalRootWalletOf(userId: string): SQL {
+  return and(eq(wallets.userId, userId), isPersonalRootWallet()) as SQL;
+}
+
+/**
+ * ON CONFLICT arbiter for inserting a personal root wallet. The unique index is
+ * partial, and Postgres infers a partial index only when the conflict clause restates
+ * its predicate. Use as `onConflictDoNothing(PERSONAL_ROOT_WALLET_ARBITER)`, or spread
+ * `{ target, targetWhere }` into `onConflictDoUpdate`.
+ */
+export const PERSONAL_ROOT_WALLET_ARBITER = {
+  target: wallets.userId,
+  where: sql`"ownerType" = 'user' AND "subjectType" IS NULL AND "parentWalletId" IS NULL`,
+} as const;
+
+export const PERSONAL_ROOT_WALLET_UPSERT_TARGET = {
+  target: wallets.userId,
+  targetWhere: PERSONAL_ROOT_WALLET_ARBITER.where,
+} as const;
+
+/**
+ * walletConsumerCaps — per-consumer daily and monthly caps on one wallet leg (WAL-7),
+ * keyed (walletId, consumerKey). A null cap is unlimited within the wallet; no row at
+ * all means no caps. `consumerKey` names who spends: `user:<userId>` for a person,
+ * `drive:<driveId>` for automations that spend as the drive (SPEND-6). Whole cents.
+ */
+export const walletConsumerCaps = pgTable('wallet_consumer_caps', {
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  consumerKey: text('consumerKey').notNull(),
+  dailyCapCents: integer('dailyCapCents'),
+  monthlyCapCents: integer('monthlyCapCents'),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.walletId, table.consumerKey], name: 'wallet_consumer_caps_pkey' }),
+  consumerKeyNonEmpty: check('wallet_consumer_caps_consumer_key_nonempty', sql`length(${table.consumerKey}) > 0`),
+  dailyNonNeg: check('wallet_consumer_caps_daily_nonneg', sql`${table.dailyCapCents} IS NULL OR ${table.dailyCapCents} >= 0`),
+  monthlyNonNeg: check('wallet_consumer_caps_monthly_nonneg', sql`${table.monthlyCapCents} IS NULL OR ${table.monthlyCapCents} >= 0`),
+}));
+
+/**
+ * automationSkipNotices — when a drive's lead was last told that an automation in the drive
+ * was skipped for want of drive-wallet funds (SPEND-6), so the notice goes out at most once
+ * per period. One row per drive, keyed by the drive rather than its wallet: a drive with no
+ * wallet at all skips too, and has no wallet row to stamp.
+ *
+ * `lastNotifiedAt` is timestamp WITHOUT time zone holding UTC wall-clock, written only as
+ * `(now() at time zone 'utc')`, so the period boundary never follows a session time zone.
+ */
+export const automationSkipNotices = pgTable('automation_skip_notices', {
+  driveId: text('driveId').primaryKey().references(() => drives.id, { onDelete: 'cascade' }),
+  lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
+});
+
+/**
+ * walletDebtNotices — when a debt-carrying wallet's funder was last told it is over (WAL-6e),
+ * so the notice goes out at most once per period of that wallet. One row per wallet; it goes
+ * with its wallet.
+ *
+ * `lastNotifiedAt` is timestamp WITHOUT time zone holding UTC wall-clock, written only as
+ * `(now() at time zone 'utc')`, so the period boundary never follows a session time zone.
+ */
+export const walletDebtNotices = pgTable('wallet_debt_notices', {
+  walletId: text('walletId').primaryKey().references(() => wallets.id, { onDelete: 'cascade' }),
+  lastNotifiedAt: timestamp('lastNotifiedAt', { mode: 'date' }).notNull(),
+});
+
+/**
+ * walletCapAlerts — which per-consumer cap alert (WAL-7, D20.6: 80% and 100%) the funder of a
+ * wallet leg was sent, per consumer, cap window and period. The primary key IS the
+ * once-per-threshold-per-period guard: the alert shell inserts its row and notifies only when
+ * the insert landed, so two settles racing past a threshold send it once. `periodStart` is the
+ * UTC day for the daily window and the month (a seat: the pool period, D-OW-12) for the monthly.
+ */
+export const walletCapAlerts = pgTable('wallet_cap_alerts', {
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  consumerKey: text('consumerKey').notNull(),
+  capWindow: text('capWindow').$type<'daily' | 'monthly'>().notNull(),
+  periodStart: timestamp('periodStart', { mode: 'date', withTimezone: true }).notNull(),
+  threshold: integer('threshold').notNull(),
+  sentAt: timestamp('sentAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.walletId, table.consumerKey, table.capWindow, table.periodStart, table.threshold], name: 'wallet_cap_alerts_pkey' }),
+  windowValid: check('wallet_cap_alerts_window_valid', sql`${table.capWindow} IN ('daily', 'monthly')`),
+  thresholdValid: check('wallet_cap_alerts_threshold_valid', sql`${table.threshold} IN (80, 100)`),
+}));
+
+/**
+ * driveSpendOverrides — SPEND-5 "Always my own credits" in ONE drive (D17.2): a row means the
+ * switch is on for (userId, driveId); no row means off. It only ever narrows what a call may
+ * spend (own credits or refuse), so it grants nothing and needs no role. Both sides cascade:
+ * the switch is the person's, about that drive.
+ */
+export const driveSpendOverrides = pgTable('drive_spend_overrides', {
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.userId, table.driveId], name: 'drive_spend_overrides_pkey' }),
+}));
+
+/** Mirrors wallet-core `FundingLeg['funder']`: the wallet owner's own top-up, or a donation (WAL-4). */
+export const FUNDING_LEG_KINDS = ['owner', 'donation'] as const;
+export type FundingLegKind = (typeof FUNDING_LEG_KINDS)[number];
+
+/**
+ * walletFundingLegs — funds moved INTO a child wallet that last until spent (WAL-3), one
+ * row per top-up or donation (D-OW-13: donation legs are tracked separately and are
+ * non-refundable). Each row maps 1:1 onto wallet-core's `FundingLeg`
+ * (legId = id, funder = funderKind, donorUserId = funderUserId on a donation,
+ * remainingCents); the other columns are storage-only (which wallet, how much it
+ * started with, the refund rule, the idempotency key, when it arrived).
+ *
+ * Spend draws legs FIFO by (createdAt, id) across both kinds — see
+ * wallet-funding `orderFundingLegs`. On a child wallet the legs are the store and
+ * `wallets.topupRemainingCents` is kept equal to SUM(remainingCents) in the same
+ * transaction that changes a leg, so readers of the wallet row stay right.
+ *
+ * A donor's leg outlives the donor's account (funderUserId SET NULL): the money was
+ * given to the drive, and erasing the donor must not take it back out.
+ */
+export const walletFundingLegs = pgTable('wallet_funding_legs', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  funderKind: text('funderKind').$type<FundingLegKind>().notNull(),
+  // Who funded it. A donation always names a person at insert; an owner top-up names
+  // the paying user or org.
+  funderUserId: text('funderUserId').references(() => users.id, { onDelete: 'set null' }),
+  funderOrgId: text('funderOrgId').references(() => organizations.id, { onDelete: 'set null' }),
+  originalCents: integer('originalCents').notNull(),
+  remainingCents: integer('remainingCents').notNull(),
+  // MONEY-4: the part of remainingCents that began as the funder's INCLUDED grant (their
+  // monthly allowance), not purchased credit. A donation draws the donor root monthly-first,
+  // so a leg can carry grant value; the liability report counts it as included, here, where
+  // it now sits — transfer invariance without counting the root it left twice.
+  includedCents: integer('includedCents').notNull().default(0),
+  nonRefundable: boolean('nonRefundable').notNull(),
+  // Idempotency key: one leg per donation id or payment reference.
+  sourceRef: text('sourceRef'),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  // The draw order: a wallet's legs, oldest first.
+  walletOrderIdx: index('wallet_funding_legs_wallet_order_idx').on(table.walletId, table.createdAt, table.id),
+  sourceRefUnique: uniqueIndex('wallet_funding_legs_source_ref_unique')
+    .on(table.sourceRef)
+    .where(sql`"sourceRef" IS NOT NULL`),
+  funderKindValid: check('wallet_funding_legs_funder_kind_valid', sql`${table.funderKind} IN ('owner', 'donation')`),
+  originalPositive: check('wallet_funding_legs_original_positive', sql`${table.originalCents} > 0`),
+  remainingInRange: check(
+    'wallet_funding_legs_remaining_range',
+    sql`${table.remainingCents} >= 0 AND ${table.remainingCents} <= ${table.originalCents}`,
+  ),
+  // Included composition is drawn down with the leg it belongs to, never past it.
+  includedInRange: check(
+    'wallet_funding_legs_included_range',
+    sql`${table.includedCents} >= 0 AND ${table.includedCents} <= ${table.remainingCents}`,
+  ),
+  // D-OW-13: a donation leg is never refundable.
+  donationNonRefundable: check(
+    'wallet_funding_legs_donation_non_refundable',
+    sql`${table.funderKind} <> 'donation' OR ${table.nonRefundable}`,
+  ),
+  // A donation comes from a person's own balance, never an org.
+  donationNotFromOrg: check(
+    'wallet_funding_legs_donation_not_from_org',
+    sql`${table.funderKind} <> 'donation' OR ${table.funderOrgId} IS NULL`,
+  ),
+}));
+
+export const walletFundingLegsRelations = relations(walletFundingLegs, ({ one }) => ({
+  wallet: one(wallets, {
+    fields: [walletFundingLegs.walletId],
+    references: [wallets.id],
+  }),
+}));
+
+export const walletsRelations = relations(wallets, ({ one, many }) => ({
+  user: one(users, {
+    fields: [wallets.userId],
+    references: [users.id],
+  }),
+  org: one(organizations, {
+    fields: [wallets.orgId],
+    references: [organizations.id],
+  }),
+  parent: one(wallets, {
+    fields: [wallets.parentWalletId],
+    references: [wallets.id],
+    relationName: 'walletParent',
+  }),
+  children: many(wallets, { relationName: 'walletParent' }),
+  consumerCaps: many(walletConsumerCaps),
+  fundingLegs: many(walletFundingLegs),
+}));
+
+export const walletConsumerCapsRelations = relations(walletConsumerCaps, ({ one }) => ({
+  wallet: one(wallets, {
+    fields: [walletConsumerCaps.walletId],
+    references: [wallets.id],
+  }),
+}));

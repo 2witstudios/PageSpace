@@ -75,7 +75,12 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
 }));
 
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
@@ -98,13 +103,14 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 import { commandTools } from '../command-tools';
-import { ne } from '@pagespace/db/operators';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockCanUserViewPage = vi.mocked(canUserViewPage);
 const mockIsDriveOwnerOrAdmin = vi.mocked(isDriveOwnerOrAdmin);
 
-const ctx: Partial<ToolExecutionContext> = { userId: 'user-1' };
+const ctx: Partial<ToolExecutionContext> = { userId: 'user-1', accessActor: credentialActor('user-1', null) };
 
 const run = async <T>(
   toolName: keyof typeof commandTools,
@@ -373,8 +379,10 @@ describe('command-tools', () => {
       expect(result.total).toBe(1);
       expect(result.commands[0].trigger).toBe('my-cmd');
       expect(result.commands[0].scope).toBe('user');
-      // A GUEST row (redeemed page share link) does not make a drive's commands the caller's.
-      expect(ne).toHaveBeenCalledWith('role', 'GUEST');
+      // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
+      // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
+      // (member-drives.integration.test.ts proves it on real Postgres).
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), { includeTrashed: false });
     });
 
     it('returns empty list when no commands exist', async () => {
@@ -393,14 +401,8 @@ describe('command-tools', () => {
     });
 
     it('filters to a specific drive when caller is a member', async () => {
-      // Simulate user owning 'drive-1' via the owned-drives select query
-      (mockSelect as Mock).mockReturnValueOnce({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([{ id: 'drive-1' }]),
-          innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
-        })),
-      });
-      // second select call (memberships) uses the default mock returning []
+      // 'drive-1' is in the caller's member-drive set
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-1']);
       mockCommandsFindMany.mockResolvedValue([
         {
           id: 'cmd-2',
@@ -421,6 +423,16 @@ describe('command-tools', () => {
       expect(result.total).toBe(1);
       expect(result.commands[0].trigger).toBe('drive-cmd');
       expect(result.commands[0].scope).toBe('drive');
+    });
+
+    it('DRV-5 (partial) X-6 (partial) asks the org-aware member-drive set (non-trashed) and reads no drive_members row of its own', async () => {
+      vi.mocked(getMemberDriveIds).mockResolvedValueOnce(['drive-open-org']);
+      mockCommandsFindMany.mockResolvedValue([]);
+
+      await run('list_commands', { driveId: 'drive-open-org' });
+
+      expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), { includeTrashed: false });
+      expect(mockSelect).not.toHaveBeenCalled();
     });
   });
 });

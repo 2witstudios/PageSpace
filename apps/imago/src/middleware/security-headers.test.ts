@@ -357,3 +357,13 @@ test('only the exact cloud billing pages mirror classic’s embedder-policy exce
     }
   }
 });
+
+
+describe('organization payment documents', () => {
+  test.each(['/account/organizations', '/orgs/org-1/settings/billing'])('%s permits Stripe frames only on cloud', pathname => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+    expect(createSecureResponse(true, new Request(`https://pagespace.ai/imago${pathname}`), { pathname }).response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
+    vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+    expect(createSecureResponse(true, new Request(`https://pagespace.ai/imago${pathname}`), { pathname }).response.headers.get('Cross-Origin-Embedder-Policy')).toBe('credentialless');
+  });
+});

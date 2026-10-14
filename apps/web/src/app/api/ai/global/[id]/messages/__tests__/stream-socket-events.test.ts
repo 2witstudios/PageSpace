@@ -815,7 +815,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  agentPageId: null, rev: 0, planPageId: null,
+  agentPageId: null, chosenWalletId: null, rev: 0, planPageId: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 
@@ -870,7 +870,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }) })
       );
     });
 

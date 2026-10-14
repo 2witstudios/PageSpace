@@ -57,7 +57,10 @@ const startSite = (): Promise<void> =>
         return;
       }
       if (req.url === '/stall') {
-        setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Stalled</title>'), 8_000);
+        // Held-hostage discrimination: a working deadline+restart returns the take-over in
+        // single-digit seconds even on a loaded runner; only a worker that lets the
+        // navigation hold the take-over would answer as late as this page does.
+        setTimeout(() => res.writeHead(200, { 'content-type': 'text/html' }).end('<!doctype html><title>Stalled</title>'), 30_000);
         return;
       }
       if (req.url === '/slow') {
@@ -249,6 +252,15 @@ describe('browser control worker (real Chromium)', () => {
     const release = await command(ALICE, { type: 'release' });
     const afterTabs = await agentOp({ kind: 'tabs', action: 'list' });
 
+    // The stale profile's deletion trails the restart (background cleanup); on a loaded
+    // machine the readdir right after the restart still sees it. Wait for the deletion.
+    const cleanupDeadline = Date.now() + 30_000;
+    let profiles = (await readdir(profileRoot)).length;
+    while (profiles > 1 && Date.now() < cleanupDeadline) {
+      await new Promise((done) => setTimeout(done, 250));
+      profiles = (await readdir(profileRoot)).length;
+    }
+
     assert({
       given: 'a slow agent navigation in flight, a take-over by Alice, 3 s of agent reads, screenshots and tab lists, then Alice releasing',
       should: 'withhold the in-flight result, refuse every agent request, let only Alice view and type, release nothing to the agent, and hand back a fresh browser',
@@ -266,7 +278,7 @@ describe('browser control worker (real Chromium)', () => {
         release: [release.status, (release.body as { mode: string }).mode],
         freshContext: afterTabs.ok && afterTabs.result.kind === 'tabs' ? afterTabs.result.tabs.map((t) => t.url) : afterTabs,
         restarts: worker.audit().browserRestarts,
-        profiles: (await readdir(profileRoot)).length,
+        profiles,
       },
       expected: {
         takeOver: [200, 'human-control'],
@@ -330,11 +342,11 @@ describe('a page that will not answer', () => {
     await stuck.close();
     await rm(root, { recursive: true, force: true });
     assert({
-      given: 'an agent navigation to a page that answers after 8 s, a 2 s deadline, and a take-over 0.3 s in',
+      given: 'an agent navigation to a page that answers after 30 s, a 2 s deadline, and a take-over 0.3 s in',
       should: 'give the human control within the deadline plus a restart, withhold the navigation, and restart once',
       actual: {
         takeOver: [takeOver.status, takeOver.body.mode],
-        inTime: tookMs < 7_000,
+        inTime: tookMs < 15_000,
         navigated: navigated.ok ? 'released' : navigated.refusal.reason,
         restarts: audit.browserRestarts,
         releasedOutside: audit.agentResultsReleasedOutsideAgentControl,

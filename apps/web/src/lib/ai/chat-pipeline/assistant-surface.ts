@@ -51,6 +51,8 @@ import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree
 import { getUserPersonalization, getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
 import type { TurnTimer } from '@/lib/ai/core/turn-timing';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
@@ -59,7 +61,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 const NO_EXCLUSIONS: ReadonlySet<string> = new Set();
 
 export interface AssistantToolSelectionInput {
-  userId: string;
+  /** Who is asking: their credential decides org access (D-OW-45). */
+  actor: AccessActor;
   readOnly: boolean;
   webSearch: boolean;
   imageGen: boolean;
@@ -94,7 +97,7 @@ export interface AssistantToolSelection {
   userCommandCatalog: UserCommandCatalog;
 }
 
-/** The Global Assistant's tools for a user and their toggles. */
+/** The Global Assistant's tools for a caller and their toggles. */
 export async function selectAssistantTools(input: AssistantToolSelectionInput): Promise<AssistantToolSelection> {
   // The COMPUTE tools (bash/files, git+gh, PTY shells — not the free
   // chat-session family) are stripped for a tier-ineligible payer BEFORE
@@ -123,7 +126,7 @@ export async function selectAssistantTools(input: AssistantToolSelectionInput): 
   // Built-in skills and the per-viewer command list feed tool_search's corpus,
   // so discovery has one search surface.
   const toolNames = Object.keys(allTools);
-  const userCommandCatalog = await loadUserCommandCatalog(input.userId, input.commandDriveId, toolNames);
+  const userCommandCatalog = await loadUserCommandCatalog(input.actor, input.commandDriveId, toolNames);
   input.timer?.mark('commands_loaded');
 
   const tools: ToolSet = {
@@ -139,12 +142,13 @@ export async function selectAssistantTools(input: AssistantToolSelectionInput): 
 }
 
 export interface AssistantContextInput {
-  userId: string;
+  /** Who is asking: their credential decides org access (D-OW-45). */
+  actor: AccessActor;
   location: LocationContext | null;
   readOnly: boolean;
   /** Whether the drive tree / all-drives summary is included. */
   showPageTree: boolean;
-  /** The caller's token drive scope (empty = unscoped), for the Home-drive hint. */
+  /** The caller's token drive ceiling (empty = unscoped), for every derived context read. */
   allowedDriveIds: readonly string[];
   /** Imago only: the drives its user keeps it out of. */
   excludedDriveIds?: ReadonlySet<string>;
@@ -164,14 +168,20 @@ export interface AssistantContext {
   pageTreePrompt: string;
 }
 
-/** The Global Assistant's context for a user at a location. */
+/** The Global Assistant's context for a caller at a location. */
 export async function buildAssistantContext(input: AssistantContextInput): Promise<AssistantContext> {
-  const { userId, location, readOnly, showPageTree, allowedDriveIds, timer } = input;
+  const { actor, readOnly, showPageTree, allowedDriveIds, timer } = input;
+  // Legacy location hints have not passed resolveRequestContext. A scoped caller
+  // must name an admitted drive before any hint, prompt or tree enters the model.
+  const location = allowedDriveIds.length > 0 &&
+    (!input.location?.currentDrive || !allowedDriveIds.includes(input.location.currentDrive.id))
+    ? null
+    : input.location;
   const excludedDriveIds = input.excludedDriveIds ?? NO_EXCLUSIONS;
 
   const [personalization, userTimezone] = await Promise.all([
-    getUserPersonalization(userId),
-    getUserTimezone(userId),
+    getUserPersonalization(actor),
+    getUserTimezone(actor.userId),
   ]);
   timer?.mark('personalization');
 
@@ -179,7 +189,7 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   // injected via buildVolatileTurnContext, never baked into the system prompt,
   // so that string stays byte-identical across turns wherever the user goes.
   const hasLocation = Boolean(location?.currentPage || location?.currentDrive);
-  const homeDriveId = await resolveHomeDriveHint(userId, hasLocation, allowedDriveIds);
+  const homeDriveId = await resolveHomeDriveHint(actor.userId, hasLocation, allowedDriveIds);
   timer?.mark('home_drive_resolved');
 
   const viewedDriveId = location?.currentDrive?.id ?? null;
@@ -197,7 +207,9 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   } : { homeDriveId });
 
   let drivePromptSection = '';
-  if (driveInView) {
+  // The drive id comes from the client: its prompt is drive content, so the turn's
+  // driver must reach the drive (org sign-in policy included).
+  if (driveInView && (await getUserDriveAccess(actor, driveInView))) {
     try {
       const [drive] = await db
         .select({ drivePrompt: drives.drivePrompt })
@@ -216,8 +228,9 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   // `canDelegate` mirrors the session-tool gate: spawn_session is stripped by
   // `filterToolsForReadOnly` as a write tool, and a prompt that names a tool
   // the model does not have makes it attempt delegation that silently fails.
-  const agentAwarenessPrompt = await buildAgentAwarenessPrompt(userId, {
+  const agentAwarenessPrompt = await buildAgentAwarenessPrompt(actor, {
     canDelegate: !readOnly,
+    allowedDriveIds,
     ...(excludedDriveIds.size > 0 && { excludedDriveIds }),
   });
   timer?.mark('agent_awareness_built');
@@ -225,13 +238,13 @@ export async function buildAssistantContext(input: AssistantContextInput): Promi
   let pageTreePrompt = '';
   if (showPageTree) {
     if (driveInView) {
-      const treeContext = await getPageTreeContext(userId, { scope: 'drive', driveId: driveInView });
+      const treeContext = await getPageTreeContext(actor, { scope: 'drive', driveId: driveInView, allowedDriveIds });
       timer?.mark('page_tree_loaded');
       if (treeContext) {
         pageTreePrompt = `\n\n## WORKSPACE STRUCTURE\n\nHere is the complete workspace structure:\n\n${treeContext}`;
       }
     } else {
-      const driveSummary = await getDriveListSummary(userId, excludedDriveIds.size > 0 ? { excludedDriveIds } : {});
+      const driveSummary = await getDriveListSummary(actor, { allowedDriveIds, ...(excludedDriveIds.size > 0 && { excludedDriveIds }) });
       timer?.mark('drive_summary_loaded');
       if (driveSummary) {
         pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;

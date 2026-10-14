@@ -97,17 +97,18 @@ function fakeFleet() {
 
   const deps = (
     listRunningApps: () => Promise<PublishedApp[]>,
-    resolvePayerId: () => Promise<string | null> = async () => 'payer-1',
+    resolveCharge: () => Promise<{ kind: 'user'; userId: string } | null> = async () => ({ kind: 'user', userId: 'payer-1' }),
   ): AwakeMeterDeps => ({
     isEnabled: () => true,
     billing: {
-      resolvePayerId,
+      resolveCharge,
       gate: async () => ({ allowed: true, holdId: 'hold-next' }),
       trackUsage: async ({ publishedAppId, activeSeconds }) => {
         charges.push({ publishedAppId, activeSeconds });
         return { persisted: true, creditsSettled: true };
       },
       releaseHold: async () => {},
+      holdMatchesCharge: async () => true,
     },
     listRunningApps,
     findStopBoundary: async () => null,
@@ -122,6 +123,7 @@ function fakeFleet() {
     park: async () => {},
     dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
+    orgComputeBillingEpoch: async () => NOW,
   });
   return { row, deps, charges };
 }
@@ -172,7 +174,7 @@ describe('meterAwakePublishedAppsSerialized when the meter lock is lost mid-tick
           if (lockPid === undefined) throw new Error('tick A lock pid was not recorded');
           await terminateBackend(lockPid);
           tickB = await meterAwakePublishedAppsSerialized(fleet.deps(async () => [fleet.row()]), lockPool);
-          return 'payer-1';
+          return { kind: 'user' as const, userId: 'payer-1' };
         },
       ),
       lockPool,

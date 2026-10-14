@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { useWorkflows } from '@/hooks/useWorkflows';
+import { useAutomationSpendContext } from '@/hooks/useAutomationSpendContext';
 import { WorkflowList } from './WorkflowList';
 import { WorkflowForm, type WorkflowFormData } from './WorkflowForm';
 import { synthesizeSteps } from './WorkflowStepsEditor';
@@ -19,6 +20,7 @@ interface WorkflowsDashboardProps {
 
 export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardProps) {
   const { workflows, isLoading, mutate, runWorkflow, toggleWorkflow, deleteWorkflow } = useWorkflows(driveId);
+  const spendContext = useAutomationSpendContext(driveId, driveName);
   const [formOpen, setFormOpen] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Workflow | null>(null);
@@ -89,11 +91,11 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
     <div className="h-full overflow-y-auto">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-5xl">
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Zap className="h-6 w-6 text-muted-foreground" />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <Zap className="h-6 w-6 shrink-0 text-muted-foreground" />
               <h1 className="text-2xl font-bold">Workflows</h1>
-              <span className="text-muted-foreground">- {driveName}</span>
+              <span className="truncate text-muted-foreground">- {driveName}</span>
             </div>
             <Button onClick={handleOpenCreate}>
               <Plus className="h-4 w-4 mr-1.5" />
@@ -110,6 +112,7 @@ export function WorkflowsDashboard({ driveId, driveName }: WorkflowsDashboardPro
           ) : (
             <WorkflowList
               workflows={workflows}
+              spendContext={spendContext}
               onRun={handleRun}
               onToggle={handleToggle}
               onEdit={handleEdit}

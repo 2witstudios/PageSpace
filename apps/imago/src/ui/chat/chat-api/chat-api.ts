@@ -120,10 +120,10 @@ export const fetchConversationMessages = async (
 type NewConversationResponse = { readonly conversationId?: unknown };
 
 /** Starts a conversation with an agent page and answers its id (the server's cuid2). */
-export const createConversation = async (client: ApiClient, agentId: string): Promise<string> => {
+export const createConversation = async (client: ApiClient, agentId: string, walletId?: string): Promise<string> => {
   const body = await client.apiFetch<NewConversationResponse>(chatPaths.newConversation(agentId), {
     method: 'POST',
-    json: {},
+    json: walletId === undefined ? {} : { walletId },
   });
   if (typeof body?.conversationId !== 'string' || body.conversationId === '') {
     throw invalid('Conversation response carried no id');

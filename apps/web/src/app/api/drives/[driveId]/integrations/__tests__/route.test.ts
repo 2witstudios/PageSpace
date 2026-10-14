@@ -6,6 +6,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/integrations
 // ============================================================================
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
@@ -50,6 +51,8 @@ vi.mock('@/lib/auth', () => ({
 
 
 import { GET, POST } from '../route';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listDriveConnections, createConnection, findDriveConnection } from '@pagespace/lib/integrations/repositories/connection-repository'
@@ -246,6 +249,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(getDrivePolicies).mockResolvedValue(null);
     // Reset env
     process.env = { ...originalEnv };
   });
@@ -659,6 +663,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
   describe('non-OAuth flow', () => {
     beforeEach(() => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: DEFAULT_ORG_POLICIES });
       vi.mocked(getDriveAccess).mockResolvedValue({
         isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
@@ -673,6 +678,31 @@ describe('POST /api/drives/[driveId]/integrations', () => {
         createdAt: new Date(), updatedAt: new Date(),
       });
       vi.mocked(findDriveConnection).mockResolvedValue(null);
+    });
+
+    it('POL-11 refuses 403 org_policy for a service off the org allowlist - nothing is stored, no credential is taken', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'lin_abc123' } }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'integrationsAllowlist' });
+      expect(encryptCredentials).not.toHaveBeenCalled();
+      expect(createConnection).not.toHaveBeenCalled();
+    });
+
+    it('POL-11 an allowed service still connects', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['linear'] } });
+      vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc_xyz' });
+      // @ts-expect-error - partial mock data
+      vi.mocked(createConnection).mockResolvedValue({ id: 'conn-new', providerId: 'prov-api', name: 'Linear', status: 'active', createdAt: new Date() });
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'k' } }),
+      });
+      expect((await POST(request, createContext(MOCK_DRIVE_ID))).status).toBe(201);
     });
 
     it('should return 400 when credentials are missing', async () => {

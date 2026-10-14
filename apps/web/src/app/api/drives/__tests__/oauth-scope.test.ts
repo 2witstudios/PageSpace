@@ -21,6 +21,12 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn(),
   createDrive: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({
+  createOrgDrive: vi.fn(),
+}));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({
+  orgDriveServiceDeps: {},
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
@@ -50,6 +56,9 @@ vi.mock('@pagespace/lib/permissions/app-permissions', async (importOriginal) => 
     ...actual,
     hasAppDriveMembership: vi.fn(),
     hasScopedDriveMembership: vi.fn(),
+    // The owner bound (review #2849 r6) is hasScopedDriveMembership's, stubbed above; the role is the scope row's.
+    getEffectiveScopedDriveMembership: vi.fn(async (scopes: Parameters<typeof actual.getScopedDriveMembership>[0], _ownerUserId: string, driveId: string) =>
+      actual.getScopedDriveMembership(scopes, driveId)),
   };
 });
 
@@ -85,6 +94,8 @@ const driveFixture = (overrides: { id: string; name: string; ownerId?: string })
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 describe('GET /api/drives — OAuth credentials', () => {
@@ -119,7 +130,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(listAccessibleDrives).toHaveBeenCalledWith('user-manage-keys', { includeTrash: false, tokenScopable: true });
+    expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-manage-keys' }), { includeTrash: false, tokenScopable: true });
     expect(body.map((drive: { id: string }) => drive.id)).toEqual(['drive-a', 'drive-b']);
     expect(db.query.drives.findMany).not.toHaveBeenCalled();
   });
@@ -142,7 +153,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(listAccessibleDrives).toHaveBeenCalledWith('user-account', { includeTrash: false, tokenScopable: false });
+    expect(listAccessibleDrives).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-account' }), { includeTrash: false, tokenScopable: false });
     expect(body.map((drive: { id: string }) => drive.id)).toEqual(['drive-account']);
     expect(db.query.drives.findMany).not.toHaveBeenCalled();
   });
@@ -199,7 +210,7 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(listAccessibleDrives).not.toHaveBeenCalled();
     expect(hasScopedDriveMembership).toHaveBeenCalledWith(
       [{ driveId: 'drive-1', role: null, customRoleId: null }],
-      'test-user-id',
+      expect.objectContaining({ userId: 'test-user-id' }),
       'drive-1',
     );
   });
@@ -219,3 +230,4 @@ describe('GET /api/drives — OAuth credentials', () => {
     expect(body[0]).toMatchObject({ id: 'drive-1', role: 'MEMBER', isOwned: false });
   });
 });
+

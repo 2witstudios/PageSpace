@@ -11,6 +11,7 @@ import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkl
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { MarketingLink } from "@/components/ui/MarketingLink";
 import { filterSettingsItems } from "./settings-visibility";
+import { AccountOrganizationsSection } from "@/components/orgs/AccountOrganizationsSection";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -223,8 +224,9 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-8">
-        {settingsSections.map((section) => (
-          <div key={section.title}>
+        {settingsSections.map((section, sectionIndex) => (
+          <div key={section.title} className="space-y-8">
+            <div>
             <h2 className="text-sm font-medium text-muted-foreground mb-2 px-1">
               {section.title}
             </h2>
@@ -255,6 +257,8 @@ export default function SettingsPage() {
                 )
               )}
             </div>
+            </div>
+            {sectionIndex === 0 ? <AccountOrganizationsSection /> : null}
           </div>
         ))}
       </div>

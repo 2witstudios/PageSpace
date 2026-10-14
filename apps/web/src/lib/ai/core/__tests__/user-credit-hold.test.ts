@@ -16,6 +16,9 @@ vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockRelea
 
 import { acquireUserCreditHold } from '../user-credit-hold';
 
+// A Zoom enrichment names its target drive as consumer (SPEND-6).
+const SPEND = { kind: 'automation', driveId: 'drive-1' } as const;
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'pro' }]);
@@ -23,33 +26,55 @@ beforeEach(() => {
 });
 
 describe('acquireUserCreditHold', () => {
+  it.each(['business', 'founder'])('A-9 never passes retired personal %s as a paid consumer tier', async (subscriptionTier) => {
+    mockSelectWhere.mockResolvedValue([{ subscriptionTier }]);
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    await acquireUserCreditHold('user-1', { spend: SPEND });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'free', { spend: SPEND });
+  });
+
   it('given a user, should gate them at their own tier with the caller options', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h' });
 
-    await acquireUserCreditHold('user-1', { skipDailyCap: true });
+    await acquireUserCreditHold('user-1', { spend: SPEND, skipDailyCap: true });
 
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'pro', { skipDailyCap: true });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'pro', { spend: SPEND, skipDailyCap: true });
   });
 
   it('given no user row, should gate at the free tier', async () => {
     mockSelectWhere.mockResolvedValue([]);
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'needs_init' });
 
-    await acquireUserCreditHold('ghost', {});
+    await acquireUserCreditHold('ghost', { spend: SPEND });
 
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('ghost', 'free', {});
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('ghost', 'free', { spend: SPEND });
   });
 
   it('given a refusal, should return the gate reason', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
 
-    expect(await acquireUserCreditHold('user-1', {})).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect(await acquireUserCreditHold('user-1', { spend: SPEND })).toEqual({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('SPEND-6 (partial) given a refused source, should carry the refusal so a skipped run can record why (e.g. source_cap_reached)', async () => {
+    const refusal = { source: 'drive_wallet' as const, reason: 'source_cap_reached' as const, options: [] };
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal });
+
+    expect(await acquireUserCreditHold('user-1', { spend: SPEND })).toEqual({ allowed: false, reason: 'source_refused', refusal });
+  });
+
+  it('given an allowed gate, should return the wallet the hold was placed on, for the calls to settle on', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+
+    const hold = await acquireUserCreditHold('user-1', { spend: SPEND });
+
+    expect(hold).toMatchObject({ allowed: true, walletId: 'w-drive-1' });
   });
 
   it('given release is called twice, should free the hold exactly once', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
 
-    const hold = await acquireUserCreditHold('user-1', {});
+    const hold = await acquireUserCreditHold('user-1', { spend: SPEND });
     if (!hold.allowed) throw new Error('expected an allowed hold');
     hold.release();
     hold.release();
@@ -61,7 +86,7 @@ describe('acquireUserCreditHold', () => {
   it('given an allowed gate with no hold, should release nothing', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'unlimited' });
 
-    const hold = await acquireUserCreditHold('user-1', {});
+    const hold = await acquireUserCreditHold('user-1', { spend: SPEND });
     if (!hold.allowed) throw new Error('expected an allowed hold');
     hold.release();
 

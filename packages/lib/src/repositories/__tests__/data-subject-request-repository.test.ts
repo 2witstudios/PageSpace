@@ -3,11 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: { dataSubjectRequests: { findFirst: vi.fn() } },
+    transaction: vi.fn(async (work) => work(db)),
     insert: vi.fn(),
     update: vi.fn(),
     select: vi.fn(),
   },
 }));
+vi.mock('../account-repository', () => ({ accountRepository: { assertMayLodgeErasure: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock('../../organizations/owner-candidate', () => ({ lockOwnershipSubject: vi.fn().mockResolvedValue(undefined), activeErasureForUser: vi.fn() }));
 vi.mock('@pagespace/db/schema/data-subject-requests', () => ({
   dataSubjectRequests: {
     id: 'id',

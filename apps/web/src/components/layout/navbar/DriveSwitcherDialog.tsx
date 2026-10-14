@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Check, Folder, Layers, Plus, Star } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Check, Folder, Layers, Plus, Settings, Star } from "lucide-react";
 
 import {
   CommandDialog,
@@ -20,6 +22,7 @@ import { useDriveStore, type Drive } from "@/hooks/useDrive";
 import { cn } from "@/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
+import { OrgMark } from "@/components/orgs/OrgMark";
 
 interface DriveSwitcherDialogProps {
   open: boolean;
@@ -98,6 +101,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
     favoriteDrives,
     recentDrives,
     allDrives,
+    ownerGroups,
     isSearching,
     selectDrive,
     selectAllDrives,
@@ -105,6 +109,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
     toggleFavorite,
   } = useDrivePicker(query);
 
+  const router = useRouter();
   // The query needs no reset: this body unmounts with the dialog.
   const close = () => onClose();
 
@@ -226,7 +231,66 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
           </CommandGroup>
         )}
 
-        {allDrives.length > 0 && (
+        {/*
+          DRV-9: the same drives under org headers and a Personal group. cmdk hides
+          group headings from assistive tech, so the header's settings icon is only a pointer
+          shortcut; the group's last option, "<org> settings", is the way to the org hub for the
+          keyboard and screen readers (UI-1).
+        */}
+        {allDrives.length > 0 && ownerGroups && !isSearching ? (
+          ownerGroups.map((group) => (
+            <CommandGroup
+              key={group.key}
+              heading={
+                <span className="flex items-center gap-2" data-testid={`picker-group-${group.kind}`}>
+                  {group.kind === "org" && <OrgMark name={group.label} avatarUrl={group.avatarUrl} size="sm" decorative />}
+                  <span>{group.label}</span>
+                  <span className="text-muted-foreground/70">· {group.drives.length}</span>
+                  {group.kind === "org" && (
+                    <Link
+                      href={`/orgs/${group.orgId}/settings`}
+                      onClick={close}
+                      className="ml-auto rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      aria-label={`${group.label} settings`}
+                      title="Organization settings"
+                    >
+                      <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Link>
+                  )}
+                </span>
+              }
+            >
+              {group.drives.map((drive) => renderItem(drive, group.key))}
+              {/* DRV-6: Restricted drives are never in the picker; every member finds them in the directory. */}
+              {group.kind === "org" && (
+                <CommandItem
+                  value={`org-drives:${group.orgId}`}
+                  onSelect={() => {
+                    close();
+                    router.push(`/orgs/${group.orgId}/drives`);
+                  }}
+                  className="cursor-pointer gap-2.5 text-muted-foreground"
+                >
+                  <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">Browse {group.label} drives</span>
+                </CommandItem>
+              )}
+              {group.kind === "org" && (
+                <CommandItem
+                  value={`org-settings:${group.orgId}`}
+                  onSelect={() => {
+                    close();
+                    router.push(`/orgs/${group.orgId}/settings`);
+                  }}
+                  className="cursor-pointer gap-2.5 text-muted-foreground"
+                >
+                  <Settings className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">{group.label} settings</span>
+                </CommandItem>
+              )}
+            </CommandGroup>
+          ))
+        ) : allDrives.length > 0 && (
           <CommandGroup heading={isSearching ? "Results" : `All drives · ${allDrives.length}`}>
             {allDrives.map((drive) => renderItem(drive, "all"))}
           </CommandGroup>

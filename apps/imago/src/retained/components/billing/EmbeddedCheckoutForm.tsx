@@ -11,6 +11,7 @@ import { Loader2, AlertCircle, Tag } from 'lucide-react';
 import type { PlanDefinition } from '@/retained/lib/subscription/plans';
 import { PromoCodeInput, type AppliedPromo } from './PromoCodeInput';
 import { post } from '@/retained/lib/auth/auth-fetch';
+import { centsFromDollars, dollarsFromCents } from '@/retained/lib/subscription/credits';
 
 interface ApplyPromoResponse {
   success: boolean;
@@ -60,11 +61,11 @@ export function EmbeddedCheckoutForm({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(cents / 100);
+    }).format(dollarsFromCents(cents));
   };
 
   // Calculate discounted price if promo is applied
-  const originalPriceCents = plan.price.monthly * 100;
+  const originalPriceCents = centsFromDollars(plan.price.monthly);
   const discountedPriceCents = appliedPromo
     ? appliedPromo.discount.discountedAmount
     : originalPriceCents;

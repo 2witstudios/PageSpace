@@ -14,10 +14,19 @@
  * Spend always draws monthly first.
  */
 
-import type { SubscriptionTier } from '../services/subscription-utils';
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
+import type { SpendKind } from '@pagespace/db/schema/credits';
+// The ONE definition of a credit (MON-5): the conversions below are pure functions of
+// their arguments. money-model's own env knobs (MARKUP_BPS, top-up bounds) are never read
+// here — markupBps is always passed in.
+import {
+  centsFromDollars,
+  chargedCentsFromProviderDollars,
+  chargedMillicentsFromProviderDollars,
+  dollarsFromCents,
+} from './money-model';
 
 export interface Balance {
   monthlyCents: number;
@@ -36,7 +45,7 @@ export interface Balance {
  */
 export function markupCents(realCostDollars: number, markupBps: number): number {
   if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
-  return Math.round(realCostDollars * (markupBps / 10000) * 100);
+  return Math.round(chargedCentsFromProviderDollars(realCostDollars, markupBps));
 }
 
 /**
@@ -48,7 +57,7 @@ export function markupCents(realCostDollars: number, markupBps: number): number 
  */
 export function chargeMillicents(realCostDollars: number, markupBps: number): number {
   if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
-  return Math.round(realCostDollars * (markupBps / 10000) * 100_000);
+  return Math.round(chargedMillicentsFromProviderDollars(realCostDollars, markupBps));
 }
 
 export interface AccrualResult {
@@ -125,7 +134,11 @@ export type GateReason =
   // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
   // call's reservation would exceed the configured daily ceiling. Independent of the
   // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
-  | 'daily_cap_exceeded';
+  | 'daily_cap_exceeded'
+  // The source the call named is empty, paused, or not this person's to spend, or none was
+  // named where several exist (SPEND-4). Nothing is reserved or charged, and the gate never
+  // switches to another wallet; the refusal names the source and the remaining options.
+  | 'source_refused';
 
 export interface DailyCapInput {
   /** This user's charged spend (whole cents) since the start of the current UTC day. */
@@ -282,25 +295,42 @@ export interface MonthlyRefill {
 
 /**
  * Compute the rollover state for a new billing period: outstanding debt is netted
- * against the carried balance, then the tier allowance is added. Credits accumulate
+ * against the carried balance, then `allowanceCents` is added. Credits accumulate
  * across periods (rollover); debt is absorbed into `monthlyRemainingCents`, not
  * forwarded as a field. `monthlyRemainingCents` is clamped to 0 — the DB schema
  * enforces `monthlyRemainingCents >= 0`, and any debt exceeding (remaining + allowance)
  * is forgiven rather than written as a negative balance. Defaults to 0 for backward
- * compat when no prior balance or debt exists. Unknown tiers fall back to the free
- * allowance.
+ * compat when no prior balance or debt exists.
+ *
+ * The allowance is DERIVED by the caller (MON-2): `allowanceCentsForPaidCents` from
+ * the invoice that was actually paid, or `tierAllowanceCents` from the list price
+ * when there is no invoice. This function never looks a tier up in a table. A
+ * negative or non-finite allowance grants nothing.
  */
 export function computeMonthlyRefill(
-  tier: SubscriptionTier,
-  allowanceTable: Record<SubscriptionTier, number>,
+  allowanceCents: number,
   currentRemainingCents: number = 0,
   currentDebtCents: number = 0,
 ): MonthlyRefill {
-  const allowance = allowanceTable[tier] ?? allowanceTable.free;
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
   const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
   // Clamp to 0: the DB schema enforces monthlyRemainingCents >= 0. Excess debt beyond
   // (remaining + allowance) is absorbed here rather than written as a negative balance.
   return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
+}
+
+/**
+ * The debt a refill FORGIVES (computeMonthlyRefill clamps `monthlyRemainingCents` at 0): what is
+ * left of the debt once the carried balance and the new allowance have absorbed what they can.
+ * Ledgered as its own row (debt_forgiven), so the wallet's books still balance (WAL-5).
+ */
+export function forgivenAtRefillCents(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): number {
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
+  return Math.max(0, Math.max(0, currentDebtCents) - currentRemainingCents - allowance);
 }
 
 export interface PaymentToDebtResult {
@@ -335,22 +365,6 @@ export function applyPaymentToDebt(
     topupCents: topupCents + (payment - paidDebt),
     paidDebt,
   };
-}
-
-/**
- * Normalize and bound a user-supplied custom top-up amount (whole cents). Returns the
- * normalized integer cents, or null if it isn't a finite integer within [min, max].
- * Pure so the API route and the client validate against the SAME rule. The min keeps
- * dust purchases above Stripe's per-transaction fee; the max caps single-charge risk.
- */
-export function validateTopupAmountCents(
-  cents: number,
-  minCents: number,
-  maxCents: number,
-): number | null {
-  if (!Number.isInteger(cents)) return null;
-  if (cents < minCents || cents > maxCents) return null;
-  return cents;
 }
 
 export type StripeAction =
@@ -425,11 +439,91 @@ export interface OrphanUsageRow {
    * `computeBackfillActions`).
    */
   source?: AIUsageSource | string | null;
+  /**
+   * The wallet the call was charged to, recorded on the usage row (WAL-5). Re-settled there,
+   * so an org pool's compute is never re-billed to the recorded person's own wallet. A row that
+   * names none is never charged (WAL-6b fail closed): it is left unattributed for reconciliation.
+   */
+  walletId?: string | null;
+  /** The usage row's metadata, whose explicit compute `spendKind` is carried to the re-settle. */
+  metadata?: unknown;
+  /** SPEND-10: the automation the call ran for (aiUsageLogs.automation_ref), carried to the re-settle. */
+  automationRef?: string | null;
 }
 
 export type BackfillAction =
   | { kind: 'retry_pending'; ledgerId: string }
-  | { kind: 'apply_orphan'; aiUsageLogId: string; userId: string; costDollars: number; markupBpsOverride?: number };
+  | {
+      kind: 'apply_orphan';
+      aiUsageLogId: string;
+      userId: string;
+      costDollars: number;
+      markupBpsOverride?: number;
+      walletId: string;
+      spendKind: SpendKind;
+      /** WAL-6b: the chosen wallet a drive rule moved the call off (usage metadata.fallbackFromWalletId). */
+      fallbackFromWalletId?: string;
+      /** SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it. */
+      automationRef?: string;
+    }
+  /**
+   * WAL-6b fail closed: a usage row that names no wallet. Nothing chose a wallet for it, so no
+   * wallet is charged (never the recorded person's own by default); it is logged and left for
+   * reconciliation.
+   */
+  | { kind: 'unattributed_orphan'; aiUsageLogId: string; userId: string; costDollars: number };
+
+/** The chosen wallet a fallback moved a call off, as its usage row's metadata records it (WAL-6b); else null. */
+export function orphanFallbackFromWalletId(metadata: unknown): string | null {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { fallbackFromWalletId?: unknown }).fallbackFromWalletId : undefined;
+  return typeof marked === 'string' && marked.length > 0 ? marked : null;
+}
+
+/** What a live hold says about its call: the wallet it reserves on and the fallback origin it records. */
+export interface HoldSettleFacts {
+  walletId: string;
+  fallbackFromWalletId: string | null;
+}
+
+export type SettleTarget =
+  | { kind: 'charge'; walletId: string; fallbackFromWalletId: string | null }
+  | { kind: 'mismatch'; holdWalletId: string; requestedWalletId: string }
+  | { kind: 'unattributed' };
+
+/**
+ * The wallet a settle charges (WAL-5, WAL-6b). A live hold names it; a caller naming another
+ * wallet than its hold is refused (neither is charged). With no live hold, the wallet the caller
+ * names. With neither, the settle FAILS CLOSED (`unattributed`): no wallet was chosen for this
+ * charge, so none is charged — never the person's own credits by default. The fallback origin
+ * comes from the hold, else from what the caller carried.
+ */
+export function decideSettleTarget(input: {
+  hold: HoldSettleFacts | null;
+  requestedWalletId: string | undefined;
+  carriedFallbackFromWalletId: string | null | undefined;
+}): SettleTarget {
+  const carried = input.carriedFallbackFromWalletId ?? null;
+  if (input.hold) {
+    if (input.requestedWalletId !== undefined && input.requestedWalletId !== input.hold.walletId) {
+      return { kind: 'mismatch', holdWalletId: input.hold.walletId, requestedWalletId: input.requestedWalletId };
+    }
+    return { kind: 'charge', walletId: input.hold.walletId, fallbackFromWalletId: input.hold.fallbackFromWalletId ?? carried };
+  }
+  if (typeof input.requestedWalletId === 'string' && input.requestedWalletId.length > 0) {
+    return { kind: 'charge', walletId: input.requestedWalletId, fallbackFromWalletId: carried };
+  }
+  return { kind: 'unattributed' };
+}
+
+/**
+ * What an orphan usage row's spend was FOR, read from the EXPLICIT marker its writer stamped
+ * (`metadata.spendKind`, AIMonitoring.trackUsage) — never inferred from its source. Anything
+ * else is 'ai', which every row written before compute was marked was.
+ */
+export function orphanSpendKind(metadata: unknown): SpendKind {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { spendKind?: unknown }).spendKind : undefined;
+  return marked === 'compute' || marked === 'drive_compute' ? marked : 'ai';
+}
 
 /**
  * Plan the reconcile work: retry every unsettled ('pending') ledger row, then
@@ -455,15 +549,23 @@ export function computeBackfillActions(
   return [
     ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
     ...orphans.map((row): BackfillAction => {
+      if (typeof row.walletId !== 'string' || row.walletId.length === 0) {
+        return { kind: 'unattributed_orphan', aiUsageLogId: row.aiUsageLogId, userId: row.userId, costDollars: row.costDollars };
+      }
       const markupBpsOverride = row.source
         ? markupBpsOverridesBySource[row.source as AIUsageSource]
         : undefined;
+      const fallbackFromWalletId = orphanFallbackFromWalletId(row.metadata);
       return {
         kind: 'apply_orphan',
         aiUsageLogId: row.aiUsageLogId,
         userId: row.userId,
         costDollars: row.costDollars,
         ...(markupBpsOverride !== undefined ? { markupBpsOverride } : {}),
+        walletId: row.walletId,
+        spendKind: orphanSpendKind(row.metadata),
+        ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
+        ...(row.automationRef ? { automationRef: row.automationRef } : {}),
       };
     }),
   ];
@@ -500,7 +602,7 @@ export interface CostDriftResult {
  * {@link chargeMillicents} (which rejects negatives) and re-signed. Pure.
  */
 export function computeCostDrift(input: CostDriftInput, markupBps: number): CostDriftResult {
-  const authCents = Math.round(Math.max(0, input.authoritativeRealCostDollars) * 100);
+  const authCents = centsFromDollars(Math.max(0, input.authoritativeRealCostDollars));
   const billed = Math.round(input.billedRealCostCents);
   const delta = authCents - billed;
   const absDelta = Math.abs(delta);
@@ -510,47 +612,9 @@ export function computeCostDrift(input: CostDriftInput, markupBps: number): Cost
   const shouldCorrect = absDelta > tol;
 
   const deltaChargeMillicents =
-    Math.sign(delta) * chargeMillicents(Math.abs(delta) / 100, markupBps);
+    Math.sign(delta) * chargeMillicents(dollarsFromCents(Math.abs(delta)), markupBps);
 
   return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
-}
-
-export interface LedgerDerivedInput {
-  /** SUM(amountCents) of grant/purchase rows — credits added to buckets. */
-  grantCents: number;
-  /** SUM(|appliedCents|) of usage rows — what spend drew out of the buckets. */
-  appliedUsageCents: number;
-  /** SUM(appliedCents) of adjustment rows (signed): reconcile corrections that moved buckets. */
-  adjustmentCents: number;
-  /** The materialized creditBalances buckets: monthlyRemaining + topupRemaining. */
-  materializedSpendableCents: number;
-  /** The materialized debt (reported alongside; not part of the bucket equation). */
-  debtCents: number;
-}
-
-export interface BalanceDriftResult {
-  /** Buckets implied by the ledger: grants − spend + applied corrections. */
-  expectedSpendableCents: number;
-  /** materialized − expected. Non-zero beyond tolerance flags a divergence. */
-  driftCents: number;
-  flagged: boolean;
-}
-
-/**
- * Compare a user's MATERIALIZED spendable buckets against what the ledger implies
- * (grants − usage drawn from buckets + applied reconcile corrections). This is a
- * DIVERGENCE SMELL DETECTOR, NOT an exact reconciliation: with rollover, monthly
- * credits carry forward with no ledger row at the boundary, and renewal debt-netting
- * absorbs debt into monthly — both legitimately break expected = materialized at period boundaries.
- * So the tolerance is generous and a flag means "look at this account", not "the books
- * are wrong". Pure; the shell supplies the SQL aggregates.
- */
-export function computeBalanceDrift(input: LedgerDerivedInput, toleranceCents: number): BalanceDriftResult {
-  const expectedSpendableCents =
-    Math.round(input.grantCents) - Math.round(input.appliedUsageCents) + Math.round(input.adjustmentCents);
-  const driftCents = Math.round(input.materializedSpendableCents) - expectedSpendableCents;
-  const flagged = Math.abs(driftCents) > Math.max(0, Math.round(toleranceCents));
-  return { expectedSpendableCents, driftCents, flagged };
 }
 
 /**

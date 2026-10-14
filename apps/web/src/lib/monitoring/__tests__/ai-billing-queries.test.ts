@@ -3,6 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 // FIFO queue of result sets; each db.select() dequeues the next set in query order.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every argument any query passed to .where(), in call order.
+const whereCalls = vi.hoisted(() => [] as unknown[]);
+const PERSONAL_ROOT = vi.hoisted(() => ({ personalRoot: true }));
 
 const mockEq = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })));
 const mockGte = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })));
@@ -17,6 +20,7 @@ const mockSql = vi.hoisted(() => {
   return tag;
 });
 const mockGetTierFromPrice = vi.hoisted(() => vi.fn());
+const mockReadCreditLiability = vi.hoisted(() => vi.fn());
 
 // Chainable db mock whose terminal resolves to the next queued result set.
 const makeChain = vi.hoisted(() => () => {
@@ -26,7 +30,10 @@ const makeChain = vi.hoisted(() => () => {
   chain.from = vi.fn(() => chain);
   chain.innerJoin = vi.fn(() => chain);
   chain.leftJoin = vi.fn(() => chain);
-  chain.where = vi.fn(() => chain);
+  chain.where = vi.fn((arg: unknown) => {
+    whereCalls.push(arg);
+    return chain;
+  });
   chain.groupBy = vi.fn(() => chain);
   chain.orderBy = vi.fn(() => chain);
   chain.limit = vi.fn(() => promise);
@@ -38,6 +45,7 @@ const makeChain = vi.hoisted(() => () => {
 const mockSelect = vi.hoisted(() => vi.fn(() => makeChain()));
 
 vi.mock('@pagespace/db/db', () => ({ db: { select: mockSelect } }));
+vi.mock('@pagespace/lib/billing/credit-liability-query', () => ({ readCreditLiability: mockReadCreditLiability }));
 
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   aiUsageLogs: {
@@ -67,14 +75,21 @@ vi.mock('@pagespace/db/schema/credits', () => ({
     createdAt: 'CREDIT_LEDGER_CREATED_AT',
     userId: 'CREDIT_LEDGER_USER_ID',
   },
-  creditBalances: {
-    monthlyRemainingCents: 'CB_MONTHLY_REMAINING',
-    topupRemainingCents: 'CB_TOPUP_REMAINING',
-  },
   creditHolds: {
     estCents: 'CH_EST_CENTS',
     expiresAt: 'CH_EXPIRES_AT',
   },
+}));
+
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: {
+    id: 'WALLETS_ID',
+    userId: 'WALLETS_USER_ID',
+    monthlyRemainingCents: 'CB_MONTHLY_REMAINING',
+    topupRemainingCents: 'CB_TOPUP_REMAINING',
+  },
+  isPersonalRootWallet: vi.fn(() => PERSONAL_ROOT),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 
 vi.mock('@pagespace/db/schema/subscriptions', () => ({
@@ -124,6 +139,7 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
@@ -286,27 +302,31 @@ describe('getActiveSubscriptionsByTier', () => {
     );
     const rows = await getActiveSubscriptionsByTier();
     const byTier = Object.fromEntries(rows.map((r) => [r.tier, r.count]));
-    expect(byTier).toEqual({ free: 0, pro: 2, founder: 0, business: 1 });
+    expect(byTier).toEqual({ free: 0, pro: 2, business: 1 });
     expect(mockEq).toHaveBeenCalledWith('SUB_STATUS', 'active');
   });
 });
 
 describe('getCreditLiability', () => {
-  it('sums monthly + top-up remaining into total liability', async () => {
-    resetQueue([{ monthlyRemainingCents: 400, topupRemainingCents: 600, userCount: 12 }]);
+  it('MON-7 (partial) reads every wallet kind through the one liability reader: grants, top-ups and legs', async () => {
+    mockReadCreditLiability.mockResolvedValueOnce({
+      includedCreditLiabilityCents: 5200,
+      personalIncludedCents: 400,
+      starterGrantIncludedCents: 0,
+      orgPoolIncludedCents: 4800,
+      topupRemainingCents: 600,
+      totalLiabilityCents: 5800,
+      userCount: 12,
+      orgPoolCount: 1,
+    });
     const result = await getCreditLiability();
     expect(result).toEqual({
-      monthlyRemainingCents: 400,
+      monthlyRemainingCents: 5200,
       topupRemainingCents: 600,
-      totalLiabilityCents: 1000,
+      totalLiabilityCents: 5800,
       userCount: 12,
     });
-  });
-
-  it('defaults to zero on an empty balances table', async () => {
-    resetQueue([]);
-    const result = await getCreditLiability();
-    expect(result).toEqual({ monthlyRemainingCents: 0, topupRemainingCents: 0, totalLiabilityCents: 0, userCount: 0 });
+    expect(mockReadCreditLiability).toHaveBeenCalledWith();
   });
 });
 

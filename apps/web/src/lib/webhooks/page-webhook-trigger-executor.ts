@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
@@ -11,13 +12,16 @@ import {
   type WorkflowExecutionInput,
 } from '@/lib/workflows/workflow-executor';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { WEBHOOK_DAILY_EXPOSURE_CAP_CENTS, CREDIT_HOLD_ESTIMATE_CENTS } from '@pagespace/lib/billing/credit-pricing';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveSteps, hasAiStep, countAiSteps } from '@/lib/workflows/core/step-plan';
 import { frameWebhookPayloadPrompt } from './webhook-payload-framing';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'page-webhook-trigger-executor' });
 
@@ -59,6 +63,16 @@ export async function executePageWebhookTrigger(
         error: `Linked workflow ${trigger.workflowId} not found`,
       };
     }
+
+    // [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left) or deleted their account (no creator) is skipped before any guard, gate or hold;
+    //    the fan-out records owner_left on the trigger.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      logger.info('Page webhook trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error: owner.error };
+    }
+    const ownerId = owner.ownerId;
 
     // 2. Authoritative same-drive guard. The trigger must be page-anchored;
     //    resolve the webhook's page and compare its CURRENT drive to the
@@ -104,9 +118,10 @@ export async function executePageWebhookTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Billing resolves to workflow.createdBy — verify they still belong to
+    // 3. Billing resolves to the workflow's owner — verify they still belong to
     //    the workflow's drive before spending their credit.
-    const hasDriveAccess = await isUserDriveMember(workflow.createdBy, workflow.driveId);
+    // An automation runs as its owner (D-OW-34): membership applies, sign-in policy does not.
+    const hasDriveAccess = await isUserDriveMember(automationActor(ownerId, 'page-webhook-trigger', inDrives(workflow.driveId)), workflow.driveId);
     if (!hasDriveAccess) {
       return {
         success: false,
@@ -191,16 +206,21 @@ export async function executePageWebhookTrigger(
     //    MAX_WORKFLOW_STEPS), so the reservation must be sized by the
     //    chain's ai-step count or a multi-step chain blows straight through
     //    the daily exposure ceiling this gate exists to enforce.
+    // SPEND-6: a webhook fire has no person present; it spends the workflow's drive wallet
+    // or is skipped, never the workflow creator's credits or allowance.
+    const spend = automationSpend(workflow.driveId);
     let holdId: string | undefined;
+    let walletId: string | undefined;
     if (needsAi) {
       const [owner] = await db
         .select({ subscriptionTier: users.subscriptionTier })
         .from(users)
-        .where(eq(users.id, workflow.createdBy));
+        .where(eq(users.id, ownerId));
       const gate = await canConsumeAI(
-        workflow.createdBy,
-        (owner?.subscriptionTier ?? 'free') as SubscriptionTier,
+        ownerId,
+        toPersonalSubscriptionTier(owner?.subscriptionTier),
         {
+          spend,
           dailyCapCeilingCents: WEBHOOK_DAILY_EXPOSURE_CAP_CENTS,
           estCostCents: CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps),
         },
@@ -209,14 +229,16 @@ export async function executePageWebhookTrigger(
         logger.info('Page webhook trigger: skipped (credit gate denied)', {
           triggerId: trigger.id,
           reason: gate.reason,
+          refusal: gate.refusal?.reason,
         });
         return {
           success: false,
           durationMs: Date.now() - startTime,
-          error: `AI credit gate denied: ${gate.reason}`,
+          error: creditDeniedError(gate.reason, gate.refusal),
         };
       }
       holdId = gate.holdId;
+      walletId = gate.walletId;
     }
 
     // 7. Compose execution input — executeWorkflow writes workflow_runs and
@@ -229,7 +251,7 @@ export async function executePageWebhookTrigger(
       workflowId: workflow.id,
       workflowName: `page-webhook-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       steps: workflow.steps,
@@ -248,7 +270,7 @@ export async function executePageWebhookTrigger(
     // execution, whether it succeeds, fails, or throws.
     let result: WorkflowExecutionResult;
     try {
-      result = await executeWorkflow(input);
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId } });
     } finally {
       if (holdId) void releaseHold(holdId).catch(() => {});
     }

@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
-// canUserViewPage below is only used for mention RECIPIENTS (other users), not
-// the requesting principal — those checks are keyed to arbitrary user ids and
-// must stay user-level.
-import { canUserViewPage, getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
+// getUsersWhoCanViewPage answers for mention RECIPIENTS (other users), not the
+// requesting principal — a third-party audience question keyed to user ids.
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -20,11 +19,11 @@ import { createMentionNotification } from '@pagespace/lib/notifications/notifica
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import type { AttachmentMeta } from '@pagespace/lib/types';
 import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 interface ChannelInboxFanoutInput {
   pageId: string;
   driveId: string;
-  driveOwnerId: string | null | undefined;
   senderUserId: string;
   lastMessageAt: string;
   lastMessagePreview: string;
@@ -43,21 +42,11 @@ interface ChannelInboxFanoutInput {
 async function fanOutChannelInboxUpdate(
   input: ChannelInboxFanoutInput
 ): Promise<Set<string>> {
-  const { pageId, driveId, driveOwnerId, senderUserId } = input;
+  const { pageId, driveId, senderUserId } = input;
 
-  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-  const driveMembersRows = await db.query.driveMembers.findMany({
-    where: eq(driveMembers.driveId, driveId),
-    columns: { userId: true },
-  });
-
-  // Build a local member set so we never mutate the ORM-returned array.
-  // Drive owner is always a recipient even if they have no explicit row.
-  const memberUserIds = new Set(driveMembersRows.map((m) => m.userId));
-  if (driveOwnerId) {
-    memberUserIds.add(driveOwnerId);
-  }
-  const otherMemberIds = [...memberUserIds].filter((id) => id !== senderUserId);
+  // Candidates: the drive's members, lead included, from the one org-aware enumeration.
+  const memberUserIds = await getDriveRecipientUserIds(driveId);
+  const otherMemberIds = memberUserIds.filter((id) => id !== senderUserId);
 
   if (otherMemberIds.length === 0) {
     return new Set<string>();
@@ -110,10 +99,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check if the principal has view permission for this channel
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this channel',
       details: 'Contact the channel owner to request access'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Pagination params
@@ -229,10 +218,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Check if the principal has edit permission to post messages in this channel
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to send messages in this channel',
       details: 'Only channel members with edit access can send messages'
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const body = await req.json() as {
@@ -476,15 +465,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         // before we broadcast a channel_updated payload (which leaks the channel
         // id, drive id, preview, and sender name), every non-follower candidate
         // must pass the channel's view-permission check.
-        const viewabilityChecks = await Promise.all(
-          nonFollowerMentioned.map(async (id: string) => ({
-            id,
-            canView: await canUserViewPage(id, pageId),
-          }))
-        );
-        const mentionTargets = viewabilityChecks
-          .filter((entry) => entry.canView)
-          .map((entry) => entry.id);
+        // A third-party audience question: who else can view the channel, not what this credential may open.
+        const mentionViewers = await getUsersWhoCanViewPage(pageId, nonFollowerMentioned);
+        const mentionTargets = nonFollowerMentioned.filter((id: string) => mentionViewers.has(id));
 
         await Promise.all(
           mentionTargets.map((memberId: string) =>
@@ -516,7 +499,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         await fanOutChannelInboxUpdate({
           pageId,
           driveId: channel.driveId,
-          driveOwnerId: channel.drive?.ownerId ?? null,
           senderUserId: userId,
           lastMessageAt: mirrorWithRelations.createdAt
             ? new Date(mirrorWithRelations.createdAt).toISOString()
@@ -534,7 +516,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         void import('@/lib/channels/agent-mention-responder')
           .then(({ triggerMentionedAgentResponses }) =>
             triggerMentionedAgentResponses({
-              userId,
+              // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+              sender: actorFromAuth(auth),
               channelId: pageId,
               channelTitle: channel?.title || 'Channel',
               channelType: 'CHANNEL',
@@ -647,7 +630,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       void import('@/lib/channels/agent-mention-responder')
         .then(({ triggerMentionedAgentResponses }) =>
           triggerMentionedAgentResponses({
-            userId,
+            // The reply runs as THIS request's credential, sign-in policy included (D-OW-62).
+            sender: actorFromAuth(auth),
             channelId: pageId,
             channelTitle: channel?.title || 'Channel',
             channelType: 'CHANNEL',
@@ -669,7 +653,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       await fanOutChannelInboxUpdate({
         pageId,
         driveId: channel.driveId,
-        driveOwnerId: channel.drive?.ownerId ?? null,
         senderUserId: userId,
         lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
         lastMessagePreview: messagePreview,

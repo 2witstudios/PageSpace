@@ -76,4 +76,21 @@ describe("PermissionsList (share dialog, Permissions tab)", () => {
     expect(screen.queryByText("Guest")).toBeNull()
     expect(screen.queryByText(/outside Studio/)).toBeNull()
   })
+
+  it("SEAT-9 (partial) a lapsed org disables wider grants but keeps narrowing and revocation available", async () => {
+    render(<PermissionsList {...{ pageId: "plan", lapsed: true }} />)
+    await waitFor(() => expect(screen.getByText("Dana Whitfield")).toBeTruthy())
+    for (const permission of ["Edit", "Share", "Delete"]) {
+      for (const checkbox of screen.getAllByRole("checkbox", { name: permission })) {
+        expect(checkbox.hasAttribute("disabled")).toBe(true)
+      }
+    }
+    for (const checkbox of screen.getAllByRole("checkbox", { name: "View" })) {
+      expect(checkbox.hasAttribute("disabled")).toBe(false)
+    }
+    for (const revoke of screen.getAllByRole("button", { name: "Remove access" })) {
+      expect(revoke.hasAttribute("disabled")).toBe(false)
+    }
+  })
+
 })

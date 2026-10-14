@@ -18,6 +18,7 @@ import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -42,9 +43,9 @@ export async function PATCH(
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to update tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Look up task list for status config validation and broadcast metadata
@@ -546,9 +547,9 @@ export async function DELETE(
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to delete tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Get task list page for driveId

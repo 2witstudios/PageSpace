@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, it, expect, vi } from 'vitest';
-import { AdvisoryLockLostError, throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+import { AdvisoryLockLostError, throwIfLockLost, withAdvisoryLock, withBlockingAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
 
 /** A mock client that, like pg.Client, is an EventEmitter — and records the listener count at each release. */
 function makeEmittingClient(query: ReturnType<typeof vi.fn>) {
@@ -416,5 +416,54 @@ describe('throwIfLockLost', () => {
       message: expect.stringContaining('before the storage correction'),
       connectionError: dropped,
     });
+  });
+});
+describe('withBlockingAdvisoryLock', () => {
+  it('waits WITHOUT holding a connection: each busy attempt hands its connection back, then it retries with backoff until it gets the lock', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => clients.shift()!) };
+    const sleep = vi.fn(async (_ms: number) => {});
+    const released: number[] = [];
+    const all = [...clients];
+    all.forEach((c, i) => c.release.mockImplementation(() => released.push(i)));
+
+    const result = await withBlockingAdvisoryLock(pool, 'k', async () => 'done', { timeoutMs: 5_000, sleep });
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'done', lockLost: false });
+    // Busy connection 0 was back in the pool before attempt 1 connected, and so on.
+    expect(released).toEqual([0, 1, 2]);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+  });
+
+  it('without an injected sleep it really waits between attempts', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const started = Date.now();
+    const result = await withBlockingAdvisoryLock({ connect: vi.fn(async () => clients.shift()!) }, 'k', async () => 'done', { timeoutMs: 5_000 });
+    expect(result).toEqual({ outcome: 'acquired', result: 'done', lockLost: false });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5);
+  });
+
+  it('past the deadline it is lock_busy and fn never runs', async () => {
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => makeClient({ query: vi.fn().mockResolvedValue({ rows: [{ acquired: false }] }) })) };
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock(pool, 'k', fn, { timeoutMs: 0 })).toEqual({ outcome: 'lock_busy' });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('a connection_error is returned at once, not retried', async () => {
+    const connect = vi.fn(async () => {
+      throw new Error('exhausted');
+    });
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock({ connect }, 'k', fn, { timeoutMs: 5_000 })).toMatchObject({ outcome: 'connection_error' });
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(fn).not.toHaveBeenCalled();
   });
 });

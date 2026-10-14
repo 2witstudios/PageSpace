@@ -3,6 +3,8 @@
 import { createClientLogger } from '@/retained/lib/logging/client-logger';
 import { getPlatformStorage, type PlatformStorage, type StoredSession } from './platform-storage';
 import { isNativeApp } from '@/retained/lib/capacitor-bridge';
+import { readOrgSignInDenial } from './org-sign-in-denial';
+import { useOrgReauthStore } from '@/retained/stores/useOrgReauthStore';
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -396,7 +398,16 @@ class AuthFetch {
       }
     }
 
+    await this.reportOrgSignInDenial(response);
     return response;
+  }
+
+  /** Report an org-only sign-in refusal without consuming the caller's response or signing out. */
+  private async reportOrgSignInDenial(response: Response): Promise<void> {
+    if (response.status !== 401 && response.status !== 403) return;
+    const body: unknown = await response.clone().json().catch(() => null);
+    const denial = readOrgSignInDenial(response.status, body);
+    if (denial) useOrgReauthStore.getState().report(denial);
   }
 
   /**

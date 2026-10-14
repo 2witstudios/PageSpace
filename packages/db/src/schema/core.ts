@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
 import { driveEnvs } from './drive-envs';
+import { organizations } from './organizations';
 import { createId } from '@paralleldrive/cuid2';
 // 'MACHINE' is a DEAD value, kept only because Postgres cannot DROP VALUE from
 // an enum type — the Machines/Development surface that used it was torn down
@@ -14,6 +15,11 @@ export const pageType = pgEnum('PageType', ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI
 export type PageTypeEnum = (typeof pageType.enumValues)[number];
 export const driveKind = pgEnum('DriveKind', ['STANDARD', 'HOME']);
 export type DriveKindEnum = (typeof driveKind.enumValues)[number];
+// Visibility of an org-owned drive to the org's members (Spec DRV-4..DRV-7).
+// Ignored for personal drives (orgId IS NULL).
+export const ORG_DRIVE_VISIBILITIES = ['OPEN', 'RESTRICTED', 'PRIVATE'] as const;
+export const orgDriveVisibility = pgEnum('OrgDriveVisibility', ORG_DRIVE_VISIBILITIES);
+export type OrgDriveVisibility = (typeof ORG_DRIVE_VISIBILITIES)[number];
 
 export const drives = pgTable('drives', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -21,6 +27,10 @@ export const drives = pgTable('drives', {
   slug: text('slug').notNull(),
   ownerId: text('ownerId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   kind: driveKind('kind').default('STANDARD').notNull(),
+  // Set when an org owns the drive (DRV-1); the human lead stays ownerId. RESTRICT, not
+  // SET NULL: deleting an org must first transfer or trash its drives (ORG-6).
+  orgId: text('orgId').references((): AnyPgColumn => organizations.id, { onDelete: 'restrict' }),
+  orgVisibility: orgDriveVisibility('orgVisibility').default('OPEN').notNull(),
   isTrashed: boolean('isTrashed').default(false).notNull(),
   trashedAt: timestamp('trashedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
@@ -38,6 +48,13 @@ export const drives = pgTable('drives', {
         // At most one Home drive per owner, forever. Race arbiter between lazy
         // provisioning and the backfill script (both insert ON CONFLICT DO NOTHING).
         ownerHomeKey: uniqueIndex('drives_owner_home_unique').on(table.ownerId).where(sql`${table.kind} = 'HOME'`),
+        // Drive slugs are unique per org for org drives (D-OW-15). Personal drives keep
+        // per-owner slugs. Leading orgId also serves "drives of this org" lookups.
+        orgSlugKey: uniqueIndex('drives_org_slug_unique').on(table.orgId, table.slug).where(sql`${table.orgId} IS NOT NULL`),
+        // A Home drive is a person's own space and never belongs to an org (DRV-1). A CHECK
+        // rather than an app guard so no write path (move-in, backfill, restore) can skip it;
+        // safe because orgId is ON DELETE RESTRICT, never SET NULL, so no cascade rewrites it.
+        homeNeverOrg: check('drives_home_never_org_check', sql`${table.kind} <> 'HOME' OR ${table.orgId} IS NULL`),
     }
 });
 
@@ -213,6 +230,10 @@ export const drivesRelations = relations(drives, ({ one, many }) => ({
     owner: one(users, {
         fields: [drives.ownerId],
         references: [users.id],
+    }),
+    organization: one(organizations, {
+        fields: [drives.orgId],
+        references: [organizations.id],
     }),
     pages: many(pages),
 }));

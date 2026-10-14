@@ -137,7 +137,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -254,7 +254,7 @@ describe('POST /api/auth/apple/callback', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -417,6 +417,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Desktop platform should use device info from state
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
@@ -435,6 +436,15 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard');
+    });
+
+    it('SEC-2 (partial) an Apple callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await POST(createCallbackRequest({ id_token: 'valid-token', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
   });
 
@@ -984,6 +994,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -1027,6 +1038,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Should use createId() as fallback for deviceId
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })
@@ -1249,7 +1261,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
         drivesAccepted: 0,
@@ -1263,7 +1275,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-apple-789',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1294,7 +1306,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-existing-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1340,7 +1352,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -1363,7 +1375,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -1384,7 +1396,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-desktop-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1407,7 +1419,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-ios-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({

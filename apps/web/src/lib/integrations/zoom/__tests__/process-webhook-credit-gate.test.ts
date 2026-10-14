@@ -1,6 +1,8 @@
 /**
- * The Zoom transcript webhook bills the connection owner for its AI enrichment
- * (summary + action items). Those model calls must pass the credit gate FIRST:
+ * The Zoom transcript webhook's AI enrichment (summary + action items) is a
+ * trigger with no person present, so on the org-wallets branch it spends the
+ * TARGET DRIVE's wallet or is skipped, never the connection owner's credits
+ * (SPEND-6). Those model calls must pass the credit gate FIRST:
  * an exhausted balance gets no enrichment and no charge, but the meeting page is
  * still created — "never blocks page creation" stays true. The real
  * generate-summary / extract-action-items helpers run here; only the model,
@@ -17,6 +19,8 @@ const {
   mockTrackUsage,
   mockCreatePage,
   mockSelectWhere,
+  mockLookupDrive,
+  walletsLive,
 } = vi.hoisted(() => ({
   mockCanConsumeAI: vi.fn(),
   mockReleaseHold: vi.fn(),
@@ -25,6 +29,8 @@ const {
   mockTrackUsage: vi.fn(),
   mockCreatePage: vi.fn(),
   mockSelectWhere: vi.fn(),
+  mockLookupDrive: vi.fn(),
+  walletsLive: { orgs: false, billing: true },
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -40,6 +46,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },
 }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
+vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: () => walletsLive.billing }));
+// Whether the destination drive still exists; the target is decided in process-webhook itself.
+vi.mock('@pagespace/lib/billing/sandbox-payer', () => ({ lookupDriveBillingFacts: mockLookupDrive }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: mockTrackUsage },
@@ -97,8 +106,14 @@ const event = {
 const createdContent = () => mockCreatePage.mock.calls[0][1].content as string;
 const createdMetadata = () => mockCreatePage.mock.calls[0][2].context.metadata as Record<string, unknown>;
 
+const DRIVE_AUTOMATION = { kind: 'automation', driveId: 'drive-1' };
+
 beforeEach(() => {
   vi.clearAllMocks();
+  walletsLive.orgs = false;
+  walletsLive.billing = true;
+  // Default destination: an org drive (Northwind's Product), led by someone else.
+  mockLookupDrive.mockResolvedValue({ ownerId: 'user-lead', orgId: 'org-northwind' });
   mockSelectWhere.mockResolvedValue([{ subscriptionTier: 'free' }]);
   mockCreatePage.mockResolvedValue({ success: true, page: { id: 'page-1' } });
   mockCreateAIProvider.mockResolvedValue({ model: {}, provider: 'pagespace', modelName: 'm' });
@@ -116,7 +131,12 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
 
     await processZoomWebhook(event, connection);
 
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'free', expect.objectContaining({ skipDailyCap: true }));
+    // SPEND-6: the target drive is the consumer, never the connection owner's credits.
+    expect(mockCanConsumeAI).toHaveBeenCalledWith(
+      'user-1',
+      'free',
+      expect.objectContaining({ spend: DRIVE_AUTOMATION, skipDailyCap: true }),
+    );
     expect(mockCreateAIProvider).not.toHaveBeenCalled();
     expect(mockGenerateText).not.toHaveBeenCalled();
     expect(mockTrackUsage).not.toHaveBeenCalled();
@@ -126,10 +146,23 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'out_of_credits' });
   });
 
-  it('given a funded balance, should enrich the page, bill each model call and release the hold once', async () => {
-    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
+  it('SPEND-6 (partial) given the connection owner\'s cap on the drive wallet is spent, should skip the enrichment and record source_cap_reached on the page', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'source_cap_reached', options: [] } });
 
     await processZoomWebhook(event, connection);
+
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'source_refused', aiEnrichmentRefusal: 'source_cap_reached' });
+  });
+
+  it('given a funded balance, should enrich the page, bill each model call and release the hold once', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+
+    await processZoomWebhook(event, connection);
+
+    // Each call settles on the wallet the hold reserved, never re-derived from the owner.
+    expect(mockTrackUsage.mock.calls.map(([usage]) => usage.walletId)).toEqual(['w-drive-1', 'w-drive-1']);
 
     // One reservation sized for both enrichment calls.
     expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
@@ -176,6 +209,76 @@ describe('processZoomWebhook AI enrichment credit gate', () => {
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
     expect(mockGenerateText).not.toHaveBeenCalled();
     expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
+  });
+
+  it('SPEND-6 (partial) given wallets are live and the gate reserved no drive wallet, should skip the enrichment rather than bill the owner', async () => {
+    walletsLive.orgs = true;
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-3' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCreateAIProvider).not.toHaveBeenCalled();
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseHold).toHaveBeenCalledTimes(1);
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-3');
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'no_drive_wallet' });
+  });
+
+  it('SPEND-6 (partial) given wallets are live and a drive wallet reserved, should enrich on that wallet', async () => {
+    walletsLive.orgs = true;
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-4', walletId: 'w-drive-1' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(mockTrackUsage.mock.calls.map(([usage]) => usage.walletId)).toEqual(['w-drive-1', 'w-drive-1']);
+    expect(createdMetadata()).not.toHaveProperty('aiEnrichmentSkipped');
+  });
+
+  it('SPEND-6 (partial) given an org destination, should gate the run as the connection owner on the drive wallet, never their own credits', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-5', walletId: 'w-drive-1' });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-1');
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(DRIVE_AUTOMATION);
+    expect(mockTrackUsage.mock.calls.map(([usage]) => [usage.userId, usage.walletId])).toEqual([['user-1', 'w-drive-1'], ['user-1', 'w-drive-1']]);
+  });
+
+  it('SPEND-6 (partial) given any destination — an org drive or a personal one — should gate as an automation on that drive, run as the connection owner, never anyone\'s own credits', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-6', walletId: 'w-drive-1' });
+
+    await processZoomWebhook(event, connection);
+
+    // The target names no payer kind: the drive's wallet or a skip, decided by the gate (SPEND-6).
+    expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user-1');
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(DRIVE_AUTOMATION);
+    expect(mockCanConsumeAI.mock.calls[0][2].spend).not.toEqual({ kind: 'personal' });
+    // SPEND-10: both enrichment calls are listed as this connection's "Zoom transcripts" automation.
+    expect(mockTrackUsage.mock.calls.map(([usage]) => usage.automationRef)).toEqual([`zoom:${connection.id}`, `zoom:${connection.id}`]);
+  });
+
+  it('SPEND-6 (partial) given the destination\'s wallet skips the run (no wallet, empty, the creator gone), should still create the page without enrichment or charge and record why', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: 'drive_wallet', reason: 'no_drive_wallet', options: [] } });
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect(mockCreatePage).toHaveBeenCalledTimes(1);
+    expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'source_refused' });
+  });
+
+  it('given the destination drive cannot be read, should still create the page without enrichment and record a gate error', async () => {
+    mockLookupDrive.mockResolvedValue(null);
+
+    await processZoomWebhook(event, connection);
+
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockGenerateText).not.toHaveBeenCalled();
     expect(mockCreatePage).toHaveBeenCalledTimes(1);
     expect(createdMetadata()).toMatchObject({ aiEnrichmentSkipped: 'gate_error' });
   });

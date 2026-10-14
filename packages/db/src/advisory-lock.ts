@@ -277,3 +277,44 @@ export async function withAdvisoryLock<T>(
     await unlockAndRelease(held);
   }
 }
+
+/** First and longest pause between try-lock attempts while waiting. */
+const WAIT_BACKOFF_START_MS = 10;
+const WAIT_BACKOFF_MAX_MS = 200;
+
+/**
+ * `withAdvisoryLock`, but WAITING for the lock (up to `timeoutMs`) instead of giving up at once —
+ * for work that must happen in turn rather than be skipped when someone else holds the key (a
+ * terminal's billing-window claims, review #2760 re-review P2-1). Cross-process: it is the same
+ * Postgres session lock, so two realtime instances serialize too.
+ *
+ * The wait holds NO connection (re-review 5408117045 P3-1): each attempt is one `withAdvisoryLock`
+ * try-lock, and between attempts the connection is back in the pool, with a backoff from 10ms
+ * doubling to 200ms. A burst of waiters therefore cannot starve the pool, which a server-side
+ * `pg_advisory_lock` wait (one parked connection per waiter) would. Not FIFO: whichever waiter
+ * tries first after the release wins.
+ *
+ * `lock_busy` means the deadline passed; `fn` never ran. `connection_error` is returned at once (no
+ * retry). `fn`'s own rejection propagates after the lock is released, as in `withAdvisoryLock`.
+ */
+export async function withBlockingAdvisoryLock<T>(
+  pool: AdvisoryLockPool,
+  lockKey: string,
+  fn: () => Promise<T>,
+  { timeoutMs, sleep = defaultSleep }: { timeoutMs: number; sleep?: (ms: number) => Promise<void> },
+): Promise<WithAdvisoryLockResult<T>> {
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  let backoff = WAIT_BACKOFF_START_MS;
+  for (;;) {
+    const attempt = await withAdvisoryLock(pool, lockKey, fn);
+    if (attempt.outcome !== 'lock_busy') return attempt;
+    const left = deadline - Date.now();
+    if (left <= 0) return { outcome: 'lock_busy' };
+    await sleep(Math.min(backoff, left));
+    backoff = Math.min(backoff * 2, WAIT_BACKOFF_MAX_MS);
+  }
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

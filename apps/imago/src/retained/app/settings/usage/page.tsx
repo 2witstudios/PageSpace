@@ -91,6 +91,9 @@ export default function UsagePage() {
         </Alert>
       )}
 
+      <SettingsGroup label="Wallets">
+        <SettingsRow label={<Link href="/account/wallets" className="hover:underline">Wallets</Link>} hint="Everything your AI can spend from and everything you fund." />
+      </SettingsGroup>
       <CreditBalanceCard />
       <UsageBreakdownCard />
 

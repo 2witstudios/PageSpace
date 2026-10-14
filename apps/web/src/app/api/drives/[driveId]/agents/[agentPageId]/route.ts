@@ -7,6 +7,9 @@ import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -31,12 +34,12 @@ export async function PATCH(
 
     const { driveId, agentPageId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can update agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can update agent members' }, { status: 403 }));
     }
 
     const rawBody = await request.json();
@@ -79,11 +82,21 @@ export async function PATCH(
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
     if (includeContext !== undefined) updateValues.includeContext = includeContext;
 
-    const [updated] = await db
-      .update(driveAgentMembers)
-      .set(updateValues)
-      .where(and(eq(driveAgentMembers.driveId, driveId), eq(driveAgentMembers.agentPageId, agentPageId)))
-      .returning();
+    // [D-OW-33] a higher role, a wider custom role or the drive's context newly included loosens what the agent's
+    // users read: guardDriveAccess undoes it and answers 402 while the drive's org is lapsed. Narrowing still applies.
+    let updated: typeof driveAgentMembers.$inferSelect | undefined;
+    try {
+      [updated] = await guardDriveAccess(db, driveId, { members: false, grants: false }, (tx) =>
+        tx
+          .update(driveAgentMembers)
+          .set(updateValues)
+          .where(and(eq(driveAgentMembers.driveId, driveId), eq(driveAgentMembers.agentPageId, agentPageId)))
+          .returning(),
+      );
+    } catch (error) {
+      if (isOrgLapsedError(error)) return orgLapsedResponse();
+      throw error;
+    }
 
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -115,12 +128,12 @@ export async function DELETE(
 
     const { driveId, agentPageId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can remove agent members' }, { status: 403 }));
     }
 
     // Verify membership exists

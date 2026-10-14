@@ -9,6 +9,7 @@ import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionRes
 import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 const MAX_CONCURRENT_TRIGGERS = 5;
 const MAX_DUE_TRIGGERS = 50;
@@ -126,11 +127,23 @@ export async function POST(req: Request) {
             }
           }
 
+          // [D-OW-36] Nothing runs under a missing person: an owner-left workflow retires the one-shot
+          // trigger with the reason, before any gate or hold.
+          const owner = automationRunOwner(workflow);
+          if (!owner.runs) {
+            await db.update(taskTriggers).set({
+              isEnabled: false,
+              lastFireError: owner.error,
+            }).where(eq(taskTriggers.id, trigger.id));
+            const skippedResult: WorkflowExecutionResult = { success: false, skipped: true, durationMs: 0, error: owner.error };
+            return { trigger, result: skippedResult };
+          }
+
           const input: WorkflowExecutionInput = {
             workflowId: workflow.id,
             workflowName: workflow.name,
             driveId: workflow.driveId,
-            createdBy: workflow.createdBy,
+            createdBy: owner.ownerId,
             agentPageId: workflow.agentPageId,
             prompt: workflow.prompt,
             contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],

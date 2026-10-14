@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  dropWithheldDerivedPages: async (_actor: unknown, ids: readonly string[]) => [...ids],
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -63,6 +73,7 @@ vi.mock('../../validators/id-validators', () => ({
 
 import { getUserAccessiblePagesInDrive, getUserAccessiblePagesInDriveWithDetails } from '../permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '../access-actor';
 
 const VALID_USER = 'clxxxxxxxxxxxxxxxxxxxxxxx';
 const VALID_DRIVE = 'clzzzzzzzzzzzzzzzzzzzzzzz';
@@ -118,10 +129,8 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
@@ -131,7 +140,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 7. explicit permissions
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toContain('private-page');
   });
 
@@ -140,10 +149,8 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (none)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
@@ -153,7 +160,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 7. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('stale-page');
     expect(result).toHaveLength(0);
   });
@@ -163,10 +170,8 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (none)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
@@ -174,7 +179,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('private-page');
     expect(result).toHaveLength(0);
   });
@@ -184,10 +189,8 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (includes page that role will deny)
       .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'non-private-page' }]))
       // 5. fetchCustomRolePermissions internal call
@@ -195,7 +198,7 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
       // 6. explicit permissions (none)
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).not.toContain('non-private-page');
     expect(result).toHaveLength(0);
   });
@@ -203,13 +206,12 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
   it('given MEMBER with custom role with driveWidePermissions:{canView:false} and no per-page entries, Rule-4 pages should be removed from the accessible set', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      .mockReturnValueOnce(mockChainWhere([]))
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'np-1' }, { id: 'np-2' }]))
       .mockReturnValueOnce(mockChainWhere([{ permissions: {}, driveWidePermissions: { canView: false, canEdit: false, canShare: false } }]))
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toHaveLength(0);
   });
 
@@ -217,18 +219,17 @@ describe('getUserAccessiblePagesInDrive — custom role path', () => {
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → no custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: null }]))
+      // 2. effective membership → MEMBER, no custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: null, source: 'invite' }]))
       // 4. non-private pages
       .mockReturnValueOnce(mockChainWhereNoLimit([{ id: 'non-private-page' }]))
       // 5. explicit permissions
       .mockReturnValueOnce(mockChainLeftJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDrive(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDrive(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toContain('non-private-page');
-    expect(db.select).toHaveBeenCalledTimes(5);
+    // drive, one effective membership read (admin and member alike), non-private pages, explicit grants
+    expect(db.select).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -245,10 +246,8 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (page-1)
       .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePages))
       // 5. fetchCustomRolePermissions internal call
@@ -258,7 +257,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 7. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     const page = result.find(p => p.id === 'page-1');
     expect(page).toBeDefined();
     expect(page?.permissions).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
@@ -272,10 +271,8 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (includes page that role will deny)
       .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePage))
       // 5. fetchCustomRolePermissions internal call
@@ -284,7 +281,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 6. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result.find(p => p.id === 'non-private-page')).toBeUndefined();
     expect(result).toHaveLength(0);
   });
@@ -296,14 +293,13 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
     ];
     vi.mocked(db.select)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      .mockReturnValueOnce(mockChainWhere([]))
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       .mockReturnValueOnce(mockChainWhereNoLimit(nonPrivatePages))
       .mockReturnValueOnce(mockChainWhere([{ permissions: {}, driveWidePermissions: { canView: false, canEdit: false, canShare: false } }]))
       // no role pages query — no canView=true entries in rolePerms
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     expect(result).toHaveLength(0);
   });
 
@@ -315,10 +311,8 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
     vi.mocked(db.select)
       // 1. drive lookup (not owner)
       .mockReturnValueOnce(mockChainWhere([{ ownerId: 'other-user' }]))
-      // 2. admin check (not admin)
-      .mockReturnValueOnce(mockChainWhere([]))
-      // 3. member check → has custom role
-      .mockReturnValueOnce(mockChainWhere([{ id: 'row', customRoleId: CUSTOM_ROLE_ID }]))
+      // 2. effective membership → MEMBER, has custom role
+      .mockReturnValueOnce(mockChainWhere([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID, source: 'invite' }]))
       // 4. non-private pages (none — private-1 is private)
       .mockReturnValueOnce(mockChainWhereNoLimit([]))
       // 5. fetchCustomRolePermissions internal call
@@ -328,7 +322,7 @@ describe('getUserAccessiblePagesInDriveWithDetails — custom role path', () => 
       // 7. explicit pages (none)
       .mockReturnValueOnce(mockChainInnerJoinWhere([]));
 
-    const result = await getUserAccessiblePagesInDriveWithDetails(VALID_USER, VALID_DRIVE);
+    const result = await getUserAccessiblePagesInDriveWithDetails(credentialActor(VALID_USER, null), VALID_DRIVE);
     const page = result.find(p => p.id === 'private-1');
     expect(page).toBeDefined();
     expect(page?.permissions).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });

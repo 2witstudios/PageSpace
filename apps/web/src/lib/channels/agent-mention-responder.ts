@@ -11,17 +11,17 @@ import {
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { acquireMentionCreditHold } from '@/lib/channels/mention-credit-gate';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
 import {
-  buildCommandPromptSection,
   commandExecutionDataFromPlan,
   isSoloBuiltinCommandIgnoringMentions,
   type CommandExecutionData,
 } from '@/lib/ai/core/command-processor';
 import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
+import { agentRunModel, toolModelContext, type AgentRunModel } from '@/lib/ai/core/tool-model-context';
 import { loadHelpAnswerText } from '@/lib/commands/help-answer';
-import { acquireUserCreditHold } from '@/lib/ai/core/user-credit-hold';
-import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
@@ -39,6 +39,9 @@ import {
   type ImageFilePart,
   type RecentImageFileCandidate,
 } from '@/lib/channels/build-recent-image-file-parts';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -52,6 +55,8 @@ export interface MentionedAgent {
   enabledTools: string[] | null;
   /** Whether this agent's configured model (falling back to DEFAULT_MODEL) supports vision. */
   hasVision: boolean;
+  /** POL-8: the provider and model this agent's reply will run (its configured pair, else the default). */
+  runModel: AgentRunModel;
 }
 
 export interface RecentChannelMessage {
@@ -70,7 +75,12 @@ export interface RecentChannelMessage {
 }
 
 export interface TriggerMentionedAgentResponsesParams {
-  userId: string;
+  /**
+   * The person who posted the mention, as the credential of the request that posted it (D-OW-62): the mentioner gate,
+   * the reply's tools, attachments and commands all run under it, so an org's sign-in policy applies to a mention
+   * exactly as to that request. Never an automation.
+   */
+  sender: AccessActor;
   channelId: string;
   channelTitle: string;
   channelType?: string;
@@ -234,6 +244,7 @@ export async function resolveMentionedAgents(content: string): Promise<Mentioned
       title: page.title || 'Agent',
       enabledTools: Array.isArray(page.enabledTools) ? page.enabledTools : null,
       hasVision: hasVisionCapability(page.aiModel || DEFAULT_MODEL),
+      runModel: agentRunModel(page),
     });
   }
 
@@ -278,7 +289,7 @@ export async function fetchRecentChannelMessages(channelId: string): Promise<Rec
  * `attachmentMeta` is used only for the display filename.
  */
 async function resolveImageAttachmentsForContext(
-  userId: string,
+  actor: AccessActor,
   contextMessages: RecentChannelMessage[]
 ): Promise<ImageFilePart[]> {
   // Dedup by fileId, keeping each file's MOST RECENT mention: re-sharing the
@@ -368,7 +379,7 @@ async function resolveImageAttachmentsForContext(
         };
       }
 
-      const accessible = await canUserAccessFile(userId, file.id, file.driveId);
+      const accessible = await canUserAccessFile(actor, file.id, file.driveId);
       const url = accessible
         ? await generatePresignedUrl(
             toContentHash(file.storagePath),
@@ -419,13 +430,16 @@ function buildMentionerContext(
   params: TriggerMentionedAgentResponsesParams,
   conversationId: string,
   locationContext: ToolExecutionContext['locationContext'],
+  creditSpend?: ToolExecutionContext['creditSpend'],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
     conversationId,
     locationContext,
     requestOrigin: 'user',
     agentCallDepth: 0,
+    ...(creditSpend ? { creditSpend } : {}),
   } as ToolExecutionContext;
 }
 
@@ -445,7 +459,8 @@ function buildAgentActorContext(
   commandExecution?: CommandExecutionData[],
 ): ToolExecutionContext {
   return {
-    userId: params.userId,
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
     conversationId,
     locationContext,
     requestOrigin: 'agent',
@@ -456,6 +471,11 @@ function buildAgentActorContext(
     },
     ...(commandExecution && { commandExecution }),
   } as ToolExecutionContext;
+}
+
+/** The actor a mention reply runs as: the sender's credential from the request that posted the mention (D-OW-62). */
+function mentionActor(params: Pick<TriggerMentionedAgentResponsesParams, 'sender'>): AccessActor {
+  return params.sender;
 }
 
 function mentionConversationIdFor(channelId: string, agentId: string): string {
@@ -606,6 +626,14 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
+    // POL-9: an agent that answers a mention replies on its own. An org that turned autonomous runs off gets no reply,
+    // checked here before any eligibility query, credit hold or model call; read now, every mention, no cache.
+    const autonomy = agentsAutonomousDecision(params.driveId ? ((await getDrivePolicies(params.driveId))?.policies ?? null) : null);
+    if (!autonomy.ok) {
+      channelMentionLogger.info('Agent mention reply skipped by org policy', { channelId: params.channelId, driveId: params.driveId, policy: autonomy.policy });
+      return;
+    }
+
     const locationContext = buildLocationContext(params);
 
     // Three gates, cheapest first, all before any model call: the agent's
@@ -671,7 +699,7 @@ export async function triggerMentionedAgentResponses(
       // to the function-level catch and silence the whole mention entirely.
       if (eligibleAgents.some((agent) => agent.hasVision)) {
         try {
-          imageAttachments = await resolveImageAttachmentsForContext(params.userId, contextMessages);
+          imageAttachments = await resolveImageAttachmentsForContext(mentionActor(params), contextMessages);
         } catch (error) {
           channelMentionLogger.error(
             'Failed to resolve recent channel image attachments; continuing with text-only replies',
@@ -697,15 +725,9 @@ export async function triggerMentionedAgentResponses(
     // page for commandExecutionDataFromPlan to read.
     const commandPlans = isSoloHelpMention
       ? []
-      : await planCommandExecutions(params.content, params.userId, {
+      : await planCommandExecutions(params.content, mentionActor(params), {
           driveId: params.driveId ?? null,
         });
-    const commandContext = buildCommandPromptSection(commandPlans);
-    const commandExecution = isSoloHelpMention
-      ? [{ label: 'help', status: 'used' as const }]
-      : commandPlans.length > 0
-        ? commandPlans.map(commandExecutionDataFromPlan)
-        : undefined;
 
     // isSoloHelpMention computed above (before command resolution). The
     // answer itself is sender-scoped (the human's command list), not
@@ -714,22 +736,27 @@ export async function triggerMentionedAgentResponses(
     for (const agent of eligibleAgents) {
       try {
         const mentionConversationId = mentionConversationIdFor(params.channelId, agent.id);
+        // POL-8: a command's pages reach this agent's model only when their org allows the model its reply runs.
+        const agentCommands = await commandsForModel(commandPlans, toolModelContext(agent.runModel));
+        const commandContext = agentCommands.prompt;
+        const commandExecution = isSoloHelpMention
+          ? [{ label: 'help', status: 'used' as const }]
+          : agentCommands.plans.length > 0
+            ? agentCommands.plans.map(commandExecutionDataFromPlan)
+            : undefined;
 
         let replyContent: string;
         if (isSoloHelpMention) {
-          replyContent = await loadHelpAnswerText(params.userId, params.driveId ?? null);
+          replyContent = await loadHelpAnswerText(mentionActor(params), params.driveId ?? null);
         } else {
-          // The agent's run bills the MENTIONER (executeAskAgent tracks usage as
-          // params.userId), so it passes the credit gate before any model is
-          // built — one hold per reply. A mention is a user action: the daily
-          // exposure cap applies, and the in-flight cap bounds a message that
-          // mentions many agents. A refusal skips this agent's reply.
-          const hold = await acquireUserCreditHold(params.userId, { maxInFlight: MAX_CHAT_INFLIGHT });
+          // SPEND-6: the reply spends the channel's drive wallet or is skipped — never the
+          // sender's credits — gated before the model call and settled on that wallet.
+          const hold = await acquireMentionCreditHold({ userId: params.sender.userId, driveId: params.driveId });
           if (!hold.allowed) {
-            channelMentionLogger.info('Mentioned agent reply skipped (credit gate denied)', {
+            channelMentionLogger.warn('Mentioned agent skipped (credit gate denied)', {
               channelId: params.channelId,
               agentId: agent.id,
-              reason: hold.reason,
+              error: hold.error,
             });
             continue;
           }
@@ -754,7 +781,7 @@ export async function triggerMentionedAgentResponses(
               {
                 toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
                 messages: [],
-                experimental_context: buildMentionerContext(params, mentionConversationId, locationContext),
+                experimental_context: buildMentionerContext(params, mentionConversationId, locationContext, hold.creditSpend),
               }
             );
           } finally {
@@ -796,7 +823,7 @@ export async function triggerMentionedAgentResponses(
           // to the resulting follower set so other followers see the reply
           // in their inbox even though it was posted by the agent.
           await postAgentThreadReply({
-            userId: params.userId,
+            userId: params.sender.userId,
             channelId: params.channelId,
             content: replyContent,
             parentId: trimmedParent,

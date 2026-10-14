@@ -62,6 +62,7 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   getDriveRecipientUserIds: (...args: unknown[]) => mockGetRecipients(...args),
 }));
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
 vi.mock('next/server', () => ({
   NextResponse: {
     json: (body: unknown, init?: ResponseInit) => new Response(JSON.stringify(body), { status: init?.status ?? 200 }),
@@ -69,6 +70,7 @@ vi.mock('next/server', () => ({
 }));
 
 import { DELETE } from '../route';
+import { LEAD_ACTION_CASES, LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
 
 function makeRequest(): Request {
   return new Request('http://localhost:3000/api/trash/drives/drive-1', { method: 'DELETE' });
@@ -118,11 +120,38 @@ describe('DELETE /api/trash/drives/[driveId]', () => {
   });
 
   it('given the drive is not in the trash, should reject with 400 and never delete', async () => {
-    mockFindDrive.mockResolvedValue({ id: 'drive-1', isTrashed: false });
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', isTrashed: false, ownerId: 'user-1' });
 
     const response = await DELETE(makeRequest(), context);
 
     expect(response.status).toBe(400);
     expect(mockDeleteWhere).not.toHaveBeenCalled();
+  });
+
+  it('permanent deletion stays lead-only: anyone but drives.ownerId (an org Owner or Admin included) gets 404 and nothing is deleted', async () => {
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', isTrashed: true, ownerId: 'lena', orgId: 'org-1', orgVisibility: 'PRIVATE' });
+
+    const response = await DELETE(makeRequest(), context);
+
+    expect(response.status).toBe(404);
+    expect(mockDeleteWhere).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/trash/drives/[driveId]: lead authority (point-guard ruling on #2689)', () => {
+  beforeEach(() => {
+    leadAuthority.reset();
+  });
+
+  it.each(LEAD_ACTION_CASES)('ORG-4 (partial) $who: allowed=$allowed, audited=$audited', async ({ userId, orgRole, drive, allowed, audited }) => {
+    mockAuthenticate.mockResolvedValue({ userId });
+    if (orgRole) leadAuthority.orgRoles.set(userId, orgRole);
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', isTrashed: true, ...LEAD_ACTION_DRIVES[drive] });
+
+    const response = await DELETE(makeRequest(), context);
+
+    expect(response.status).toBe(allowed ? 200 : 404);
+    expect(mockDeleteWhere.mock.calls.length > 0).toBe(allowed);
+    expect(leadAuthority.audited).toEqual(audited ? [expect.objectContaining({ userId, driveId: 'drive-1', action: 'permanent_delete' })] : []);
   });
 });

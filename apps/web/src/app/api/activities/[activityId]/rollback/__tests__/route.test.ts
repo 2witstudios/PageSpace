@@ -336,7 +336,7 @@ describe('POST /api/activities/[activityId]/rollback', () => {
       // Route now wraps executeRollback in transaction and passes options
       expect(executeRollback).toHaveBeenCalledWith(
         mockActivityId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'drive',
         { tx: {}, force: false }
       );

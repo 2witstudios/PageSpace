@@ -26,12 +26,13 @@ vi.mock('../../../../../../lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 
@@ -44,6 +45,7 @@ import { getPageVersionHistory, getUserRetentionDays } from '../../../../../../s
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -268,6 +270,7 @@ describe('GET /api/pages/[pageId]/history', () => {
       vi.mocked(getUserRetentionDays).mockResolvedValue(7);
 
       await GET(createRequest(), { params: mockParams });
+      expect(getUserRetentionDays).toHaveBeenCalledWith(mockUserId, { pageId: mockPageId });
 
       // Should have called with a startDate exactly 7 days ago
       const call = vi.mocked(getPageVersionHistory).mock.calls[0];

@@ -205,13 +205,15 @@
         "src/schema/tasks.ts",
         "src/schema/toast-notification-preferences.ts",
         "src/schema/versioning.ts",
+        "src/schema/wallets.ts",
         "src/schema/webhook-triggers.ts",
         "src/schema/workflow-runs.ts",
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
         "src/test/require-db.ts",
-        "src/transactions/auth-transactions.ts"
+        "src/transactions/auth-transactions.ts",
+        "src/wallet-backfill.ts"
       ],
       "project": [
         "src/**/*.ts"
@@ -220,6 +222,7 @@
     },
     "packages/lib": {
       "entry": [
+        "src/env-bridge/index.ts",
         "src/agent-accounts/grant.ts",
         "src/agent-accounts/executor/plane-main.ts",
         "src/agent-accounts/account-authority-executor.ts",
@@ -348,12 +351,17 @@
         "src/billing/credit-backfill.ts",
         "src/billing/credit-balance.ts",
         "src/billing/credit-consume.ts",
+        "src/billing/credit-copy.ts",
         "src/billing/credit-core.ts",
         "src/billing/credit-emit.ts",
         "src/billing/credit-funding.ts",
         "src/billing/credit-gate.ts",
         "src/billing/credit-pricing.ts",
+        "src/billing/invoice-grant.ts",
+        "src/billing/missed-grant-reconcile.ts",
+        "src/billing/money-model.ts",
         "src/billing/sandbox-payer.ts",
+        "src/billing/wallet-core.ts",
         "src/canvas/cert-action.ts",
         "src/canvas/csp.ts",
         "src/canvas/custom-domain-mirror.ts",

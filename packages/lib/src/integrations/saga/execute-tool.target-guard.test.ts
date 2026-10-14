@@ -44,7 +44,7 @@ const fetchSpy = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Prom
 
 const mockLoadConnection = vi.fn();
 const mockLogAudit = vi.fn(async () => undefined);
-const deps: ExecuteToolDependencies = { loadConnection: mockLoadConnection, logAudit: mockLogAudit };
+const deps: ExecuteToolDependencies = { loadConnection: mockLoadConnection, logAudit: mockLogAudit, getDriveOrgPolicies: async () => null };
 
 const okJson = (body: unknown): Response =>
   ({

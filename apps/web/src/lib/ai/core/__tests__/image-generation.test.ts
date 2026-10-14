@@ -60,7 +60,7 @@ describe('pure extractors', () => {
 });
 
 describe('generateImageBytes (shell, injected client + generate)', () => {
-  const client = { chat: vi.fn(() => 'MODEL_HANDLE') } as unknown as import('../image-generation').OpenRouterImageClient;
+  const client = { chat: vi.fn(() => 'MODEL_HANDLE') } as unknown as import('../provider-factory').OpenRouterImageClient;
 
   it('returns bytes, mediaType, cost and ids on success', async () => {
     const generate = vi.fn(async () => goodResult);
@@ -78,7 +78,7 @@ describe('generateImageBytes (shell, injected client + generate)', () => {
 
   it('passes modalities and aspect ratio through extraBody', async () => {
     const chat = vi.fn((_model: string, _opts: unknown) => 'MODEL_HANDLE');
-    const c2 = { chat } as unknown as import('../image-generation').OpenRouterImageClient;
+    const c2 = { chat } as unknown as import('../provider-factory').OpenRouterImageClient;
     const generate = vi.fn(async () => goodResult);
     await generateImageBytes({ prompt: 'x', model: 'm', aspectRatio: '16:9' }, { client: c2, generate });
     const opts = chat.mock.calls[0][1] as { usage: unknown; extraBody: Record<string, unknown> };

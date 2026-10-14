@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, lte, sql } from '@pagespace/db/operators'
+import { eq, and, isNull, lte, sql } from '@pagespace/db/operators'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
-import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
+import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -44,6 +45,8 @@ export async function POST(req: Request) {
       .from(workflows)
       .where(and(
         eq(workflows.isEnabled, true),
+        // [D-OW-36] An owner-left workflow is disabled when flagged; this keeps it out even if re-enabled by hand.
+        isNull(workflows.ownerLeftAt),
         eq(workflows.triggerType, 'cron'),
         lte(workflows.nextRunAt, now),
         sql`NOT EXISTS (
@@ -62,11 +65,11 @@ export async function POST(req: Request) {
 
     type WorkflowRow = typeof dueWorkflows[number];
 
-    const toExecutionInput = (workflow: WorkflowRow): WorkflowExecutionInput => ({
+    const toExecutionInput = (workflow: WorkflowRow, ownerId: string): WorkflowExecutionInput => ({
       workflowId: workflow.id,
       workflowName: workflow.name,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       steps: workflow.steps,
@@ -96,7 +99,14 @@ export async function POST(req: Request) {
 
       const batchResults = await Promise.allSettled(
         batch.map(async (workflow) => {
-          const input = toExecutionInput(workflow);
+          // [D-OW-36] Nothing runs under a missing person: an account deleted since the row was read
+          // leaves no creator. Skipped before any gate or hold; the schedule is not advanced.
+          const owner = automationRunOwner(workflow);
+          if (!owner.runs) {
+            const result: WorkflowExecutionResult = { success: false, skipped: true, durationMs: 0, error: owner.error };
+            return { workflow, result };
+          }
+          const input = toExecutionInput(workflow, owner.ownerId);
 
           // The atomic claim is the workflow_runs partial unique index inside
           // the executor. If a peer cron invocation already claimed this

@@ -8,7 +8,8 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { readMigrationFiles } from 'drizzle-orm/migrator';
+import { runMigrations as runProductionMigrations } from '../../packages/db/src/migration-runner';
 import { schema } from '@pagespace/db/schema';
 import path from 'path';
 
@@ -34,7 +35,10 @@ export async function runMigrations(db: TestDb): Promise<void> {
     __dirname,
     '../../packages/db/drizzle',
   );
-  await migrate(db, { migrationsFolder });
+  // Production commits each migration before the next uses a newly added enum value.
+  await runProductionMigrations(db, readMigrationFiles({ migrationsFolder }), {
+    migrationsSchema: 'drizzle', migrationsTable: '__drizzle_migrations',
+  });
 }
 
 /** Truncate all user-data tables in reverse FK order */

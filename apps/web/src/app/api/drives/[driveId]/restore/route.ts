@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq } from '@pagespace/db/operators'
 import { drives } from '@pagespace/db/schema/core';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -10,6 +10,8 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -33,7 +35,7 @@ export async function POST(
     // ADMIN is not enough, mirroring the user-side ownership requirement.
     let scopedExplicitRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null | undefined;
     if (isScopedMCPAuth(auth)) {
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (!membership) {
         return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
       }
@@ -44,14 +46,17 @@ export async function POST(
     }
 
     const requireUserOwnership = !isScopedMCPAuth(auth) || scopedExplicitRole === null;
-    const drive = await db.query.drives.findFirst({
-      where: requireUserOwnership
-        ? and(eq(drives.id, driveId), eq(drives.ownerId, auth.userId))
-        : eq(drives.id, driveId),
+    // Restoring a drive takes lead authority (the lead, or on an org drive an org Owner/Admin,
+    // audited), unless an explicit OWNER-role key acts.
+    const found = await db.query.drives.findFirst({
+      where: eq(drives.id, driveId),
     });
+    const drive = found && (!requireUserOwnership || (await loadDriveLeadAuthority(actorFromAuth(auth), found, 'restore')).allowed)
+      ? found
+      : undefined;
 
     if (!drive) {
-      return NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found or access denied' }, { status: 404 }));
     }
 
     if (isHomeDrive(drive)) {

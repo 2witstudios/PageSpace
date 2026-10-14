@@ -56,6 +56,8 @@ import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
 import { commandDriveIdFor } from '@/lib/commands/command-scope';
+import { ComposerSpendStrip } from '@/components/wallets/ComposerSpendStrip';
+import { SpendSurfaceProvider } from '@/components/wallets/SpendSurface';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -903,6 +905,7 @@ const SidebarChatTab: React.FC = () => {
   }
 
   return (
+    <SpendSurfaceProvider conversationId={currentConversationId ?? null} driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null} isGlobal={!selectedAgent}>
     <AskUserAnswerProvider value={askUserAnswering}>
     <div data-testid="sidebar-chat-tab" className="flex flex-col h-full">
       {/* Header */}
@@ -1011,6 +1014,18 @@ const SidebarChatTab: React.FC = () => {
         {sideQuestion.state && (
           <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />
         )}
+        {currentConversationId && (
+          // SPEND-2: an agent's conversation spends in the agent's drive; the global
+          // assistant's in the drive its turns name (the same contextRef drive).
+          <ComposerSpendStrip
+            conversationId={currentConversationId}
+            driveId={selectedAgent ? selectedAgent.driveId : locationContext?.currentDrive?.id ?? null}
+            isGlobal={!selectedAgent}
+            hasMessages={renderedMessages.length > 0}
+            // Below lg this sidebar is a modal sheet over the header chip: keep the strip.
+            persistentBelowLg
+          />
+        )}
         <ChatErrorBanner
           cause={errorCause}
           show={showError}
@@ -1067,6 +1082,7 @@ const SidebarChatTab: React.FC = () => {
       />
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 };
 

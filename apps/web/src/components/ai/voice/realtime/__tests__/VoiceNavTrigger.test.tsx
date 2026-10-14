@@ -70,6 +70,7 @@ const liveConnection = {
   callId: 'rtc_1',
   attached: true,
   maxDurationMs: undefined,
+  spendFallback: null,
   microphone: { getTracks: () => [], getAudioTracks: () => [] },
   setMicrophoneEnabled: setMicSpy,
   stop: stopSpy,

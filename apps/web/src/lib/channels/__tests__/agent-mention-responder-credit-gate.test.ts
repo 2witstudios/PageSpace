@@ -1,8 +1,13 @@
 /**
- * A mention reply runs the mentioned agent's model and bills the MENTIONER
- * (executeAskAgent → AIMonitoring.trackUsage). That spend must pass the credit
- * gate before the model runs: an exhausted balance gets no agent reply and no
- * charge, a funded one gets its reply and the hold is released exactly once.
+ * A mention reply runs the mentioned agent's model (executeAskAgent →
+ * AIMonitoring.trackUsage). That spend must pass the credit gate before the model
+ * runs: a refused gate gets no agent reply and no charge, an admitted one gets its
+ * reply and the hold is released exactly once.
+ *
+ * On the org-wallets branch the gate is acquireMentionCreditHold (SPEND-6): the
+ * reply spends the CHANNEL'S DRIVE WALLET, never the mentioner's credits. This file
+ * mocks only canConsumeAI beneath it, so the real gate runs and every assertion
+ * below reaches the branch's path.
  */
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
@@ -12,6 +17,10 @@ const { mockCanConsumeAI, mockReleaseHold, mockSelectWhere, mentionLogger } = vi
   mockSelectWhere: vi.fn(),
   mentionLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
+
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
@@ -48,10 +57,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -112,7 +123,7 @@ const mockAskAgentExecute = executeAskAgent as unknown as Mock;
 const mockSendChannelExecute = channelTools.send_channel_message.execute as unknown as Mock;
 
 const params = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL' as const,
@@ -122,6 +133,9 @@ const params = {
   driveName: 'Workspace',
   driveSlug: 'workspace',
 };
+
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('agent-mention-responder credit gate', () => {
   beforeEach(() => {
@@ -136,30 +150,69 @@ describe('agent-mention-responder credit gate', () => {
     mockReleaseHold.mockResolvedValue(undefined);
   });
 
-  it('given the mentioner has an exhausted balance, should not run the agent or post a reply', async () => {
+  it('given the drive wallet cannot cover it, should not run the agent or post a reply', async () => {
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
 
     await triggerMentionedAgentResponses(params);
 
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-1', 'free', expect.any(Object));
+    // SPEND-6: the gate names the channel's drive as consumer, never the mentioner's credits.
+    expect(mockCanConsumeAI).toHaveBeenCalledWith(
+      'user-1',
+      'free',
+      expect.objectContaining({ spend: { kind: 'automation', driveId: 'drive-1', personPresent: true } }),
+    );
     expect(mockAskAgentExecute).not.toHaveBeenCalled();
     expect(mockSendChannelExecute).not.toHaveBeenCalled();
     expect(mockReleaseHold).not.toHaveBeenCalled();
     // The refusal is a logged skip, not a swallowed exception.
-    expect(mentionLogger.info).toHaveBeenCalledWith(
-      'Mentioned agent reply skipped (credit gate denied)',
-      expect.objectContaining({ agentId: 'agent-1', reason: 'out_of_credits' }),
+    expect(mentionLogger.warn).toHaveBeenCalledWith(
+      'Mentioned agent skipped (credit gate denied)',
+      expect.objectContaining({ agentId: 'agent-1' }),
     );
     expect(mentionLogger.error).not.toHaveBeenCalled();
   });
 
-  it('given a funded mentioner, should run the agent, post its reply and release the hold once', async () => {
-    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1' });
+  it('SPEND-6 (partial) given a mention outside any drive, should never gate a person and never run the agent', async () => {
+    await triggerMentionedAgentResponses({ ...params, driveId: undefined });
+
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('POL-9 given the org turned autonomous agents off, should reserve nothing, run nothing and post nothing', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+    getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, agentsAutonomous: false } });
+
+    await triggerMentionedAgentResponses(params);
+
+    expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).not.toHaveBeenCalled();
+    expect(mockSendChannelExecute).not.toHaveBeenCalled();
+  });
+
+  it('POL-9 given autonomy is ON (or there is no org), should reply as before; the policy is read on every mention', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
+    getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES } });
+    await triggerMentionedAgentResponses(params);
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it('given a funded drive wallet, should run the agent on that wallet, post its reply and release the hold once', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-1', walletId: 'w-drive-1' });
 
     await triggerMentionedAgentResponses(params);
 
     expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    // The reply settles on the wallet the gate reserved, not on the mentioner — and on the ONE
+    // hold the responder took, which it hands in rather than having the reply reserve again.
+    expect(mockAskAgentExecute.mock.calls[0][1].experimental_context.creditSpend).toEqual({
+      spend: { kind: 'automation', driveId: 'drive-1', personPresent: true },
+      walletId: 'w-drive-1',
+      reservedHoldId: 'hold-1',
+    });
     expect(mockSendChannelExecute).toHaveBeenCalledTimes(1);
     expect(mockReleaseHold).toHaveBeenCalledTimes(1);
     expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');

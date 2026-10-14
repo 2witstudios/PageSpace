@@ -9,6 +9,7 @@ import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -56,7 +57,7 @@ export async function DELETE(
 
   const canEdit = await canPrincipalEditPage(auth, taskListPageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), taskListPageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   await db

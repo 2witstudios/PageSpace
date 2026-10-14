@@ -1,0 +1,737 @@
+/**
+ * wallet-funding — the PURE decisions for putting money into wallets (Spec MON-3,
+ * WAL-3, WAL-4; decisions D-OW-12, D-OW-13).
+ *
+ *   - Org pool refill (MON-3): an org invoice paid refills the pool with
+ *     (Business base + extra-seat items) paid × ratio, through the same money-model
+ *     derivation a personal invoice uses. No second constant.
+ *   - Allocation reset (D-OW-12): a child wallet's allocation resets when its
+ *     governing period starts — the pool's refill date under an org, the personal
+ *     renewal under a person. Two clocks, never collapsed into one.
+ *   - Donation (WAL-4, D-OW-13): a one-off amount from the donor's personal root
+ *     wallet into a drive wallet the donor can see, when the drive allows it. The
+ *     donation lands as funds that last until spent and has no way back out.
+ *
+ * INVARIANT: zero I/O, like wallet-core. The caller supplies `nowMs` and every row it
+ * read; wallet-funding-shell.ts does the reads and writes. Money is whole cents of
+ * credit value; credit counts only enter through money-model (MON-5).
+ */
+
+import { allocateSpend, applyPaymentToDebt, computeMonthlyRefill, type Balance } from './credit-core';
+import { allowanceRefills } from './credit-pricing';
+import type { InvoiceGrant } from './invoice-grant';
+import { allowanceCentsForPaidCents } from './money-model';
+import { orgListPriceCents } from './org-plan-quote';
+import { isSubscriptionTier } from './subscription-tiers';
+import {
+  allocateWalletSpend,
+  type FundingLeg,
+  governingAllocationPeriodStartMs,
+  isAllocationResetDue,
+  renewWalletAllocation,
+  utcMonthStartMs,
+  walletStatusFor,
+  type WalletStatus,
+} from './wallet-core';
+
+// ---------------------------------------------------------------------------
+// Org pool refill (MON-3)
+// ---------------------------------------------------------------------------
+
+/** The tier an org pool is always sized at: Business is the org plan (SEAT-2). */
+export const ORG_POOL_TIER = 'business' as const;
+
+/**
+ * The pool grant for an org subscription we fund ourselves (an admin gift, [D-OW-23] as
+ * amended by [D-OW-30]): a gift pays nothing (a 100%-coupon subscription whose lines net
+ * to 0), so it is funded at the Business list price for the base plus `extraSeats` extra
+ * seats at the list seat price, times the Business ratio — exactly as a personal gift is
+ * funded. Integer cents; multiply before any divide. There is no org trial ([D-OW-30]):
+ * a $0 invoice that is not a gift is sized from what it paid — nothing.
+ */
+export function orgPoolListPriceGrantCents(extraSeats: number): number {
+  return allowanceCentsForPaidCents(orgListPriceCents(extraSeats), ORG_POOL_TIER);
+}
+
+/**
+ * `metadata.type` an admin gift stamps on the org's own Stripe subscription (lib billing/org-gift)
+ * and on a personal gift subscription (apps/admin .../gift-subscription/route.ts). The one place a
+ * gift is recognized: the invoice snapshot (personal and org funding), the subscription mirrors,
+ * the gift writer and the reactivation decision all read this constant.
+ */
+export const GIFT_SUBSCRIPTION_METADATA_TYPE = 'gift_subscription';
+
+/**
+ * Structural subset of a Stripe invoice line the pool refill reads. `amount` is the
+ * line total BEFORE discounts (signed: proration credits are negative); what a coupon
+ * took off that line is in `discount_amounts`. `pricing` and `parent` are how the line
+ * names its price and the subscription item that generated it (a line Stripe made from
+ * a manually added invoice item has no subscription item) — the keys
+ * {@link selectOrgPoolRefillLines} recognizes the Business base and extra-seat lines by.
+ */
+export interface OrgInvoiceLine {
+  amount?: number | null;
+  discount_amounts?: ReadonlyArray<{ amount?: number | null } | null> | null;
+  period?: { start?: number | null; end?: number | null } | null;
+  pricing?: { price_details?: { price?: string | { id?: string | null } | null } | null } | null;
+  parent?: { subscription_item_details?: { subscription_item?: string | null } | null } | null;
+}
+
+/** The configured Stripe price ids of the org plan (D1): the Business base and the extra-seat item. */
+export interface OrgPoolPriceIds {
+  basePriceId?: string | null;
+  seatPriceId?: string | null;
+}
+
+/** An invoice line that is neither the Business base nor the extra-seat item (MON-3). */
+export interface UnrecognizedOrgInvoiceLine {
+  /** The price id the line bills, when the line names one. */
+  priceId: string | null;
+  /** The subscription item that generated the line, when one did. */
+  subscriptionItemId: string | null;
+  /** The line's amount (before discounts), minor units — reported so a misconfig is visible. */
+  amountCents: number;
+}
+
+export interface OrgPoolLineSelection {
+  /** A configured nonnegative subscription line, without unknown replacement charges. */
+  hasVerifiedGiftPrice: boolean;
+  /** The Business base and extra-seat lines: the ONLY lines the pool refill sums (MON-3). */
+  refillLines: Array<OrgInvoiceLine>;
+  /** Every other line on the invoice, excluded from the refill and reported for the log. */
+  unrecognized: Array<UnrecognizedOrgInvoiceLine>;
+}
+
+/** The price id a line bills, read off Stripe's pricing.price_details (an id or an expanded price). */
+export function orgInvoiceLinePriceId(line: OrgInvoiceLine | null | undefined): string | null {
+  const price = line?.pricing?.price_details?.price;
+  if (typeof price === 'string') return price.length > 0 ? price : null;
+  return typeof price?.id === 'string' && price.id.length > 0 ? price.id : null;
+}
+
+/** The subscription item a line came from, when the line was generated by one. */
+function orgInvoiceLineItemId(line: OrgInvoiceLine | null | undefined): string | null {
+  const item = line?.parent?.subscription_item_details?.subscription_item;
+  return typeof item === 'string' && item.length > 0 ? item : null;
+}
+
+/**
+ * MON-3: of an org subscription invoice's lines, the ones the pool refill may sum —
+ * only the Business base and the extra-seat item. A line must name one unambiguous
+ * configured org plan price (D-OW-42); a subscription item ID cannot establish price identity. Every
+ * other line (a manually added ad-hoc invoice item, a stranger price) is EXCLUDED and
+ * reported with its price id and amount, so a misconfiguration is visible in the log.
+ * Nothing configured recognizes nothing: an invoice with no recognizable line refills
+ * nothing, never its full amount.
+ */
+export function selectOrgPoolRefillLines(
+  lines: ReadonlyArray<OrgInvoiceLine | null | undefined>,
+  prices: OrgPoolPriceIds = {},
+): OrgPoolLineSelection {
+  const basePriceId = prices.basePriceId || null;
+  const seatPriceId = prices.seatPriceId || null;
+  const refillLines: Array<OrgInvoiceLine> = [];
+  const unrecognized: Array<UnrecognizedOrgInvoiceLine> = [];
+  for (const line of lines) {
+    const priceId = orgInvoiceLinePriceId(line);
+    const subscriptionItemId = orgInvoiceLineItemId(line);
+    const recognized =
+      subscriptionItemId !== null && priceId !== null && basePriceId !== seatPriceId && (priceId === basePriceId || priceId === seatPriceId);
+    if (recognized) refillLines.push(line as OrgInvoiceLine);
+    else unrecognized.push({ priceId, subscriptionItemId, amountCents: wholeCents(line?.amount) });
+  }
+  const hasVerifiedGiftPrice = refillLines.some((line) =>
+    typeof line.amount === 'number' && Number.isFinite(line.amount) && line.amount >= 0,
+  ) && !unrecognized.some((line) => line.subscriptionItemId !== null && line.amountCents >= 0);
+  return { refillLines, unrecognized, hasVerifiedGiftPrice };
+}
+
+export interface OrgPoolRefillInput {
+  /**
+   * The invoice's Business base and extra-seat lines — the {@link selectOrgPoolRefillLines}
+   * selection, and NOTHING else: an unrecognized line must never reach the sum (MON-3).
+   */
+  lines: ReadonlyArray<OrgInvoiceLine | null | undefined>;
+  /** Stripe invoice.amount_paid: what was actually collected (tax included), minor units. */
+  amountPaidCents: number | null | undefined;
+  /**
+   * Whether the invoice was generated for a subscription (invoice.parent.subscription_details).
+   * A manual or one-off invoice never refills a pool, whatever it paid — the same
+   * security gate the personal grant applies. Fails closed.
+   */
+  hasSubscriptionParent: boolean;
+  /** Stripe invoice.billing_reason. */
+  billingReason?: string | null;
+  /** Stripe invoice.subtotal: 0 on a trial-create invoice, the list price under a 100% coupon. */
+  subtotalCents?: number | null;
+  /** Verified against ALL original invoice lines, before filtering (D-OW-42). */
+  hasVerifiedGiftPrice?: boolean;
+  /** The org subscription was gifted by an admin. */
+  gifted?: boolean;
+  /**
+   * Review #2761 P2-4: the invoice is on the org's OWN stored subscription (the one the mirror
+   * reads its status from). A gift elsewhere funds nothing; absent reads as false (fail closed).
+   */
+  onOrgSubscription?: boolean;
+  /**
+   * D-OW-54: the extra seats the admin pinned when gifting (org_subscriptions.giftedExtraSeats),
+   * the ONLY quantity a gift is sized from. null/absent: not an admin-pinned gift.
+   */
+  giftedExtraSeats?: number | null;
+}
+
+/**
+ * D-OW-54: only an invoice that paid NOTHING is funded as a gift. A paid invoice on a gift-typed
+ * subscription (a coupon removed, a tampered metadata) funds as an ordinary paid invoice — what
+ * it paid × ratio — never at the gift's list price.
+ */
+function isGiftFunded(input: Pick<OrgPoolRefillInput, 'gifted' | 'amountPaidCents'>): boolean {
+  return input.gifted === true && wholeCents(input.amountPaidCents) === 0;
+}
+
+/** The admin-pinned gifted extra seats, or null when there is no valid pin (fail closed). */
+function pinnedGiftSeats(input: Pick<OrgPoolRefillInput, 'giftedExtraSeats'>): number | null {
+  const n = input.giftedExtraSeats;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+function wholeCents(value: number | null | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0;
+}
+
+/** Structural subset of a Stripe invoice the org funding path reads (a Stripe.Invoice satisfies it). */
+export interface OrgInvoice {
+  id?: string | null;
+  customer?: string | { id?: string | null } | null;
+  amount_paid?: number | null;
+  subtotal?: number | null;
+  billing_reason?: string | null;
+  period_start?: number | null;
+  period_end?: number | null;
+  parent?: {
+    subscription_details?: {
+      metadata?: Record<string, string> | null;
+      subscription?: string | { id?: string | null } | null;
+    } | null;
+  } | null;
+  lines?: {
+    data?: Array<OrgInvoiceLine | null | undefined> | null;
+    /** Stripe's pagination flag: only `false` proves `data` is every line of the invoice. */
+    has_more?: boolean | null;
+  } | null;
+}
+
+/** The subscription an invoice was generated for (invoice.parent.subscription_details), or null. */
+export function orgInvoiceSubscriptionId(invoice: Pick<OrgInvoice, 'parent'>): string | null {
+  const s = invoice.parent?.subscription_details?.subscription;
+  if (typeof s === 'string') return s.length > 0 ? s : null;
+  return typeof s?.id === 'string' && s.id.length > 0 ? s.id : null;
+}
+
+/**
+ * The ONE reading of an org invoice as funding evidence: the recognized Business lines, what was
+ * paid for them, whether it is a subscription invoice, and whether it is a gift on the org's own
+ * (stored) subscription. invoice.paid (the pool refill and its proof), the proof recovery script
+ * and the reactivation decision all derive `orgSubscriptionFundingBasis` from this, so they can
+ * never disagree about what funds an org. The caller guarantees `lines` is COMPLETE.
+ */
+export function orgInvoiceFundingInput(
+  invoice: OrgInvoice,
+  ctx: { prices: OrgPoolPriceIds; storedSubscriptionId: string | null; giftedExtraSeats?: number | null },
+): { input: OrgPoolRefillInput; unrecognized: UnrecognizedOrgInvoiceLine[] } {
+  const subscriptionId = orgInvoiceSubscriptionId(invoice);
+  const selection = selectOrgPoolRefillLines(invoice.lines?.data ?? [], ctx.prices);
+  return {
+    input: {
+      lines: selection.refillLines,
+      hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+      amountPaidCents: invoice.amount_paid,
+      hasSubscriptionParent: subscriptionId !== null,
+      billingReason: invoice.billing_reason,
+      subtotalCents: invoice.subtotal,
+      gifted: invoice.parent?.subscription_details?.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
+      onOrgSubscription: subscriptionId !== null && subscriptionId === ctx.storedSubscriptionId,
+      giftedExtraSeats: ctx.giftedExtraSeats ?? null,
+    },
+    unrecognized: selection.unrecognized,
+  };
+}
+
+/**
+ * What the org PAID for the subscription's lines: each line net of its discounts,
+ * summed (proration credits net in), and never more than the invoice actually
+ * collected — so a coupon, a customer-balance credit or a partial payment all shrink
+ * the refill, and tax (in amount_paid, not in the lines) never grows it.
+ */
+export function orgInvoicePaidCents(input: Pick<OrgPoolRefillInput, 'lines' | 'amountPaidCents'>): number {
+  let net = 0;
+  for (const line of input.lines) {
+    net += wholeCents(line?.amount);
+    for (const discount of line?.discount_amounts ?? []) net -= wholeCents(discount?.amount);
+  }
+  return Math.max(0, Math.min(net, wholeCents(input.amountPaidCents)));
+}
+
+/** First-payment entitlement is independent of credit ratios and sub-cent rounding. */
+export function orgSubscriptionFundingBasis(input: OrgPoolRefillInput): 'paid' | 'gift' | null {
+  if (!input.hasSubscriptionParent || input.hasVerifiedGiftPrice !== true) return null;
+  if (isGiftFunded(input)) return input.onOrgSubscription === true && pinnedGiftSeats(input) !== null ? 'gift' : null;
+  return orgInvoicePaidCents(input) > 0 ? 'paid' : null;
+}
+
+/**
+ * MON-3: size the pool refill from what the org invoice PAID for its lines (the
+ * Business base and the extra seats), net of discounts, times the Business ratio. More
+ * seats paid means a bigger pool through the same derivation, with no second constant.
+ * A gifted org subscription is funded at list price × ratio for the admin-pinned gifted
+ * seats ([D-OW-23], [D-OW-54], D-OW-16 extended to orgs). There is no org trial ([D-OW-30]): a $0 invoice that is not a gift — a
+ * trial-shaped subscription_create, or a 100% coupon on a non-gifted subscription
+ * (D-OW-16d) — grants nothing, so creating orgs never mints credit.
+ */
+export function orgPoolRefillGrant(input: OrgPoolRefillInput): InvoiceGrant {
+  const paidCents = orgInvoicePaidCents(input);
+  if (input.hasSubscriptionParent !== true) {
+    return { paidCents, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' };
+  }
+  if (isGiftFunded(input)) {
+    // A gift on any subscription but the org's own funds a pool the org could never spend: the
+    // org's status reads its own subscription, so it stays lapsed. Grant nothing (review #2761 P2-4).
+    if (input.onOrgSubscription !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' };
+    if (input.hasVerifiedGiftPrice !== true) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+    // D-OW-54: sized for exactly the seats the admin pinned — never the invoice's seat line,
+    // which a gifted Owner could inflate for free with throwaway invites.
+    const seats = pinnedGiftSeats(input);
+    if (seats === null) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'gift_quantity_unknown' };
+    const allowanceCents = orgPoolListPriceGrantCents(seats);
+    return allowanceCents > 0
+      ? { paidCents, allowanceCents, basis: 'list', reason: 'gifted' }
+      : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+  }
+  if (paidCents === 0) return { paidCents, allowanceCents: 0, basis: 'none', reason: 'zero_amount' };
+  const allowanceCents = allowanceCentsForPaidCents(paidCents, ORG_POOL_TIER);
+  return allowanceCents > 0
+    ? { paidCents, allowanceCents, basis: 'paid', reason: 'paid' }
+    : { paidCents, allowanceCents: 0, basis: 'none', reason: 'no_ratio' };
+}
+
+export interface PoolBalance {
+  monthlyRemainingCents: number;
+  debtCents: number;
+}
+
+export interface PoolRefillWrite {
+  monthlyRemainingCents: number;
+  monthlyAllowanceCents: number;
+  debtCents: 0;
+}
+
+/**
+ * The pool after a refill lands: the same rollover rule as a personal renewal (debt
+ * netted against the carry, then the grant added; debt beyond that is forgiven,
+ * WAL-6d).
+ */
+export function refillPool(pool: PoolBalance | null, allowanceCents: number): PoolRefillWrite {
+  return computeMonthlyRefill(allowanceCents, pool?.monthlyRemainingCents ?? 0, pool?.debtCents ?? 0);
+}
+
+/**
+ * The service period an invoice pays for, from its line items: the line with the
+ * LATEST period end (a plan-change invoice carries proration lines for the old plan
+ * beside the new plan's full period). Stripe's invoice-level period describes the
+ * cycle that just ended, so it is only the fallback. Seconds in, epoch ms out.
+ */
+export function invoiceServicePeriodMs(input: {
+  lines: ReadonlyArray<{ period?: { start?: number | null; end?: number | null } | null } | null | undefined>;
+  periodStart?: number | null;
+  periodEnd?: number | null;
+}): { startMs: number | null; endMs: number | null } {
+  const ms = (s: number | null | undefined): number | null =>
+    typeof s === 'number' && Number.isFinite(s) ? s * 1000 : null;
+  let startMs: number | null = null;
+  let endMs: number | null = null;
+  for (const line of input.lines) {
+    const lineStart = ms(line?.period?.start);
+    const lineEnd = ms(line?.period?.end);
+    if (lineStart !== null && lineEnd !== null && (endMs === null || lineEnd > endMs)) {
+      startMs = lineStart;
+      endMs = lineEnd;
+    }
+  }
+  return { startMs: startMs ?? ms(input.periodStart), endMs: endMs ?? ms(input.periodEnd) };
+}
+
+// ---------------------------------------------------------------------------
+// Allocation reset (D-OW-12)
+// ---------------------------------------------------------------------------
+
+/** The root wallet whose period governs a child allocation: the org pool or a personal wallet. */
+export interface GoverningRoot {
+  ownerType: 'org' | 'user';
+  periodStartMs: number | null;
+  periodEndMs: number | null;
+}
+
+export interface ChildAllocation {
+  periodStartMs: number | null;
+  /** The end of the period the child last reset onto; null when none was stamped. */
+  periodEndMs: number | null;
+  allocationCents: number;
+  spentCents: number;
+  debtCents: number;
+  paused: boolean;
+}
+
+export type AllocationResetPlan =
+  | { due: false }
+  | {
+      due: true;
+      periodStartMs: number;
+      periodEndMs: number;
+      spentCents: number;
+      debtCents: 0;
+      status: WalletStatus;
+    };
+
+function nextUtcMonthStartMs(nowMs: number): number {
+  const d = new Date(utcMonthStartMs(nowMs));
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+}
+
+/**
+ * The governing root's CURRENT period. A root that is still inside its period governs
+ * with it. A root whose period ended without a renewal (a late or lapsed invoice, a
+ * Free personal root that never refills) is rolled forward by whole periods of its own
+ * length, starting exactly at its period end — which is where the renewal Stripe will
+ * stamp begins, so a renewal that arrives late lands on the SAME start and resets
+ * nothing twice. Without that roll the anchor would freeze and every allocation under
+ * it would stay exhausted forever. A root never refilled governs with the UTC calendar
+ * month (D20).
+ */
+export function currentGoverningPeriodMs(governing: GoverningRoot, nowMs: number): { startMs: number; endMs: number } {
+  const start = governing.periodStartMs;
+  const end = governing.periodEndMs;
+  if (start === null) {
+    const monthStart = utcMonthStartMs(nowMs);
+    return { startMs: monthStart, endMs: nextUtcMonthStartMs(monthStart) };
+  }
+  if (end === null || end <= start) return { startMs: start, endMs: nextUtcMonthStartMs(start) };
+  if (nowMs < end) return { startMs: start, endMs: end };
+  const length = end - start;
+  const rolledStart = end + Math.floor((nowMs - end) / length) * length;
+  return { startMs: rolledStart, endMs: rolledStart + length };
+}
+
+/**
+ * D-OW-12: whether a child allocation resets now, and to what. The period comes from
+ * its governing root — the pool's refill date under an org, the personal renewal under
+ * a person — see {@link currentGoverningPeriodMs}. A reset puts spend back to zero,
+ * nets the wallet debt against the new allocation and clears it (WAL-6d), and never
+ * touches top-ups or donations (WAL-3: they last until spent).
+ *
+ * A child's allocation periods never overlap: when the child has a period end, a reset
+ * is due only once the governing period starts at or after that end. A root whose
+ * clock shifts earlier (a mid-period plan change) therefore makes the child wait for
+ * the next governing boundary rather than hand it a second allocation for time it
+ * already had. A comped root is rolled by the same sweep, first, onto exactly the
+ * period this computes (planPersonalRootRoll), so its children reset once, in step.
+ *
+ * Idempotent by construction: once the wallet carries the governing period, the same
+ * period is never due again, however many times this runs.
+ */
+export function planAllocationReset(input: {
+  wallet: ChildAllocation;
+  governing: GoverningRoot;
+  nowMs: number;
+}): AllocationResetPlan {
+  const current = currentGoverningPeriodMs(input.governing, input.nowMs);
+  const governingStartMs = governingAllocationPeriodStartMs({
+    rootOwner: input.governing.ownerType,
+    poolPeriodStartMs: input.governing.ownerType === 'org' ? current.startMs : null,
+    personalPeriodStartMs: input.governing.ownerType === 'user' ? current.startMs : null,
+    nowMs: input.nowMs,
+  });
+  // A governing period that has not begun yet is not this period.
+  if (governingStartMs > input.nowMs) return { due: false };
+  if (input.wallet.periodEndMs !== null && input.wallet.periodStartMs !== null) {
+    if (governingStartMs < input.wallet.periodEndMs) return { due: false };
+  } else if (
+    input.wallet.periodStartMs !== null &&
+    !isAllocationResetDue({ walletPeriodStartMs: input.wallet.periodStartMs, governingPeriodStartMs: governingStartMs })
+  ) {
+    return { due: false };
+  }
+
+  const periodEndMs = current.endMs;
+  const renewed = renewWalletAllocation(
+    {
+      allocationCents: input.wallet.allocationCents,
+      allocationSpentCents: input.wallet.spentCents,
+      topupLegs: [],
+      debtCents: input.wallet.debtCents,
+    },
+    input.wallet.allocationCents,
+  );
+  return {
+    due: true,
+    periodStartMs: governingStartMs,
+    periodEndMs,
+    spentCents: renewed.allocationSpentCents,
+    debtCents: 0,
+    status: walletStatusFor({ paused: input.wallet.paused, debtCents: 0 }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Personal root roll for comped accounts (D-OW-12, ew9v06jeb)
+// ---------------------------------------------------------------------------
+
+/**
+ * One calendar month after `from`, clamped to the last valid day of the target
+ * month so a month-end start doesn't overflow. Naive `setUTCMonth(+1)` turns
+ * Jan 31 into Mar 3 (Feb has no 31st), which would make a "monthly" window longer
+ * than a month and delay the next allowance reset for users initialized near
+ * month end. Clamping maps Jan 31 -> Feb 28/29. Time-of-day is preserved.
+ */
+export function addOneMonth(from: Date): Date {
+  const d = new Date(from.getTime());
+  const day = d.getUTCDate();
+  d.setUTCDate(1); // avoid overflow while we shift the month
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  const lastDayOfTarget = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDayOfTarget));
+  return d;
+}
+
+/**
+ * `months` calendar months after `base`, on day `anchorDay` clamped to that month's length, at
+ * `base`'s UTC time of day. Every period is placed on the ORIGINAL anchor, never chained from the
+ * previous clamped date, so a 31st renewal reads Feb 28 → Mar 31, not Feb 28 → Mar 28 forever.
+ */
+function anchoredMonthMs(base: Date, months: number, anchorDay: number): number {
+  const monthIndex = base.getUTCMonth() + months;
+  const year = base.getUTCFullYear() + Math.floor(monthIndex / 12);
+  const month = ((monthIndex % 12) + 12) % 12;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Date.UTC(year, month, Math.min(anchorDay, lastDay), base.getUTCHours(), base.getUTCMinutes(), base.getUTCSeconds(), base.getUTCMilliseconds());
+}
+
+export interface PersonalRootRollInput {
+  /** The owner's stored plan tier (users.subscriptionTier), unchecked. */
+  tier: string;
+  /** Whether any subscription could still deliver an invoice (RENEWAL_CAPABLE_STATUSES). */
+  hasRenewalCapableSubscription: boolean;
+  /** The root's stored period start; with the end it recovers the renewal's anchor day. */
+  periodStartMs: number | null;
+  /** The root's stored period end; null when none was ever stamped (a row created bare by a top-up). */
+  periodEndMs: number | null;
+  nowMs: number;
+}
+
+export type PersonalRootRollPlan = { due: false } | { due: true; periodStartMs: number; periodEndMs: number };
+
+/**
+ * Whether a personal root wallet's monthly allowance rolls now, and onto which period. This is
+ * the ONE reset of a personal root that Stripe does not drive: a paid tier whose refill can never
+ * come from an invoice (comped/founder accounts — no renewal-capable subscription). With a live
+ * subscription invoice.paid is authoritative and rolling here would double-grant when a late
+ * renewal lands; Free's allowance is a one-time starter grant and never refills; an unknown tier
+ * has no allowance at all.
+ *
+ * The new period starts exactly at the stored period END and runs one calendar month in UTC on the
+ * renewal's anchor day (clamped per month, never chained from a clamped date), so the renewal date
+ * never drifts — not by how late the sweep ran, and not by a short month. An account left
+ * unattended for several periods rolls ONCE, onto the period containing now: one allowance, not
+ * one per missed month (as the gate's lazy roll behaved). A row never stamped starts now.
+ *
+ * Exactly once per period by construction: the stamped period contains now, so the same plan is
+ * never due again until that period ends.
+ */
+export function planPersonalRootRoll(input: PersonalRootRollInput): PersonalRootRollPlan {
+  if (!isSubscriptionTier(input.tier) || !allowanceRefills(input.tier)) return { due: false };
+  if (input.hasRenewalCapableSubscription) return { due: false };
+  if (input.periodEndMs === null) {
+    return { due: true, periodStartMs: input.nowMs, periodEndMs: addOneMonth(new Date(input.nowMs)).getTime() };
+  }
+  if (input.periodEndMs > input.nowMs) return { due: false };
+  // The renewal's anchor day (review P3-2). A stored period is two consecutive anchored dates, each
+  // the anchor clamped to its month, and no two consecutive months are both shorter than an
+  // anchor day, so the later of the two days IS the anchor (Jan 31 → Feb 28 reads 31).
+  const end = new Date(input.periodEndMs);
+  const anchorDay = input.periodStartMs === null
+    ? end.getUTCDate()
+    : Math.max(end.getUTCDate(), new Date(input.periodStartMs).getUTCDate());
+  let k = 0;
+  while (anchoredMonthMs(end, k + 1, anchorDay) <= input.nowMs) k += 1;
+  const periodStartMs = k === 0 ? input.periodEndMs : anchoredMonthMs(end, k, anchorDay);
+  return { due: true, periodStartMs, periodEndMs: anchoredMonthMs(end, k + 1, anchorDay) };
+}
+
+// ---------------------------------------------------------------------------
+// Funding legs (WAL-3, D-OW-13)
+// ---------------------------------------------------------------------------
+
+/** A wallet_funding_legs row as the shell reads it. */
+export interface StoredFundingLeg {
+  id: string;
+  funderKind: 'owner' | 'donation';
+  funderUserId: string | null;
+  remainingCents: number;
+  /** The part of remainingCents that began as the funder's included grant (MONEY-4). */
+  includedCents: number;
+  nonRefundable: boolean;
+  createdAtMs: number;
+}
+
+/**
+ * The defined draw order: FIFO by arrival (createdAt), then id, across owner top-ups
+ * and donations alike, so no funder's money is preferred over another's.
+ */
+export function orderFundingLegs<L extends { id: string; createdAtMs: number }>(legs: readonly L[]): L[] {
+  return [...legs].sort((a, b) => a.createdAtMs - b.createdAtMs || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** The stored row as wallet-core's `FundingLeg` (legId = id, funder = funderKind). */
+export function toFundingLeg(leg: StoredFundingLeg): FundingLeg {
+  return {
+    legId: leg.id,
+    funder: leg.funderKind,
+    donorUserId: leg.funderKind === 'donation' ? leg.funderUserId : null,
+    remainingCents: leg.remainingCents,
+  };
+}
+
+export interface LegDrawResult {
+  draws: { legId: string; cents: number }[];
+  /** Every leg's remaining after the draw, in draw order. */
+  legs: FundingLeg[];
+  appliedCents: number;
+  shortfallCents: number;
+}
+
+/**
+ * Draw `amountCents` from a wallet's funding legs in the defined order, through
+ * wallet-core's own leg draw (allocateWalletSpend with no allocation), so the gate
+ * and this module cannot disagree about how a leg is spent.
+ */
+export function drawFundingLegs(legs: readonly StoredFundingLeg[], amountCents: number): LegDrawResult {
+  const drawn = allocateWalletSpend({
+    parent: { monthlyCents: 0, topupCents: 0 },
+    wallet: { allocationCents: 0, allocationSpentCents: 0, topupLegs: orderFundingLegs(legs).map(toFundingLeg), debtCents: 0 },
+    amountCents,
+  });
+  return {
+    draws: drawn.legDraws,
+    legs: drawn.wallet.topupLegs.map((leg) => ({ ...leg })),
+    appliedCents: drawn.appliedCents,
+    shortfallCents: drawn.shortfallCents,
+  };
+}
+
+export type LegRefundPlan =
+  | { kind: 'refund'; legId: string; cents: number; remainingCents: number }
+  | { kind: 'refuse'; legId: string; reason: 'donation_non_refundable' | 'non_refundable' | 'invalid_amount' | 'exceeds_remaining' };
+
+/**
+ * D-OW-13: a refund never draws from a donation leg — not when the wallet is deleted,
+ * not when its drive leaves the org, not ever. Only an owner leg marked refundable
+ * gives back, and never more than it still holds.
+ */
+export function planLegRefund(leg: StoredFundingLeg, cents: number): LegRefundPlan {
+  if (leg.funderKind === 'donation') return { kind: 'refuse', legId: leg.id, reason: 'donation_non_refundable' };
+  if (leg.nonRefundable) return { kind: 'refuse', legId: leg.id, reason: 'non_refundable' };
+  if (!Number.isInteger(cents) || cents <= 0) return { kind: 'refuse', legId: leg.id, reason: 'invalid_amount' };
+  if (cents > leg.remainingCents) return { kind: 'refuse', legId: leg.id, reason: 'exceeds_remaining' };
+  return { kind: 'refund', legId: leg.id, cents, remainingCents: leg.remainingCents - cents };
+}
+
+// ---------------------------------------------------------------------------
+// Donations (WAL-4, D-OW-13)
+// ---------------------------------------------------------------------------
+
+export interface DonorWallet {
+  walletId: string;
+  /** Must be the donor's personal root wallet: a donation is "from their own balance". */
+  isPersonalRoot: boolean;
+  balance: Balance;
+  /** The donor's outstanding holds on that wallet (calls in flight). */
+  heldCents: number;
+}
+
+export interface DonationTarget {
+  walletId: string;
+  subjectType: 'drive' | null;
+  donationsEnabled: boolean;
+  /** SUM of the wallet's funding legs' remaining (mirrored on wallets.topupRemainingCents). */
+  legsRemainingCents: number;
+}
+
+export interface DonationInput {
+  amountCents: number;
+  /** Decided by the permissions module: the donor can see the drive the wallet funds. */
+  donorCanSeeDrive: boolean;
+  donor: DonorWallet;
+  target: DonationTarget;
+}
+
+export type DonationRefusal =
+  | 'invalid_amount'
+  | 'not_a_drive_wallet'
+  | 'cannot_see_drive'
+  | 'donations_disabled'
+  | 'not_personal_wallet'
+  | 'same_wallet'
+  | 'insufficient_funds';
+
+export type DonationPlan =
+  | {
+      kind: 'donate';
+      amountCents: number;
+      donor: { monthlyRemainingCents: number; topupRemainingCents: number; spentMonthly: number; spentTopup: number };
+      /** The new donation leg: the whole gift, never netted against the wallet's debt. */
+      leg: { originalCents: number; remainingCents: number; nonRefundable: true };
+      target: { topupRemainingCents: number };
+    }
+  | { kind: 'refuse'; reason: DonationRefusal };
+
+/**
+ * WAL-4: plan a one-off donation. Refused unless the amount is a positive whole number
+ * of cents, the target is a drive wallet, the donor can see that drive, the drive has
+ * donations on, the source is the donor's own personal wallet, and that wallet covers
+ * the whole amount now (net of debt and in-flight holds) — a donation never puts the
+ * donor into debt and is never partial.
+ *
+ * The donor's balance is drawn monthly first, then top-up (the spend order). The drive
+ * wallet receives the WHOLE gift as its own non-refundable funding leg (D-OW-13) that lasts
+ * until spent (WAL-3). Unlike an owner's top-up, a donation never pays the wallet's debt:
+ * wallet debt is the funder's chosen landing for an overage (WAL-6c), netted from their next
+ * allocation (WAL-6d), and a donor's money funds spend made after it — attributable to them,
+ * never an overage that preceded it.
+ */
+export function planDonation(input: DonationInput): DonationPlan {
+  const amount = input.amountCents;
+  if (!Number.isInteger(amount) || amount <= 0) return { kind: 'refuse', reason: 'invalid_amount' };
+  if (input.target.subjectType !== 'drive') return { kind: 'refuse', reason: 'not_a_drive_wallet' };
+  if (!input.donorCanSeeDrive) return { kind: 'refuse', reason: 'cannot_see_drive' };
+  if (!input.target.donationsEnabled) return { kind: 'refuse', reason: 'donations_disabled' };
+  if (!input.donor.isPersonalRoot) return { kind: 'refuse', reason: 'not_personal_wallet' };
+  if (input.donor.walletId === input.target.walletId) return { kind: 'refuse', reason: 'same_wallet' };
+
+  const b = input.donor.balance;
+  const available =
+    b.monthlyCents + b.topupCents - Math.max(0, b.debtCents ?? 0) - Math.max(0, Math.round(input.donor.heldCents));
+  if (available < amount) return { kind: 'refuse', reason: 'insufficient_funds' };
+
+  const draw = allocateSpend(b, amount);
+  return {
+    kind: 'donate',
+    amountCents: amount,
+    donor: {
+      monthlyRemainingCents: draw.monthlyCents,
+      topupRemainingCents: draw.topupCents,
+      spentMonthly: draw.spentMonthly,
+      spentTopup: draw.spentTopup,
+    },
+    leg: { originalCents: amount, remainingCents: amount, nonRefundable: true },
+    target: { topupRemainingCents: Math.max(0, input.target.legsRemainingCents) + amount },
+  };
+}

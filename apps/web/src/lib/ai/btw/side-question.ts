@@ -92,6 +92,7 @@ export function createSideQuestionStream({
   snapshot,
   abortSignal,
   onSettle,
+  headers,
   streamText: stream = streamText,
 }: {
   model: LanguageModel;
@@ -103,6 +104,8 @@ export function createSideQuestionStream({
    * spends real model tokens, so every caller must bill them.
    */
   onSettle: (settlement: SideQuestionSettlement) => Promise<void>;
+  /** Extra response headers: the spend-fallback notice when the gate fell back (SPEND-4). */
+  headers?: Record<string, string>;
   streamText?: typeof streamText;
 }): Response {
   const prompt = `<conversation_snapshot>\n${snapshot}\n</conversation_snapshot>\n\n<side_question>\n${question}\n</side_question>`;
@@ -157,5 +160,5 @@ export function createSideQuestionStream({
   void Promise.resolve(result.steps).catch((error: unknown) => settle(
     abortSignal.aborted ? aborted([]) : { outcome: 'errored', usage: {}, steps: [], error: lastError ?? error },
   ));
-  return result.toTextStreamResponse();
+  return result.toTextStreamResponse(headers ? { headers } : undefined);
 }

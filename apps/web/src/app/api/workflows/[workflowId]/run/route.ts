@@ -10,6 +10,8 @@ import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const MANAGEABLE_TRIGGER_TYPE = 'cron' as const;
@@ -36,19 +38,25 @@ export async function POST(
     return NextResponse.json({ error: 'Workflow not found' }, { status: 404 });
   }
 
-  const access = await checkDriveAccess(workflow.driveId, auth.userId);
+  const access = await checkDriveAccess(workflow.driveId, actorFromAuth(auth));
   if (!access.drive) {
-    return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+    return deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
   }
   if (!access.isOwner && !access.isAdmin) {
-    return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), workflow.driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }));
+  }
+
+  // [D-OW-36] A workflow whose creator left runs as nobody, a Run included: an Owner or Admin reassigns or deletes it first.
+  const owner = automationRunOwner(workflow);
+  if (!owner.runs) {
+    return NextResponse.json({ error: owner.error, code: owner.reason }, { status: 409 });
   }
 
   const executionInput: WorkflowExecutionInput = {
     workflowId: workflow.id,
     workflowName: workflow.name,
     driveId: workflow.driveId,
-    createdBy: workflow.createdBy,
+    createdBy: owner.ownerId,
     agentPageId: workflow.agentPageId,
     prompt: workflow.prompt,
     steps: workflow.steps,
@@ -56,17 +64,20 @@ export async function POST(
     instructionPageId: workflow.instructionPageId,
     timezone: workflow.timezone,
     source: { table: 'manual', id: null, triggerAt: null },
+    // Pressing Run is the CALLER acting: the run reads and writes as their credential, sign-in policy included (D-OW-62).
+    actingActor: actorFromAuth(auth),
   };
 
   // Atomic claim is enforced by the workflow_runs partial unique index inside
   // the executor — any concurrent fire (cron / manual) for the same workflow
   // returns claimConflict and we surface a 409. The credit gate runs inside
-  // that claim, before any model is built. The run bills the workflow's creator
-  // (executeWorkflow tracks usage as createdBy), so that is who is gated, not
-  // the admin who pressed Run.
+  // that claim, before any model is built. Pressing Run is the CALLER's spend (the actor
+  // pays, as for a channel @mention): the gate admits it as them, so their per-consumer caps
+  // on the drive wallet bind (WAL-7). It still spends only the drive wallet. Usage is recorded
+  // under the workflow's creator, as for every run.
   let deniedReason: GateReason | undefined;
   const result = await executeWorkflow(executionInput, {
-    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }),
+    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }, auth.userId),
   });
 
   if (result.claimConflict) {

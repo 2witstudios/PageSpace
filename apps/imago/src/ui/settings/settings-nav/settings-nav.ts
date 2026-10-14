@@ -11,8 +11,8 @@ export type NavContext = {
   readonly isNative: boolean;
   /** isOnPrem(): no external integrations (Integrations, Google Calendar). */
   readonly onPrem: boolean;
-  /** ORGS_ENABLED (pu/ow-final-seats-money): Wallet, Wallets, Organizations. */
-  readonly orgs: boolean;
+  /** Organizations are shown only for a viewer with memberships. */
+  readonly hasOrganizations: boolean;
 };
 
 type Gated = NavItem & { readonly when?: (ctx: NavContext) => boolean };
@@ -20,18 +20,18 @@ type Gated = NavItem & { readonly when?: (ctx: NavContext) => boolean };
 const keep = (items: readonly Gated[], ctx: NavContext): readonly NavItem[] =>
   items.filter((item) => item.when?.(ctx) ?? true).map(({ label, href }) => ({ label, href }));
 
-const orgs = (ctx: NavContext) => ctx.orgs;
+const organizations = (ctx: NavContext) => ctx.hasOrganizations;
 const integrations = (ctx: NavContext) => !ctx.onPrem;
 const billing = (ctx: NavContext) => ctx.showBilling;
 
 /** Who the viewer is in this drive: owners and admins manage it; the owner alone may delete it, and never a Home drive. */
 export type DriveAccess = { readonly role: 'OWNER' | 'ADMIN' | 'MEMBER'; readonly home: boolean };
 
-const ADMIN_ONLY = new Set(['General', 'Members & roles', 'Wallet', 'Integrations', 'Context', 'Backups', 'Domains']);
+const ADMIN_ONLY = new Set(['General', 'Members & roles', 'Integrations', 'Context', 'Backups', 'Domains']);
 
 /**
  * Drive settings: Overview, General, Members & roles, Wallet, Integrations, Commands, Context, Backups, Domains, Danger zone.
- * Classic's gating: a plain member sees Overview and Commands; Danger zone is the owner's, and a Home drive has none.
+ * Classic's gating: a plain member sees Overview, Wallet and Commands; Danger zone is the owner's, and a Home drive has none.
  * With the access unknown (drives still loading), every row the build allows is shown and each route still refuses.
  */
 export const driveSettingsNav = (driveId: string, ctx: NavContext, access?: DriveAccess): readonly NavItem[] => {
@@ -43,7 +43,7 @@ export const driveSettingsNav = (driveId: string, ctx: NavContext, access?: Driv
       { label: 'Overview', href: base },
       { label: 'General', href: `${base}/general` },
       { label: 'Members & roles', href: `${base}/roles` },
-      { label: 'Wallet', href: `${base}/wallet`, when: orgs },
+      { label: 'Wallet', href: `${base}/wallet` },
       { label: 'Integrations', href: `${base}/integrations`, when: integrations },
       { label: 'Commands', href: `${base}/commands` },
       { label: 'Context', href: `${base}/context` },
@@ -92,10 +92,11 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
           { label: 'Plan', href: '/account/plan', when: billing },
           { label: 'Billing', href: '/account/billing', when: billing },
           { label: 'Usage', href: '/account/usage' },
-          { label: 'Wallets', href: '/account/wallets', when: orgs },
+          { label: 'Wallets', href: '/account/wallets' },
           { label: 'Storage', href: '/account/storage' },
           { label: 'Drives', href: '/account/drives' },
-          { label: 'Organizations', href: '/account/organizations', when: orgs },
+          { label: 'Organizations', href: '/account/organizations', when: organizations },
+          { label: 'Create organization', href: '/account/organizations?createOrg=1', when: (c) => !c.hasOrganizations && !c.isNative },
           { label: 'Backups', href: '/account/backups' },
           { label: 'Trash', href: '/account/trash' },
           { label: 'Activity', href: '/account/activity' },

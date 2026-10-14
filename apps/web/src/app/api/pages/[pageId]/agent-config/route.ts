@@ -10,8 +10,9 @@ import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -26,6 +27,9 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
+    // Fixed by the credential alone, before any request-controlled branch reads it.
+    const mcpScoped = isScopedMCPAuth(auth);
     const userId = auth.userId;
 
     const { pageId } = await context.params;
@@ -37,10 +41,10 @@ export async function GET(
     // Check if user has permission to view this page
     const canView = await canPrincipalEditPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json(
+      return deniedResponse(actor, pageId, NextResponse.json(
         { error: 'You do not have permission to view this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get page configuration
@@ -55,7 +59,7 @@ export async function GET(
     // Get available tools for the UI — hide account-level-only tools (e.g.
     // create_drive) from a drive-scoped MCP token, mirroring the runtime
     // chat/consult tool-list filtering.
-    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth));
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, mcpScoped);
     const availableTools = Object.entries(scopedPageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
       description: tool.description || `${toolName} tool`,
@@ -113,6 +117,9 @@ export async function PATCH(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
+    // Fixed by the credential alone, before any request-controlled branch reads it.
+    const mcpScoped = isScopedMCPAuth(auth);
     const userId = auth.userId;
 
     const { pageId } = await context.params;
@@ -140,10 +147,10 @@ export async function PATCH(
     // Check if user has permission to edit this page
     const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actor, pageId, NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Validate the page exists
@@ -161,7 +168,7 @@ export async function PATCH(
     // filtering, so a scoped caller can't configure a tool it will never be
     // permitted to invoke.
     if (enabledTools && Array.isArray(enabledTools)) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = enabledTools.filter(tool => !availableToolNames.includes(tool));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -304,6 +311,9 @@ export async function PATCH(
           },
         });
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        const refused = orgModelPolicyErrorResponse(error);
+        if (refused) return NextResponse.json(refused.body, { status: refused.status });
         if (error instanceof PageRevisionMismatchError) {
           return NextResponse.json(
             {

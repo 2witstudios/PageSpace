@@ -17,6 +17,8 @@ const assert = ({ given, should, actual, expected }: AssertParams): void => {
   expect(actual, message).toEqual(expected);
 };
 
+const authVerification = vi.hoisted(() => ({ userVerified: true }));
+
 // Mock @simplewebauthn/server for unit tests
 vi.mock('@simplewebauthn/server', () => ({
   generateRegistrationOptions: vi.fn().mockImplementation(async (options) => ({
@@ -53,13 +55,14 @@ vi.mock('@simplewebauthn/server', () => ({
       credentialBackedUp: false,
     },
   }),
-  verifyAuthenticationResponse: vi.fn().mockResolvedValue({
+  verifyAuthenticationResponse: vi.fn().mockImplementation(async () => ({
     verified: true,
     authenticationInfo: {
       newCounter: 1,
       credentialID: 'mock-credential-id',
+      userVerified: authVerification.userVerified,
     },
-  }),
+  })),
 }));
 
 import {
@@ -83,6 +86,7 @@ describe('Passkey Service', () => {
   let testUserEmail: string;
 
   beforeEach(async () => {
+    authVerification.userVerified = true;
     testUserEmail = `passkey-test-${Date.now()}@example.com`;
     const [user] = await db.insert(users).values({
       id: createId(),
@@ -477,7 +481,8 @@ describe('Passkey Service', () => {
       testPasskeyId = passkey.id;
     });
 
-    it('returns userId on successful authentication', async () => {
+    it.each([true, false])('returns server-verified assurance with successful authentication (user verified: %s)', async (userVerified) => {
+      authVerification.userVerified = userVerified;
       const optionsResult = await generateAuthenticationOptions({ email: testUserEmail });
       if (!optionsResult.ok) throw new Error('Setup failed');
 
@@ -507,6 +512,7 @@ describe('Passkey Service', () => {
       });
 
       if (result.ok) {
+        expect(result.data.userVerified).toBe(userVerified);
         assert({
           given: 'a valid authentication response',
           should: 'return correct userId',

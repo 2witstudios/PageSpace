@@ -1,22 +1,24 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, isNotNull, ne, or } from '@pagespace/db/operators';
+import { and, eq, inArray, ne, or } from '@pagespace/db/operators';
 import { commands } from '@pagespace/db/schema/commands';
 import type { SelectCommand } from '@pagespace/db/schema/commands';
-import { drives, pages } from '@pagespace/db/schema/core';
-import { driveMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
 import {
   isReservedTrigger,
   validateCommandDescription,
   validateCommandTrigger,
 } from '@pagespace/lib/commands/command-core';
 import { canUserViewPage, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
 import type { ToolExecutionContext } from '../core/types';
+import { toolActor } from '@/lib/ai/tools/actor-permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { driveDeniedForActor, filterDriveIdsForActor } from './actor-permissions';
 
 async function broadcastCommandChange(driveId: string): Promise<void> {
@@ -30,36 +32,14 @@ async function broadcastCommandChange(driveId: string): Promise<void> {
 
 const commandLogger = loggers.ai.child({ module: 'command-tools' });
 
-async function getMemberDriveIds(userId: string): Promise<string[]> {
-  const driveIds = new Set<string>();
-  const owned = await db
-    .select({ id: drives.id })
-    .from(drives)
-    .where(and(eq(drives.ownerId, userId), eq(drives.isTrashed, false)));
-  for (const drive of owned) driveIds.add(drive.id);
-  const memberships = await db
-    .select({ driveId: driveMembers.driveId })
-    .from(driveMembers)
-    .innerJoin(drives, eq(driveMembers.driveId, drives.id))
-    .where(
-      and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt),
-        ne(driveMembers.role, 'GUEST'),
-        eq(drives.isTrashed, false)
-      )
-    );
-  for (const m of memberships) driveIds.add(m.driveId);
-  return Array.from(driveIds);
-}
-
 const IMAGO_EXCLUDED_DRIVE = 'This drive is outside your reach here';
 
 async function loadCommandForManage(
   context: ToolExecutionContext,
-  userId: string,
   commandId: string,
 ): Promise<SelectCommand> {
+  const actor = toolActor(context);
+  const { userId } = actor;
   const command = await db.query.commands.findFirst({
     where: eq(commands.id, commandId),
   });
@@ -70,14 +50,14 @@ async function loadCommandForManage(
     if (command.userId !== userId) throw new Error('Command not found');
     return command;
   }
-  const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
+  const allowed = await isDriveOwnerOrAdmin(actor, command.driveId as string);
   if (!allowed) throw new Error('Only the drive owner or admins can manage drive commands');
   return command;
 }
 
 async function validateEntryPageForTool(
   context: ToolExecutionContext,
-  userId: string,
+  actor: AccessActor,
   entryPageId: string,
   commandDriveId: string | null
 ): Promise<void> {
@@ -87,7 +67,7 @@ async function validateEntryPageForTool(
   });
   if (!page || await driveDeniedForActor(context, page.driveId)) throw new Error('Entry page not found');
   if (page.isTrashed) throw new Error('Entry page is in the trash');
-  const canView = await canUserViewPage(userId, entryPageId);
+  const canView = await canUserViewPage(actor, entryPageId);
   if (!canView) throw new Error('You do not have access to the entry page');
   if (commandDriveId !== null && page.driveId !== commandDriveId) {
     throw new Error("A drive command's entry page must be in the same drive");
@@ -142,11 +122,11 @@ export const commandTools = {
           if (await driveDeniedForActor(context as ToolExecutionContext, commandDriveId)) {
             throw new Error(IMAGO_EXCLUDED_DRIVE);
           }
-          const allowed = await isDriveOwnerOrAdmin(userId, commandDriveId);
+          const allowed = await isDriveOwnerOrAdmin(toolActor(context as ToolExecutionContext), commandDriveId);
           if (!allowed) throw new Error('Only the drive owner or admins can create drive commands');
         }
 
-        await validateEntryPageForTool(context as ToolExecutionContext, userId, entryPageId, commandDriveId);
+        await validateEntryPageForTool(context as ToolExecutionContext, toolActor(context as ToolExecutionContext), entryPageId, commandDriveId);
 
         const duplicate = await db.query.commands.findFirst({
           where: and(
@@ -239,7 +219,7 @@ export const commandTools = {
       }
 
       try {
-        const command = await loadCommandForManage(context as ToolExecutionContext, userId, commandId);
+        const command = await loadCommandForManage(context as ToolExecutionContext, commandId);
 
         if (typeof trigger === 'string' && trigger !== command.trigger) {
           const duplicate = await db.query.commands.findFirst({
@@ -258,7 +238,7 @@ export const commandTools = {
         }
 
         if (typeof entryPageId === 'string') {
-          await validateEntryPageForTool(context as ToolExecutionContext, userId, entryPageId, command.driveId);
+          await validateEntryPageForTool(context as ToolExecutionContext, toolActor(context as ToolExecutionContext), entryPageId, command.driveId);
         }
 
         const updateData: Partial<{
@@ -313,7 +293,7 @@ export const commandTools = {
       if (!userId) throw new Error('User authentication required');
 
       try {
-        const command = await loadCommandForManage(context as ToolExecutionContext, userId, commandId);
+        const command = await loadCommandForManage(context as ToolExecutionContext, commandId);
         await db.delete(commands).where(eq(commands.id, command.id));
         if (command.driveId !== null) void broadcastCommandChange(command.driveId);
 
@@ -352,7 +332,7 @@ export const commandTools = {
       try {
         const allMemberDriveIds = await filterDriveIdsForActor(
           context as ToolExecutionContext,
-          await getMemberDriveIds(userId),
+          await getMemberDriveIds(toolActor(context as ToolExecutionContext), { includeTrashed: false }),
         );
 
         if (driveId && !allMemberDriveIds.includes(driveId)) {

@@ -38,8 +38,12 @@ import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/retained/lib/ai/shared/hooks/useOpenPagePane';
 import { useChatAttachments } from '@/retained-adapters/chat-attachments';
 import { useSideQuestion, parseSideQuestionInput } from '@/retained/components/ai/btw/useSideQuestion';
+import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
 import { SideQuestionCard } from '@/retained/components/ai/btw/SideQuestionCard';
 import type { AgentInfo } from '@/retained/types/agent';
+import { SpendSurfaceProvider } from '@/retained/components/wallets/SpendSurface';
+import { ComposerSpendStrip } from '@/retained/components/wallets/ComposerSpendStrip';
+import { SpendStrip } from '@/ui/chat/spend-strip/spend-strip';
 import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
 
 export interface SessionChatProps {
@@ -90,6 +94,7 @@ export default function SessionChat({
       // turn's command chips against the agent page's `page.driveId`, so any
       // other scope would offer commands that fail as `not_found` on send.
       agentId={agent.id}
+      spendScope={{ driveId: agent.driveId, isGlobal: false }}
       commandDriveId={agent.driveId}
       name={agent.title}
       visionModel={agent.aiModel || ''}
@@ -128,6 +133,7 @@ export interface SessionChatViewProps {
    * view cannot silently reintroduce the unscoped-picker bug.
    */
   commandDriveId: string | null;
+  spendScope?: { driveId: string | null; isGlobal: boolean };
   context: 'page' | 'console';
   isReadOnly?: boolean;
   imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
@@ -141,6 +147,7 @@ export function SessionChatView({
   name,
   visionModel,
   commandDriveId,
+  spendScope,
   context,
   isReadOnly = false,
   imagoComposer,
@@ -156,10 +163,20 @@ export function SessionChatView({
 
   useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
 
+  // JOURNEYS-2: the first send in a drive (multi-source) context waits for a RESOLVED,
+  // displayed source — an unresolved preview must not charge an undisclosed wallet. The
+  // strip above the composer shows the loading/retry state; SWR dedupes this read.
+  const spendPreview = useConversationSpend(
+    spendScope ? conversationId : null,
+    { driveId: spendScope?.driveId ?? null, isGlobal: spendScope?.isGlobal ?? false },
+  );
+  const sendPausedBySpend = Boolean(spendScope?.driveId) && spendPreview.spend === null;
+
   const handleSendClick = useCallback(async () => {
     const text = input;
     const files = getFilesForSend();
     if (!text.trim() && files.length === 0) return;
+    if (sendPausedBySpend) return; // the strip shows loading/retry; no reservation, no charge
     const sentIds = attachments.filter(attachment => !attachment.processing && attachment.dataUrl).map(attachment => attachment.id);
     // Clear immediately — typing during the handoff wait must not merge into
     // the old draft; restore only if the composer is still empty on refusal.
@@ -169,7 +186,7 @@ export function SessionChatView({
     if (!dispatched) {
       setInput((current) => (current === '' ? text : current));
     }
-  }, [input, chat, attachments, getFilesForSend, removeFile, setInput]);
+  }, [input, chat, attachments, getFilesForSend, removeFile, setInput, sendPausedBySpend]);
 
   const handleSideQuestion = useCallback(() => {
     const question = parseSideQuestionInput(input) ?? '';
@@ -201,6 +218,7 @@ export function SessionChatView({
     // isReadOnly viewers get no answer plumbing at all — same as rendering
     // outside a chat surface entirely — so AskUserQuestionCard's options and
     // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    <SpendSurfaceProvider conversationId={spendScope ? conversationId : null} driveId={spendScope?.driveId ?? null} isGlobal={spendScope?.isGlobal ?? false}>
     <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
@@ -276,6 +294,9 @@ export function SessionChatView({
           }}
         />
         {imagoComposer?.aboveComposer}
+        {spendScope && !isReadOnly && (imagoComposer
+          ? <SpendStrip conversationId={conversationId} {...spendScope} />
+          : <ComposerSpendStrip conversationId={conversationId} {...spendScope} hasMessages={chat.messages.length > 0} persistentBelowLg />)}
         <ChatInput
           value={input}
           onChange={setInput}
@@ -285,6 +306,7 @@ export function SessionChatView({
           isStreaming={chat.displayIsStreaming}
           isStopping={chat.isStopping}
           disabled={isReadOnly}
+          sendDisabled={sendPausedBySpend}
           placeholder={isReadOnly ? 'View only' : imagoComposer?.placeholder ?? `Message ${name}...`}
           inputLabel={imagoComposer ? `Message ${name}` : undefined}
           hideModelSelector
@@ -320,5 +342,6 @@ export function SessionChatView({
       )}
     </div>
     </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
   );
 }

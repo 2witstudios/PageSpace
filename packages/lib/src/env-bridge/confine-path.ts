@@ -62,7 +62,10 @@ export type PathResolver = Realpath | PathProbe;
 
 /** Strip trailing slashes so `/a/b/` and `/a/b` name the same directory (never touches `/`). */
 function stripTrailingSlash(path: string): string {
-  return path.length > 1 && path.endsWith('/') ? path.replace(/\/+$/, '') : path;
+  // A scan, not /\/+$/: that regex backtracks quadratically on a long run of slashes not at the end.
+  let end = path.length;
+  while (end > 1 && path[end - 1] === '/') end -= 1;
+  return path.slice(0, end);
 }
 
 function normalizePath(path: string): string {

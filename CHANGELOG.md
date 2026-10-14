@@ -5,7 +5,134 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Organizations and their settings are now available in both interfaces. A fresh assistant conversation shows its spending source before the first message, and choosing another source uses it for the first reply. Imago now applies organization sign-in requirements and keeps access-restricting changes available while an organization is unpaid.
+
+- Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.
+
+- Text-to-speech and Global Assistant voice calls made inside a drive now spend from that drive's wallet, like a typed message there, instead of always using your personal credits. Speech or a call whose drive cannot be determined is refused and charges nothing.
+
+- An agent consulted from work in another drive (`agents.ask` with `sessionDriveId`, or `drive_context` on the OpenAI-compatible API) now spends and records its usage in that drive, not the agent's own. API threads spend in the drive they were opened in.
+
+- Storage in someone else's personal drive now counts against the drive owner's quota, not the member who uploaded it. Moving a drive into or out of an organization, or handing a personal drive to a new owner, moves its storage with it. Direct-message attachments still count against the sender.
+
+- Machine storage in an organization's drive never puts the organization's credits pool into debt: a paused pool is not charged, and a pool that can't cover the full amount is charged only what it has. An organization's Owner or Admin can now buy dedicated (always-on) hosting for an app in an organization drive; it is billed to the organization, not to a person's card.
+
+- The personal usage breakdown now shows only spend from your own credits. Compute you run in an organization's drive is the organization's spend and no longer appears there.
+
+- Organization Owners and Admins can pause the whole credits pool from Plan & seats: while paused, no seat and no drive wallet can spend from it. A paused pool's drive wallets show as paused.
+- Guests can no longer spend an organization drive's wallet by @mentioning an agent or pressing Run. An Admin can let a drive's guests spend its wallet (Drive Settings › Wallet › Guests); guests are then always held to spending caps (the default daily and monthly caps unless set lower).
+- The amount shown for a drive wallet in the "spending from" chip, strip and popover is now the wallet's own remaining amount, the same figure as the drive's Wallet page.
+- When an automation or mention is skipped because the person it runs as reached their cap, or is a guest the drive keeps off its wallet, the drive lead's notice now says so.
+- A donation to a drive wallet is now always kept whole as your gift; it no longer pays off the wallet's debt, and it can be spent right away even while the wallet is over.
+- Moving a drive into or out of an organization now moves its wallet with it: top-ups and donations stay, and the new owner sets its monthly allocation.
+- Zoom transcript summaries and action items spend the destination drive's wallet on personal drives too, never anyone's own credits; a drive without a wallet skips them.
+- On the Wallet page, each member's spend now shows how much was today and how much ran through their automations, with each automation listed by name under the person who created it.
+- Inside a drive with no chat open, the header chip now shows what a new conversation there would spend from.
+
+- A conversation in a drive now keeps the source it started on. If that drive wallet is empty, paused or at your cap, the call is refused, names the wallet and offers your other options; it moves only where the drive's fallback rule allows, and the move is shown. It no longer switches to your own credits without telling you. Asking another agent (ask_agent) now reserves credits before the agent runs and is refused when the wallet cannot cover it.
+
+- Organization sign-in rules now also cover: channel @mention replies and manual workflow Runs (they act with the sign-in of the person who sent or pressed them), org admin settings and drive join-request approvals for sessions and access keys (leaving an organization never needs a fresh sign-in), Pulse summaries, AI memory and the Memory pages that hold it when drawn from an org's content (withheld, with a prompt to sign in as the org requires, on Home and in Personalization settings; a data export or drive backup leaves them out and says why), conversation transcripts, calendar events, and live app logs. Scheduled automations (workflows, triggers, backups) now reach only the drive they live in. The Security page shows how many members and guests a rule would block, flags a damaged maximum age as invalid, and saves only what you changed; the CLI tells access-key users to create a new key rather than sign in again.
+
+- An organization's sign-in rules (require a passkey sign-in, maximum session age) now apply everywhere its content can be reached: pages, files, search, inbox, activity and Pulse, AI assistants and their tools, live collaboration (open documents and channels are closed when a session passes the maximum age), terminals and previews, uploads, and the CLI and MCP keys. A refused request answers `403` with `code: "org_strong_sign_in_required"` or `"org_reauthentication_required"` so you can sign in again; your personal drives and account settings stay reachable. Scheduled automations (workflows, triggers, scheduled backups, Pulse) keep running as their creator, since no one signs in for them, within the drives they belong to.
+
+- Organization capabilities now require a verified payment or supported gift for the current subscription. A zero-dollar non-gift invoice or balance left from a previous subscription cannot activate an unpaid organization.
+
+- Included credits now follow the published money model: each Pro or Business payment includes credits worth a set share of what it paid, rather than its full price, and the plan cards, pricing page and Plan & seats page show the new monthly figures. Top-up packs are unchanged. A gifted organization's pool is funded the same way from the list price; staff gift an organization from the admin console, on the organization's own subscription, for a fixed number of seats (inviting past them is refused until the gift changes), and can revoke the gift; gifting a lapsed organization cancels its unpaid renewal invoice and restores it at once.
+
+- Organization seats: re-adding someone in the last hour of a billing period no longer charges a proration, and a member who hits the seat limit is no longer told how many seats the organization has. On self-hosted and dedicated deployments every organization billing page and endpoint is absent for everyone.
+
+- Billing now recognizes paid plans only by their configured Stripe price IDs. Unknown and retired prices no longer gain paid access or credit grants by matching a plan amount.
+
+- Organization audit log: every org event is now saved together with the change it records, so an event can no longer go missing when the audit store is briefly unavailable; it is delivered as soon as the store recovers. Seat count changes made in Stripe (the customer portal or a support edit) now appear in the log too.
+
+- Organization model allowlists now apply everywhere: agent model changes, agent creation, copies and moves of agents into an org drive refuse disallowed models, the model picker in an org drive shows only allowed models, and Zoom summaries, compaction, memory and pulse respect each org's allowlist. Workflows, @mentions and agent-to-agent consults now check the model against the plan of whoever pays for the run.
+
+- Moving a team to a dedicated PageSpace instance now brings its organizations with it: org drives arrive
+  as org drives with their visibility, members, policies, verified domains and subscription record. Wallet
+  balances (including debt), donations and spending caps are copied across as records only: a dedicated
+  instance does not run PageSpace billing, so there they are not charged against or enforced, and every
+  organization counts as active. An organization that is only reached through a drive you were a guest in
+  comes along without its money, invitations or domains, but people who left it still cannot be
+  automatically re-added by email domain. Usage history stays on the original instance.
+
 - /btw side questions now work on every chat surface (dashboard assistant, right-sidebar chat, agent console) and /btw appears in the / command picker on all of them.
+
+### Added
+
+- **Organization Drives directory and join requests** — every
+  member, not only admins, can open the organization's Drives directory from the organization page or
+  "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
+  to join, with an optional note. The drive lead and organization Owners and Admins see pending requests
+  on the drive's Members page and approve or decline them.
+
+- **Unpaid-organization banner everywhere in the organization** (shown once organizations are switched
+  on) — the reactivate banner (Owner and Admins) and the read-only notice (members) now show on every
+  organization page and on every page of an organization drive, not only in organization settings.
+
+- **Who spends, today and via automations** — a drive wallet's "Spend this month" list shows, per
+  member, how much was spent today and how much came from automations run on their behalf. Settings ›
+  Usage › Wallets shows what you spent from each drive wallet this month.
+
+- **Organization changes update live** — renaming an organization, changing its avatar, deleting it, and
+  sending or revoking invitations update the drive picker, the header and organization pages for every
+  member without a refresh.
+
+- **Joining an organization from the invitation email** — the
+  invitation link now opens a page that lets you join: sign in or create an account with the invited
+  address (by any sign-in method) and you land in the organization; if you are already signed in, one click
+  joins. The page says plainly when the link has expired, is no longer valid, belongs to another account,
+  or you are already a member.
+
+- **Organization avatar upload** — Owners and Admins set the
+  organization's avatar in Organization settings › General by uploading an image (JPEG, PNG, GIF or WebP,
+  up to 5 MB). The avatar is stored by PageSpace and shown only to members; an avatar can no longer be a
+  link to an image on another site.
+
+- **Create drives in your organization from anywhere** — the
+  New drive dialog offers the organizations you may create drives in, preselecting the one you are working
+  in, and the AI assistant's create-drive tool and the MCP drive create accept an organization too. The
+  organization's "who can create drives" setting applies everywhere.
+
+- **Organization sign-in requirements** — an organization's
+  Security page can now require strong sign-in (a passkey confirmed on your device) and a maximum sign-in age
+  (15 minutes to 30 days) for everyone opening its drives, with a preview of how many members would have to
+  sign in again. Turning a requirement on first asks you to meet it yourself, so you never lock yourself out;
+  relaxing one needs a sign-in that meets the one in force. Someone who does not meet a requirement keeps their
+  account and personal drives: the app asks them to confirm it is them (passkey, or an emailed link for a
+  sign-in that is too old) without signing out, the Files page shows the organization's drives as locked
+  instead of hiding them, and the CLI and MCP tools say to run `pagespace login` (with a passkey when strong
+  sign-in is required). Every sign-in method now records how you signed in; sessions from before this change
+  must sign in again to open an organization's drives under these requirements. Single sign-on and SCIM are
+  out of scope and named as such on the Security page.
+
+- **Organizations in the CLI and on MCP keys** — `pagespace orgs
+  list|get|members|drives|policies` and the matching `organizations.*` MCP tools read what the web already
+  shows: your organizations and your role in each, the member roster, the drive directory (including
+  Restricted drives, with join standing), and the org's policies for Owners and Admins. The CLI and MCP now
+  also do what the web does with an organization, under the same roles: rename it, invite, resend and revoke
+  invitations, accept one, change roles, remove members, leave, change policies (including requiring a
+  passkey sign-in and a maximum sign-in age), manage verified domains, answer guest requests and owner-left
+  automations, read the audit log (and export it as CSV), trashed drives, drive usage and suspended items,
+  preview how many members a sign-in policy would refuse before saving it (`pagespace orgs sign-in-preview`);
+  create a drive in an organization, move drives in and out, change a drive's visibility or lead, and ask
+  to join, approve, deny or withdraw drive join requests (`pagespace orgs …`, `pagespace drives …`). Money
+  stays with a signed-in session: creating or deleting an organization, transferring ownership, seat caps,
+  the seat allowance and wallet fallback policies, buying another seat (an access key may invite only into
+  seats already paid for), billing, the credits pool and every wallet change refuse an access key by name,
+  and the CLI asks before a change that can remove or suspend access. An access key scoped to
+  specific drives is refused on organization actions and sees only its own drives in the directory, and
+  an organization's sign-in requirements now apply to its own settings and admin actions too, for access
+  keys and signed-in sessions alike.
+
+- **Organization settings** — Settings › Organizations lists the
+  organizations you belong to and lets you create one: name it, choose the drives you own to move in (Home
+  stays personal), invite people, see the price, and pay with a card; the organization is ready once that
+  first payment goes through. Each organization has a settings page for its Owner and Admins: Members &
+  seats (roles, invitations, guests, per-person seat caps), Drives, Policies, Security (verified domains),
+  Plan & seats (seats, the credits pool, drive wallets and invoices), an Audit log with CSV export, a
+  Needs your attention list (guest requests to approve, automations whose owner left), and the Owner's
+  Danger Zone. A member who is not an Admin sees only the option to leave. While an organization is
+  unpaid, every page says so, offers to reactivate it, and allows only changes that restrict access.
 
 ### Changed
 
@@ -50,8 +177,214 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
 
+- Failed organization payments now pause organization spending and access expansion immediately. Stripe-side trials do not grant organization access. Existing pages remain readable, and security restrictions still work.
+
+- Reactivating an organization now only pays what is owed or starts a new paid subscription. If the subscription was changed outside PageSpace (for example a trial, a pause or invoice billing set up in Stripe), Reactivate no longer tries to repair it: Owners and Admins are told it needs support and can contact us from the banner, and the organization is never shown as active until it really is. An organization whose subscription is switched to invoice billing in Stripe is treated as unpaid until support restores automatic payment.
+
+- Personal accounts now offer Free and Pro only. Business belongs to organizations; retired personal Business pricing and access exceptions have been removed.
+
+- **A lapsed organization can no longer open things up** (organizations; off until organizations launch) —
+  while its plan is unpaid or canceled, an organization's drives cannot be made more open (Private to
+  Restricted or Open, Restricted to Open), a member cannot be made an Admin, and nobody from outside can be
+  added as a guest, by invitation, share link or page share, even with guests turned on. Making a drive less
+  open, making an Admin a Member and removing people still work. The settings pages only offer what is
+  allowed and say why the rest waits until the plan is paid.
+- **A lapsed organization can only restrict access, everywhere** (organizations; off until organizations
+  launch) — while its plan is unpaid, nothing in its drives can give anyone more access: no new members,
+  invitations (direct, by email, or to the organization), share links, page shares or wider page
+  permissions; no raising a member's role or widening a role people hold; no approving join requests,
+  changing a drive's lead, adding agents to a drive or letting an agent carry a drive's instructions; no
+  new custom domain; and no making a private page visible to the whole drive. Undo, redo and backup
+  restores that would give access back wait too. Invitations already sent stay open and work once the plan
+  is paid. Removing people, revoking links, lowering roles, narrowing permissions and making pages private
+  all still work, and each screen disables only what is paused and says so.
+- **A key never reaches further than the person who made it** — an MCP key or a connected app's access to
+  a drive now ends the moment its owner leaves that drive, and returns if they are added back: it no longer
+  lists the drive, its calendar events, tasks or search results, and a key's admin role counts only while
+  its owner is still an admin there.
+- **New conversations start on the drive's wallet** — if you have not chosen a default, a new conversation
+  in a drive with a wallet you can spend now uses that wallet, and elsewhere your own credits, instead of
+  asking you to choose first. Settings › Usage › Wallets shows this default as selected. In the right
+  sidebar and the dashboard assistant, a new conversation now shows its spending source as soon as it is
+  saved.
+- **Automations spend their drive's wallet only** — the Wallet settings, workflow details and the
+  organization's attention page now say so: a scheduled run counts against its creator's caps and never
+  falls back to anyone's own credits. A workflow whose owner left can no longer be run by hand.
+- **Organization pages show where you are** — the header names the organization on its settings pages,
+  the drive picker lists each organization's settings as an option you can reach by keyboard and screen
+  reader, and the organization hub's rows keep readable text on hover.
+- **Clearer guest invitations** — if you cannot see an organization's Guests policy, inviting someone from
+  outside says that it may need approval or may be turned off, and if guests are off the refusal says so
+  and switches you to giving them a seat. A failed "Move out of the organization" keeps its dialog open with
+  the reason. The Workflows list fits a phone screen.
+- **Pricing page and plan cards show the organization plan's terms** — the pricing page and the in-app
+  plan cards now show three tiers, Free, Pro and Business. Each card lists the price, the credits
+  included, and the top-up rate as separate lines. Business is the organization plan: $50 a month with
+  5 seats, $10 a month for each extra seat, and the credits each extra seat adds. There is no trial, and
+  a card is required at checkout. Credit amounts are plain counts and never carry a "$". All figures come
+  from the same billing model the app charges with.
+- **New organizations ask before letting outsiders in** — a new organization's "guests from outside"
+  setting now starts at "Admins approve" instead of "On": inviting or sharing with someone outside the
+  organization waits for an Owner or Admin to approve it. Owners can change the setting at any time.
+- **An organization's automations outlive the person who made them** — when someone leaves an
+  organization, is removed from it, or deletes their account, the workflows, task and calendar triggers
+  and page webhooks they set up in its drives are no longer deleted. They are switched off and marked
+  "owner left", and nothing runs under the missing person, including a manual Run. An Owner or Admin can
+  hand each one to another member who can reach its drive (it then runs as that person and counts against
+  their spending cap) or delete it; both are recorded in the organization's audit log. An automation whose
+  creator deleted their account keeps nothing that identifies them. Automations in personal drives still
+  go with the account, as before.
+- **A lapsed organization can still lock things down** — while an organization's plan is unpaid or
+  canceled, its Owner and Admins can still make any change that restricts: turn guests from outside off
+  or to approval (guests are removed from its drives at once, as when the plan is active), turn off share
+  links, publishing and other features, lower the seat allowance, narrow the allowed models or
+  integrations, remove members, revoke share links and invitations, decline guest requests, pause a
+  drive's wallet and lower a person's spending cap. Changes that open access or add spending — including
+  approving a guest request — still wait until the plan is paid again.
+- **Automations count against their creator's spending cap** — a workflow, a scheduled run or a trigger
+  now counts toward the per-person spending cap of the person who created it, on the drive wallet it
+  spends. Once that person's cap is reached the run is skipped and the run log says the cap was reached;
+  the wallet's funders get the same 80% and 100% alerts as for that person's own chats. People with no
+  cap set are unaffected. An automation stops running if the person who created it leaves the
+  organization (or, on a personal drive, the drive); its run log says why. A workflow you run by hand
+  counts against your own cap, not its creator's.
+- **Organization policies now hold everywhere they apply** — when an organization turns guests from
+  outside off, nobody outside it can be added to its drives by sharing a single page either (the Share
+  dialog, an email share or accepting a page invitation), and people outside it whose only access was a
+  shared page lose that access until guests are turned back on, as other guests already did. When guests
+  need approval, sharing a page with someone outside waits for an Owner or Admin just like a drive invite.
+  An organization's minimum default role for its Open drives is now enforced: a drive's default role, a
+  drive becoming Open, or a raise of the minimum is refused with a message naming the policy when the
+  role would fall below it. The minimum also holds when access is checked, not only when roles are saved:
+  every member of the organization in one of its Open drives can always view (or, under an edit minimum,
+  edit) its non-private pages, even if an older role or a page-specific setting says less. People invited
+  with a specific role, guests and other outsiders keep exactly the access they were given, and private
+  pages stay private. Pulse, the activity summary and opened pages follow exactly the same organization
+  access as everywhere else: a member who has lost access to a Restricted or Private drive no longer sees
+  its pages there, and an Owner or Admin opening a Private drive this way is recorded in the audit log.
+  A policy change that turns off published apps, environments, agents from
+  other drives, autonomous agents or some models lists what it affected in the organization's audit log,
+  and the log now also shows compute handed to a drive's lead, resumed apps, and a former member's
+  turned-away attempt to rejoin (without their email address).
+- **Your allowance of an organization's credits covers compute too** — sandbox runs, terminals and
+  browsers you use in an organization's drives count toward your monthly allowance of the organization's
+  credits, together with your AI use, whoever's session you are working in: compute is charged to the
+  person who runs it. In a shared terminal that is whoever is typing: joining a teammate's terminal to
+  watch costs you nothing, and once your allowance is used up your keystrokes there are refused with a
+  message saying so. When two people type at the same moment, each is charged for their own turn. Environments and published apps you create there count toward your allowance too
+  (their storage, wakes and running time). Once your allowance is used up, new compute is refused with a
+  message saying so, you cannot create a new environment or publish a new app, and your published apps
+  show visitors a "This app is paused" page. A paused app comes back by itself within the hour after your
+  allowance renews (a daily allowance at midnight UTC, a monthly one after the organization's credits
+  refill; the paused page shows when that refill is next due), and you, the drive's lead or an organization Owner or
+  Admin can resume it sooner from the app pane once there is room again (for example after an Owner or
+  Admin raises your allowance). If you leave the organization, your environments and apps keep running
+  and their costs move to the drive's lead; if you are removed from one drive, the same happens for that
+  drive's environments and apps within the hour.
+- **Complimentary paid plans refill on their renewal date** — an account on a paid plan with no Stripe
+  subscription behind it now gets its monthly credits on its renewal date (within the hour), instead of
+  at its next AI request after the date passed. The renewal date no longer drifts later each month.
+- **Imago reuses the full PageSpace feature UI** — native editors and file viewers, page creation and sharing, rich chat controls and results, messaging, tasks, agent sessions and account/drive settings now stay inside the persistent Imago shell. Classic PageSpace and rollout defaults are preserved.
+
+- **Right-sidebar chat input is a single compact card** — attach, tools, model picker and one send/stop button now share one toolbar row under the text box instead of stacking a separate model selector above it. While a reply is streaming, a queue button appears next to Stop once you've typed something, so you can still queue a follow-up on phones.
+
 ### Added
 
+- **See what your AI usage spends from, before you send** (organizations; off until organizations
+  launch) — inside a drive with more than one source, the credit chip in the header shows which one a
+  conversation will spend (the drive's wallet, your seat allowance from the organization, or your own
+  credits) and how much is left, and lets you switch for that conversation. A new conversation names its
+  source above the message box. When the source cannot pay, the message is not sent and nothing is
+  charged: a card says what happened (the wallet is empty, paused, or you reached your cap) and who
+  controls that budget, and offers your other sources. When a drive's rule moves a reply to another
+  source, a note under the reply (and on side questions and voice calls) says so.
+- **Drive Settings › Wallet** — a drive's wallet in one place: what is left this month, and for its lead
+  and the organization's Owner and Admins the monthly allocation, top-ups, the pause switch, what spends
+  from it and what happens when it runs out, per-person daily and monthly caps, and spend this month by
+  person. Members see only what is left and their own cap, and can add credits from their own balance.
+- **Settings › Usage › Wallets** — everything you spend from (your credits, your seat allowance with what
+  is left, drive wallets, including paused or over-budget ones) and everything you fund, plus what a new
+  conversation starts on.
+- **Organizations in your drives** — an organization's drive shows the organization's mark in the header,
+  the drive picker groups drives under each organization and Personal, a drive's General settings show
+  who owns and pays for it, who in the organization can see it, its lead and moving it in or out, and its
+  Members page labels guests and where each person's access comes from, with the people who joined a
+  single page by link listed apart. Inviting someone from outside lets you choose: a guest of this drive
+  or a member of the organization.
+- **Spending cap alerts in your notifications** — when someone reaches 80% or 100% of a cap on a wallet
+  you fund, the notification opens that wallet's settings. Workflows and triggers show who they spend as
+  and why a run was skipped, and flag an automation whose creator left the organization.
+
+- **Spending caps per person, with alerts** — an organization Owner or Admin can set a daily and a
+  monthly spending cap for a person on an organization drive's wallet or on their organization seat, and
+  the owner of a personal drive can do the same on that drive's wallet. A person who reaches a cap is told
+  the wallet is capped for them and can pick another source; the wallet's funders get an in-app
+  notification when the person reaches 80% and again at 100% of a cap, once per day or month.
+- **A fallback to another wallet is always shown** — when a drive's rule moves a call off the wallet you
+  chose (for example onto your own credits because the drive's wallet is empty), the answer now says so on
+  every surface: API completions, side questions, agent consultations and voice calls, not only chat. A
+  tool or a later step of the same turn never moves to yet another wallet on its own, and any overspend on
+  such a call is charged where your chosen wallet would have put it, never to you.
+- **Drive Members shows guests** — members of an organization drive who are not in the organization are
+  marked as guests, each member shows whether they were invited or joined through the organization, and
+  the drive's lead and admins see people who joined through a page share link listed separately.
+
+- **Wallet debt notices, and who absorbs a drive's overspend** — when spending in an organization's drive
+  runs past what its wallet held, the organization's Owner and Admins get an in-app notification, at most
+  once per billing period, and the wallet shows as over until its debt is cleared. An Owner or Admin can
+  choose whether a drive wallet's overspend is absorbed by the organization's pool (the default) or carried
+  by the drive wallet and taken out of its next allocation. The person who was spending is never charged
+  for it.
+- **Organization audit log** — an organization Owner or Admin can read the organization's audit log:
+  membership and ownership changes, seats, invitations, policy changes, verified domains, drive
+  visibility, join requests, drives created in or moved into and out of the organization, lead changes,
+  an Owner or Admin opening a Private drive, drive wallet changes, top-ups, donations and billing events.
+  It filters by event type or category, by drive and by time, and exports to CSV (values that would run
+  as a spreadsheet formula are written as plain text). The log is part of the existing tamper-evident
+  security audit trail, and it only ever shows the organization's own events.
+- **Verified email domains for organizations** — an organization Owner or Admin can add the
+  organization's email domain and prove it is theirs, either with a DNS TXT record or with a link sent
+  to an administrative mailbox of the domain (admin@, postmaster@ and the like). Once verified, people
+  who create a PageSpace account with a verified address on that domain join the organization as members
+  automatically, taking a seat: if every seat is taken and automatic seat purchase is off they are not
+  added, and the Owner finds the refusal in the audit trail. Joining opens the organization's Open drives
+  only, never a Restricted or Private one. Only one organization can hold a domain, shared providers such
+  as gmail.com cannot be claimed, existing accounts and guests are never swept in, and someone who leaves
+  or is removed is not re-added, even after deleting their account and signing up again (the organization
+  keeps only a one-way fingerprint of the address, which an Owner or Admin can clear). Removing a domain stops future joins and removes nobody.
+- **Organization sharing policies** — an organization Owner or Admin can turn public share links,
+  publishing to the web, custom domains and guests from outside the organization off, or (for guests)
+  require approval. Turning one off pauses what already exists instead of deleting it: share links stop
+  working and read as if they never existed, published sites stop being served, and guests lose access
+  to the organization's drives, all listed for the Owner and Admins and all restored exactly when the
+  policy is turned back on. With guests set to require approval, a person invited from outside, or who
+  opens a share link, waits in an approval queue and holds no access until an Owner or Admin approves.
+  Policies take effect immediately and only ever apply to the organization's own drives.
+- **Organization policies for members, AI, compute and services** — an organization Owner or Admin can
+  choose who may invite members and create drives, which AI models and providers its drives may use, whether
+  agents may run on their own (mentions, schedules, triggers) or be added from other drives, whether cloud
+  sandboxes, persistent environments and published apps are allowed, and which services a drive may connect.
+  Each applies the moment it changes and only to the organization's own drives. Nothing is deleted when a
+  policy turns something off: agents, environments, apps and connections are paused and come back when it is
+  turned on again, and a model the organization does not allow is refused rather than replaced by another.
+- **Organization seats follow your members** — an organization's Business plan includes 5 seats, and
+  each accepted member or pending invitation takes one; guests, agents and apps never do. Inviting
+  past your purchased seats either adds a seat automatically (billed pro rata) when the Owner has
+  turned on automatic seat purchase, or is refused with a message saying how to free one. Removing
+  a member keeps their paid seat until the billing period ends, so adding someone back in the same
+  period costs nothing; at period end unused seats are released from the next invoice. Automatic
+  seat purchase is off until an Owner turns it on. No credits are added or removed by any seat change.
+- **Sandboxes, environments and published apps run in organization drives** — compute in a drive
+  that belongs to an organization is now billed to the organization's credit pool, not to the
+  person who started it or the drive's lead. Before, it was refused. If the organization's pool is
+  empty, paused, or not set up, the run is refused before anything starts and nothing is charged.
+  The message says which of the three it is and that an org Owner or Admin can fix it. A published
+  app parks the same way. Usage from before organization billing started is never charged. Buying
+  dedicated hosting for an organization's app is still unavailable.
+  Moving a drive into or out of an organization while a terminal is open changes who pays from the
+  next ten-minute settle, and the window the move fell in stays with whoever owed it. An
+  organization's app is no longer refused because the lead spent a lot on AI that day: daily and
+  in-flight limits count AI and organization compute separately.
 - **Imago preview at `/imago`** — a first look at PageSpace's new interface, served
   beside classic PageSpace and signed in with the same account. Live on pagespace.ai since the
   IMG-11.2 flip; self-hosted installs stay dark until they set `IMAGO_ENABLED=true` (and
@@ -660,6 +993,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Credits are counted, not priced** — every credit amount in the app, on the plan page, and on the
+  marketing site now reads as a whole-number count with thousands separators, never as a dollar
+  figure or a fraction, and a credit has one definition everywhere (the pricing page states the
+  rate). Nothing changes about what you are granted or charged; a balance that used to show as a
+  dollar-like amount now shows as the matching whole credit count. The included
+  allowance behind a paid plan is derived from the plan's price rather than kept in a separate
+  table, and the admin billing view lists it as included credits.
+- **Plans are Free, Pro, and Business; Founder is retired** — the pricing page and the in-app plan
+  page now show three plans. Pro stays $15 a month for a person. Business is now the plan for an
+  organization: $50 a month with 5 seats included and $10 a month for each extra seat, and it is not
+  offered to a single user. Every plan card states its price, its included credits (a plain count),
+  and the top-up rate as three separate facts. The Founder plan is no longer sold; its subscriber
+  moves to Pro at the end of the current billing period, and anyone already on the earlier $100
+  personal Business plan keeps Business features at the price they pay today.
 - **New global assistant sessions live in your Home drive** — a sandbox session started from the
   global assistant (or by its first sandbox tool call) is now created in your Home drive, which is
   set up for you if you do not have one yet, so it is listed under Home rather than under "Global
@@ -715,13 +1062,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the Android shell never hands its native bridge to a third-party site or a wildcard host.
 
 - **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
-  free accounts still get 5 credits to try AI with, granted once on their first AI call, but
+  free accounts still get a starter grant of credits to try AI with, granted once on their first AI call, but
   that grant no longer refills or accumulates month over month. Credits you already have never
   expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
   going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
   to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
   comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
-  "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
+  that the Free grant is "to start" rather than "per month", and free accounts no longer show a
   "Renews" date. Free accounts receive a one-time email explaining the change, quoting the
   exact balance they keep and pointing to top-ups and the Pro plan; anyone who has turned
   product-update email off is skipped, and the notice carries a one-click unsubscribe link.
@@ -768,17 +1115,50 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and the server keeps running; an affected request may fail and can be retried. Billing and
   storage-correction runs that lose their lock part-way stop before their next charge or
   correction and leave the rest to the next run instead of repeating it.
+- **Apodex 1.1 Mini (free) no longer reserves credits as if it were a paid model** — the free model was
+  missing from the price list, so each call held and counted a paid model's estimated cost against your
+  balance mid-reply. It is now priced as free.
 - **Memory now checks your AI credits before it learns** — the nightly Memory pass (learning
   from your conversations and tidying your profile pages) used to run and charge you even when
   your balance was used up, so you could go into debt without opening PageSpace. Now each step
   checks your credits before the AI runs. When you're out of credits that night's learning is
   skipped: nothing is charged, your profile pages stay exactly as they were, and anything Memory
   was about to add waits for the next night.
-- **Agent mentions and Zoom summaries now check your AI credits first** — @mentioning an agent in
-  a channel, and the AI summary and action items on a recorded Zoom meeting's page, used to run
-  and charge you even when your balance was used up, so you could go into debt. Now they check
-  your credits before the AI runs. When you're out of credits, a mentioned agent doesn't reply.
-  A Zoom meeting still gets its page, just without the summary and action items.
+- **Every AI call now checks your credits before it runs** — conversation summarising (when a long chat
+  is condensed) and the nightly Memory update used to run first and charge afterwards, which could
+  push an out-of-credit balance into debt. They now reserve credits first like every other AI call;
+  with no credits they simply don't run, and nothing about your conversation or your Memory pages
+  changes. A live voice call with a page agent now spends from the same source as typing to that
+  agent in its drive, instead of always from your own credits — including images it makes during
+  the call. If the call cannot tell which drive pays for it, it does not start and you are not
+  charged. Voice calls with the global assistant still use your own credits.
+- **Published pricing figures match the plans** — the "Credits Replace Daily Limits" blog post no
+  longer lists per-plan credit amounts from before the credit count change, and no longer names the
+  retired Founder plan; it points to the pricing page for current amounts, packs and the top-up range.
+  The Business plan card no longer claims "20x more than Free".
+- **Admin billing counts organization credit** — "Included credit liability" and "Outstanding
+  liability" now include organization credit pools and credit moved into drive wallets, counted
+  once; a pool's allocation to a drive wallet is not counted twice. The free starter grant is shown
+  separately.
+- **Stripe plan detection by amount works again** — when an invoice carries a price the app does
+  not recognise, its amount is read as the cents Stripe sends, so a $15 or $50 price resolves to
+  Pro or Business instead of never matching.
+
+- **Agents answering an @mention in a channel now check credits first** — an agent's reply to a
+  channel mention used to run even when there were no credits to pay for it. Each reply is now
+  checked before the agent starts; if there is nothing to pay with, the agent does not reply and
+  you are not charged.
+
+- **A page share that has expired no longer lists its drive** — when someone shared a single page
+  with you for a limited time, the share stopped opening the page once it expired, but the drive
+  it lived in stayed in your drive picker and sidebar, where it opened to nothing. An expired
+  share now lists nothing, just as it opens nothing, so that drive disappears from your list
+  unless you still have another way in.
+
+- **Zoom summaries now check your AI credits first** — the AI summary and action items on a
+  recorded Zoom meeting's page used to run and charge you even when your balance was used up, so
+  you could go into debt. Now they check your credits before the AI runs. When you're out of
+  credits, the meeting still gets its page, just without the summary and action items.
 - **A page share link now opens only that page** — opening a link to one page used to make you a
   full member of its drive, so you could read every other non-private page there and post in its
   channels. Now you join as a guest: you see only the pages that were shared with you. Guests do

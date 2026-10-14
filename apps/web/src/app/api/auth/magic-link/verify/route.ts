@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
@@ -30,6 +31,7 @@ import {
   consumeAllInvitesForEmail,
   type NativeInviteAcceptanceResult,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 /**
  * Magic-link redemption has one core and two doors.
@@ -374,10 +376,13 @@ async function redeemMagicLink({
     // Continue with login anyway - email verification is secondary
   }
 
+  const authentication = ceremonyAuthentication({ method: 'magic_link' }, Date.now());
+
   // Create new session
   const sessionToken = await sessionService.createSession({
     userId,
     type: 'user',
+    authentication,
     scopes: ['*'],
     expiresInMs: SESSION_DURATION_MS,
     deviceId: handoffDevice?.deviceId,
@@ -444,6 +449,9 @@ async function redeemMagicLink({
   }
   const invitedDriveId = inviteResult?.invitedDriveId ?? null;
 
+  // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+  await autoJoinVerifiedDomainAfterSignIn(userId);
+
   // Provision the Home drive unconditionally — idempotent, and run BEFORE the
   // redirect branches so every login provisions, including page/connection
   // invite logins whose redirect never consults the shared resolver below.
@@ -462,7 +470,10 @@ async function redeemMagicLink({
   // Determine the landing path — kind-specific overrides win, then fall back
   // to the shared helper so new-user provisioning and `next` still work.
   let redirectPath: string;
-  if (inviteResult?.kind === 'connection') {
+  if (inviteResult?.orgLandingPath) {
+    // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+    redirectPath = inviteResult.orgLandingPath;
+  } else if (inviteResult?.kind === 'connection') {
     redirectPath = '/dashboard/connections';
   } else if (inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId) {
     redirectPath = `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}`;
@@ -471,7 +482,9 @@ async function redeemMagicLink({
   }
 
   const redirectParams: Record<string, string> = {};
-  if (inviteResult?.kind === 'connection') {
+  if (inviteResult?.orgLandingPath) {
+    // The landing page itself tells the person what happened.
+  } else if (inviteResult?.kind === 'connection') {
     redirectParams.connection_requested = '1';
   } else if (invitedDriveId) {
     redirectParams.invited = '1';
@@ -499,6 +512,7 @@ async function redeemMagicLink({
           emailVerified: userRow.emailVerified,
         };
         const { deviceToken } = await validateOrCreateDeviceToken({
+          authentication,
           providedDeviceToken: undefined,
           userId,
           deviceId: handoffDevice.deviceId,

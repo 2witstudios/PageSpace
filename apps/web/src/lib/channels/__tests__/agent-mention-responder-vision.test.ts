@@ -1,10 +1,18 @@
 import { beforeEach, describe, it, vi, type Mock } from 'vitest';
 import { assert } from '@/lib/ai/core/__tests__/riteway';
 
-// Billing is covered by agent-mention-responder-credit-gate.test.ts; here the
-// mentioner is always funded so the gate never stands between a test and its reply.
-vi.mock('@/lib/ai/core/user-credit-hold', () => ({
-  acquireUserCreditHold: vi.fn(async () => ({ allowed: true, release: () => {} })),
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -39,10 +47,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({

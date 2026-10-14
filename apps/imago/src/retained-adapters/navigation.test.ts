@@ -60,3 +60,19 @@ it.each([
   expect(auth ? exit : route).toHaveBeenCalledExactlyOnceWith(destination);
   expect(auth ? route : exit).not.toHaveBeenCalled();
 });
+
+
+it('maps wallet and organization entrypoints to their native destinations', () => {
+  expect(imagoHref('/settings/usage/wallets?view=funded')).toBe('/account/wallets?view=funded');
+  expect(imagoHref('/settings?createOrg=1')).toBe('/account/organizations?createOrg=1');
+  expect(classicPathname('/account/wallets')).toBe('/settings/usage/wallets');
+  expect(classicPathname('/orgs/org-1/settings')).toBe('/orgs/org-1/settings');
+});
+
+it('org settings use the account shell without a fictitious orgs drive', () => {
+  expect(stageFor('/orgs/org-1/settings/members')).toEqual({ driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } });
+});
+
+it('a pathname unavailable during hydration does not claim a drive or throw', () => {
+  expect(classicPathname(null)).toBe('/dashboard');
+});

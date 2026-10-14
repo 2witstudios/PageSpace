@@ -119,6 +119,8 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const mockWorkflow = {
@@ -137,7 +139,8 @@ const mockWorkflow = {
   eventDebounceSecs: null,
   instructionPageId: null,
   nextRunAt: null,
-  createdBy: 'user_123',
+  createdBy: 'user_123' as string | null,
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -207,6 +210,20 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const response = await POST(request, createContext('wf_1'));
 
     expect(response.status).toBe(403);
+  });
+
+  test.each([
+    ['flagged owner-left', { ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { createdBy: null }],
+  ])('SPEND-6 (partial) a Run of a workflow %s is refused 409 owner_left before the executor or any gate ([D-OW-36])', async (_label, overrides) => {
+    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, ...overrides }]);
+
+    const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'owner_left' });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
   });
 
   test('returns 409 when executor reports a claim conflict', async () => {
@@ -323,7 +340,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       },
     );
 
-    test('hands the executor the credit gate as its admit hook, gating the billed owner (not the clicker) as interactive', async () => {
+    test('SPEND-6 (partial) WAL-7 (partial) hands the executor the credit gate as its admit hook: the drive the workflow runs in pays, and the person who pressed Run is gated, so their caps bind', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
       const admit = async () => ({ admitted: true as const, release: () => {} });
       mockCreditAdmission.mockReturnValue(admit);
@@ -332,8 +349,10 @@ describe('POST /api/workflows/[workflowId]/run', () => {
 
       const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
       expect(options?.admit).toBe(admit);
-      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function));
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function), 'admin_clicker');
       expect(input.createdBy).toBe('user_123');
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(mockWorkflow.driveId);
     });
 
     test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {

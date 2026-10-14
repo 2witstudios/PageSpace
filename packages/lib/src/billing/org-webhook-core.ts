@@ -1,0 +1,169 @@
+/**
+ * org-webhook-core — the pure decisions the Stripe webhook makes for ORG billing
+ * (Spec SEAT-7, MON-3, A-8). The webhook shell (apps/web …/stripe/webhook) does the IO.
+ *
+ * WHOSE EVENT IS IT. An org's Stripe customer is its own (SEAT-1, one per org, stored
+ * on organizations.stripeCustomerId) and never a person's (users.stripeCustomerId).
+ * The customer id is therefore the authority: an event on an org's customer is that
+ * org's, and nothing else is. The subscription metadata D1 stamps (kind =
+ * 'org_business', pagespace_org_id) is a second, weaker signal used only to REFUSE:
+ *   - tagged as an org's but on no org's customer → no effect (it never falls through
+ *     to the personal path, so an org invoice can never fund a person);
+ *   - on org A's customer but tagged for org B → no effect, logged as an error.
+ * An event with neither signal is a person's and takes the existing personal path
+ * unchanged — which also finds nobody for a customer that is no user's.
+ */
+import { ORG_ID_METADATA_KEY, ORG_SUBSCRIPTION_KIND, orgSubscriptionItems, isLiveOrgSubscriptionStatus, type OrgSubscriptionCandidate, type OrgBusinessPrices } from './org-subscription-core';
+import type { OrgAuditEvent } from '../audit/org-audit';
+import type { OrgLapseTransition, OrgStatus } from '../organizations/status-core';
+
+export type BillingOwnerRoute =
+  | { kind: 'org'; orgId: string }
+  | { kind: 'person' }
+  | { kind: 'org_unlinked'; taggedOrgId: string | null }
+  | { kind: 'org_mismatch'; orgId: string; taggedOrgId: string };
+
+export function routeBillingOwner(input: {
+  /** The org whose organizations.stripeCustomerId is the event's customer, or null. */
+  customerOrgId: string | null;
+  /** The subscription's metadata (or the invoice's snapshot of it). */
+  metadata: Record<string, string> | null | undefined;
+}): BillingOwnerRoute {
+  const taggedOrgId = input.metadata?.[ORG_ID_METADATA_KEY] || null;
+  const taggedKind = input.metadata?.kind === ORG_SUBSCRIPTION_KIND;
+  if (input.customerOrgId !== null) {
+    if (taggedOrgId !== null && taggedOrgId !== input.customerOrgId) {
+      return { kind: 'org_mismatch', orgId: input.customerOrgId, taggedOrgId };
+    }
+    return { kind: 'org', orgId: input.customerOrgId };
+  }
+  if (taggedKind || taggedOrgId !== null) return { kind: 'org_unlinked', taggedOrgId };
+  return { kind: 'person' };
+}
+
+export type OrgSubscriptionMirrorPlan = 'apply' | 'ignore_other_subscription' | 'no_row';
+
+/**
+ * Whether a subscription fetched from Stripe may be mirrored onto the org's stored row.
+ * The webhook never mirrors the EVENT's snapshot: under the org's billing lock it
+ * re-reads the subscription from Stripe, so whichever delivery runs last writes the
+ * latest state and an out-of-order or late event cannot roll the row back. What it
+ * must still refuse is a different subscription: a late event about an ended one the
+ * org has since replaced. An org with no row yet is the provisioning path's
+ * (provisionOrgSubscription writes the row under the same lock).
+ */
+export function planOrgSubscriptionMirror(input: {
+  storedSubscriptionId: string | null;
+  fetchedSubscriptionId: string;
+}): OrgSubscriptionMirrorPlan {
+  if (input.storedSubscriptionId === null) return 'no_row';
+  return input.storedSubscriptionId === input.fetchedSubscriptionId ? 'apply' : 'ignore_other_subscription';
+}
+
+/** The seat linkage org_subscriptions stores, as the mirror compares it. */
+export interface StoredOrgSeatLinkage {
+  stripeBaseItemId: string;
+  stripeSeatItemId: string;
+  extraSeatQuantity: number;
+  seatRevision: number;
+}
+
+export type OrgSeatItemMirrorPatch = Partial<StoredOrgSeatLinkage>;
+
+/**
+ * Review 3+4 P2-8 (SEAT-7): the subscription mirror re-reads Stripe, so it refreshes the item
+ * ids and the extra-seat quantity from what Stripe says NOW — a seat change made outside the app
+ * (the dashboard, a support edit) is no longer left stale (the review saw stored 2 vs Stripe 3).
+ * A changed quantity bumps the seat revision, so the next seat change's idempotency key can never
+ * be one an earlier change already used. Missing, ambiguous or incomplete plan items
+ * return null, so callers invalidate the mirror instead of keeping stale identity.
+ * Only what differs is in the patch.
+ */
+export function planOrgSeatItemMirror(input: {
+  stored: StoredOrgSeatLinkage;
+  items: ReadonlyArray<{ id: string; priceId: string; quantity: number }>;
+  prices: OrgBusinessPrices;
+  itemsHasMore?: boolean;
+}): OrgSeatItemMirrorPatch | null {
+  const linkage = orgSubscriptionItems({ items: input.items, itemsHasMore: input.itemsHasMore }, input.prices);
+  if (!linkage) return null;
+  const patch: OrgSeatItemMirrorPatch = {};
+  if (linkage.baseItemId !== input.stored.stripeBaseItemId) patch.stripeBaseItemId = linkage.baseItemId;
+  if (linkage.seatItem.id !== input.stored.stripeSeatItemId) patch.stripeSeatItemId = linkage.seatItem.id;
+  if (linkage.seatItem.quantity !== input.stored.extraSeatQuantity) {
+    patch.extraSeatQuantity = linkage.seatItem.quantity;
+    patch.seatRevision = input.stored.seatRevision + 1;
+  }
+  return patch;
+}
+
+/** Persist an invalid identity as a lapsed mirror, without losing the subscription ID
+ * needed to cancel or repair it. Ended subscriptions remain ended so replacement is safe. */
+export function planOrgSubscriptionPriceMirror(input: {
+  stored: StoredOrgSeatLinkage;
+  subscription: Pick<OrgSubscriptionCandidate, 'status' | 'items' | 'itemsHasMore'>;
+  prices: OrgBusinessPrices;
+}): OrgSeatItemMirrorPatch & { status: string; stripeBasePriceId: string; stripeSeatPriceId: string } {
+  const patch = planOrgSeatItemMirror({ stored: input.stored, ...input.subscription, prices: input.prices });
+  return {
+    ...patch,
+    status: patch !== null || !isLiveOrgSubscriptionStatus(input.subscription.status) ? input.subscription.status : 'unverified_price',
+    stripeBasePriceId: patch !== null ? input.prices.basePriceId : '',
+    stripeSeatPriceId: patch !== null ? input.prices.seatPriceId : '',
+  };
+}
+
+/** What the mirror compares, before and after one Stripe re-read. */
+export interface MirroredOrgSubscriptionState {
+  status: string;
+  cancelAtPeriodEnd: boolean;
+  extraSeatQuantity: number;
+}
+
+/**
+ * AUD-1: the org events one subscription mirror writes, staged with the mirror's own write. A change of status or
+ * cancel-at-period-end is a billing event; a change of the extra-seat quantity is a SEAT event — the mirror only ever
+ * sees a quantity it did not set itself (every change the app makes stores its quantity first), so it is a change
+ * made on Stripe's side (the dashboard, the customer portal, support). A redelivery that mirrors the same state writes
+ * nothing.
+ */
+export function orgSubscriptionMirrorAuditEvents(input: {
+  orgId: string;
+  eventId: string;
+  previous: MirroredOrgSubscriptionState;
+  next: MirroredOrgSubscriptionState;
+  orgStatusBefore: OrgStatus;
+  orgStatusAfter: OrgStatus;
+  transition: OrgLapseTransition | null;
+}): OrgAuditEvent[] {
+  const { orgId, eventId, previous, next } = input;
+  const events: OrgAuditEvent[] = [];
+  if (previous.status !== next.status || previous.cancelAtPeriodEnd !== next.cancelAtPeriodEnd) {
+    events.push({
+      orgId,
+      eventType: 'org.billing.subscription_changed',
+      resourceType: 'org_subscription',
+      resourceId: orgId,
+      details: {
+        source: 'stripe_webhook',
+        eventId,
+        from: previous.status,
+        to: next.status,
+        cancelAtPeriodEnd: next.cancelAtPeriodEnd,
+        orgStatusBefore: input.orgStatusBefore,
+        orgStatusAfter: input.orgStatusAfter,
+        ...(input.transition ? { transition: input.transition } : {}),
+      },
+    });
+  }
+  if (previous.extraSeatQuantity !== next.extraSeatQuantity) {
+    events.push({
+      orgId,
+      eventType: 'org.seat.quantity_changed',
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { reason: 'stripe_side_change', source: 'stripe_webhook', eventId, from: previous.extraSeatQuantity, to: next.extraSeatQuantity },
+    });
+  }
+  return events;
+}

@@ -80,7 +80,7 @@ export class SessionFullError extends Error {
  * A GLOBAL workspace (driveId null, or — since IMG-5.1 — its owner's own Home
  * drive; `sessionHostsAgentsFromAnyDrive`) is exempt from this gate: its tenant/payer
  * already resolve to the workspace's own owner regardless of which agent's
- * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayerId`
+ * conversation runs inside it (`resolveSessionTenantId`/`resolveSessionPayer`
  * key off the WORKSPACE's driveId/ownerId, never the hosted agent's), and each
  * conversation-creation route independently checks the caller can view the
  * target agent page before this gate ever runs. So a global workspace may host
@@ -108,7 +108,7 @@ export interface CreateConversationInSessionDeps<Tx = unknown>
    * `conversationId`): `conversationRepository.createConversation`.
    */
   createPageConversation: (
-    input: { conversationId: string; userId: string; agentPageId: string; title: string | null },
+    input: { conversationId: string; userId: string; agentPageId: string; title: string | null; initialChosenWalletId?: string | null },
     tx: Tx,
   ) => Promise<'created' | 'exists' | 'message_owner_conflict'>;
   /**
@@ -117,7 +117,7 @@ export interface CreateConversationInSessionDeps<Tx = unknown>
    * whatever its class.
    */
   createGlobalConversation: (
-    input: { conversationId: string; userId: string; title: string | null },
+    input: { conversationId: string; userId: string; title: string | null; initialChosenWalletId?: string | null },
     tx: Tx,
   ) => Promise<void>;
   /**
@@ -141,6 +141,7 @@ export async function createConversationInSessionWith<Tx>(
     title = null,
     excludeTargetId,
     activeNodeId,
+    initialChosenWalletId,
   }: {
     conversationId: string;
     userId: string;
@@ -153,6 +154,7 @@ export async function createConversationInSessionWith<Tx>(
     excludeTargetId?: string;
     /** The pane a human picked into — see {@link AdmitConversationInput.activeNodeId}. */
     activeNodeId?: string;
+    initialChosenWalletId?: string | null;
   },
 ): Promise<void> {
   // Cheap, early exits before opening a transaction. Unlike the version this
@@ -190,7 +192,7 @@ export async function createConversationInSessionWith<Tx>(
     within: async (tx) => {
       if (agentPageId === null) {
         try {
-          await deps.createGlobalConversation({ conversationId, userId, title }, tx);
+          await deps.createGlobalConversation({ conversationId, userId, title, ...(initialChosenWalletId !== undefined && { initialChosenWalletId }) }, tx);
         } catch (error) {
           // Foreign owner or a binding mismatch — one answer, because
           // distinguishing them would tell an id-guessing caller which it was.
@@ -200,7 +202,10 @@ export async function createConversationInSessionWith<Tx>(
         return;
       }
 
-      const created = await deps.createPageConversation({ conversationId, userId, agentPageId, title }, tx);
+      const created = await deps.createPageConversation({ conversationId, userId, agentPageId, title, ...(initialChosenWalletId !== undefined && { initialChosenWalletId }) }, tx);
+      if (initialChosenWalletId !== undefined && created !== 'created') {
+        throw new ConversationUnavailableError({ cause: new Error('initial_choice_requires_new_conversation') });
+      }
       if (created === 'message_owner_conflict') {
         throw new ConversationUnavailableError({ cause: new Error('message_owner_conflict') });
       }
@@ -225,6 +230,11 @@ export async function createConversationInSessionWith<Tx>(
     },
   });
 
+  // The membership shortcut does not execute the creator. A requested initial
+  // choice therefore cannot be acknowledged on an already-bound row.
+  if (initialChosenWalletId !== undefined && outcome === 'already_a_member') {
+    throw new ConversationUnavailableError({ cause: new Error('initial_choice_requires_new_conversation') });
+  }
   if (outcome === 'admitted' || outcome === 'already_a_member') return;
   if (outcome === 'session_full') throw new SessionFullError();
   // 'bound_elsewhere' (the unique index refused: this thread already has a

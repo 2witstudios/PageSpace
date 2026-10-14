@@ -31,8 +31,10 @@ import {
 import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { createDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
 import { createEnvInDrive, listEnvsInDrive, toDriveEnvDTO } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -57,7 +59,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'list' },
       });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     return NextResponse.json({ envs: await listEnvsInDrive(driveId) });
@@ -84,7 +86,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'create' },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can create environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can create environments' }, { status: 403 }));
     }
 
     const body = await request.json().catch(() => null);
@@ -118,6 +120,17 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       }
       if (result.reason === 'name_taken') {
         return NextResponse.json({ error: 'An environment with this name already exists' }, { status: 409 });
+      }
+      if (result.reason === 'org_policy') {
+        return orgPolicyRefusalResponse({ code: 'org_policy', policy: 'persistentEnvironments', status: 403, message: result.message });
+      }
+      if (result.reason === 'org_lapsed') {
+        // SEAT-9: a lapsed org creates no new environment until an Owner or Admin reactivates billing.
+        return NextResponse.json({ error: result.message, code: 'org_lapsed' }, { status: 402 });
+      }
+      if (result.reason === 'member_cap_reached') {
+        // [D-OW-28] The env's compute would count against this member's cap, and it is reached.
+        return NextResponse.json({ error: result.message, code: 'org_member_cap_reached' }, { status: 402 });
       }
       // Quota. The two denials get DIFFERENT statuses because they have
       // different remedies: an ineligible tier is a forbidden feature (403),

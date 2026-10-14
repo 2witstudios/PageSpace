@@ -749,7 +749,8 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           if (n >= maxEnvs) return { ok: false as const, reason: 'limit_reached' as const };
           const [row] = await tx
             .insert(driveEnvs)
-            .values({ driveId, name, createdBy, substrate: local ? 'local' : 'sprite', createdAt: at, updatedAt: at })
+            // [D-OW-28] The creator's per-member cap carries the env's compute; null = the drive lead.
+            .values({ driveId, name, createdBy, costOwnerId: createdBy, substrate: local ? 'local' : 'sprite', createdAt: at, updatedAt: at })
             .returning();
           if (!local) return { ok: true as const, env: row as DriveEnvRecord, local: null };
           // The sibling in the SAME transaction: a local env never exists

@@ -57,4 +57,11 @@ describe('DriveEnvAppPane — always-on purchase', () => {
   it('given a parked app on the web, should still point to topping up or the always-on plan', () => {
     expect(parkedNoticeFor(true)).toMatch(/top up/i);
   });
+
+  it('WAL-2 (partial) given an app paused on its creator\'s allowance, says it returns by itself and who can resume it — and sells nothing', () => {
+    const notice = parkedNoticeFor(true, 'parked: org_member_cap_reached');
+    expect(notice).toMatch(/returns automatically when that allowance renews/);
+    expect(notice).toMatch(/its creator, the drive lead or an org admin can resume it sooner/);
+    expect(notice).not.toMatch(PURCHASE_CTA);
+  });
 });

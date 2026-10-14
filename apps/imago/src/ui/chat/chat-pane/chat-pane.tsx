@@ -8,6 +8,7 @@
 // Opening an object changes only the context a turn carries, never the agent
 // or the conversation.
 
+import { HeaderSpendSource } from './header-spend-source';
 import { focusComposerAtEnd } from './focus-composer';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
@@ -20,7 +21,6 @@ import { usePageTrail } from '@/ui/tasks/use-tasks/use-tasks';
 import { chatChipFor, chatContextFor, type Stage } from '../../frame/stage/stage';
 import { tabLabelFor } from '../../frame/tabs/tab-label';
 import { AgentPicker } from '../agent-picker/agent-picker';
-import { SpendStrip } from '../spend-strip/spend-strip';
 import { OutOfCreditsAlert } from './out-of-credits';
 import { ChipsRow } from '../chips-row/chips-row';
 import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
@@ -131,12 +131,13 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
   const ground = groundFor(stage);
   // A side chat with an agent beside a page, before its first message: the invitation and chips (IMC-3.11).
   const sideChatEmpty = chosenAgent !== null && stage.object?.kind === 'page' && conversationId === null && !resolving;
-  const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} ownsCreditsAlert aboveComposer={<>{sideChatEmpty ? <SideChatEmpty agentName={agentName} /> : null}<OutOfCreditsAlert conversationId={conversationId} /><ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /><SpendStrip /></>} /></div>;
+  const thread = view === 'history' ? <ImagoHistory agentId={agentId} activeId={conversationId} /> : <div ref={chatHost} className={context.density === 'roomy' ? 'mx-auto h-full min-h-0 w-full max-w-imago-ground' : 'h-full min-h-0'}><RetainedChat home={stage.section === 'chat'} agentId={agentId} name={agentName} conversationId={conversationId} resolving={resolving} placeholder={context.placeholder} ownsCreditsAlert aboveComposer={<>{sideChatEmpty ? <SideChatEmpty agentName={agentName} /> : null}<OutOfCreditsAlert conversationId={conversationId} /><ChipsRow conversationId={conversationId} agentId={agentId} driveId={stage.driveId ?? undefined} /></>} /></div>;
   return renderChatPane({
     density: context.density,
     agentName: headerAgent?.title ?? agentName,
     leading,
     trailing,
+    source: <HeaderSpendSource agentId={agentId} conversationId={conversationId} />,
     picker: (
       <AgentPicker
         agentName={headerAgent?.title ?? agentName}

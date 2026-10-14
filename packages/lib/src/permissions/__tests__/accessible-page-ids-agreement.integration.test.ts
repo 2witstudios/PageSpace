@@ -28,6 +28,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { accessiblePageIds } from '../accessible-page-ids';
 import { getUserAccessLevel } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 const seededUserIds: string[] = [];
 
@@ -162,12 +163,12 @@ describe('accessible_page_ids_for_user agrees with getUserAccessLevel (integrati
       const userId = c.label === 'owner' ? owner.id : (await seedUser()).id;
       await c.setup(userId);
 
-      const fromSql = new Set(await accessiblePageIds(userId));
+      const fromSql = new Set(await accessiblePageIds(credentialActor(userId, null)));
       const sqlInDrive = pageIds.filter((id) => fromSql.has(id)).sort();
 
       const fromTs: string[] = [];
       for (const pageId of pageIds) {
-        if ((await getUserAccessLevel(userId, pageId))?.canView) fromTs.push(pageId);
+        if ((await getUserAccessLevel(credentialActor(userId, null), pageId))?.canView) fromTs.push(pageId);
       }
 
       expect(sqlInDrive, c.label).toEqual(fromTs.sort());

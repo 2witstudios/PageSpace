@@ -87,7 +87,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -140,7 +140,7 @@ describe('POST /api/auth/signup-passkey', () => {
     vi.mocked(validateLoginCSRFToken).mockReturnValue(true);
     vi.mocked(verifySignupRegistration).mockResolvedValue({
       ok: true,
-      data: { userId: 'new-user-1', passkeyId: 'pk-1' },
+      data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified: true },
     });
   });
 
@@ -245,8 +245,23 @@ describe('POST /api/auth/signup-passkey', () => {
       await POST(createRequest());
 
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
         createdByIp: '192.168.1.1',
       }));
+    });
+
+    it.each([
+      [true, 'user_verified_passkey'],
+      [false, 'single_factor'],
+    ] as const)('SEC-2 (partial) a signup passkey with userVerified=%s records %s on the new session (D-OW-45)', async (userVerified, assurance) => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({ ok: true, data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified } });
+      const before = Date.now();
+
+      await POST(createRequest());
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
 
     it('passes undefined createdByIp when IP is unknown', async () => {
@@ -255,6 +270,7 @@ describe('POST /api/auth/signup-passkey', () => {
       await POST(createRequest());
 
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
         createdByIp: undefined,
       }));
     });
@@ -587,7 +603,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: 'drive',
         invitedDriveId: 'drive_invited',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -609,7 +625,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -627,7 +643,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_NOT_FOUND',
       });
 
@@ -658,7 +674,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: 'drive',
         invitedDriveId: 'drive_invited',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -673,7 +689,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_conn' }));
@@ -688,7 +704,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 

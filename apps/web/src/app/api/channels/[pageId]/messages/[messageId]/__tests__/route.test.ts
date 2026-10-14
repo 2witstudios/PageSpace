@@ -18,6 +18,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -48,6 +49,7 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 import { DELETE } from '../route';
 import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const PAGE_ID = 'page_chan';
 const MESSAGE_ID = 'msg_1';
@@ -121,4 +123,13 @@ describe('DELETE /api/channels/[pageId]/messages/[messageId]', () => {
     const broadcasts = fetchMock.mock.calls.filter(([url]) => typeof url === 'string' && url.includes('/api/broadcast'));
     expect(broadcasts).toHaveLength(0);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

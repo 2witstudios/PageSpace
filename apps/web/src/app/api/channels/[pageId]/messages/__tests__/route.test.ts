@@ -28,7 +28,13 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 // --- Permissions ---------------------------------------------------------------
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
   // Inbox fan-out asks the centralized helper which candidates can view the
@@ -678,9 +684,9 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
-    // Sender (USER_ID) passes; the mentioned outsider does not.
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+    // Sender (USER_ID) can view; the mentioned outsider cannot (a third-party audience question).
+    const { getUsersWhoCanViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUsersWhoCanViewPage).mockImplementationOnce(async (_pageId, ids) => new Set(ids.filter((id) => id === USER_ID)));
 
     await callPost({
       content: 'hey @[Stranger](user-outsider:user)',

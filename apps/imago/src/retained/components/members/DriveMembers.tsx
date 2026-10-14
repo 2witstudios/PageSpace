@@ -15,9 +15,15 @@ import { toast } from 'sonner';
 import { useSocket } from '@/retained/hooks/useSocket';
 import { del, fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/retained/hooks/useOrgLapsed';
+import { MemberSourceLegend, PageLinkGuestsSection, type PageLinkGuest } from './PageLinkGuestsSection';
 import { partitionMembers } from '@/ui/tools/members/members-roster';
 
 interface DriveMember {
+  source?: 'invite' | 'org' | 'lead';
+  isGuest?: boolean;
   id: string;
   userId: string;
   role: string;
@@ -70,6 +76,12 @@ const DRIVE_MEMBER_EVENTS = [
 
 export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
   const isHome = isHomeDrive({ kind: driveKind });
+  const driveOrgId = useDriveStore(state => state.drives.find(drive => drive.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
+  const { orgById } = useMyOrganizations();
+  const orgLabels = driveOrgId !== null;
+  const orgName = orgById(driveOrgId)?.name ?? null;
+  const [pageLinkGuests, setPageLinkGuests] = useState<PageLinkGuest[]>([]);
   const [members, setMembers] = useState<DriveMember[]>([]);
   const [agentMembers, setAgentMembers] = useState<AgentMember[]>([]);
   const [appMembers, setAppMembers] = useState<AppMember[]>([]);
@@ -98,6 +110,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
       const data = await membersRes.json();
       if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
+      setPageLinkGuests(data.guests ?? []);
       setPendingInvites(data.pendingInvites ?? []);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
 
@@ -214,7 +227,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
 
       {canManage && (
         <div className="flex justify-end">
-          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
+          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)} disabled={lapsed}>
             <UserPlus className="w-4 h-4 mr-2" />
             Invite
           </Button>
@@ -223,9 +236,11 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
 
       {canManage && (
         <section id="links" aria-label="Invite links">
-          <DriveShareLinkSection driveId={driveId} />
+          <DriveShareLinkSection driveId={driveId} lapsed={lapsed} />
         </section>
       )}
+
+      {lapsed && canManage && <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">Inviting, new invite links and new agents are paused. {LAPSED_LOOSEN_NOTE}</p>}
 
       <section id="people" aria-label="People" className="space-y-3">
         <MembersSectionHeading title="People" count={people.length} />
@@ -240,6 +255,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
                 key={member.id}
                 member={member}
                 driveId={driveId}
+                orgLabels={orgLabels}
                 currentUserRole={currentUserRole}
                 onRemove={() => handleRemoveMember(member.userId)}
               />
@@ -248,13 +264,16 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
         </div>
       </section>
 
+      {orgLabels && members.length > 0 && <MemberSourceLegend orgName={orgName} />}
+
       {canManage && (
         <section id="page-link-guests" aria-label="Page-link guests" className="space-y-3">
           <MembersSectionHeading
             title="Page-link guests"
-            count={guests.length}
-            detail="People outside Studio who joined a single page through a share link appear here. Only the drive lead and admins see this list."
+            count={guests.length + pageLinkGuests.length}
+            detail="People who joined a single page through a share link appear here. Only the drive lead and admins see this list."
           />
+          <PageLinkGuestsSection guests={pageLinkGuests} orgName={orgName} onChanged={() => void fetchMembers()} showHeader={false} />
           {guests.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
               {guests.map((member) => (
@@ -275,7 +294,7 @@ export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
         <div className="flex items-start justify-between gap-2">
           <MembersSectionHeading title="Agents" count={agentMembers.length} detail="AI Chat pages acting with a role" />
           {canManage && (
-            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)} disabled={lapsed}>
               <UserPlus className="h-4 w-4 mr-2" />
               Invite Agent
             </Button>

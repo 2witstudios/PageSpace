@@ -15,6 +15,10 @@ const nextConfig = readFileSync(
   join(__dirname, '../../../apps/web/next.config.ts'),
   'utf-8'
 );
+const ciWorkflow = readFileSync(
+  join(__dirname, '../../../.github/workflows/ci.yml'),
+  'utf-8'
+);
 const spritesClient = readFileSync(
   join(__dirname, '../../../apps/web/src/lib/sandbox/sprites-client.ts'),
   'utf-8'
@@ -63,5 +67,24 @@ describe('Dockerfile build args', () => {
     expect(spritesClient).toMatch(/import\s+\{\s*SpritesClient\s*\}\s+from\s+['"]@fly\/sprites['"]/);
     expect(nextConfig).toMatch(/serverExternalPackages:\s*\[\s*["']pg["']\s*\]/);
     expect(nextConfig).not.toMatch(/serverExternalPackages:[\s\S]*@fly\/sprites/);
+  });
+
+  // The production image (docker-images.yml) builds apps/web with this Dockerfile. CI raised its
+  // heap to 6144 after Next's build OOMed at Node's ~4GB default (#2740); a Dockerfile left at 4096
+  // can fail the image build at deploy time, so the default must match CI's ceiling and stay
+  // overridable for a self-hosted builder with less memory.
+  it('given the Dockerfile, the web build heap defaults to the CI ceiling and is a build ARG', () => {
+    const ciHeaps = [...ciWorkflow.matchAll(/NODE_OPTIONS: --max-old-space-size=(\d+)/g)].map((m) => Number(m[1]));
+    expect(ciHeaps.length).toBeGreaterThan(0);
+    const ciCeiling = Math.max(...ciHeaps);
+
+    const arg = dockerfile.match(/^ARG WEB_BUILD_MAX_OLD_SPACE_MB=(\d+)$/m);
+    expect(arg).not.toBeNull();
+    expect(Number(arg![1])).toBe(ciCeiling);
+
+    const buildLine = dockerfile.match(/^RUN cd apps\/web && .*bun run build$/m);
+    expect(buildLine).not.toBeNull();
+    expect(buildLine![0]).toContain('--max-old-space-size=${WEB_BUILD_MAX_OLD_SPACE_MB}');
+    expect(dockerfile).not.toMatch(/max-old-space-size=4096/);
   });
 });

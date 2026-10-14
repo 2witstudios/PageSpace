@@ -49,6 +49,7 @@ const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
   { key: 'tasks', title: 'Tasks', example: 'pagespace tasks create <pageId> --title <title>', resources: ['tasks'] },
   { key: 'agents', title: 'Agents', example: 'pagespace agents ask <agentPageId> <message>', resources: ['agents', 'models', 'conversations'] },
   { key: 'workspaces', title: 'Workspaces', example: 'pagespace workspaces exec <workspaceId> -- ls -la', resources: ['workspaces'] },
+  { key: 'wallets', title: 'Wallets (read-only)', example: 'pagespace wallets drive <driveId>', resources: ['wallets'] },
   { key: 'keys', title: 'Keys', example: 'pagespace keys', resources: ['keys'] },
   { key: 'mcp', title: 'MCP', example: 'pagespace mcp', resources: ['mcp'] },
   { key: 'other', title: 'Other', example: 'pagespace activity <driveId>', resources: [] },

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -66,7 +66,8 @@ export const users = pgTable('users', {
   // @pagespace/lib/billing/subscription-tiers (TIERS). This is a denormalized
   // CACHE of the subscriptions table — see subscription-tier-sync.ts for the
   // single write-through derivation and subscription-tier-reconcile.ts for the
-  // periodic drift repair. Read call sites must coerce with toSubscriptionTier().
+  // periodic drift repair. Personal rows support only Free/Pro; org entitlements
+  // come from org_subscriptions, never this column.
   subscriptionTier: text('subscriptionTier').default('free').notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
@@ -103,12 +104,15 @@ export const users = pgTable('users', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
+  personalTier: check('users_personal_subscription_tier', sql`${table.subscriptionTier} IN ('free', 'pro')`),
   // Unique blind-index lookup for email (preserves the email uniqueness
   // guarantee once the raw-email unique constraint is retired post-backfill).
   emailBidxIdx: uniqueIndex('users_email_bidx_idx').on(table.emailBidx),
 }));
 
 export const deviceTokens = pgTable('device_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -154,6 +158,8 @@ export const deviceTokens = pgTable('device_tokens', {
 });
 
 export const mcpTokens = pgTable('mcp_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 

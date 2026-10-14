@@ -1,5 +1,7 @@
 "use client";
 
+import { OrgMark } from '@/components/orgs/OrgMark';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -10,6 +12,13 @@ import { useDriveStore } from "@/hooks/useDrive";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 
 const DASHBOARD_PATH = "/dashboard";
+const ORG_PAGE = /^\/orgs\/([^/]+)(?:\/|$)/;
+
+/** UI-3: the org an /orgs/[orgId]/* page is about, from the route; null anywhere else. */
+export function orgIdFromPath(pathname: string | null): string | null {
+  const match = pathname ? ORG_PAGE.exec(pathname) : null;
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 /**
  * Home is the ONE outlined control in the header, at icon-button height
@@ -23,6 +32,10 @@ const HOME_CLASS =
 
 const DRIVE_CRUMB_CLASS =
   "hidden h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:inline-flex";
+
+/** The org chip has nowhere else to live on an org page (no drive switcher), so it shows from sm. */
+const ORG_CRUMB_CLASS =
+  "hidden h-8 min-w-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:inline-flex";
 
 /**
  * The header's route home, and the only place the header says where you
@@ -51,6 +64,16 @@ export default function DashboardCrumb() {
   const driveName = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.name : undefined
   );
+  // UI-3: an org-owned drive is still ONE chip — the org's mark replaces the folder icon, and
+  // the org's name is in the tooltip, never a second crumb.
+  const driveOrgId = useDriveStore((state) =>
+    driveId ? state.drives.find((drive) => drive.id === driveId)?.orgId ?? null : null
+  );
+  const { orgById } = useMyOrganizations();
+  const org = orgById(driveOrgId);
+  // UI-3 (canvas Main): on the org hub and its settings pages the header names the org, as a link
+  // back to the hub. Only an org the viewer belongs to is named; anything else shows Home alone.
+  const pageOrg = !driveName ? orgById(orgIdFromPath(pathname)) : null;
 
   if (pathname === DASHBOARD_PATH) {
     // Hidden below lg, unlike the link. This variant is orientation only —
@@ -97,6 +120,19 @@ export default function DashboardCrumb() {
         Below lg the sidebar is a sheet, and its DriveSwitcher opens the same
         picker, so nothing is lost there but the persistent name.
       */}
+      {pageOrg ? (
+        <>
+          <span aria-hidden="true" className="hidden px-0.5 text-sm text-muted-foreground/60 sm:inline">
+            /
+          </span>
+          <Link href={`/orgs/${encodeURIComponent(pageOrg.id)}/settings`} className={ORG_CRUMB_CLASS}>
+            <OrgMark name={pageOrg.name} avatarUrl={pageOrg.avatarUrl} size="sm" />
+            <span className="max-w-[160px] truncate" title={pageOrg.name}>
+              {pageOrg.name}
+            </span>
+          </Link>
+        </>
+      ) : null}
       {driveName ? (
         <>
           <span aria-hidden="true" className="hidden px-0.5 text-sm text-muted-foreground/60 lg:inline">
@@ -109,13 +145,17 @@ export default function DashboardCrumb() {
             aria-expanded={pickerOpen}
             className={DRIVE_CRUMB_CLASS}
           >
-            <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            {org ? (
+              <OrgMark name={org.name} avatarUrl={org.avatarUrl} size="sm" />
+            ) : (
+              <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            )}
             {/*
               title + a width cap, matching content-header/Breadcrumbs.tsx: a
               truncated name is unrecoverable without the tooltip, and an
               uncapped one competes with the search field for the same row.
             */}
-            <span className="max-w-[160px] truncate" title={driveName}>
+            <span className="max-w-[160px] truncate" title={org ? `${driveName} · ${org.name}` : driveName}>
               {driveName}
             </span>
             <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />

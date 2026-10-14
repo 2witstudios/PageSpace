@@ -1,5 +1,7 @@
 'use client';
 
+import { dollarsFromCents } from '@/retained/lib/subscription/credits';
+
 import { useState, useEffect, useCallback } from 'react';
 import {
   Dialog,
@@ -141,7 +143,7 @@ export function PlanChangeConfirmation({
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(cents / 100);
+    }).format(dollarsFromCents(cents));
   };
 
   return (

@@ -1,8 +1,10 @@
+import { toPersonalSubscriptionTier } from '../billing/subscription-tiers';
 import { getStorageConfigFromSubscription, STORAGE_TIERS, type SubscriptionTier } from './subscription-utils';
 import { storageRepository, type DrizzleTx } from './storage-repository';
 import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
 import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
+import { payerForDrive, type BillingPayer, type DriveBillingFacts } from '../billing/sandbox-payer';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -17,10 +19,22 @@ export interface StorageQuota {
   warningLevel: 'none' | 'warning' | 'critical';
 }
 
-export interface StorageCheckResult {
+/**
+ * An organization's storage quota (WAL-9, O-9). Every org is on Business (SEAT-8), and its
+ * usage is DERIVED — SUM(files.sizeBytes) over files in the org's drives — rather than cached,
+ * so a drive moving in or out changes the org's usage with no counter to keep in step.
+ */
+export interface OrgStorageQuota extends Omit<StorageQuota, 'userId'> {
+  orgId: string;
+}
+
+/** The quota an upload is checked against: the payer's — a person's, or the drive's org's. */
+export type AnyStorageQuota = StorageQuota | OrgStorageQuota;
+
+export interface StorageCheckResult<Q extends AnyStorageQuota = StorageQuota> {
   allowed: boolean;
   reason?: string;
-  quota?: StorageQuota;
+  quota?: Q;
   requiredBytes?: number;
 }
 
@@ -34,7 +48,7 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
   if (!user) return null;
 
   // Compute storage config from subscription tier
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   const quotaBytes = storageConfig.quotaBytes;
@@ -71,7 +85,19 @@ export async function checkStorageQuota(
     };
   }
 
-  // Check tier file size limit
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  return decideFileCount({ quota, fileCount: await getUserFileCount(userId) });
+}
+
+/**
+ * The byte half of a quota check (pure): the tier's per-file limit, then the bytes left.
+ * One rule for a person's quota and an org's.
+ */
+export function decideStorageBytes<Q extends AnyStorageQuota>(input: { quota: Q; fileSize: number }): StorageCheckResult<Q> {
+  const { quota, fileSize } = input;
   const tierConfig = STORAGE_TIERS[quota.tier];
   if (fileSize > tierConfig.maxFileSize) {
     return {
@@ -81,8 +107,6 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
-
-  // Check available storage
   if (fileSize > quota.availableBytes) {
     return {
       allowed: false,
@@ -91,9 +115,13 @@ export async function checkStorageQuota(
       requiredBytes: fileSize
     };
   }
+  return { allowed: true, quota };
+}
 
-  // Check file count limit
-  const fileCount = await getUserFileCount(userId);
+/** The file-count half of a quota check (pure). A tier limit of 0 means unlimited. */
+export function decideFileCount<Q extends AnyStorageQuota>(input: { quota: Q; fileCount: number }): StorageCheckResult<Q> {
+  const { quota, fileCount } = input;
+  const tierConfig = STORAGE_TIERS[quota.tier];
   if (tierConfig.maxFileCount > 0 && fileCount >= tierConfig.maxFileCount) {
     return {
       allowed: false,
@@ -101,11 +129,208 @@ export async function checkStorageQuota(
       quota
     };
   }
+  return { allowed: true, quota };
+}
 
+/**
+ * An org's quota over its derived usage (pure). Every org is on Business (SEAT-8), so the
+ * Business storage limits apply; a lapsed org's restrictions are SEAT-9's, not storage's.
+ */
+export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number }): OrgStorageQuota {
+  const storageConfig = getStorageConfigFromSubscription('business');
+  const quotaBytes = storageConfig.quotaBytes;
+  const usedBytes = toByteCount(input.usedBytes);
+  const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
   return {
-    allowed: true,
-    quota
+    orgId: input.orgId,
+    quotaBytes,
+    usedBytes,
+    availableBytes: Math.max(0, quotaBytes - usedBytes),
+    utilizationPercent,
+    tier: storageConfig.tier,
+    warningLevel: getWarningLevel(utilizationPercent),
   };
+}
+
+/**
+ * The org's storage quota over its derived usage (WAL-9): SUM(files.sizeBytes) across its drives.
+ */
+export async function getOrgStorageQuota(orgId: string): Promise<OrgStorageQuota> {
+  return buildOrgStorageQuota({ orgId, usedBytes: await storageRepository.sumOrgFileBytes(orgId) });
+}
+
+/**
+ * The billing facts (owner, org) of each of `driveIds`, for callers that attribute many files at
+ * once (the orphan reaper). A drive that no longer exists is absent: its files rows cascaded with it.
+ */
+export async function findDriveBillingFactsMap(driveIds: ReadonlyArray<string>): Promise<Map<string, DriveBillingFacts>> {
+  return storageRepository.findDriveBillingFactsMap([...new Set(driveIds)]);
+}
+
+/** FILE pages across the org's drives: the org's file count (WAL-9). */
+export async function getOrgFileCount(orgId: string): Promise<number> {
+  const driveIds = await storageRepository.findOrgDriveIds(orgId);
+  if (driveIds.length === 0) return 0;
+  return storageRepository.countFiles(driveIds);
+}
+
+/**
+ * Who an upload into `driveId` bills (WAL-9, O-9): the payer seam — the drive's org when it has
+ * one, else the drive's OWNER, whoever is uploading. A drive-less upload (a DM attachment) bills
+ * its uploader. A named drive that cannot be found is refused: null, never a substitute payer.
+ */
+export async function resolveUploadPayer(userId: string, driveId: string | null | undefined): Promise<BillingPayer | null> {
+  if (!driveId) return { kind: 'user', userId };
+  const drive = await storageRepository.findDriveBillingFacts(driveId);
+  return drive ? storagePayerForFile({ createdBy: userId, drive }) : null;
+}
+
+/**
+ * Who an upload into a drive bills, and the quota it is checked against, read ONCE (WAL-9).
+ * A caller that needs both the quota (its tier) and the check resolves this once and passes it
+ * to `checkUploadQuotaTarget`, so the org's derived usage (a SUM over every file in the org) is
+ * read once per request (#2719 review P2-2). Deliberately uncached: an undercounted usage lets
+ * an org exceed its quota.
+ */
+export interface UploadQuotaTarget {
+  payer: BillingPayer;
+  quota: AnyStorageQuota;
+}
+
+/**
+ * The payer and quota for an upload into `driveId`: the org's for an org drive, the drive
+ * owner's for a personal drive, the uploader's for a drive-less attachment. An upload never
+ * reads the quota of anyone but its payer. Null when the drive or the personal payer does not
+ * exist.
+ */
+export async function resolveUploadQuotaTarget(
+  userId: string,
+  driveId: string | null | undefined,
+): Promise<UploadQuotaTarget | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer === null) return null;
+  if (payer.kind === 'org') return { payer, quota: await getOrgStorageQuota(payer.orgId) };
+  const quota = await getUserStorageQuota(payer.userId);
+  return quota ? { payer, quota } : null;
+}
+
+/**
+ * The upload quota check against an already-resolved target: the tier's per-file limit, the
+ * bytes left, then the payer's file count. Re-reads neither the payer nor the usage.
+ */
+export async function checkUploadQuotaTarget(
+  target: UploadQuotaTarget | null,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  if (!target) return { allowed: false, reason: 'User not found' };
+  const { payer, quota } = target;
+  const bytes = decideStorageBytes({ quota, fileSize });
+  if (!bytes.allowed) return bytes;
+
+  // Counted only once the byte checks pass: the count is the expensive read.
+  const fileCount = payer.kind === 'org' ? await getOrgFileCount(payer.orgId) : await getUserFileCount(payer.userId);
+  return decideFileCount({ quota, fileCount });
+}
+
+/**
+ * The upload quota check for an upload into `driveId` (WAL-9): an org drive checks the org's
+ * bytes, per-file size and file count; anything else checks the uploader's.
+ */
+export async function checkStorageQuotaForDrive(
+  userId: string,
+  driveId: string | null | undefined,
+  fileSize: number,
+): Promise<StorageCheckResult<AnyStorageQuota>> {
+  return checkUploadQuotaTarget(await resolveUploadQuotaTarget(userId, driveId), fileSize);
+}
+
+/**
+ * Charge the first physical store of `deltaBytes` uploaded into `driveId` (WAL-9, O-9). A
+ * personal payer's counter moves — the drive OWNER's for a personal drive, the uploader's for a
+ * drive-less attachment; an org drive's usage is derived from its files rows, so an org-billed
+ * store writes no counter at all. A drive that no longer exists charges no one (its files rows
+ * cascade with it). Returns who the bytes bill.
+ */
+export async function chargeStorageForStore(
+  userId: string,
+  driveId: string | null | undefined,
+  deltaBytes: number,
+  context: { pageId?: string; eventType?: 'upload' | 'delete' | 'update' | 'reconcile' },
+): Promise<BillingPayer | null> {
+  const payer = await resolveUploadPayer(userId, driveId);
+  if (payer?.kind === 'user') {
+    await updateStorageUsage(payer.userId, deltaBytes, { ...context, driveId: driveId ?? undefined });
+  }
+  return payer;
+}
+
+/** What a drive move did to stored-byte attribution (O-9). */
+export interface StorageReattributionResult {
+  status: 'applied';
+  direction: DriveMoveDirection;
+  /** Bytes whose attribution moved between the drive owner's personal quota and the org. */
+  movedBytes: number;
+  deltas: StorageReattributionDelta[];
+}
+
+/**
+ * O-9 (D-OW-9): re-attribute a moving drive's stored bytes INSIDE the move's transaction, so
+ * drives.orgId and the owner's counter change together or not at all. Moving in takes all the
+ * drive's bytes off its owner's personal quota; moving out puts them on it. The org's usage is
+ * derived from its drives, so it follows drives.orgId with no write. One 'reattribute' storage
+ * event per changed counter.
+ */
+export async function reattributeDriveStorageInTx(
+  tx: DrizzleTx,
+  input: { driveId: string; ownerId: string; orgId: string; direction: DriveMoveDirection },
+): Promise<StorageReattributionResult> {
+  const files = await storageRepository.findDriveFileBytesInTx(tx, input.driveId);
+  const deltas = computeMoveReattribution({ ownerId: input.ownerId, files, direction: input.direction });
+  const events: Parameters<typeof storageRepository.insertStorageEventsInTx>[1] = [];
+  for (const { userId, deltaBytes } of deltas) {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
+    events.push({
+      userId,
+      eventType: 'reattribute',
+      sizeDelta: deltaBytes,
+      totalSizeAfter: newUsage,
+      metadata: { driveId: input.driveId, orgId: input.orgId, direction: input.direction },
+    });
+  }
+  await storageRepository.insertStorageEventsInTx(tx, events);
+  return {
+    status: 'applied',
+    direction: input.direction,
+    movedBytes: deltas.reduce((sum, d) => sum + Math.abs(d.deltaBytes), 0),
+    deltas,
+  };
+}
+
+/**
+ * WAL-9: a personal drive handed to a new owner (account deletion's transfer) moves its stored
+ * bytes from the old owner's quota to the new owner's INSIDE the transfer's transaction, so
+ * drives.ownerId and both counters change together or not at all. An org drive's bytes bill the
+ * org whoever leads it, so a lead change moves nothing (callers never call this for one).
+ */
+export async function reattributeDriveOwnerStorageInTx(
+  tx: DrizzleTx,
+  input: { driveId: string; fromUserId: string; toUserId: string },
+): Promise<StorageReattributionDelta[]> {
+  const files = await storageRepository.findDriveFileBytesInTx(tx, input.driveId);
+  const deltas = computeOwnerTransferReattribution({ fromUserId: input.fromUserId, toUserId: input.toUserId, files });
+  const events: Parameters<typeof storageRepository.insertStorageEventsInTx>[1] = [];
+  for (const { userId, deltaBytes } of deltas) {
+    const { newUsage } = await storageRepository.updateStorageInTx(tx, userId, deltaBytes);
+    events.push({
+      userId,
+      eventType: 'reattribute',
+      sizeDelta: deltaBytes,
+      totalSizeAfter: newUsage,
+      metadata: { driveId: input.driveId, fromUserId: input.fromUserId, toUserId: input.toUserId, reason: 'owner_transfer' },
+    });
+  }
+  await storageRepository.insertStorageEventsInTx(tx, events);
+  return deltas;
 }
 
 /**
@@ -133,7 +358,7 @@ export async function reserveConcurrentUploadSlot(
   const user = await storageRepository.findUserForStorage(userId);
   if (!user) return false;
 
-  const subscriptionTier = (user.subscriptionTier || 'free') as SubscriptionTier;
+  const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
   return reserveUploadSlot(jobId, userId, fileSize, storageConfig.maxConcurrentUploads);
@@ -191,13 +416,13 @@ export function toByteCount(value: number | string | null | undefined): number {
 }
 
 /**
- * H4 — sum a reconcile population (pure). The charge path bills the UPLOADER and
- * a `files` row is created (createdBy = uploader) on the first physical store of
- * every page-file AND attachment. So the population that reconcile must re-sum to
- * match the charge basis is exactly the user's `files` rows — across drives, and
- * including trashed-but-not-yet-purged ones (the `files` row survives until the
- * orphan reaper deletes it). This pure summation is integer-safe and ignores
- * null/garbage so a single bad row can't poison the total.
+ * H4 — sum a reconcile population (pure). The charge path bills the file's PAYER (the
+ * personal drive's owner, or a drive-less attachment's uploader) and a `files` row is
+ * created on the first physical store of every page-file AND attachment. So the
+ * population that reconcile must re-sum to match the charge basis is exactly the
+ * `files` rows billed to the user — including trashed-but-not-yet-purged ones (the
+ * `files` row survives until the orphan reaper deletes it). This pure summation is
+ * integer-safe and ignores null/garbage so a single bad row can't poison the total.
  */
 export function sumStorageBytes(
   rows: ReadonlyArray<{ sizeBytes: number | string | null }>,
@@ -211,19 +436,85 @@ export function sumStorageBytes(
  * M8 (charge side) — only charge storage on the FIRST physical store of a blob.
  *
  * Storage is content-addressed: the second+ uploader of identical bytes hits
- * `files` ON CONFLICT DO NOTHING, so no new bytes are stored and `files.createdBy`
- * stays the first uploader. Charging every /complete (the old behaviour) meant N
- * charges but the reaper only ever credits `createdBy` once — a permanent quota
- * leak for the non-first uploaders. Charging only when the row was newly inserted
- * keeps the charge symmetric with the single credit at unlink.
+ * `files` ON CONFLICT DO NOTHING, so no new bytes are stored and the row keeps
+ * its first drive. Charging every /complete (the old behaviour) meant N charges
+ * but the reaper only ever credits the row's payer once — a permanent quota leak.
+ * Charging only when the row was newly inserted keeps the charge symmetric with
+ * the single credit at unlink.
  */
 export function shouldChargeForStore(fileRowNewlyInserted: boolean): boolean {
   return fileRowNewlyInserted;
 }
 
+/**
+ * WAL-9, O-9 (D-OW-9) — who a stored file's bytes bill (pure): the payer seam ("org if
+ * drives.orgId, else owner", payerForDrive) on the file's drive — the org for an org drive, the
+ * drive's OWNER for a personal one, whoever uploaded it. A drive-less file (a DM attachment)
+ * bills its uploader (files.createdBy), or nobody once that user is gone. `drive` is the billing
+ * facts of files.driveId, null for a drive-less file.
+ *
+ * The attribution follows files.driveId: storage is content-addressed, so a blob has ONE files
+ * row, and its bytes stay where they were first stored even when a page in another drive links
+ * the same hash.
+ */
+export function storagePayerForFile(input: { createdBy: string | null; drive: DriveBillingFacts | null }): BillingPayer | null {
+  if (input.drive !== null) return payerForDrive(input.drive);
+  if (input.createdBy) return { kind: 'user', userId: input.createdBy };
+  return null;
+}
+
+export type DriveMoveDirection = 'into-org' | 'out-of-org';
+
+export interface StorageReattributionDelta {
+  userId: string;
+  /** Negative when the bytes leave the person's quota, positive when they land on it. */
+  deltaBytes: number;
+}
+
+/**
+ * O-9 (D-OW-9) — re-attribute a drive's stored bytes when it moves into or out of an org
+ * (pure). While personal, every byte in the drive bills its OWNER, whoever uploaded it; moving
+ * in takes exactly those bytes off the owner's quota (the org's usage is derived from its
+ * drives, so it rises by the same total with no write), and moving out puts exactly them on it.
+ * A move in then out nets zero: nothing is double-counted or orphaned. Integer bytes only.
+ */
+export function computeMoveReattribution(input: {
+  ownerId: string;
+  files: ReadonlyArray<{ createdBy: string | null; sizeBytes: number | string | null }>;
+  direction: DriveMoveDirection;
+}): StorageReattributionDelta[] {
+  const bytes = sumStorageBytes(input.files);
+  if (bytes === 0) return [];
+  return [{ userId: input.ownerId, deltaBytes: input.direction === 'into-org' ? -bytes : bytes }];
+}
+
+/**
+ * WAL-9 — re-attribute a personal drive's stored bytes when it is handed to a new owner (pure):
+ * all of them leave the old owner's quota and land on the new owner's. Sorted by userId so every
+ * transfer updates users rows in one order (no lock cycle between concurrent transfers).
+ */
+export function computeOwnerTransferReattribution(input: {
+  fromUserId: string;
+  toUserId: string;
+  files: ReadonlyArray<{ createdBy: string | null; sizeBytes: number | string | null }>;
+}): StorageReattributionDelta[] {
+  const bytes = sumStorageBytes(input.files);
+  if (bytes === 0 || input.fromUserId === input.toUserId) return [];
+  return [
+    { userId: input.fromUserId, deltaBytes: -bytes },
+    { userId: input.toUserId, deltaBytes: bytes },
+  ].sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
+}
+
 export interface UnlinkCreditInput {
-  /** files.createdBy — the uploader who was charged on first physical store. */
+  /** files.createdBy — who uploaded it, the payer of a drive-less attachment. */
   createdBy: string | null;
+  /**
+   * The billing facts of the file's drive at reap time; null for a drive-less file. A personal
+   * drive's bytes credit its owner; an org drive's bill the org, whose usage is derived from the
+   * rows themselves, so no personal quota is credited (WAL-9).
+   */
+  drive: DriveBillingFacts | null;
   sizeBytes: number | string | null;
   /** Whether THIS reap call actually deleted the row (race-safe credit gate). */
   deletedByThisCall: boolean;
@@ -233,39 +524,38 @@ export interface UnlinkCreditInput {
 
 export interface StorageCredit {
   userId: string;
-  /** Negative byte delta to apply to the uploader's usage. */
+  /** Negative byte delta to apply to the payer's usage. */
   deltaBytes: number;
 }
 
 /**
  * M8 (credit side) — compute the storage credit owed when a content-addressed
  * blob is unlinked/reaped (pure). Mirrors {@link shouldChargeForStore}: exactly
- * one credit, to the uploader who paid the single first-store charge, and only
- * when this call truly removed the row and real bytes existed. Returns null when
- * no credit is owed. Integer bytes only.
+ * one credit, to the payer the bytes bill (storagePayerForFile), and only when
+ * this call truly removed the row and real bytes existed. Returns null when no
+ * credit is owed. Integer bytes only.
  */
 export function computeStorageCreditOnUnlink(input: UnlinkCreditInput): StorageCredit | null {
   if (!input.deletedByThisCall) return null;
   if (!input.hadPhysicalBlob) return null;
-  if (!input.createdBy) return null;
+  const payer = storagePayerForFile({ createdBy: input.createdBy, drive: input.drive });
+  if (payer?.kind !== 'user') return null;
   const bytes = toByteCount(input.sizeBytes);
   if (bytes === 0) return null;
-  return { userId: input.createdBy, deltaBytes: -bytes };
+  return { userId: payer.userId, deltaBytes: -bytes };
 }
 
 /**
  * Calculate actual storage usage from database
  * Used for reconciliation and verification
  *
- * H4: sums the SAME population the charge path bills — the user's `files` rows
- * (createdBy = userId) across every drive, including trashed-but-unpurged files.
- * The old basis (FILE pages in drives the user OWNS, non-trashed only) diverged
- * from charging: it missed channel/DM attachments, misattributed cross-drive
- * uploads, and excluded trashed files — so `?reconcile=true` could be abused to
- * reset usage downward (self-serve quota wipe).
+ * H4: sums the SAME population the charge path bills — the `files` rows billed to
+ * the user (their personal drives' files, whoever uploaded them, and their own
+ * drive-less attachments), including trashed-but-unpurged files — so
+ * `?reconcile=true` cannot reset usage downward (self-serve quota wipe).
  */
 export async function calculateActualStorageUsage(userId: string): Promise<number> {
-  const rows = await storageRepository.findFilesByCreator(userId);
+  const rows = await storageRepository.findFilesBilledToUser(userId);
   return sumStorageBytes(rows);
 }
 
@@ -383,7 +673,7 @@ export interface StorageDriftResult {
 
 /**
  * #2155 — compare the materialized storage counter against what the `files`
- * rows imply (pure; modeled on computeBalanceDrift in the credit service).
+ * rows imply (pure; modeled on computeWalletDrift in wallet-ledger-core).
  * Between a delete and the orphan-reaper cron the two legitimately disagree,
  * so a small tolerance keeps the reconcile from thrashing on in-flight state;
  * a flag means "rewrite the cache from the rows", not "data corruption".

@@ -1,3 +1,4 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 /**
  * AI PROVIDER SETTINGS — the read and write behind `GET`/`PATCH /api/ai/chat`.
  *
@@ -25,6 +26,8 @@ import { pages } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -117,7 +120,7 @@ async function validateProviderModel(
     const admission = resolveGenerationAdmission({
       provider,
       model,
-      subscriptionTier: user?.subscriptionTier ?? undefined,
+      subscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
       isAdmin: isAdminUser,
       requiresProSubscription,
     });
@@ -233,6 +236,13 @@ export async function patchAiChatSettings(request: Request) {
         { error: validation.reason || 'Invalid provider/model combination' },
         { status: 400 }
       );
+    }
+
+    // POL-8: saving a model the org does not allow in this drive is refused up front. The runtime refusal in the provider
+    // factory is the authority (a stored model keeps being judged on every call); this only stops the save.
+    const allowed = modelDecision((await getDrivePolicies(page.driveId))?.policies ?? null, { modelId: sanitizedModel, provider: sanitizedProvider });
+    if (!allowed.ok) {
+      return NextResponse.json({ error: allowed.message, code: allowed.code, policy: allowed.policy }, { status: allowed.status });
     }
 
     // Update page settings

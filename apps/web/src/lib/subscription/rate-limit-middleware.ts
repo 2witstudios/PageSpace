@@ -3,7 +3,7 @@ import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
 import { isModelAllowedForTier } from '@/lib/ai/core/ai-providers-config';
 
 /** Subscription tiers that have access to paid features (voice mode, etc.). */
-export const PAID_TIERS = new Set(['pro', 'founder', 'business']);
+export const PAID_TIERS = new Set(['pro', 'business']);
 
 /**
  * Whether the user's subscription tier is barred from the requested model.

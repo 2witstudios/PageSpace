@@ -1,5 +1,7 @@
 'use client';
 
+import { dollarsFromCents } from '@/retained/lib/subscription/credits';
+
 interface UpcomingInvoiceProps {
   invoice: {
     amountDue: number;
@@ -19,7 +21,7 @@ export function UpcomingInvoice({ invoice }: UpcomingInvoiceProps) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: currency.toUpperCase(),
-    }).format(amount / 100);
+    }).format(dollarsFromCents(amount));
   };
 
   const formatDate = (dateString: string) => {

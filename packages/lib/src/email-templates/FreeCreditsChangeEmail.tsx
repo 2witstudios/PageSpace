@@ -17,20 +17,21 @@ interface FreeCreditsChangeEmailProps {
   /** Recipient's display name (falls back to a friendly default upstream). */
   userName: string;
   /**
-   * The recipient's current spendable credit balance as a display string (e.g. "3.2"),
+   * The recipient's current spendable credit balance as a display string from
+   * formatCreditCount (e.g. "320"),
    * or undefined when they have never used AI and therefore have no balance row yet —
    * in which case the email tells them their starter credits are still waiting.
    */
   currentCredits?: string;
   /**
-   * How far in the red the recipient is, as a positive display string (e.g. "0.3"),
+   * How far in the red the recipient is, as a positive display string (e.g. "30"),
    * when their balance is negative (an in-flight call overshot). Mutually exclusive
    * with `currentCredits`; when set the email says a top-up clears the overage.
    */
   overageCredits?: string;
-  /** The free starter grant, as a display string (e.g. "5"). */
+  /** The free starter grant, formatted from money-model's FREE_STARTER_CREDITS (a count, never a price). The same amount was the old monthly grant, hence "instead of … per month" below. */
   starterCredits: string;
-  /** The Pro plan's monthly allowance, as a display string (e.g. "15"). */
+  /** The Pro plan's monthly allowance, formatted from money-model's tierAllowanceCents('pro'). */
   proMonthlyCredits: string;
   /** Cheapest top-up, as a dollar string (e.g. "$5"). */
   minTopup: string;

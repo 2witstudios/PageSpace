@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { POST } from '../route';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadUserDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
+/** What loadUserDriveRelationships answers for the transfer target (the lead is always the lead). */
+let targetRelationship: DriveRelationship = NONE;
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock dependencies
@@ -15,6 +25,7 @@ vi.mock('@pagespace/db/db', () => ({
       },
     },
     delete: vi.fn(),
+    update: vi.fn(),
     // The drive delete runs in a transaction now — its chat history has to go
     // with it, and the two must not be able to half-happen. The tx exposes the
     // same `delete` mock the assertions already inspect.
@@ -23,6 +34,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 // A collaborator with its own live-DB coverage — see
 // `apps/web/src/lib/repositories/__tests__/chat-mutation-matrix.integration.test.ts`.
+const { mockReattributeOwnerStorage, mockLockedDrive } = vi.hoisted(() => ({ mockReattributeOwnerStorage: vi.fn(), mockLockedDrive: vi.fn() }));
+vi.mock('@pagespace/lib/services/storage-limits', () => ({ reattributeDriveOwnerStorageInTx: mockReattributeOwnerStorage }));
 vi.mock('@pagespace/lib/repositories/conversation-cleanup', () => ({
   deleteConversationsForDrive: vi.fn().mockResolvedValue({ conversations: 0, messages: 0 }),
 }));
@@ -59,6 +72,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
+}));
+
+// The org-aware relationship answers who is an ADMIN (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadUserDriveRelationships: vi.fn(),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -110,24 +128,8 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
-});
-
-// Helper to create mock drive member
-const mockDriveMember = (overrides: {
-  id: string;
-  userId: string;
-  driveId: string;
-  role: 'OWNER' | 'ADMIN' | 'MEMBER';
-}) => ({
-  id: overrides.id,
-  userId: overrides.userId,
-  driveId: overrides.driveId,
-  role: overrides.role,
-  customRoleId: null,
-  invitedBy: null,
-  invitedAt: new Date(),
-  acceptedAt: new Date(),
-  lastAccessedAt: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 describe('POST /api/account/handle-drive', () => {
@@ -139,6 +141,16 @@ describe('POST /api/account/handle-drive', () => {
   const setupTransferMock = () => {
     vi.mocked(transferDriveOwnership).mockResolvedValue(undefined);
     return vi.mocked(transferDriveOwnership);
+  };
+
+  // Helper to setup update mock. The route updates inside a transaction, so
+  // the tx handed to the callback carries the same `update` chain — the
+  // assertions below inspect that one mock either way.
+  const setupUpdateMock = () => {
+    const whereMock = vi.fn().mockResolvedValue(undefined);
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+    return whereMock;
   };
 
   // Helper to setup delete mock. The route deletes inside a transaction, so
@@ -153,9 +165,13 @@ describe('POST /api/account/handle-drive', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // The transfer re-reads the drive row under FOR UPDATE inside its transaction (D-OW-64).
+    const lockedSelect = { from: () => ({ where: () => ({ for: () => mockLockedDrive() }) }) };
     vi.mocked(db.transaction).mockImplementation(async (fn) =>
-      fn({ delete: db.delete } as unknown as Parameters<typeof fn>[0]),
+      fn({ delete: db.delete, update: db.update, select: () => lockedSelect } as unknown as Parameters<typeof fn>[0]),
     );
+    mockReattributeOwnerStorage.mockResolvedValue([]);
+    mockLockedDrive.mockResolvedValue([{ ownerId: 'user_123', orgId: null }]);
 
     // Setup default auth success
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(
@@ -168,15 +184,10 @@ describe('POST /api/account/handle-drive', () => {
       mockDrive({ id: mockDriveId, name: 'Test Drive', ownerId: mockUserId })
     );
 
-    // Setup default admin membership
-    vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(
-      mockDriveMember({
-        id: 'membership_1',
-        userId: mockNewOwnerId,
-        driveId: mockDriveId,
-        role: 'ADMIN',
-      })
-    );
+    // Setup default: the transfer target is an accepted ADMIN
+    targetRelationship = asMember('ADMIN');
+    vi.mocked(loadUserDriveRelationships).mockImplementation(async (userId, drives) => new Map(drives.map((drive) => [drive.id,
+      drive.ownerId === userId ? { isOwner: true, membership: null } : targetRelationship])));
 
     // Setup default database operations
     setupTransferMock();
@@ -314,10 +325,37 @@ describe('POST /api/account/handle-drive', () => {
       expect(body.action).toBe('transfer');
       expect(body.message).toContain('transferred successfully');
       expect(transferMock).toHaveBeenCalledTimes(1);
-      expect(transferMock).toHaveBeenCalledWith(mockDriveId, mockUserId, mockNewOwnerId);
+      expect(transferMock).toHaveBeenCalledWith(mockDriveId, mockUserId, mockNewOwnerId, expect.anything());
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive ownership transferred: drive_abc from user_123 to admin_456`
       );
+    });
+
+    it('WAL-9 (partial) a drive moved into an org (or handed elsewhere) between the check and the write is refused 409 under the row lock — no owner change, no bytes moved (D-OW-64)', async () => {
+      const updateMock = setupUpdateMock();
+      mockLockedDrive.mockResolvedValue([{ ownerId: 'user_123', orgId: 'org-northwind' }]);
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+      }));
+
+      expect(response.status).toBe(409);
+      expect(updateMock).not.toHaveBeenCalled();
+      expect(mockReattributeOwnerStorage).not.toHaveBeenCalled();
+    });
+
+    it('WAL-9 (partial) moves the personal drive\'s stored bytes to the new owner\'s quota in the same transaction as the owner change', async () => {
+      setupUpdateMock();
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(mockReattributeOwnerStorage).toHaveBeenCalledWith(expect.anything(), { driveId: mockDriveId, fromUserId: mockUserId, toUserId: mockNewOwnerId });
     });
 
     it('rejects transfer of a Home drive with 403 (Home stays bound to its owner)', async () => {
@@ -344,6 +382,33 @@ describe('POST /api/account/handle-drive', () => {
       expect(transferMock).not.toHaveBeenCalled();
     });
 
+    it.each(['delete', 'transfer'] as const)(
+      'D-OW-7 refuses to %s an org drive the person leads: it passes to the org Owner instead',
+      async (action) => {
+        const updateMock = setupUpdateMock();
+        const deleteMock = setupDeleteMock();
+        vi.mocked(db.query.drives.findFirst).mockResolvedValue({
+          ...mockDrive({ id: mockDriveId, name: 'Product', ownerId: mockUserId }),
+          orgId: 'org-northwind',
+        });
+
+        const request = new Request('https://example.com/api/account/handle-drive', {
+          method: 'POST',
+          body: JSON.stringify({ driveId: mockDriveId, action, newOwnerId: mockNewOwnerId }),
+        });
+
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(409);
+        expect(body.error).toBe(
+          'This drive belongs to an organization. When you delete your account, the organization Owner becomes its lead.'
+        );
+        expect(updateMock).not.toHaveBeenCalled();
+        expect(deleteMock).not.toHaveBeenCalled();
+      }
+    );
+
     it('still allows DELETE of a Home drive (account-deletion prep; cascade would remove it anyway)', async () => {
       const deleteMock = setupDeleteMock();
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({
@@ -363,7 +428,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should reject transfer when new owner is not an admin', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      targetRelationship = NONE;
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -385,7 +450,7 @@ describe('POST /api/account/handle-drive', () => {
       // NOTE: The production code uses WHERE clause with role='ADMIN'.
       // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
       // what the database returns when no matching ADMIN record is found.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      targetRelationship = NONE;
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -407,7 +472,7 @@ describe('POST /api/account/handle-drive', () => {
       // NOTE: The production code uses WHERE clause with driveId filter.
       // Mocks don't evaluate WHERE clauses, so we return undefined to simulate
       // what the database returns when no matching record is found for this drive.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      targetRelationship = NONE;
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -430,7 +495,7 @@ describe('POST /api/account/handle-drive', () => {
     it('rejects transfer to pending admin (acceptedAt IS NULL) — adversarial drive-ownership-transfer-to-pending-admin path', async () => {
       // Simulate the gate filtering the pending row out — the query now
       // requires acceptedAt IS NOT NULL so the pending admin is invisible.
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      targetRelationship = NONE;
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',
@@ -443,9 +508,33 @@ describe('POST /api/account/handle-drive', () => {
 
       const response = await POST(request);
 
+      // The org-aware relationship reads ACCEPTED rows only: a pending ADMIN is no membership.
       expect(response.status).toBe(400);
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('rejects transfer to a plain MEMBER, and to a personal drive\'s former OWNER row (only an ADMIN qualifies, as before)', async () => {
+      for (const rel of [asMember('MEMBER'), asMember('OWNER')]) {
+        targetRelationship = rel;
+        const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+          method: 'POST',
+          body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+        }));
+        expect(response.status).toBe(400);
+      }
+    });
+
+    it('asks the relationship about the transfer target on the drive row it loaded', async () => {
+      const request = new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'transfer', newOwnerId: mockNewOwnerId }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(loadUserDriveRelationships).toHaveBeenCalledWith(mockNewOwnerId, [expect.objectContaining({ id: mockDriveId, ownerId: mockUserId })]);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -640,7 +729,7 @@ describe('POST /api/account/handle-drive', () => {
     });
 
     it('should NOT log activity when new owner is not admin', async () => {
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined);
+      targetRelationship = NONE;
 
       const request = new Request('https://example.com/api/account/handle-drive', {
         method: 'POST',

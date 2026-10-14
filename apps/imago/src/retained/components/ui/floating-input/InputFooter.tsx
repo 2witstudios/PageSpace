@@ -66,6 +66,7 @@ export interface InputFooterProps {
   onProviderModelChange?: (provider: string, model: string) => void;
   /** Hide the provider/model selector (for compact layouts) */
   hideModelSelector?: boolean;
+  modelPolicyDriveId?: string | null;
   /** Disable the selector (e.g., during streaming) */
   disabled?: boolean;
   /** Compact toolbar: icon-only Tools, tighter padding, shrinkable model selector */
@@ -113,6 +114,7 @@ export function InputFooter({
   selectedModel,
   onProviderModelChange,
   hideModelSelector = false,
+  modelPolicyDriveId = null,
   disabled = false,
   compact = false,
   leading,
@@ -162,6 +164,7 @@ export function InputFooter({
             model={selectedModel}
             onChange={onProviderModelChange}
             disabled={disabled}
+            driveId={modelPolicyDriveId}
           />
         )}
 

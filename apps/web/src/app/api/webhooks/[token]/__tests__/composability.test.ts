@@ -35,6 +35,8 @@ const WORKFLOW = {
   id: 'workflow-1',
   driveId: 'drive-1',
   createdBy: 'user-1',
+  // [D-OW-36] The row shape: an owner who has not left. A missing key reads as owner-left (fail closed).
+  ownerLeftAt: null,
   agentPageId: 'agent-page-1',
   prompt: 'Summarize the delivery',
   contextPageIds: [],
@@ -123,6 +125,7 @@ vi.mock('@pagespace/lib/security/webhook-delivery-idempotency', () => ({
 
 const mockIsUserDriveMember = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: (...args: unknown[]) => mockIsUserDriveMember(...args),
 }));
 
@@ -241,6 +244,10 @@ describe('Incoming Webhooks: composability (real trigger fan-out reaches execute
         driveId: WORKFLOW.driveId,
         createdBy: WORKFLOW.createdBy,
         source: expect.objectContaining({ table: 'webhookTriggers', id: TRIGGER.id }),
+      }),
+      // SPEND-6: the fan-out's run spends the workflow's drive (the wallet its gate reserved).
+      expect.objectContaining({
+        creditSpend: expect.objectContaining({ spend: { kind: 'automation', driveId: WORKFLOW.driveId } }),
       }),
     );
     // The channel action still only ran once — the fan-out didn't duplicate it.

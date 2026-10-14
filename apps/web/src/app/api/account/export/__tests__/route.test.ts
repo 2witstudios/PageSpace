@@ -32,6 +32,11 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
+const mockGate = { derivedContent: vi.fn(), refusedDrives: vi.fn(), refusedDerivedPages: vi.fn() };
+vi.mock('@pagespace/lib/compliance/export/export-sign-in-gate', () => ({
+  credentialExportGate: vi.fn(() => mockGate),
+}));
+
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
@@ -58,6 +63,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { credentialExportGate } from '@pagespace/lib/compliance/export/export-sign-in-gate';
 import { buildNativeExportFiles, EXPORT_SCHEMA_VERSION } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
@@ -98,6 +104,8 @@ const mockUserData = {
   settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
   personalization: null,
   personalizationCandidates: [],
+  pulseSummaries: [],
+  withheld: [],
   // The categories the "Agent-Session Single Source of Truth" epic added. They
   // were missing from the export for the whole epic, and THIS FILE is why
   // nobody noticed: the category assertion below used to be a hand-written list
@@ -108,6 +116,19 @@ const mockUserData = {
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
   contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
   localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
+  // Spec X-2 (Organizations & Wallets): the subject's org life and their own money.
+  organizations: [{ id: 'org-1', name: 'Northwind', slug: 'northwind', createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+  orgMembership: {
+    memberships: [{ orgId: 'org-1', orgName: 'Northwind', role: 'MEMBER', joinedAt: new Date('2026-09-04T00:00:00.000Z'), seatAllowanceCents: 3000 }],
+    departures: [],
+    joinRequests: [],
+    guestHolds: [],
+  },
+  wallet: {
+    wallet: { id: 'w-1', monthlyRemainingCents: 1234, monthlyAllowanceCents: 900, spentCents: 0, topupRemainingCents: 0, debtCents: 0, status: 'active', fallbackRule: null, defaultSpendSource: null, alwaysOwnCredits: false, monthlyPeriodStart: null, monthlyPeriodEnd: null, createdAt: new Date('2026-09-04T00:00:00.000Z') },
+    fundingLegs: [{ id: 'leg-1', walletId: 'w-drive', walletOwnerType: 'org', walletSubjectType: 'drive', walletSubjectDriveName: 'Product', funderKind: 'donation', originalCents: 500, remainingCents: 200, nonRefundable: true, createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+    spendOverrides: [],
+  },
 };
 
 describe('GET /api/account/export', () => {
@@ -265,6 +286,21 @@ describe('GET /api/account/export', () => {
       expect(manifest.format).toBe('native');
       expect(Array.isArray(manifest.files)).toBe(true);
       expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);
+    });
+
+    it('SEC-2 (partial) collects through the requesting session credential, and the manifest names what an org sign-in policy left out', async () => {
+      const withheld = [{ category: 'pulseSummaries', count: 1, code: 'org_strong_sign_in_required', orgIds: ['org-1'] }];
+      vi.mocked(collectAllUserData).mockResolvedValue({ ...mockUserData, withheld } as never);
+
+      await GET(createRequest());
+
+      expect(credentialExportGate).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', via: 'credential' }));
+      expect(collectAllUserData).toHaveBeenCalledWith(expect.anything(), 'user-1', mockGate);
+      const manifestCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('manifest.json')
+      );
+      const manifest = JSON.parse(manifestCall![0] as string);
+      expect(manifest.withheld).toEqual([expect.objectContaining({ ...withheld[0], note: expect.stringContaining('passkey') })]);
     });
 
     it('format=portable emits a single schema.org data.json plus manifest', async () => {

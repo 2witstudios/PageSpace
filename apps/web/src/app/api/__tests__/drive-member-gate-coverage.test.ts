@@ -77,31 +77,11 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 1,
     reason: 'Platform-admin debug tool that already reads any drive\'s pages with no membership check; the drive picker read grants nothing. Followup #4 tracks hiding pending invitations from the picker.',
   }],
-  ['apps/web/src/app/api/channels/[pageId]/messages/route.ts', {
-    ormReads: 1,
-    reason: 'Builds a CANDIDATE recipient set only; recipients are filtered through getUsersWhoCanViewPage, which requires an accepted membership, so a pending admin receives no broadcast.',
-  }],
   ['apps/web/src/app/api/drives/[driveId]/backups/[backupId]/restore/route.ts', {
     ormReads: 1,
     reason: 'Enumerates ALL current members (including pending) for full replacement during restore; filtering on acceptedAt would silently leave pending-invite rows behind.',
   }],
-  ['apps/web/src/app/api/inbox/route.ts', {
-    sqlReads: 2,
-    reason: 'Both channel queries are candidate filters; getBatchPagePermissions (accepted members only) decides which channels are returned.',
-  }],
-  ['apps/web/src/app/api/messages/threads/route.ts', {
-    sqlReads: 1,
-    reason: 'Candidate filter; getBatchPagePermissions (accepted members only) decides which channels are returned.',
-  }],
-  ['apps/web/src/app/api/sidebar/badges/route.ts', {
-    sqlReads: 1,
-    reason: 'Candidate filter; getBatchPagePermissions (accepted members only) decides which channels are counted.',
-  }],
   // ── apps/web/src/lib ────────────────────────────────────────────────────
-  ['apps/web/src/lib/auth/revoke-adapters.ts', {
-    ormReads: 1,
-    reason: 'findActorMembership returns raw {role, acceptedAt} so the strict "accepted OWNER/ADMIN" gate lives once in validateRevokeRequest. Filtering in SQL would NOT_FOUND a request that should be FORBIDDEN.',
-  }],
   ['apps/web/src/lib/repositories/drive-invite-repository.ts', {
     ormReads: 2,
     reason: 'Invite management: findExistingMember looks up a row by composite key to avoid duplicate invites, and findActivePendingMemberByEmail filters acceptedAt IS NULL on purpose to list pending rows.',
@@ -140,9 +120,37 @@ const EXEMPT = new Map<string, Exemption>([
     ormReads: 2,
     reason: 'Both reads are scoped to the drive set resolved by the gated owned/accepted-member query: the caller\'s role/lastAccessedAt per drive, and the member list (which returns acceptedAt so the UI can show pending invitations).',
   }],
+  ['packages/lib/src/services/org-membership-sync.ts', {
+    ormReads: 1,
+    reason: 'The org membership sync (loadExistingRows) must see EVERY row on the org\'s drives, pending included: a user holding any row gets no second insert (unique driveId+userId), and an unaccepted source=org row is repaired. It reads acceptedAt to plan that; it writes rows and grants nothing.',
+  }],
   ['packages/lib/src/services/drive-member-service.ts', {
     ormReads: 3,
     reason: 'listDriveMembers and getDriveMemberDetails surface pending rows ("Invitation pending") behind the gated checkDriveAccess owner/admin check; updateMemberRole reads the old role before writing it.',
+  }],
+  ['packages/lib/src/permissions/org-drive-membership.ts', {
+    ormReads: 1,
+    reason: 'loadDriveMemberRowState reads the requester\'s row pending included, for the Restricted-drive join decisions only: a pending invitation is theirs to accept, so it blocks a request and an admission. It returns `accepted` with the row, and the decision grants nothing from an unaccepted one.',
+  }],
+  ['packages/lib/src/permissions/guest-holds.ts', {
+    ormReads: 2,
+    reason: 'Both ungated reads find an outsider\'s rows (pending included, on purpose) to TAKE THEM OUT of the live tables: memberOutsiders lists the outsiders of an org\'s drives, and takeOutsider reads one person\'s row to snapshot it into org_guest_holds (parked, or queued for approval) before deleting it. Writers that REMOVE access, inside the transaction that changed the policy or brought the access in; they grant nothing. The admission read (admitReentry) and the page-move exemption in grantOutsiders are gated: only an accepted, non-GUEST row counts as an admitted guest.',
+  }],
+  ['packages/lib/src/permissions/org-lapse-guard.ts', {
+    ormReads: 1,
+    reason: '[D-OW-33] snapshotDriveAccess reads every row, pending included, on purpose: it compares who reaches a drive before and after a write, and a pending row turning accepted is a loosening it must see. It decides nothing from a row by itself (driveAccessWidens treats a pending row as no access) and grants nothing.',
+  }],
+  ['packages/lib/src/permissions/org-read-models.ts', {
+    ormReads: 1,
+    reason: 'The org Guests list (listOrgGuests, DRV-8) is the org admin\'s one view of every outsider with access, so it shows pending invitations on purpose, each drive marked pending. It is a display behind the Admin+ route and grants nothing. The other read (memberRowsIn, behind drive usage and member drive counts) is gated: a pending invitee is not counted as a member.',
+  }],
+  ['packages/lib/src/permissions/org-guest-footprint.ts', {
+    ormReads: 2,
+    reason: 'isOrgGuest asks whether a NON-member holds any row on the org\'s drives, and listOrgPeople lists those people for countOrgSignInBlocked (POL-1, D-OW-45); pending included on purpose in both: an invited outsider is a guest and meets the sign-in policy when they accept. isOrgGuest only withholds auto-join (SEC-1); the count is counts only, no identities. Neither grants anything.',
+  }],
+  ['packages/lib/src/permissions/org-drive-directory.ts', {
+    ormReads: 1,
+    reason: 'The org Drives directory reads the viewer\'s OWN rows pending included, so decideDriveDirectoryEntry can tell a pending invitation (not joined, not requestable) from no row; an unaccepted row never counts as joined. Display for the viewer, behind the org-member gate.',
   }],
 ]);
 

@@ -1,8 +1,10 @@
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from './authentication-evidence';
 import { generateOpaqueToken, isValidTokenFormat, type TokenType } from './opaque-tokens';
 import { hashToken } from './token-utils';
 import { IDLE_TIMEOUT_MS } from './constants';
 import { sessionRepository } from './session-repository';
 import { loggers } from '../logging/logger-config';
+import { type AccessActor, credentialActor } from '../permissions/access-actor';
 
 const SESSION_CLEANUP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -17,6 +19,7 @@ export function clampExpiry(currentExpiresAt: Date, notLaterThan: Date): Date {
 
 export interface SessionClaims {
   sessionId: string;
+  authentication?: VerifiedAuthentication | null;
   userId: string;
   userRole: 'user' | 'admin';
   tokenVersion: number;
@@ -63,6 +66,14 @@ export interface SessionValidationFailure {
 export type SessionValidationResult = SessionValidationSuccess | SessionValidationFailure;
 
 export interface CreateSessionOptions {
+  /**
+   * REQUIRED, so no sign-in path can forget it (D-OW-45). A sign-in route passes the evidence of the ceremony it just
+   * verified (`ceremonyAuthentication`); a derived credential passes its parent's evidence unchanged. `null` is named
+   * explicitly by exactly two kinds of caller: machine credentials no person signed in for (service tokens, drive-env
+   * bridge tokens), and credentials derived from a parent minted before evidence existed. Org sign-in policies refuse
+   * null evidence, so neither can open an org drive under a policy.
+   */
+  authentication: VerifiedAuthentication | null;
   userId: string;
   type: 'user' | 'service' | 'mcp' | 'device' | 'socket';
   scopes: string[];
@@ -80,6 +91,8 @@ export class SessionService {
    * Create new session - returns raw token ONCE (never stored)
    */
   async createSession(options: CreateSessionOptions): Promise<string> {
+    const authentication = parseVerifiedAuthentication(options.authentication, Date.now());
+    if (options.authentication != null && authentication === null) throw new Error('Invalid authentication evidence');
     const user = await sessionRepository.findUserById(options.userId);
 
     if (!user) {
@@ -97,6 +110,8 @@ export class SessionService {
     await sessionRepository.insertSession({
       tokenHash,
       tokenPrefix,
+      authenticatedAt: authentication ? new Date(authentication.authenticatedAtMs) : null,
+      authenticationAssurance: authentication?.assurance ?? null,
       userId: options.userId,
       deviceId: options.deviceId,
       type: options.type,
@@ -115,8 +130,8 @@ export class SessionService {
   }
 
   /**
-   * Is the session that minted a DERIVED credential still usable, for this
-   * user? Read-only, and keyed on the session id rather than its token.
+   * The session that minted a DERIVED credential, as an access actor, while it
+   * is still usable for this user (null otherwise). Read-only, and keyed on the session id rather than its token.
    *
    * The dev-preview cookie is the caller: it is signed by us, names its
    * minting session, and is presented to a preview origin that never sees the
@@ -134,12 +149,12 @@ export class SessionService {
    * This runs per proxied subresource from an untrusted origin, and the next
    * real session use will do the lazy revoke anyway.
    */
-  async isSessionUsableById(sessionId: string, userId: string): Promise<boolean> {
+  async loadUsableSessionActor(sessionId: string, userId: string): Promise<AccessActor | null> {
     const session = await sessionRepository.findActiveSessionById(sessionId);
-    if (!session?.user) return false;
-    if (session.userId !== userId) return false;
-    if (session.user.suspendedAt) return false;
-    if (session.tokenVersion !== session.user.tokenVersion) return false;
+    if (!session?.user) return null;
+    if (session.userId !== userId) return null;
+    if (session.user.suspendedAt) return null;
+    if (session.tokenVersion !== session.user.tokenVersion) return null;
     // THE IDLE TIMEOUT APPLIES HERE TOO, and it is the revocation most likely
     // to matter for a preview: a frame left open in a background tab makes no
     // request that would trigger `validateSession`'s lazy revoke, so without
@@ -150,9 +165,13 @@ export class SessionService {
     if (IDLE_TIMEOUT_MS > 0) {
       const lastActivity = session.lastUsedAt ?? session.createdAt;
       const lastUsed = lastActivity instanceof Date ? lastActivity : new Date(lastActivity);
-      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return false;
+      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return null;
     }
-    return true;
+    // The session's own ceremony evidence: what the derived credential is, for every org sign-in check (SEC-2/3).
+    return credentialActor(userId, parseVerifiedAuthentication(
+      { authenticatedAtMs: session.authenticatedAt?.getTime(), assurance: session.authenticationAssurance },
+      Date.now(),
+    ));
   }
 
   /**
@@ -249,6 +268,7 @@ export class SessionService {
     return {
       claims: {
         sessionId: session.id,
+        authentication: parseVerifiedAuthentication({ authenticatedAtMs: session.authenticatedAt?.getTime(), assurance: session.authenticationAssurance }, Date.now()),
         userId: session.userId,
         userRole: session.user.role,
         tokenVersion: session.tokenVersion,

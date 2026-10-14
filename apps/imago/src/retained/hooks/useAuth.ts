@@ -4,6 +4,8 @@ import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from '@/retained-adapters/navigation';
 import { useAuthStore, authStoreHelpers } from '@/retained/stores/useAuthStore';
 import { useTokenRefresh } from './useTokenRefresh';
+import { purgePendingSetups } from '@/retained/lib/orgs/pending-setup';
+import { useOrgReauthStore } from '@/retained/stores/useOrgReauthStore';
 import { post, clearSessionCache } from '@/retained/lib/auth/auth-fetch';
 import { setAppNavigator } from '@/retained/lib/navigation/app-navigator';
 import { getOrCreateDeviceId, getDeviceName } from '@/retained/lib/analytics';
@@ -131,6 +133,7 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear device token from localStorage', err);
         }
+        purgePendingSetups();
       }
 
       // Reset token refresh state
@@ -171,6 +174,7 @@ export function useAuth(): {
         // Non-critical
       }
 
+      useOrgReauthStore.getState().dismiss();
       endSession();
       router.push('/auth/signin');
     }
