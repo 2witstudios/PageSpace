@@ -4,16 +4,22 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { creditsPhrase, planFacts, type PlanFacts } from "@/lib/credits";
+import { creditsPhrase, formatDollars, planFacts, type PlanFacts } from "@/lib/credits";
 import {
   TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
+  STORAGE_ADDON,
   formatTierBytes,
+  tierAllowsStorageAddon,
   type SubscriptionTier,
 } from "@pagespace/lib/billing/subscription-tiers";
+import { centsFromDollars } from "@pagespace/lib/billing/money-model";
 import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibility";
 
 export const metadata = pageMetadata.pricing;
+
+// Extra storage on paid plans, from the one add-on table (blocks never change the per-file limit).
+const STORAGE_ADDON_PHRASE = `Add ${formatTierBytes(STORAGE_ADDON.blockBytes, " ")} for ${formatDollars(centsFromDollars(STORAGE_ADDON.priceMonthlyUsd))}/month`;
 
 /**
  * MON-2 / D-OW-17: this page prerenders once at `next build` time (inside the
@@ -187,6 +193,11 @@ export default function PricingPage() {
                       <span className="text-muted-foreground">Storage</span>
                       <span className="font-medium">{plan.features.storage}</span>
                     </div>
+                    {tierAllowsStorageAddon(plan.facts.tier) && (
+                      <p className="text-right text-xs text-muted-foreground" data-testid="plan-storage-addon">
+                        {STORAGE_ADDON_PHRASE}
+                      </p>
+                    )}
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-muted-foreground">Models</span>
                       <span className="font-medium">{plan.features.models}</span>

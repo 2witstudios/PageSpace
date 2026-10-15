@@ -407,3 +407,23 @@ describe('useFileDrop', () => {
     });
   });
 });
+
+describe('quotaDenial', () => {
+  it('given a 413 on a personal quota, should surface the reason and point at the usage page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { allowed: false, reason: 'Insufficient storage: need 2 GB, have 1 GB available', quota: { userId: 'u1' } } }))
+      .toEqual({ reason: 'Insufficient storage: need 2 GB, have 1 GB available', manageHref: '/settings/usage' });
+  });
+
+  it('given a 413 on an org quota, should point at the org billing page', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'Insufficient storage', quota: { orgId: 'org 1' } } })?.manageHref)
+      .toBe('/orgs/org%201/settings/billing');
+  });
+
+  it('given any other error, should not treat it as a quota denial', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial(new Error('boom'))).toBeNull();
+    expect(quotaDenial({ status: 500, body: { reason: 'x' } })).toBeNull();
+  });
+});
