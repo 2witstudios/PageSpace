@@ -3,11 +3,13 @@ import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, LEGAL_LAST_UPDATED } from "@/lib/metadata";
 import { formatDollars, planFacts } from "@/lib/credits";
+import { TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
 
 // Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
 const PRO = planFacts("pro");
 const BUSINESS = planFacts("business");
 const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const storageOf = (tier: keyof typeof TIER_PLAN_LIMITS) => formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes);
 const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
 
 export const metadata = pageMetadata.terms;
@@ -147,9 +149,9 @@ export default function TermsOfService() {
               PageSpace offers the following subscription plans:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Free Plan:</strong> a one-time starter credit grant, standard models, 500MB storage</li>
-              <li><strong>Pro Plan ({PRO.price}/month):</strong> a monthly credit allowance, standard and Pro models, 2GB storage</li>
-              <li><strong>Business Plan ({BUSINESS.price}/month per organization, {BUSINESS_SEATS} seats included, {EXTRA_SEAT_PRICE} per extra seat):</strong> a monthly credit allowance for the organization, standard and Pro models, 50GB storage, priority support</li>
+              <li><strong>Free Plan:</strong> a one-time starter credit grant, standard models, {storageOf("free")} storage</li>
+              <li><strong>Pro Plan ({PRO.price}/month):</strong> a monthly credit allowance, standard and Pro models, {storageOf("pro")} storage</li>
+              <li><strong>Business Plan ({BUSINESS.price}/month per organization, {BUSINESS_SEATS} seats included, {EXTRA_SEAT_PRICE} per extra seat):</strong> a monthly credit allowance for the organization, standard and Pro models, {storageOf("business")} storage, priority support</li>
             </ul>
             <p className="mb-4">
               These Terms state no credit figures: the current credit figures for each plan — the starter grant, each paid plan&#39;s monthly allowance, and top-up pack sizes — are published on our <Link href="/pricing" className="text-primary hover:underline">pricing page</Link> and change there.

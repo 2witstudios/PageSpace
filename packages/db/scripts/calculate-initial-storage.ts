@@ -54,7 +54,7 @@ async function calculateInitialStorage() {
         // Check if user needs subscription upgrade (log warnings only)
         const currentSubscription = user.subscriptionTier || 'free';
         const freeLimit = 524288000; // 500MB
-        const proLimit = 2 * 1024 * 1024 * 1024; // 2GB
+        const proLimit = 10 * 1024 * 1024 * 1024; // 10GB (mirrors TIER_PLAN_LIMITS.pro; db cannot import lib)
 
         if (totalSize > freeLimit && currentSubscription === 'free') {
           console.log(`  ⚠️ User using ${formatBytes(totalSize)} but has free subscription (${formatBytes(freeLimit)} limit)`);

@@ -1,5 +1,14 @@
 import { DocsMarkdown } from "@/components/DocsContent";
 import { createMetadata } from "@/lib/metadata";
+import { STORAGE_ADDON, TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
+
+const limitsOf = (tier: keyof typeof TIER_PLAN_LIMITS) => {
+  const l = TIER_PLAN_LIMITS[tier];
+  return { storage: formatTierBytes(l.quotaBytes, " "), file: formatTierBytes(l.maxFileSize, " "), uploads: l.maxConcurrentUploads };
+};
+const FREE = limitsOf("free");
+const PRO = limitsOf("pro");
+const BUSINESS = limitsOf("business");
 
 export const metadata = createMetadata({
   title: "Files & Uploads — How it Works",
@@ -38,7 +47,7 @@ An upload goes in two steps.
 
 While those jobs run, the File page shows a processing status. Your browser gets live updates over the real-time socket, so the preview and "text available" state appear without a refresh. You can keep working — upload a second file, edit a Document, send an AI message — nothing is blocked on the first file finishing.
 
-Size and concurrency are bounded by your tier. Free gives you 500 MB of storage and accepts files up to 50 MB, with 3 uploads in flight at once. Pro is 2 GB / 250 MB per file / 5 at once. Business is 50 GB / 1 GB per file / 10 at once.
+Size and concurrency are bounded by your tier. Free gives you ${FREE.storage} of storage and accepts files up to ${FREE.file}, with ${FREE.uploads} uploads in flight at once. Pro is ${PRO.storage} / ${PRO.file} per file / ${PRO.uploads} at once. Business is ${BUSINESS.storage} / ${BUSINESS.file} per file / ${BUSINESS.uploads} at once. Pro and Business can add more storage in ${formatTierBytes(STORAGE_ADDON.blockBytes, " ")} blocks.
 
 ## Good to know
 

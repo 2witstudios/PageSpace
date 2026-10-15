@@ -63,7 +63,7 @@ describe('Subscription Plans', () => {
 
     it('should have correct storage limits for each tier', () => {
       expect(PLANS.free.limits.storage.bytes).toBe(500 * 1024 * 1024); // 500MB
-      expect(PLANS.pro.limits.storage.bytes).toBe(2 * 1024 * 1024 * 1024); // 2GB
+      expect(PLANS.pro.limits.storage.bytes).toBe(10 * 1024 * 1024 * 1024); // 10GB
       expect(PLANS.business.limits.storage.bytes).toBe(50 * 1024 * 1024 * 1024); // 50GB
     });
 

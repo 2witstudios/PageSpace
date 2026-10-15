@@ -125,10 +125,10 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
   pro: {
     name: 'Pro',
     priceMonthlyUsd: 15,
-    quotaBytes: 2 * GB,
+    quotaBytes: 10 * GB,
     maxFileSize: 250 * MB,
     maxConcurrentUploads: 5,
-    maxFileCount: 500,
+    maxFileCount: 0,
     maxCustomDomains: 1,
     canChooseSubdomain: true,
     proModels: true,
@@ -144,7 +144,7 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
     quotaBytes: 50 * GB,
     maxFileSize: 1 * GB,
     maxConcurrentUploads: 10,
-    maxFileCount: 5000,
+    maxFileCount: 0,
     maxCustomDomains: 10,
     canChooseSubdomain: true,
     proModels: true,
@@ -153,6 +153,26 @@ export const TIER_PLAN_LIMITS: Record<SubscriptionTier, TierPlanLimits> = {
     extraSeatUsd: 10,
   },
 };
+
+/**
+ * The stackable storage add-on: extra quota bought in fixed blocks on top of a
+ * paid plan (Pro or an org's Business). Blocks add bytes only — paid plans have
+ * no file-count ceiling — and never change the per-file limit. Display price only;
+ * the configured Stripe price is authoritative for billing.
+ */
+export const STORAGE_ADDON = {
+  /** Bytes one block adds to the payer's quota. */
+  blockBytes: 50 * GB,
+  /** Monthly list price of one block in whole USD. */
+  priceMonthlyUsd: 5,
+  /** Most blocks one payer may hold (abuse backstop; beyond it, contact us). */
+  maxBlocks: 20,
+} as const;
+
+/** Tiers a storage add-on may be bought on. */
+export function tierAllowsStorageAddon(tier: SubscriptionTier): boolean {
+  return tier !== 'free';
+}
 
 /** Whether `tier` is bought by an organization rather than a person (SEAT-2). */
 export function isOrgPlanTier(tier: SubscriptionTier): boolean {

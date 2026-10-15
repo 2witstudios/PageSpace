@@ -1,6 +1,9 @@
 import { DocsMarkdown } from "@/components/DocsContent";
 import { createMetadata } from "@/lib/metadata";
 import { FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
+import { TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
+
+const FREE_LIMITS = TIER_PLAN_LIMITS.free;
 
 export const metadata = createMetadata({
   title: "Getting Started",
@@ -22,7 +25,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 - **Magic link**: enter your email and click the link we send.
 - **Google** or **Apple** OAuth.
 
-No credit card required. The free tier includes 500 MB storage, ${FREE_STARTER_CREDITS_DISPLAY} credits to get started (a one-time grant), and a 20 MB max file size.
+No credit card required. The free tier includes ${formatTierBytes(FREE_LIMITS.quotaBytes, " ")} storage, ${FREE_STARTER_CREDITS_DISPLAY} credits to get started (a one-time grant), and a ${formatTierBytes(FREE_LIMITS.maxFileSize, " ")} max file size.
 
 After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 

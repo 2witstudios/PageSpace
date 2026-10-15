@@ -95,14 +95,14 @@ describe('TIER_PLAN_LIMITS', () => {
       isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0,
     });
     expect(TIER_PLAN_LIMITS.pro).toMatchObject({
-      name: 'Pro', priceMonthlyUsd: 15, quotaBytes: 2 * GB, maxFileSize: 250 * MB,
-      maxConcurrentUploads: 5, maxFileCount: 500, maxCustomDomains: 1,
+      name: 'Pro', priceMonthlyUsd: 15, quotaBytes: 10 * GB, maxFileSize: 250 * MB,
+      maxConcurrentUploads: 5, maxFileCount: 0, maxCustomDomains: 1,
       canChooseSubdomain: true, proModels: true,
       isOrgPlan: false, includedSeats: 0, extraSeatUsd: 0,
     });
     expect(TIER_PLAN_LIMITS.business).toMatchObject({
       name: 'Business', priceMonthlyUsd: 50, quotaBytes: 50 * GB, maxFileSize: 1 * GB,
-      maxConcurrentUploads: 10, maxFileCount: 5000, maxCustomDomains: 10,
+      maxConcurrentUploads: 10, maxFileCount: 0, maxCustomDomains: 10,
       canChooseSubdomain: true, proModels: true,
     });
   });
