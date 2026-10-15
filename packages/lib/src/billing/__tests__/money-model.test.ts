@@ -347,6 +347,14 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     expect(creditsFromDollars(10)).toBe(100);
     expect(centsFromCredits(creditsFromDollars(12.3))).toBe(1230);
   });
+
+  it('MON-4 a dollar amount that is not a whole number of credits is refused, never rounded to a different charge', () => {
+    // $5.04 would otherwise charge $5.00, and $4.96 would pass the $5 minimum.
+    expect(validateTopupCredits(creditsFromDollars(5.04))).toBeNull();
+    expect(validateTopupCredits(creditsFromDollars(4.96))).toBeNull();
+    expect(validateTopupCredits(creditsFromDollars(5.1))).toBe(51);
+    expect(validateTopupCredits(creditsFromDollars(5))).toBe(50);
+  });
 });
 
 describe('D-OW-17 no client-visible mirror, and no env var, of the flag (single source of truth: a code constant)', () => {

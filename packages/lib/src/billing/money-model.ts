@@ -272,9 +272,14 @@ export function formatDollars(cents: number): string {
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
 }
 
-/** Dollars → credits at the purchase rate (MON-4), to the nearest credit: $12.30 buys 123 credits. */
+/**
+ * Dollars → credits at the purchase rate (MON-4): $12.30 buys 123 credits. Never rounds to
+ * a whole credit: an amount that is not one ($5.04 is 50.4 credits) comes back fractional,
+ * so validateTopupCredits refuses it instead of silently charging a different amount.
+ * The dollars are first taken to the nearest cent, so float input like 12.3 is exact.
+ */
 export function creditsFromDollars(dollars: number): number {
-  return Math.round(dollars * CREDITS_PER_DOLLAR);
+  return creditsFromCents(centsFromDollars(dollars));
 }
 
 export interface CreditPack {
