@@ -94,8 +94,8 @@ describe('walletStatusCopy', () => {
 
 describe('parseCreditInput', () => {
   it('UI-12 (partial) a typed credit count becomes cents through the money model; separators are allowed, a "$" is not', () => {
-    expect(parseCreditInput('1,200')).toEqual({ ok: true, cents: 1200 });
-    expect(parseCreditInput(' 50 ')).toEqual({ ok: true, cents: 50 });
+    expect(parseCreditInput('1,200')).toEqual({ ok: true, cents: 12_000 });
+    expect(parseCreditInput(' 50 ')).toEqual({ ok: true, cents: 500 });
     expect(parseCreditInput('0')).toEqual({ ok: true, cents: 0 });
     expect(parseCreditInput('0', { min: 1 })).toEqual({ ok: false });
     expect(parseCreditInput('$10')).toEqual({ ok: false });

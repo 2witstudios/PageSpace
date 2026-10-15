@@ -22,8 +22,8 @@ const code = (f: string) => maskSource(read(f));
 const sources = listSourceFiles(ROOTS);
 
 describe('MON-5 a credit is defined once and consumed everywhere', () => {
-  it('a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: 100 credits to the dollar, converted exactly both ways', () => {
-    expect(CREDITS_PER_DOLLAR).toBe(100);
+  it('a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: 10 credits to the dollar, converted exactly both ways', () => {
+    expect(CREDITS_PER_DOLLAR).toBe(10);
     expect(creditsFromCents(CENTS_PER_DOLLAR)).toBe(CREDITS_PER_DOLLAR);
     expect(centsFromCredits(CREDITS_PER_DOLLAR)).toBe(CENTS_PER_DOLLAR);
     for (const cents of [0, 7, 99, 150_000]) expect(centsFromCredits(creditsFromCents(cents))).toBe(cents);
@@ -41,11 +41,11 @@ describe('MON-5 a credit is defined once and consumed everywhere', () => {
   });
 
   it('formatCreditCount renders an integer count with thousands separators — never a decimal, never a dollar sign', () => {
-    expect(formatCreditCount(1_500)).toBe('1,500');
-    expect(formatCreditCount(900)).toBe('900');
-    expect(formatCreditCount(12_345_678)).toBe('12,345,678');
-    expect(formatCreditCount(1_234.6)).toBe('1,235');
-    expect(formatCreditCount(-120)).toBe('-120');
+    expect(formatCreditCount(15_000)).toBe('1,500');
+    expect(formatCreditCount(900)).toBe('90');
+    expect(formatCreditCount(123_456_780)).toBe('12,345,678');
+    expect(formatCreditCount(12_346)).toBe('1,235');
+    expect(formatCreditCount(-1_200)).toBe('-120');
     expect(formatCreditCount(-0.2)).toBe('0');
     for (const cents of [0, 1, 99, 1_234.5, 9_999_999]) {
       expect(formatCreditCount(cents)).toMatch(/^-?\d{1,3}(,\d{3})*$/);

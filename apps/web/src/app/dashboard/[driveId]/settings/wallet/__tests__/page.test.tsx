@@ -46,16 +46,16 @@ vi.mock('@/hooks/useDriveMemberNames', () => ({
 
 import DriveWalletSettingsPage from '../page';
 
-const POOL_CENTS = 900_017;
-const PRIYA_SPEND = 64_513;
+const POOL_CENTS = 9_000_170;
+const PRIYA_SPEND = 645_130;
 
 const facts: DriveWalletFacts = {
   wallet: {
     id: 'w-product',
     driveId: 'd-product',
     status: 'active',
-    monthlyAllowanceCents: 120_000,
-    spentCents: 100_800,
+    monthlyAllowanceCents: 1_200_000,
+    spentCents: 1_008_000,
     topupRemainingCents: 0,
     debtCents: 0,
     monthlyPeriodStart: new Date('2026-09-01T00:00:00Z'),
@@ -67,10 +67,10 @@ const facts: DriveWalletFacts = {
     guestSpendEnabled: false,
     parentStatus: 'active',
   },
-  myCap: { dailyCapCents: 2_000, monthlyCapCents: null, spentTodayCents: 500, spentThisMonthCents: 500 },
-  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND, spentTodayCents: 1_250, viaAutomationsCents: 7_300,
-    automations: [{ consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: 7_300, spentTodayCents: 0 }] }],
-  pool: { walletId: 'w-pool', availableCents: POOL_CENTS, outstandingChildAllocationsCents: 120_000 },
+  myCap: { dailyCapCents: 20_000, monthlyCapCents: null, spentTodayCents: 5_000, spentThisMonthCents: 5_000 },
+  spendByConsumer: [{ consumerKey: 'user:u-priya', userId: 'u-priya', displayName: 'Priya Nair', spentCents: PRIYA_SPEND, spentTodayCents: 12_500, viaAutomationsCents: 73_000,
+    automations: [{ consumerKey: 'automation:workflow:wf-digest', automation: { kind: 'workflow', workflowId: 'wf-digest' }, displayName: 'Weekly digest', creatorUserId: 'u-priya', creatorName: 'Priya Nair', spentCents: 73_000, spentTodayCents: 0 }] }],
+  pool: { walletId: 'w-pool', availableCents: POOL_CENTS, outstandingChildAllocationsCents: 1_200_000 },
 };
 
 const viewAs = (viewer: Exclude<WalletViewer, 'none'>, over: Partial<DriveWalletFacts['wallet']> = {}) => {
@@ -81,7 +81,7 @@ const viewAs = (viewer: Exclude<WalletViewer, 'none'>, over: Partial<DriveWallet
   };
 };
 
-const capsBody = { walletId: 'w-product', caps: [{ userId: 'u-priya', displayName: 'Priya Nair', dailyCapCents: 5_000, monthlyCapCents: 100_000, dailyCapCredits: '5,000', monthlyCapCredits: '100,000' }] };
+const capsBody = { walletId: 'w-product', caps: [{ userId: 'u-priya', displayName: 'Priya Nair', dailyCapCents: 50_000, monthlyCapCents: 1_000_000, dailyCapCredits: '5,000', monthlyCapCredits: '100,000' }] };
 
 const renderPage = () =>
   render(
@@ -192,13 +192,13 @@ describe('Drive Settings › Wallet', () => {
   });
 
   it('WAL-7 (partial) an over wallet shows the over state and what calls do', () => {
-    viewAs('member', { debtCents: 300, spentCents: 120_000 });
+    viewAs('member', { debtCents: 3_000, spentCents: 1_200_000 });
     renderPage();
     expect(screen.getByText('Over')).toBeTruthy();
     expect(screen.getByText("This month's allocation is spent. Calls follow the fallback rule.")).toBeTruthy();
   });
 
-  it('WAL-7 (partial) turning a cap on with no values sends no amounts, so the defaults (50 a day, 1,000 a month) apply; "No cap" sends null', async () => {
+  it('WAL-7 (partial) turning a cap on with no values sends no amounts, so the defaults (5 a day, 100 a month) apply; "No cap" sends null', async () => {
     viewAs('org_admin');
     renderPage();
     const caps = await screen.findByTestId('wallet-caps-card');
@@ -210,7 +210,7 @@ describe('Drive Settings › Wallet', () => {
     const [noDaily] = await screen.findAllByRole('checkbox');
     fireEvent.click(noDaily);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/drives/d-product/wallet/caps/u-priya', { dailyCapCents: null, monthlyCapCents: 100_000 }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/drives/d-product/wallet/caps/u-priya', { dailyCapCents: null, monthlyCapCents: 1_000_000 }));
   });
 
   it('UI-12 (partial) the page shows credit counts and never a dollar sign', () => {

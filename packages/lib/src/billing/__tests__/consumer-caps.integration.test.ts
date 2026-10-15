@@ -31,6 +31,7 @@ import { notifyCapAlerts } from '../wallet-cap-alerts';
 import { listDriveWalletCaps, setDriveWalletCap, setSeatCap } from '../../services/drive-wallet-service';
 import { leaveOrganization } from '../../organizations/leave';
 import { credentialActor } from '../../permissions/access-actor';
+import { formatCreditCount } from '../money-model';
 
 // A seam AFTER the unlocked resolution returns: a test changes the world before the gate's locked re-check.
 const afterResolution = vi.hoisted(() => ({ run: null as null | (() => Promise<void>) }));
@@ -156,7 +157,7 @@ describe('per-consumer caps on drive-wallet and seat legs (real Postgres)', () =
     expect(await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { dailyCents: 30 }, 'session')).toMatchObject({
       ok: true,
       walletId: w.productWalletId,
-      caps: [{ userId: w.marcusId, displayName: 'Marcus Oyelaran', dailyCapCents: 30, monthlyCapCents: 1_000, dailyCapCredits: '30', monthlyCapCredits: '1,000' }],
+      caps: [{ userId: w.marcusId, displayName: 'Marcus Oyelaran', dailyCapCents: 30, monthlyCapCents: 1_000, dailyCapCredits: formatCreditCount(30), monthlyCapCredits: formatCreditCount(1_000) }],
     });
     expect(await capRow(w.productWalletId, w.marcusId)).toMatchObject({ dailyCapCents: 30, monthlyCapCents: 1_000 });
 

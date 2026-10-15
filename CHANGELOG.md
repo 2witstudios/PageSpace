@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Credits are now a larger unit, so every balance, allowance, cap and pack shows one-tenth the number it did. What you have, and what things cost, is unchanged. A custom top-up must now be a whole number of credits; an amount that is not is refused rather than rounded.
+
 - Organizations and their settings are now available in both interfaces. A fresh assistant conversation shows its spending source before the first message, and choosing another source uses it for the first reply. Imago now applies organization sign-in requirements and keeps access-restricting changes available while an organization is unpaid.
 
 - Paid models and voice now follow whoever pays for the call. Inside an organization's drive, its plan applies to a member on the drive wallet or their seat; on someone's personal drive wallet, the drive owner's plan applies; on your own credits, your own plan applies. This now holds for agent consultations, the OpenAI-compatible API, workflows, @mentions, agents asking agents, text-to-speech and voice calls.

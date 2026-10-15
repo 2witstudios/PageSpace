@@ -46,7 +46,7 @@ describe('auditDetailLine', () => {
       { key: 'guests', from: 'on', to: 'approve' },
       { key: 'seatAllowanceCents', from: 100, to: 150 },
       { key: 'providerAllowlist', from: null, to: ['anthropic', 'openai'] },
-    ] })).toBe('Public share links: on → off · Guests: On → Admins approve · Seat allowance: 100 → 150 credits a month · AI providers: Unrestricted → 2 allowed');
+    ] })).toBe('Public share links: on → off · Guests: On → Admins approve · Seat allowance: 10 → 15 credits a month · AI providers: Unrestricted → 2 allowed');
   });
 
   it('names what a policy change suspended, restored or blocked', () => {
@@ -64,7 +64,7 @@ describe('auditDetailLine', () => {
   it('seats and billing: counts in credits, payments in dollars', () => {
     expect(auditDetailLine('org.seat.auto_add_changed', { autoAdd: true })).toBe('Automatic seats on');
     expect(auditDetailLine('org.seat.refused', { purchased: 15, held: 15 })).toBe('15 of 15 seats in use');
-    expect(auditDetailLine('org.billing.pool_refilled', { allowanceCents: 9000, paidCents: 15000 })).toBe('$150 paid · 9,000 credits added to the pool');
+    expect(auditDetailLine('org.billing.pool_refilled', { allowanceCents: 9000, paidCents: 15000 })).toBe('$150 paid · 900 credits added to the pool');
     expect(auditDetailLine('org.domain.verified', { domain: 'northwind.com', method: 'dns' })).toBe('northwind.com · by DNS');
   });
 

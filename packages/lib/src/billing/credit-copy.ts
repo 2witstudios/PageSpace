@@ -54,8 +54,8 @@ export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = perTier((tier) 
 export const FREE_STARTER_CREDITS_DISPLAY: string = formatCreditCount(centsFromCredits(FREE_STARTER_CREDITS));
 
 /**
- * Allowance phrase for an explicit cents value: "900 credits/month" for refilling
- * paid tiers, "500 credits to start" for a one-time grant. The seam
+ * Allowance phrase for an explicit cents value: "90 credits/month" for refilling
+ * paid tiers, "50 credits to start" for a one-time grant. The seam
  * `withCreditOverrides` (apps/web/src/lib/subscription/plans.ts) uses to rebuild a
  * plan's copy from a server-supplied number, without re-deriving the ratio itself.
  */
@@ -66,14 +66,14 @@ export function monthlyCreditsPhraseForCents(tier: SubscriptionTier, cents: numb
 }
 
 /**
- * Allowance phrase for a tier: "900 credits/month" for refilling paid tiers,
- * "500 credits to start" for the free tier's one-time starter grant.
+ * Allowance phrase for a tier: "90 credits/month" for refilling paid tiers,
+ * "50 credits to start" for the free tier's one-time starter grant.
  */
 export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
   return monthlyCreditsPhraseForCents(tier, MONTHLY_CREDIT_CENTS[tier]);
 }
 
-/** Short table-cell form: "900 credits/mo" or "500 credits to start". */
+/** Short table-cell form: "90 credits/mo" or "50 credits to start". */
 export function creditsCellPhrase(tier: SubscriptionTier, cents: number): string {
   return TIER_ALLOWANCE_REFILLS[tier]
     ? `${formatCreditCount(cents)} credits/mo`
@@ -101,7 +101,7 @@ export function includedCreditsPhraseForCents(tier: SubscriptionTier, cents: num
 
 /**
  * MON-6: the plan card's "included credits" fact — an integer credit COUNT, never a
- * dollar figure. "900 credits included each month" for refilling paid tiers, "500
+ * dollar figure. "90 credits included each month" for refilling paid tiers, "50
  * credits to start" for the free tier's one-time grant. Sized by money-model.
  */
 export function includedCreditsPhrase(tier: SubscriptionTier): string {
@@ -123,7 +123,7 @@ export function creditPacksPhrase(): string {
 
 /**
  * MON-6 / MON-4: the plan card's "top-up rate" fact, from the smallest buyable pack
- * ("1,000 credits per $10"): the credit figure is a count, the dollar figure a real
+ * ("100 credits per $10"): the credit figure is a count, the dollar figure a real
  * purchase price and NO ratio is applied (unlike a subscription's included credits).
  * The same on every card — the rate is a property of the money model, not of a tier.
  */
@@ -139,7 +139,7 @@ export interface OrgPlanFacts {
   extraSeatPriceCents: number;
   /** "per organization · 5 seats included · $10 per extra seat a month". */
   seatTerms: string;
-  /** "+1,000 credits a month per extra seat": a count, never a dollar figure (UI-12). */
+  /** "+60 credits a month per extra seat": a count, never a dollar figure (UI-12). */
   extraSeatCredits: string;
   /** D-OW-30: no org trial; a card is required at checkout. */
   checkout: string;
@@ -155,9 +155,9 @@ export interface PlanFacts {
   price: string;
   /** "/month" for a paid tier, null for free. */
   period: string | null;
-  /** MON-6 second fact: "900 credits included each month" / "500 credits to start". */
+  /** MON-6 second fact: "90 credits included each month" / "50 credits to start". */
   includedCredits: string;
-  /** MON-6 third fact: "1,000 credits per $10". */
+  /** MON-6 third fact: "100 credits per $10". */
   topUpRate: string;
   org: OrgPlanFacts | null;
 }

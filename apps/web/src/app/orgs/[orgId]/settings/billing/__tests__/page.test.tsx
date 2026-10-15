@@ -47,12 +47,12 @@ beforeEach(() => {
   mocks.seats = { data: { seats: { members: 12, pendingInvites: 2, held: 14, included: 5, purchasedExtra: 10, purchased: 15, autoAdd: true, hasSubscription: true, currentPeriodEnd: '2026-10-01T00:00:00Z' } }, error: undefined };
   mocks.reads = {
     '/api/orgs/org_nw/pool': {
-      walletId: 'w_pool', status: 'active', availableCents: 4_500, unallocatedCents: 4_308, periodEnd: '2026-10-01T00:00:00Z',
-      seats: { memberCount: 12, allowanceCents: 150, allocatedCents: 1_800, spentCents: 1_152 },
+      walletId: 'w_pool', status: 'active', availableCents: 45_000, unallocatedCents: 43_080, periodEnd: '2026-10-01T00:00:00Z',
+      seats: { memberCount: 12, allowanceCents: 1_500, allocatedCents: 18_000, spentCents: 11_520 },
       driveWallets: [
-        { driveId: 'd_eng', driveName: 'Engineering', walletId: 'w_e', allocationCents: 900, spentCents: 1_233, status: 'over' },
-        { driveId: 'd_cr', driveName: 'Customer Research', walletId: 'w_c', allocationCents: 600, spentCents: 567, status: 'paused' },
-        { driveId: 'd_prod', driveName: 'Product', walletId: 'w_p', allocationCents: 1_200, spentCents: 1_008, status: 'active' },
+        { driveId: 'd_eng', driveName: 'Engineering', walletId: 'w_e', allocationCents: 9_000, spentCents: 12_330, status: 'over' },
+        { driveId: 'd_cr', driveName: 'Customer Research', walletId: 'w_c', allocationCents: 6_000, spentCents: 5_670, status: 'paused' },
+        { driveId: 'd_prod', driveName: 'Product', walletId: 'w_p', allocationCents: 12_000, spentCents: 10_080, status: 'active' },
       ],
       drivesWithoutWallet: [{ id: 'd_ds', name: 'Design System' }, { id: 'd_fin', name: 'Finance' }],
     },

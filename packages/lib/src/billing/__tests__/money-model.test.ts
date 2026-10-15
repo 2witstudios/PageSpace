@@ -63,8 +63,8 @@ describe('MON-1 (partial) one module defines the money model', () => {
     expect(CREDIT_PRICING_MARKUP_BPS).toBe(MARKUP_BPS);
   });
 
-  it('A-11 CREDITS_PER_DOLLAR is 100 and INCLUDED_CREDIT_RATIO_BPS is 60% for pro and business', () => {
-    expect(CREDITS_PER_DOLLAR).toBe(100);
+  it('A-11 CREDITS_PER_DOLLAR is 10 and INCLUDED_CREDIT_RATIO_BPS is 60% for pro and business', () => {
+    expect(CREDITS_PER_DOLLAR).toBe(10);
     expect(INCLUDED_CREDIT_RATIO_BPS.pro).toBe(6000);
     expect(INCLUDED_CREDIT_RATIO_BPS.business).toBe(6000);
   });
@@ -104,12 +104,12 @@ describe('MON-2 the monthly allowance is derived from the amount paid, never tab
     }
   });
 
-  it('A-11 Pro $15 → 900 credits; Business $50 + 10 seats × $10 → 9,000 credits (Northwind Labs)', () => {
-    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(900);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(3000);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(9000);
-    // One extra seat is $10 → 600 credits, so 6 extra seats add 3,600.
-    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(600);
+  it('A-11 Pro $15 → 90 credits; Business $50 + 10 seats × $10 → 900 credits (Northwind Labs)', () => {
+    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(90);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(300);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(900);
+    // One extra seat is $10 → 60 credits, so 6 extra seats add 360.
+    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(60);
   });
 
   it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢', () => {
@@ -160,40 +160,37 @@ describe('MON-5 (partial) one definition of a credit', () => {
   it('MON-5 (partial) a credit is CREDITS_PER_DOLLAR⁻¹ of a dollar: creditsFromCents / centsFromCredits round-trip', () => {
     expect(creditsFromCents(100)).toBe(CREDITS_PER_DOLLAR);
     expect(centsFromCredits(CREDITS_PER_DOLLAR)).toBe(100);
-    for (const cents of [0, 1, 500, 1500, 123456]) {
+    for (const cents of [0, 1, 7, 500, 1500, 123456]) {
       expect(centsFromCredits(creditsFromCents(cents))).toBe(cents);
     }
   });
 
   it('MON-5 (partial) centsFromCredits returns an exact integer for every whole credit count 0..10,000', () => {
-    // Divide-then-multiply drifts: (7 / 100) * 100 is 7.000000000000001. Stripe rejects
-    // a non-integer amount, and integer cents columns and equality checks break on it.
-    // At the A-11 rate one credit is exactly one cent, so the oracle is the input itself
-    // (an independent value, not the implementation's formula restated).
-    expect(CREDITS_PER_DOLLAR).toBe(100);
-    for (let credits = 0; credits <= 10_000; credits++) {
-      const cents = centsFromCredits(credits);
-      if (!Number.isInteger(cents) || cents !== credits) {
-        expect.fail(`centsFromCredits(${credits}) returned ${cents}`);
-      }
-    }
-    expect(centsFromCredits(7)).toBe(7);
+    // Stripe rejects a non-integer amount, and integer cents columns and equality checks
+    // break on one. At the A-11 rate one credit is exactly ten cents, so the oracle is the
+    // input times ten (an independent value, not the implementation's formula restated).
+    expect(CREDITS_PER_DOLLAR).toBe(10);
+    const counts = Array.from({ length: 10_001 }, (_, credits) => credits);
+    // Collected rather than asserted per value, so a regression names every bad count at once.
+    expect(counts.filter((credits) => centsFromCredits(credits) !== credits * 10)).toEqual([]);
+    expect(counts.map(centsFromCredits).every(Number.isInteger)).toBe(true);
+    expect(centsFromCredits(7)).toBe(70);
   });
 
-  it('MON-5 (partial) creditsFromCents returns an exact integer for every whole cent amount 0..10,000', () => {
-    expect(CREDITS_PER_DOLLAR).toBe(100);
-    for (let cents = 0; cents <= 10_000; cents++) {
-      const credits = creditsFromCents(cents);
-      if (!Number.isInteger(credits) || credits !== cents) {
-        expect.fail(`creditsFromCents(${cents}) returned ${credits}`);
-      }
-    }
-    expect(creditsFromCents(7)).toBe(7);
+  it('MON-5 (partial) creditsFromCents is exact for every whole cent amount 0..100,000 and round-trips back to it', () => {
+    // A cent amount that is not a whole number of credits is a fractional count (7¢ is
+    // 0.7 credits); it must still come back to the same whole cents, never 7.000000000000001.
+    expect(CREDITS_PER_DOLLAR).toBe(10);
+    const amounts = Array.from({ length: 100_001 }, (_, cents) => cents);
+    expect(amounts.filter((cents) => centsFromCredits(creditsFromCents(cents)) !== cents)).toEqual([]);
+    const wholeCredits = Array.from({ length: 10_001 }, (_, credits) => credits);
+    expect(wholeCredits.filter((credits) => creditsFromCents(credits * 10) !== credits)).toEqual([]);
+    expect(creditsFromCents(70)).toBe(7);
   });
 
-  it('A-11 a $10 top-up pack is 1,000 credits at the full rate, no ratio applied', () => {
-    expect(creditsFromCents(1000)).toBe(1000);
-    expect(formatCreditCount(1000)).toBe('1,000');
+  it('A-11 a $10 top-up pack is 100 credits at the full rate, no ratio applied', () => {
+    expect(creditsFromCents(1000)).toBe(100);
+    expect(formatCreditCount(1000)).toBe('100');
   });
 
   it('MON-5 (partial) dollarsFromCents is the single cents→dollars conversion', () => {
@@ -274,18 +271,18 @@ describe('MON-5 (partial) formatCreditCount renders an integer count with thousa
   });
 
   it('MON-5 (partial) never shows decimals: fractional credits round to the nearest whole credit', () => {
-    // 0.4 credits → "0"; 0.6 → "1"; 1,499.5 → "1,500" (half away from zero).
-    expect(formatCreditCount(0.4)).toBe('0');
-    expect(formatCreditCount(0.6)).toBe('1');
-    expect(formatCreditCount(149950 / 100)).toBe('1,500');
-    for (const cents of [0.4, 1, 150, 149950 / 100, 1234567]) {
+    // 4¢ is 0.4 credits → "0"; 6¢ is 0.6 → "1"; 14,995¢ is 1,499.5 → "1,500" (half up).
+    expect(formatCreditCount(4)).toBe('0');
+    expect(formatCreditCount(6)).toBe('1');
+    expect(formatCreditCount(14_995)).toBe('1,500');
+    for (const cents of [0.4, 1, 7, 150, 14_995, 1234567]) {
       expect(formatCreditCount(cents)).not.toMatch(/\./);
     }
   });
 
   it('UI-12 never carries a dollar sign and negatives (overage) carry a leading minus', () => {
-    expect(formatCreditCount(-5000)).toBe('-5,000');
-    expect(formatCreditCount(-0.2)).toBe('0');
+    expect(formatCreditCount(-50_000)).toBe('-5,000');
+    expect(formatCreditCount(-2)).toBe('0');
     for (const cents of [-5000, -1, 0, 1, 99, 100, 123456789]) {
       expect(formatCreditCount(cents)).not.toContain('$');
     }
@@ -293,9 +290,9 @@ describe('MON-5 (partial) formatCreditCount renders an integer count with thousa
 });
 
 describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs are credit counts', () => {
-  it('MON-4 packs are defined as credit counts 1,000 / 2,500 / 5,000 and priced from the rate', () => {
+  it('MON-4 packs are defined as credit counts 100 / 250 / 500 and priced from the rate', () => {
     const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
-    expect(packs.map((p) => p.credits)).toEqual([1000, 2500, 5000]);
+    expect(packs.map((p) => p.credits)).toEqual([100, 250, 500]);
     for (const pack of packs) {
       // $ price = credits / CREDITS_PER_DOLLAR, in cents; the 60% ratio never applies.
       expect(creditPackPriceCents(pack)).toBe((pack.credits / CREDITS_PER_DOLLAR) * 100);
@@ -317,8 +314,8 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
   });
 
   it('MON-4 a custom top-up is validated in credits: an integer within [min, max]', () => {
-    expect(CREDIT_TOPUP_MIN_CREDITS).toBe(500);
-    expect(CREDIT_TOPUP_MAX_CREDITS).toBe(50_000);
+    expect(CREDIT_TOPUP_MIN_CREDITS).toBe(50);
+    expect(CREDIT_TOPUP_MAX_CREDITS).toBe(5_000);
     expect(validateTopupCredits(1234)).toBe(1234);
     expect(validateTopupCredits(CREDIT_TOPUP_MIN_CREDITS)).toBe(CREDIT_TOPUP_MIN_CREDITS);
     expect(validateTopupCredits(CREDIT_TOPUP_MAX_CREDITS)).toBe(CREDIT_TOPUP_MAX_CREDITS);
@@ -342,10 +339,18 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     expect(max).toBe(9000);
   });
 
-  it('MON-4 a dollar amount buys credits at the full rate: $12.34 → 1,234 credits → 1234¢ charged', () => {
-    expect(creditsFromDollars(12.34)).toBe(1234);
-    expect(creditsFromDollars(10)).toBe(1000);
-    expect(centsFromCredits(creditsFromDollars(12.34))).toBe(1234);
+  it('MON-4 a dollar amount buys credits at the full rate: $12.30 → 123 credits → 1230¢ charged', () => {
+    expect(creditsFromDollars(12.3)).toBe(123);
+    expect(creditsFromDollars(10)).toBe(100);
+    expect(centsFromCredits(creditsFromDollars(12.3))).toBe(1230);
+  });
+
+  it('MON-4 a dollar amount that is not a whole number of credits is refused, never rounded to a different charge', () => {
+    // $5.04 would otherwise charge $5.00, and $4.96 would pass the $5 minimum.
+    expect(validateTopupCredits(creditsFromDollars(5.04))).toBeNull();
+    expect(validateTopupCredits(creditsFromDollars(4.96))).toBeNull();
+    expect(validateTopupCredits(creditsFromDollars(5.1))).toBe(51);
+    expect(validateTopupCredits(creditsFromDollars(5))).toBe(50);
   });
 });
 
