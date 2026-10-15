@@ -26,7 +26,7 @@ describe('spendRefusalCopy: the refusal card', () => {
   });
 
   it('WAL-7 (partial) a reached cap names its window, its amount when known, and when it resets (source_cap_reached)', () => {
-    expect(spendRefusalCopy({ reason: 'source_cap_reached', source: product, cap: { window: 'daily', capCents: 2000 }, hasOptions: true, now: SEPT }))
+    expect(spendRefusalCopy({ reason: 'source_cap_reached', source: product, cap: { window: 'daily', capCents: 20000 }, hasOptions: true, now: SEPT }))
       .toEqual({
         title: "You've reached your daily cap on Product wallet",
         body: 'Your cap here is 2,000 credits a day and resets tomorrow. Nothing was charged. The Northwind Labs Owner and Admins set caps on this wallet. You can send this message from another source.',

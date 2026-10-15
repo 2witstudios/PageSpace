@@ -76,7 +76,7 @@ export const CENTS_PER_DOLLAR = 100;
 const MILLICENTS_PER_CENT = 1000;
 
 /** The purchase and display rate: a dollar of credit value is this many credits (A-11). */
-export const CREDITS_PER_DOLLAR = 100;
+export const CREDITS_PER_DOLLAR = 10;
 
 /**
  * Share of a subscription's PAID amount granted as credit value each period, in
@@ -93,18 +93,18 @@ export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
 
 /**
  * One-time starter grant for the free tier, as a plain credit count (MON-8). Not
- * derived from any price. 500 credits = $5 of credit value at CREDITS_PER_DOLLAR,
+ * derived from any price. 50 credits = $5 of credit value at CREDITS_PER_DOLLAR,
  * unchanged from the previous $5 starter grant.
  */
-export const FREE_STARTER_CREDITS = 500;
+export const FREE_STARTER_CREDITS = 50;
 
 /**
  * The org's default seat allowance, in credits a month per member (WAL-2, the POL-7 policy
- * default and the fallback when an org sets none): D20.5's 100. Its own figure on purpose:
- * [D-OW-31] moved the per-consumer cap defaults and left the seat allowance where it was, so a
+ * default and the fallback when an org sets none): D20.5's $1, now 10 credits. Its own figure
+ * on purpose: [D-OW-31] moved the per-consumer cap defaults and left the seat allowance where it was, so a
  * cap edit must never move what every member may draw from every pool.
  */
-export const DEFAULT_SEAT_ALLOWANCE_CREDITS = 100;
+export const DEFAULT_SEAT_ALLOWANCE_CREDITS = 10;
 
 /**
  * The most a seat allowance may be set to: 10,000,000 cents of credit value a month per
@@ -116,10 +116,10 @@ export const MAX_SEAT_ALLOWANCE_CENTS = 10_000_000;
 
 /**
  * Per-consumer cap defaults when an admin enables caps without naming values, in credits
- * ([D-OW-31]: 50 a day and 1,000 a month, replacing D20.5's 10/100, which sat below one image
- * or uncatalogued model's hold and so refused every such call).
+ * ([D-OW-31]: $0.50 a day and $10 a month, 5 and 100 credits, replacing D20.5's $0.10/$1,
+ * which sat below one image or uncatalogued model's hold and so refused every such call).
  */
-export const DEFAULT_CONSUMER_CAP_CREDITS = { daily: 50, monthly: 1_000 } as const;
+export const DEFAULT_CONSUMER_CAP_CREDITS = { daily: 5, monthly: 100 } as const;
 
 /**
  * The included-credit ratio for `tier`, in basis points. 0 for the free tier and for
@@ -166,24 +166,29 @@ export function tierAllowanceCents(tier: string): number {
 }
 
 /**
- * Cents of credit value → credit count. Multiplies before dividing: a whole-cent input
- * gives an exact integer product, and while CENTS_PER_DOLLAR divides that product
- * evenly (true while it equals CREDITS_PER_DOLLAR) the quotient is exact too.
- * Divide-then-multiply drifts ((7 / 100) * 100 is 7.000000000000001).
+ * Cents of credit value in one credit. Derived from the two rates so it cannot drift from
+ * them; must be a whole number (a credit is never a fraction of a cent — the MON-5
+ * exact-integer test fails on purpose if a rate change breaks that).
+ */
+const CENTS_PER_CREDIT = CENTS_PER_DOLLAR / CREDITS_PER_DOLLAR;
+
+/**
+ * Cents of credit value → credit count. One correctly rounded division, so the result
+ * round-trips through {@link centsFromCredits} exactly for every whole-cent input. A
+ * balance that is not a whole number of credits gives a fractional count; display rounds
+ * it ({@link formatCreditCount}).
  */
 export function creditsFromCents(cents: number): number {
-  return (cents * CREDITS_PER_DOLLAR) / CENTS_PER_DOLLAR;
+  return cents / CENTS_PER_CREDIT;
 }
 
 /**
- * Credit count → cents of credit value. Multiplies before dividing, so a whole credit
- * count gives exact integer cents while CREDITS_PER_DOLLAR divides the product evenly
- * (true while it equals CENTS_PER_DOLLAR) — the figure goes to Stripe as
- * `unit_amount`, which rejects a non-integer. A rate that does not divide evenly makes
- * a credit a fraction of a cent, and the MON-5 exact-integer test fails on purpose.
+ * Credit count → cents of credit value. A whole credit count gives exact integer cents
+ * (CENTS_PER_CREDIT is a whole number) — the figure goes to Stripe as `unit_amount`,
+ * which rejects a non-integer.
  */
 export function centsFromCredits(credits: number): number {
-  return (credits * CENTS_PER_DOLLAR) / CREDITS_PER_DOLLAR;
+  return credits * CENTS_PER_CREDIT;
 }
 
 /** Whole cents → dollars (real money, for prices, invoices, and top-up purchases). */
@@ -249,7 +254,7 @@ const creditCountFormat = new Intl.NumberFormat('en-US', {
 
 /**
  * MON-5 / UI-12: render cents of credit value as an integer credit count with
- * thousands separators — "900", "1,200", "9,000" — never a decimal, never a dollar
+ * thousands separators — "90", "1,200", "9,000" — never a decimal, never a dollar
  * sign. Rounds to the nearest whole credit; an overage (negative) keeps its minus.
  */
 export function formatCreditCount(cents: number): string {
@@ -267,7 +272,7 @@ export function formatDollars(cents: number): string {
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
 }
 
-/** Dollars → credits at the purchase rate (MON-4): $12.34 buys 1,234 credits. */
+/** Dollars → credits at the purchase rate (MON-4), to the nearest credit: $12.30 buys 123 credits. */
 export function creditsFromDollars(dollars: number): number {
   return Math.round(dollars * CREDITS_PER_DOLLAR);
 }
@@ -291,9 +296,9 @@ function creditPack(id: string, credits: number): CreditPack {
  * metadata and the e2e seed); the price comes from {@link creditPackPriceCents}.
  */
 export const CREDIT_PACKS: Record<string, CreditPack> = {
-  pack_10: creditPack('pack_10', 1000),
-  pack_25: creditPack('pack_25', 2500),
-  pack_50: creditPack('pack_50', 5000),
+  pack_10: creditPack('pack_10', 100),
+  pack_25: creditPack('pack_25', 250),
+  pack_50: creditPack('pack_50', 500),
 };
 
 export function getCreditPack(id: string): CreditPack | undefined {
@@ -313,10 +318,10 @@ export function creditPackPriceCents(pack: CreditPack): number {
 /**
  * Bounds, in credits, for a CUSTOM top-up alongside the fixed packs. The min keeps
  * dust purchases above Stripe's per-transaction fee; the max caps single-charge
- * fraud/chargeback exposure. Default 500–50,000 credits ($5–$500); tune via env.
+ * fraud/chargeback exposure. Default 50–5,000 credits ($5–$500); tune via env.
  */
-export const CREDIT_TOPUP_MIN_CREDITS = envInt('CREDIT_TOPUP_MIN_CREDITS', 500);
-export const CREDIT_TOPUP_MAX_CREDITS = envInt('CREDIT_TOPUP_MAX_CREDITS', 50_000);
+export const CREDIT_TOPUP_MIN_CREDITS = envInt('CREDIT_TOPUP_MIN_CREDITS', 50);
+export const CREDIT_TOPUP_MAX_CREDITS = envInt('CREDIT_TOPUP_MAX_CREDITS', 5_000);
 
 /**
  * Normalize and bound a user-supplied custom top-up, in credits (MON-4). Returns the

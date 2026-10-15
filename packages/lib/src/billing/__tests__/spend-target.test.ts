@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { centsFromCredits } from '../money-model';
 import {
   PERSONAL_SPEND,
   driveSpend,
@@ -40,7 +39,8 @@ import type { SpendLeg } from '../wallet-core';
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits under
 // the 9,000-credit pool; Marcus is a member on the free tier, Chris Rowe a guest.
-const c = (credits: number): number => Math.round(centsFromCredits(credits));
+// Fixture amounts are whole cents of credit value, never credit counts.
+const c = (cents: number): number => cents;
 
 const wallet = (over: Partial<WalletBalanceFacts> = {}): WalletBalanceFacts => ({
   id: 'w',

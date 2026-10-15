@@ -82,15 +82,15 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     );
   });
 
-  it('Spec A-11: Pro includes 900, Business 3,000, and an extra seat adds 600 credits', () => {
+  it('Spec A-11: Pro includes 90, Business 300, and an extra seat adds 60 credits', () => {
     const seatCents = centsFromDollars(TIER_PLAN_LIMITS.business.extraSeatUsd);
     expect(planFacts('business').org?.extraSeatCredits).toBe(
       `+${formatCreditCount(allowanceCentsForPaidCents(seatCents, 'business'))} credits a month per extra seat`,
     );
-    expect(planFacts('business').org?.extraSeatCredits).toBe('+600 credits a month per extra seat');
-    expect(planFacts('pro').includedCredits).toBe('900 credits included each month');
-    expect(planFacts('business').includedCredits).toBe('3,000 credits included each month');
-    expect(planFacts('free').includedCredits).toBe('500 credits to start');
+    expect(planFacts('business').org?.extraSeatCredits).toBe('+60 credits a month per extra seat');
+    expect(planFacts('pro').includedCredits).toBe('90 credits included each month');
+    expect(planFacts('business').includedCredits).toBe('300 credits included each month');
+    expect(planFacts('free').includedCredits).toBe('50 credits to start');
   });
 
   it('the org plan (no org trial, Spec A-7 and D-OW-30) states no trial and that a card is required at checkout; personal plans carry no org facts', () => {
