@@ -326,9 +326,19 @@ describe('EventModal — agent trigger disclosure', () => {
     const onSave = vi.fn<(data: unknown) => Promise<void>>(async () => undefined);
     renderModal({ context: 'user', driveId: undefined, event: null, onSave });
 
-    // Title is required
+    // Title is required. The title is setup here, not the behaviour under test, so it goes in as one
+    // paste: still a real focus + input event through user-event, but one React commit of this
+    // ~1.2k-line modal instead of ten. Typing it key by key cost ~0.4s idle and ~2s under coverage
+    // on a saturated runner, which pushed this test past the 5s timeout on CI.
     const titleInput = await screen.findByLabelText(/Title/i);
-    await userEvent.type(titleInput, 'Solo lunch', { delay: null });
+    await userEvent.click(titleInput);
+    await userEvent.paste('Solo lunch');
+    assert({
+      given: 'the title pasted into the focused title input',
+      should: 'hold the full title before Create is clicked',
+      actual: (titleInput as HTMLInputElement).value,
+      expected: 'Solo lunch',
+    });
 
     await userEvent.click(screen.getByRole('button', { name: /^Create$/i }));
 
