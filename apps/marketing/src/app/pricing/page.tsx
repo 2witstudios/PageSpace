@@ -136,7 +136,7 @@ export default function PricingPage() {
       {/* Pricing Cards */}
       <section className="pb-16 md:pb-24">
         <div className="container mx-auto px-4 md:px-6">
-          <div className="grid md:grid-cols-3 gap-6 max-w-6xl mx-auto">
+          <div className="grid gap-6 lg:grid-cols-3 max-w-6xl mx-auto">
             {plans.map((plan) => (
               <div
                 key={plan.facts.tier}
@@ -153,47 +153,39 @@ export default function PricingPage() {
                     Most Popular
                   </div>
                 )}
-                <div className="mb-6">
-                  <h3 className="text-xl font-semibold mb-2">{plan.facts.name}</h3>
-                  <div className="flex items-baseline gap-1 mb-2">
-                    <span className="text-4xl font-bold" data-testid="plan-price">{plan.facts.price}</span>
+                <div>
+                  <h3 className="text-lg font-semibold">{plan.facts.name}</h3>
+                  <div className="flex items-baseline gap-1 mt-2">
+                    <span className="text-4xl font-bold tracking-tight" data-testid="plan-price">{plan.facts.price}</span>
                     {plan.facts.period && (
                       <span className="text-muted-foreground" data-testid="plan-period">{plan.facts.period}</span>
                     )}
                   </div>
-                  {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
-                  {plan.facts.org && (
-                    <div className="mb-2 space-y-0.5 text-xs text-muted-foreground">
-                      <p data-testid="plan-seats">{plan.facts.org.seatTerms}</p>
-                      <p data-testid="plan-seat-credits">{plan.facts.org.extraSeatCredits}</p>
-                      <p data-testid="plan-checkout">{plan.facts.org.checkout}</p>
-                    </div>
-                  )}
-                  <p className="text-sm text-muted-foreground">{plan.description}</p>
+                  <p className="text-sm text-muted-foreground mt-3 min-h-[2.5rem]">{plan.description}</p>
                 </div>
 
-                <div className="space-y-4 flex-1">
+                <div className="flex-1 space-y-6 mt-6">
                   {/* MON-6: price (above), included credits, and the top-up rate are three separate facts. */}
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Included</span>
-                      <span className="font-medium" data-testid="plan-included-credits">{plan.facts.includedCredits}</span>
+                  <dl className="divide-y divide-border rounded-xl border border-border text-sm">
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Included</dt>
+                      <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.facts.includedCredits}</dd>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Top up</span>
-                      <span className="font-medium" data-testid="plan-topup-rate">{plan.facts.topUpRate}</span>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Top up</dt>
+                      <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.facts.topUpRate}</dd>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Storage</span>
-                      <span className="font-medium">{plan.features.storage}</span>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Storage</dt>
+                      <dd className="font-medium text-right">{plan.features.storage}</dd>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Models</span>
-                      <span className="font-medium">{plan.features.models}</span>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Models</dt>
+                      <dd className="font-medium text-right">{plan.features.models}</dd>
                     </div>
-                  </div>
+                  </dl>
 
-                  <div className="border-t border-border pt-4 space-y-2">
+                  <ul className="space-y-2.5 text-sm">
                     {[
                       { key: "sandbox", label: "Cloud sandbox — run code, use a terminal", value: plan.features.sandbox },
                       { key: "buyMore", label: "Buy more credits anytime", value: plan.features.buyMore },
@@ -201,18 +193,39 @@ export default function PricingPage() {
                       { key: "hierarchicalAgents", label: "Hierarchical AI agents", value: plan.features.hierarchicalAgents },
                       { key: "prioritySupport", label: "Priority support", value: plan.features.prioritySupport },
                     ].map((feature) => (
-                      <div key={feature.key} className="flex items-center gap-2 text-sm">
+                      <li key={feature.key} className="flex items-start gap-2.5">
                         {feature.value ? (
-                          <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
+                          <Check className="h-4 w-4 mt-0.5 text-green-500 flex-shrink-0" />
                         ) : (
-                          <X className="h-4 w-4 text-muted-foreground/50 flex-shrink-0" />
+                          <X className="h-4 w-4 mt-0.5 text-muted-foreground/50 flex-shrink-0" />
                         )}
                         <span className={feature.value ? "" : "text-muted-foreground/50"}>
                           {feature.label}
                         </span>
-                      </div>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
+
+                  {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
+                  {plan.facts.org && (
+                    <div className="rounded-xl bg-muted/60 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Team terms</p>
+                      <dl className="space-y-3 text-sm">
+                        <div>
+                          <dt className="text-muted-foreground">Seats</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-seats">{plan.facts.org.seatTerms}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-muted-foreground">Extra seat credits</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-seat-credits">{plan.facts.org.extraSeatCredits}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-muted-foreground">Checkout</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-checkout">{plan.facts.org.checkout}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
                 </div>
 
                 <Button
