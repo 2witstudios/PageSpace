@@ -51,6 +51,7 @@ import {
   getDriveSpend,
 } from '../drive-wallet-service';
 import { encodeAutomationRef } from '../../billing/automation-attribution';
+import { formatCreditCount } from '../../billing/money-model';
 import { credentialActor, automationActor, inDrives } from '../../permissions/access-actor';
 
 const accountActor = (userId: string) => credentialActor(userId, { authenticatedAtMs: Date.now(), assurance: 'user_verified_passkey' });
@@ -231,8 +232,8 @@ describe('drive-wallet service (real Postgres)', () => {
     expect(read).toMatchObject({ ok: true, viewer: 'lead' });
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     expect(read.wallet.spendByConsumer).toEqual([
-      expect.objectContaining({ consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: MARCUS_SPEND.toLocaleString('en-US') }),
-      expect.objectContaining({ consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: LENA_SPEND.toLocaleString('en-US') }),
+      expect.objectContaining({ consumerKey: `user:${world.ids.marcus}`, userId: world.ids.marcus, displayName: 'Marcus Oyelaran', spentCents: MARCUS_SPEND, spentCredits: formatCreditCount(MARCUS_SPEND) }),
+      expect.objectContaining({ consumerKey: `user:${world.ids.lena}`, userId: world.ids.lena, displayName: 'Lena Schulz', spentCents: LENA_SPEND, spentCredits: formatCreditCount(LENA_SPEND) }),
     ]);
     expect(JSON.stringify(read)).not.toContain(String(POOL_CENTS));
     expect('pool' in read.wallet).toBe(false);
@@ -293,7 +294,7 @@ describe('drive-wallet service (real Postgres)', () => {
     const read = await getDriveWallet(credentialActor(world.ids.dana, null), world.productId, 'session');
     if (!read.ok || !read.wallet || read.wallet.viewer !== 'lead') throw new Error('expected a lead view');
     const marcus = read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.marcus);
-    expect(marcus).toMatchObject({ spentCents: MARCUS_SPEND + 81, spentTodayCents: 81, viaAutomationsCents: 70, spentTodayCredits: '81', viaAutomationsCredits: '70' });
+    expect(marcus).toMatchObject({ spentCents: MARCUS_SPEND + 81, spentTodayCents: 81, viaAutomationsCents: 70, spentTodayCredits: formatCreditCount(81), viaAutomationsCredits: formatCreditCount(70) });
     expect(marcus?.automations.map((a) => [a.displayName, a.spentCents, a.spentTodayCents])).toEqual([['Weekly digest', 70, 70]]);
     expect(read.wallet.spendByConsumer.find((c) => c.userId === world?.ids.lena)).toMatchObject({ spentCents: LENA_SPEND, spentTodayCents: 0, viaAutomationsCents: 0, automations: [] });
 
@@ -312,8 +313,8 @@ describe('drive-wallet service (real Postgres)', () => {
       walletId: world.poolId,
       availableCents: POOL_CENTS,
       unallocatedCents: POOL_CENTS - outstanding,
-      availableCredits: POOL_CENTS.toLocaleString('en-US'),
-      unallocatedCredits: (POOL_CENTS - outstanding).toLocaleString('en-US'),
+      availableCredits: formatCreditCount(POOL_CENTS),
+      unallocatedCredits: formatCreditCount(POOL_CENTS - outstanding),
     });
   });
 
@@ -409,8 +410,8 @@ describe('drive-wallet service (real Postgres)', () => {
     const marcus = await listMyWallets(credentialActor(world.ids.marcus, null), 'session');
     expect(marcus.driveWallets).toEqual([{
       driveId: world.productId, driveName: 'Product', walletId: world.productWalletId, status: 'active',
-      remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: (120_000 - LENA_SPEND - MARCUS_SPEND).toLocaleString('en-US'),
-      mySpentCents: MARCUS_SPEND, mySpentCredits: MARCUS_SPEND.toLocaleString('en-US'),
+      remainingCents: 120_000 - LENA_SPEND - MARCUS_SPEND, remainingCredits: formatCreditCount(120_000 - LENA_SPEND - MARCUS_SPEND),
+      mySpentCents: MARCUS_SPEND, mySpentCredits: formatCreditCount(MARCUS_SPEND),
     }]);
     // His own spend only: Lena's never appears in his list (SPEND-9).
     expect(JSON.stringify(marcus.driveWallets)).not.toContain(String(LENA_SPEND));
@@ -419,7 +420,7 @@ describe('drive-wallet service (real Postgres)', () => {
     expect(JSON.stringify(marcus)).not.toContain(String(POOL_CENTS));
 
     const priya = await listMyWallets(credentialActor(world.ids.priya, null), 'session');
-    expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId, availableCents: POOL_CENTS, availableCredits: POOL_CENTS.toLocaleString('en-US') })]);
+    expect(priya.funds.pools).toEqual([expect.objectContaining({ orgId: world.orgId, orgName: 'Northwind Labs', walletId: world.poolId, availableCents: POOL_CENTS, availableCredits: formatCreditCount(POOL_CENTS) })]);
     expect(JSON.stringify([marcus, priya])).not.toContain('$');
   });
 
@@ -434,11 +435,11 @@ describe('drive-wallet service (real Postgres)', () => {
       orgName: 'Northwind Labs',
       walletId: world.poolId,
       allowanceCents: DEFAULT_SEAT_ALLOWANCE_CENTS,
-      allowanceCredits: DEFAULT_SEAT_ALLOWANCE_CENTS.toLocaleString('en-US'),
+      allowanceCredits: formatCreditCount(DEFAULT_SEAT_ALLOWANCE_CENTS),
       spentCents: 30,
-      spentCredits: '30',
+      spentCredits: formatCreditCount(30),
       remainingCents: DEFAULT_SEAT_ALLOWANCE_CENTS - 30,
-      remainingCredits: (DEFAULT_SEAT_ALLOWANCE_CENTS - 30).toLocaleString('en-US'),
+      remainingCredits: formatCreditCount(DEFAULT_SEAT_ALLOWANCE_CENTS - 30),
     });
     // The same figure the spending-from popover shows for the seat: one source (seatAllowanceFor).
     const conversationId = createId();
@@ -497,7 +498,7 @@ describe('drive-wallet service (real Postgres)', () => {
     if (!before.ok) throw new Error('expected a read');
     expect(before.options.map((o) => o.source)).toEqual(['drive_wallet', 'seat_allowance', 'own_credits']);
     // UI-8: each choice is named and says what this person can still spend from it, as a credit count.
-    expect(before.options.map((o) => [o.label, o.driveName, o.orgName, typeof o.remainingCents, o.remainingCredits === o.remainingCents?.toLocaleString('en-US')])).toEqual([
+    expect(before.options.map((o) => [o.label, o.driveName, o.orgName, typeof o.remainingCents, o.remainingCredits === (o.remainingCents === null || o.remainingCents === undefined ? undefined : formatCreditCount(o.remainingCents))])).toEqual([
       ['Product wallet', 'Product', 'Northwind Labs', 'number', true],
       ['Northwind Labs seat', 'Product', 'Northwind Labs', 'number', true],
       ['Your credits', null, null, 'number', true],
