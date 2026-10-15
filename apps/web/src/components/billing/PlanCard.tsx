@@ -209,32 +209,47 @@ export function PlanCard({
           <span className="text-3xl font-bold" data-testid="plan-price">{facts.priceCents > 0 ? facts.price : plan.price.formatted}</span>
           {facts.period && <span className="text-sm text-muted-foreground">{facts.period}</span>}
         </div>
-        {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
-        {facts.org && (
-          <div className="space-y-0.5 text-xs text-muted-foreground">
-            <p data-testid="plan-seats">{facts.org.seatTerms}</p>
-            <p data-testid="plan-seat-credits">{facts.org.extraSeatCredits}</p>
-            <p data-testid="plan-checkout">{facts.org.checkout}</p>
-          </div>
-        )}
       </CardHeader>
 
       <CardContent className="flex-grow flex flex-col justify-between">
-        <CardDescription className="text-center text-sm mb-4 h-10">
+        <CardDescription className="text-center text-sm mb-6 min-h-[2.5rem]">
           {plan.description}
         </CardDescription>
 
-        {/* MON-6: included credits and the top-up rate as separate facts from the price. */}
-        <dl className="mb-4 space-y-1 text-sm">
-          <div className="flex items-center justify-between gap-2">
-            <dt className="text-muted-foreground">Included</dt>
-            <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.includedCredits}</dd>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <dt className="text-muted-foreground">Top up</dt>
-            <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.topUpRate}</dd>
-          </div>
-        </dl>
+        <div className="space-y-4">
+          {/* MON-6: included credits and the top-up rate as separate facts from the price. */}
+          <dl className="divide-y divide-border rounded-lg border border-border text-sm">
+            <div className="flex items-start justify-between gap-4 px-4 py-3">
+              <dt className="text-muted-foreground shrink-0">Included</dt>
+              <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.includedCredits}</dd>
+            </div>
+            <div className="flex items-start justify-between gap-4 px-4 py-3">
+              <dt className="text-muted-foreground shrink-0">Top up</dt>
+              <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.topUpRate}</dd>
+            </div>
+          </dl>
+
+          {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
+          {facts.org && (
+            <div className="rounded-lg bg-muted/60 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Team terms</p>
+              <dl className="space-y-3 text-sm">
+                <div>
+                  <dt className="text-muted-foreground">Seats</dt>
+                  <dd className="font-medium mt-0.5" data-testid="plan-seats">{facts.org.seatTerms}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Extra seat credits</dt>
+                  <dd className="font-medium mt-0.5" data-testid="plan-seat-credits">{facts.org.extraSeatCredits}</dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Checkout</dt>
+                  <dd className="font-medium mt-0.5" data-testid="plan-checkout">{facts.org.checkout}</dd>
+                </div>
+              </dl>
+            </div>
+          )}
+        </div>
 
         <div className="mt-auto">
           {getActionButton()}
