@@ -254,6 +254,14 @@ jobs:
 
       - name: Run migrations
         run: |
+          # EXIT captures sanitized evidence before destroying the one-shot machine.
+          DIAGNOSTICS_DIR="$RUNNER_TEMP/migration-diagnostics/main"
+          MACHINE_JSON="/tmp/fly_machine.json"
+          MACHINE_ID=""
+          rm -f "$MACHINE_JSON"
+          source scripts/fly-migration-diagnostics.sh
+          trap capture_migration_diagnostics EXIT
+
           docker pull ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG
           docker tag ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
           docker push registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
@@ -280,7 +288,6 @@ jobs:
           if grep -q "Error:" /tmp/machine_output.txt && ! grep -q "desired start state" /tmp/machine_output.txt; then
             echo "ERROR: unexpected flyctl error:"
             grep "Error:" /tmp/machine_output.txt
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
 
@@ -292,9 +299,9 @@ jobs:
           while [ $ELAPSED -lt $TIMEOUT ]; do
             # flyctl machine status has no --json flag (outputs a formatted table regardless).
             # Use the Fly.io Machines REST API directly for reliable JSON state polling.
-            HTTP_CODE=$(curl -s -o /tmp/fly_machine.json -w "%{http_code}" \
+            HTTP_CODE=$(curl --connect-timeout 10 --max-time 30 -s -o /tmp/fly_machine.json -w "%{http_code}" \
               -H "Authorization: Bearer $FLY_API_TOKEN" \
-              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID" || true)
             if [ "$HTTP_CODE" = "200" ]; then
               STATE=$(jq -r '.state // "unknown"' /tmp/fly_machine.json 2>/dev/null || echo "unknown")
             elif [ "$HTTP_CODE" = "404" ]; then
@@ -304,18 +311,17 @@ jobs:
               STATE="unknown"
             fi
             echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$HTTP_CODE" = "200" ] && jq -e --arg mode failed -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
+              echo "ERROR: migration exit evidence indicates failure"
+              exit 1
+            fi
             if [ "$STATE" = "stopped" ]; then
-              if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
-                echo "ERROR: migration has no verified successful exit"
-                flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
-                exit 1
+              if jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
+                break
               fi
-              break
+              echo "Exit evidence pending; waiting within ${TIMEOUT}s deadline"
             elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
               echo "ERROR: migration machine reached $STATE state (migrations failed)"
-              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
               exit 1
             fi
             sleep 10
@@ -324,11 +330,9 @@ jobs:
 
           if [ $ELAPSED -ge $TIMEOUT ]; then
             echo "ERROR: timed out after ${TIMEOUT}s waiting for migration machine"
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
 
-          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
           echo "Migrations complete"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
@@ -350,6 +354,14 @@ jobs:
       - name: Run admin migrations
         if: ${{ vars.ADMIN_DB_MIGRATIONS_ENABLED == 'true' }}
         run: |
+          # EXIT captures sanitized evidence before destroying the one-shot machine.
+          DIAGNOSTICS_DIR="$RUNNER_TEMP/migration-diagnostics/admin"
+          MACHINE_JSON="/tmp/fly_admin_machine.json"
+          MACHINE_ID=""
+          rm -f "$MACHINE_JSON"
+          source scripts/fly-migration-diagnostics.sh
+          trap capture_migration_diagnostics EXIT
+
           # Fail fast: without the dedicated migrate URL the machine would fall
           # back to the app's runtime login and fail with permission errors deep
           # inside the migration — surface the misconfiguration by name instead.
@@ -385,18 +397,17 @@ jobs:
           if grep -q "Error:" /tmp/admin_machine_output.txt && ! grep -q "desired start state" /tmp/admin_machine_output.txt; then
             echo "ERROR: unexpected flyctl error:"
             grep "Error:" /tmp/admin_machine_output.txt
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
 
-          # Poll for terminal state (stopped = success, failed/destroyed = failure) —
+          # Poll for verified exit evidence; stopped alone is pending —
           # same REST-API polling as the main migration step.
           TIMEOUT=900
           ELAPSED=0
           while [ $ELAPSED -lt $TIMEOUT ]; do
-            HTTP_CODE=$(curl -s -o /tmp/fly_admin_machine.json -w "%{http_code}" \
+            HTTP_CODE=$(curl --connect-timeout 10 --max-time 30 -s -o /tmp/fly_admin_machine.json -w "%{http_code}" \
               -H "Authorization: Bearer $FLY_API_TOKEN" \
-              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID")
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID" || true)
             if [ "$HTTP_CODE" = "200" ]; then
               STATE=$(jq -r '.state // "unknown"' /tmp/fly_admin_machine.json 2>/dev/null || echo "unknown")
             elif [ "$HTTP_CODE" = "404" ]; then
@@ -406,18 +417,17 @@ jobs:
               STATE="unknown"
             fi
             echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$HTTP_CODE" = "200" ] && jq -e --arg mode failed -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
+              echo "ERROR: migration exit evidence indicates failure"
+              exit 1
+            fi
             if [ "$STATE" = "stopped" ]; then
-              if ! jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
-                echo "ERROR: migration has no verified successful exit"
-                flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-                flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
-                exit 1
+              if jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
+                break
               fi
-              break
+              echo "Exit evidence pending; waiting within ${TIMEOUT}s deadline"
             elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
-              echo "ERROR: admin migration machine reached $STATE state (migrations failed)"
-              flyctl machine logs "$MACHINE_ID" --app pagespace-web 2>/dev/null || true
-              flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
+              echo "ERROR: migration machine reached $STATE state (migrations failed)"
               exit 1
             fi
             sleep 10
@@ -426,16 +436,23 @@ jobs:
 
           if [ $ELAPSED -ge $TIMEOUT ]; then
             echo "ERROR: timed out after ${TIMEOUT}s waiting for admin migration machine"
-            flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force 2>/dev/null || true
             exit 1
           fi
 
-          flyctl machine destroy "$MACHINE_ID" --app pagespace-web --force
           echo "Admin migrations complete"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_NO_UPDATE_CHECK: "true"
           ADMIN_DATABASE_URL_MIGRATE: ${{ secrets.ADMIN_DATABASE_URL_MIGRATE }}
+
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: migration-diagnostics
+          path: ${{ runner.temp }}/migration-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
 
       # REALTIME BEFORE WEB — order is load-bearing, do not swap.
       #
@@ -555,6 +572,15 @@ jobs:
             exit 1
           fi
           echo "cron: 1/1 machine started"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy imago
+        run: |
+          docker pull "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker tag "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG" "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker push "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          flyctl deploy --app pagespace-imago --image "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG" --yes --wait-timeout 300
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 

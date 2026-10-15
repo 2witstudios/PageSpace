@@ -4,7 +4,7 @@
  * The Dockerfile mirrors apps/admin's (standalone Next server, non-root
  * runner) on port 3006; the local compose stack runs it wired to web (the
  * `/api/*` origin) and realtime (sockets). Production routing of /imago is
- * human-only (IMG-11.1), so the image workflow builds it but never deploys it.
+ * human-only (IMG-11.1); releases update the existing app without changing routing.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -204,11 +204,15 @@ describe('docker-images.yml imago', () => {
     expect(read('.github/workflows/imago-image.yml')).not.toContain('IMAGO_API_PROXY_ORIGIN');
   });
 
-  it('should mention imago only in build-and-push — no job deploys it (production routing is human-only, IMG-11.1)', () => {
+  it('should build and deploy imago while preserving human-controlled production routing (IMG-11.1)', () => {
     const jobsMentioningImago = Object.entries(workflow.jobs)
       .filter(([, job]) => /imago/i.test(JSON.stringify(job)))
       .map(([name]) => name);
-    expect(jobsMentioningImago).toEqual(['build-and-push']);
+    expect(jobsMentioningImago).toEqual(['build-and-push', 'deploy-fly']);
+    const deploy = workflow.jobs['deploy-fly'].steps?.find(step => step.name === 'Deploy imago');
+    expect(deploy?.run).toContain('docker push "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"');
+    expect(deploy?.run).toContain('flyctl deploy --app pagespace-imago');
+    expect(deploy?.run).not.toMatch(/IMAGO_ENABLED|secrets set|certs|domains/);
   });
 });
 
