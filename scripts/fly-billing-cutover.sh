@@ -34,6 +34,9 @@ snapshot() {
   mkdir -p "$(dirname "$config_dir")"
   stage="$(mktemp -d "$config_dir.staging.XXXXXX")"
   for app in "${CUTOVER_APPS[@]}"; do
+    # flyctl requires --config to exist before saving the remote configuration.
+    # Seed only the app identity so no local build settings enter the snapshot.
+    printf 'app = "%s"\n' "$app" > "$stage/$app.toml"
     flyctl config save --app "$app" --config "$stage/$app.toml" --yes
     flyctl machines list --app "$app" --json > "$stage/$app.machines.json"
     jq -ce -f "$script_dir/fly-machine-topology.jq" "$stage/$app.machines.json" > "$stage/$app.topology.json"
