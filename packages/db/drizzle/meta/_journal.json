@@ -2423,6 +2423,13 @@
       "when": 1791906770000,
       "tag": "0377_wallet_leg_included_cents",
       "breakpoints": true
+    },
+    {
+      "idx": 346,
+      "version": "7",
+      "when": 1792066545045,
+      "tag": "0346_wide_sway",
+      "breakpoints": true
     }
   ]
 }

@@ -9,8 +9,20 @@ import type { DriveBillingFacts } from '../billing/sandbox-payer';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 export type DrizzleTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** A payer's mirrored storage add-on (blocks, and paid-through grace after a decrease). */
+export interface StorageAddonRecord {
+  blocks: number;
+  graceBlocks: number;
+  graceUntil: Date | null;
+}
+
+/** Subscription statuses whose storage add-on still counts (the plan itself still applies). */
+const ADDON_ENTITLED_STATUSES = ['active', 'trialing', 'past_due'];
 
 export interface StorageUserRecord {
   id: string;
@@ -47,6 +59,35 @@ const billedToUser = (userId: string) => or(
 const STORAGE_EVENT_CHUNK = 500;
 
 export const storageRepository = {
+  /** The person's storage add-on on their live personal subscription; undefined when none. */
+  findUserStorageAddon: async (userId: string): Promise<StorageAddonRecord | undefined> => {
+    const [row] = await db
+      .select({
+        blocks: subscriptions.storageBlocks,
+        graceBlocks: subscriptions.storageGraceBlocks,
+        graceUntil: subscriptions.storageGraceUntil,
+      })
+      .from(subscriptions)
+      .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ADDON_ENTITLED_STATUSES)))
+      .orderBy(desc(subscriptions.updatedAt))
+      .limit(1);
+    return row;
+  },
+
+  /** The org's storage add-on on its Business subscription; undefined when none. */
+  findOrgStorageAddon: async (orgId: string): Promise<StorageAddonRecord | undefined> => {
+    const [row] = await db
+      .select({
+        blocks: orgSubscriptions.storageBlocks,
+        graceBlocks: orgSubscriptions.storageGraceBlocks,
+        graceUntil: orgSubscriptions.storageGraceUntil,
+      })
+      .from(orgSubscriptions)
+      .where(and(eq(orgSubscriptions.orgId, orgId), inArray(orgSubscriptions.status, ADDON_ENTITLED_STATUSES)))
+      .limit(1);
+    return row;
+  },
+
   findUserForStorage: async (userId: string): Promise<StorageUserRecord | undefined> => {
     return db.query.users.findFirst({
       where: eq(users.id, userId),
