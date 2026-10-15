@@ -2423,6 +2423,13 @@
       "when": 1791906770000,
       "tag": "0377_wallet_leg_included_cents",
       "breakpoints": true
+    },
+    {
+      "idx": 346,
+      "version": "7",
+      "when": 1792036591966,
+      "tag": "0378_users_subscription_tier_default_free",
+      "breakpoints": true
     }
   ]
 }
