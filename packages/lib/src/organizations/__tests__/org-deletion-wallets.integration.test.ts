@@ -93,7 +93,7 @@ describe('organization closure preserves surviving drive wallets (real Postgres)
     for (const f of sorted) {
       expect(await walletRow(f.wallet.id)).toEqual(f.wallet);
       expect((await db.select().from(drives).where(eq(drives.id, f.drive.id)))[0].orgId).toBe(w.org.id);
-      expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, f.wallet.id))).toEqual(f.legs);
+      expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, f.wallet.id)).orderBy(walletFundingLegs.id)).toEqual([...f.legs].sort((a, b) => a.id.localeCompare(b.id)));
       expect(await db.select().from(creditLedger).where(eq(creditLedger.walletId, f.wallet.id))).toEqual(f.ledger);
     }
     expect(await db.select().from(creditHolds).where(eq(creditHolds.id, hold.id))).toEqual([hold]);
