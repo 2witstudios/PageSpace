@@ -7,7 +7,7 @@ describe('whole-credit account copy', () => {
     assert({
       given: 'whole and fractional credit values represented in internal cents',
       should: 'render whole credits with no decimals',
-      actual: [formatWholeCredits(1000), formatWholeCredits(15), formatWholeCredits(4.7)],
+      actual: [formatWholeCredits(10_000), formatWholeCredits(150), formatWholeCredits(47)],
       expected: ['1,000', '15', '5'],
     });
   });
@@ -17,7 +17,7 @@ describe('whole-credit account copy', () => {
       given: 'a refilling Pro allowance and the free one-time grant',
       should: 'say included each month for Pro and to start for Free',
       actual: [includedCreditsPhraseForCents('pro', 1500), includedCreditsPhraseForCents('free', 500)],
-      expected: ['1,500 credits included each month', '500 credits to start'],
+      expected: ['150 credits included each month', '50 credits to start'],
     });
   });
 
@@ -26,7 +26,7 @@ describe('whole-credit account copy', () => {
       given: 'the canonical credit packs',
       should: 'quote the smallest pack as credits per dollars',
       actual: topUpRatePhrase(),
-      expected: '1,000 credits per $10',
+      expected: '100 credits per $10',
     });
   });
 });

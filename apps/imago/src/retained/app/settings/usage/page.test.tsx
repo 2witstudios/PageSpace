@@ -104,14 +104,14 @@ describe('UsagePage (/account/usage)', () => {
     render(<UsagePage />);
     const bar = screen.getByRole('progressbar', { name: 'Monthly credits used' });
     assert({
-      given: 'a Pro balance of 9 of 15 monthly credits left',
+      given: 'a Pro balance of 90 of 150 monthly credits left',
       should: 'show the left and allowance as whole credits and the used portion on the progress bar',
       actual: {
-        balance: screen.getByText('/ 1,500 credits').previousElementSibling?.textContent,
-        used: screen.getByText('600 of 1,500 used', { exact: false }) !== null,
+        balance: screen.getByText('/ 150 credits').previousElementSibling?.textContent,
+        used: screen.getByText('60 of 150 used', { exact: false }) !== null,
         bar: bar.tagName,
       },
-      expected: { balance: '900', used: true, bar: 'DIV' },
+      expected: { balance: '90', used: true, bar: 'DIV' },
     });
   });
 
@@ -156,7 +156,7 @@ describe('UsagePage (/account/usage)', () => {
       },
       expected: {
         headers: ['Agent', 'Runtime', 'Calls', 'Credits'],
-        row: 'Sandbox A2m3500',
+        row: 'Sandbox A2m350',
         environment: true,
         inFlight: true,
       },
