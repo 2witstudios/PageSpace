@@ -57,6 +57,8 @@ export interface OrgWebhookDeps {
   seatPriceId: () => string;
   /** The configured Business base price id (stripe-config orgPriceIds.businessBase): finds the base item the mirror refreshes. */
   basePriceId: () => string;
+  /** The configured storage add-on price id (stripe-config storageAddonPriceId); '' when not sold. */
+  storagePriceId?: () => string;
 }
 
 type MetadataBag = Record<string, string> | null | undefined;
@@ -142,7 +144,7 @@ export async function mirrorOrgSubscription(
     const mirrorPatch = planOrgSubscriptionPriceMirror({
       stored,
       subscription: fetched,
-      prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId() },
+      prices: { basePriceId: deps.basePriceId(), seatPriceId: deps.seatPriceId(), storagePriceId: deps.storagePriceId?.() },
     });
     // D-OW-54: Stripe's gift metadata is the single source of a gift and its pinned seats. A
     // gift-typed subscription without a valid pin is NOT a gift for capability (no pinned seats,
@@ -273,6 +275,7 @@ export async function handleOrgInvoicePaid(
   const refill = await applyOrgPoolRefill(invoice, {
     basePriceId: deps.basePriceId(),
     seatPriceId: deps.seatPriceId(),
+    storagePriceId: deps.storagePriceId?.(),
   });
   const subscriptionId = invoiceSubscriptionId(invoice);
   const mirror = subscriptionId ? await mirrorOrgSubscription(route.orgId, subscriptionId, eventId, deps) : null;
@@ -300,6 +303,7 @@ export function defaultOrgWebhookDeps(): OrgWebhookDeps {
     stripe: stripeOrgBilling(appStripe),
     seatPriceId: () => stripeConfig.orgPriceIds.extraSeat,
     basePriceId: () => stripeConfig.orgPriceIds.businessBase,
+    storagePriceId: () => stripeConfig.storageAddonPriceId,
   };
 }
 

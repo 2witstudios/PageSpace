@@ -74,7 +74,7 @@ export const storageRepository = {
     return row;
   },
 
-  /** The org's storage add-on on its Business subscription; undefined when none. */
+  /** The org's storage add-on on its active Business subscription; undefined when none. */
   findOrgStorageAddon: async (orgId: string): Promise<StorageAddonRecord | undefined> => {
     const [row] = await db
       .select({
@@ -83,7 +83,9 @@ export const storageRepository = {
         graceUntil: orgSubscriptions.storageGraceUntil,
       })
       .from(orgSubscriptions)
-      .where(and(eq(orgSubscriptions.orgId, orgId), inArray(orgSubscriptions.status, ADDON_ENTITLED_STATUSES)))
+      // Only an active org subscription grants capability (SEAT-8/9): a lapsed org keeps its
+      // files readable but its add-on bytes stop counting, so new uploads wait for payment.
+      .where(and(eq(orgSubscriptions.orgId, orgId), eq(orgSubscriptions.status, 'active')))
       .limit(1);
     return row;
   },

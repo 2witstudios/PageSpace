@@ -87,6 +87,8 @@ const MATRIX: Record<string, Row> = {
   '/[orgId]/billing/portal POST': { minRole: 'ADMIN', posture: 'money-write' },
   '/[orgId]/billing/seats GET': { minRole: 'ADMIN', posture: 'session-read' },
   '/[orgId]/billing/seats PATCH': { minRole: 'OWNER', posture: 'money-write' },
+  '/[orgId]/billing/storage GET': { minRole: 'ADMIN', posture: 'session-read' },
+  '/[orgId]/billing/storage PATCH': { minRole: 'OWNER', posture: 'money-write' },
   '/[orgId]/billing/subscription POST': { minRole: 'ADMIN', posture: 'money-write' },
   '/[orgId]/domains GET': { minRole: 'ADMIN', posture: 'token' },
   '/[orgId]/domains POST': { minRole: 'ADMIN', posture: 'token' },

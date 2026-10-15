@@ -52,6 +52,25 @@ describe('planOrgSubscriptionMirror', () => {
   });
 });
 
+describe('planOrgSeatItemMirror — the storage add-on item', () => {
+  const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat', storagePriceId: 'price_storage' };
+  const base = [
+    { id: 'si_base', priceId: 'price_base', quantity: 1 },
+    { id: 'si_seat', priceId: 'price_seat', quantity: 2 },
+  ];
+  const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4, stripeStorageItemId: null, storageBlocks: 0 };
+
+  it('given a storage item Stripe now holds, should mirror its id and quantity without touching the seat revision', () => {
+    const items = [...base, { id: 'si_storage', priceId: 'price_storage', quantity: 2 }];
+    expect(planOrgSeatItemMirror({ stored, items, prices })).toEqual({ stripeStorageItemId: 'si_storage', storageBlocks: 2 });
+  });
+
+  it('given a storage item removed in Stripe, should clear it', () => {
+    expect(planOrgSeatItemMirror({ stored: { ...stored, stripeStorageItemId: 'si_storage', storageBlocks: 2 }, items: base, prices }))
+      .toEqual({ stripeStorageItemId: null, storageBlocks: 0 });
+  });
+});
+
 describe('planOrgSeatItemMirror — the mirror refreshes the seat item from what Stripe says now (review 3+4 P2-8)', () => {
   const prices = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
   const stored = { stripeBaseItemId: 'si_base', stripeSeatItemId: 'si_seat', extraSeatQuantity: 2, seatRevision: 4 };

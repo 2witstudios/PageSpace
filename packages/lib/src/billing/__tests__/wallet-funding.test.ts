@@ -154,6 +154,18 @@ describe('wallet-funding: org pool refill', () => {
       expect(grant).toEqual({ paidCents: 8000, allowanceCents: 4800, basis: 'paid', reason: 'paid' });
     });
 
+    it('given a storage add-on line, should keep it out of the refill without reporting it as a stranger', () => {
+      const storage = { ...priced('price_storage', 1500) };
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), storage], { ...PRICES, storagePriceId: 'price_storage' });
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS)]);
+      expect(selection.unrecognized).toEqual([]);
+      expect(selection.storageLines).toEqual([storage]);
+      // The verified-price signal (first-payment funding proof) is unaffected by storage.
+      expect(selection.hasVerifiedGiftPrice).toBe(true);
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: BASE_CENTS + 1500, hasSubscriptionParent: true });
+      expect(grant.paidCents).toBe(BASE_CENTS);
+    });
+
     it('MON-3 a stranger price id is excluded and reported with its price id and amount', () => {
       const stranger = { amount: 900, pricing: { price_details: { price: 'price_stranger' } } };
       const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), stranger], PRICES);
