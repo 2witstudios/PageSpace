@@ -93,7 +93,7 @@ export function BuyCreditsButton({
     const credits = validateTopupCredits(creditsFromDollars(dollars));
     if (credits === null) {
       setError(
-        `Enter an amount between ${formatDollars(TOPUP_MIN_CENTS)} and ${formatDollars(TOPUP_MAX_CENTS)}.`,
+        `Enter an amount between ${formatDollars(TOPUP_MIN_CENTS)} and ${formatDollars(TOPUP_MAX_CENTS)}, in steps of ${formatDollars(centsFromCredits(1))}.`,
       );
       return;
     }

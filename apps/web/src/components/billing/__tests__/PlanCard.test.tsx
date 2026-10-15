@@ -66,7 +66,7 @@ describe('PlanCard', () => {
     // test DOES prove: PlanCard's DOM actually reflects a patched plan's numbers
     // rather than some cached/memoized copy of the original. 777 is not a figure
     // PLANS.pro resolves to, so a dropped patch cannot pass vacuously.
-    const patched = withCreditsCents(PLANS.pro, 777);
+    const patched = withCreditsCents(PLANS.pro, 7770);
     render(<PlanCard plan={patched} currentTier="free" />);
     expect(screen.getByTestId('plan-included-credits').textContent).toBe('777 credits included each month');
     // And an untouched plan is provably unaffected by the same call.

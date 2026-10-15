@@ -9,16 +9,16 @@ const now = Date.parse('2026-10-05T12:00:00Z');
 describe('seatCapsLabel', () => {
   it('UI-7 (partial) UI-12 (partial): caps read as plain credit counts, never dollars', () => {
     expect(seatCapsLabel({ dailyCapCents: null, monthlyCapCents: null })).toBe('No caps');
-    expect(seatCapsLabel({ dailyCapCents: 50, monthlyCapCents: null })).toBe('50 a day');
-    expect(seatCapsLabel({ dailyCapCents: 20, monthlyCapCents: 100 })).toBe('20 a day · 100 a month');
-    expect(seatCapsLabel({ dailyCapCents: null, monthlyCapCents: 1000 })).toBe('1,000 a month');
+    expect(seatCapsLabel({ dailyCapCents: 500, monthlyCapCents: null })).toBe('50 a day');
+    expect(seatCapsLabel({ dailyCapCents: 200, monthlyCapCents: 1000 })).toBe('20 a day · 100 a month');
+    expect(seatCapsLabel({ dailyCapCents: null, monthlyCapCents: 10_000 })).toBe('1,000 a month');
   });
 });
 
 describe('parseCreditsInput', () => {
   it('reads a whole credit count as cents; empty means no cap', () => {
-    expect(parseCreditsInput('50')).toEqual({ ok: true, cents: 50 });
-    expect(parseCreditsInput(' 1,000 ')).toEqual({ ok: true, cents: 1000 });
+    expect(parseCreditsInput('50')).toEqual({ ok: true, cents: 500 });
+    expect(parseCreditsInput(' 1,000 ')).toEqual({ ok: true, cents: 10_000 });
     expect(parseCreditsInput('')).toEqual({ ok: true, cents: null });
   });
 

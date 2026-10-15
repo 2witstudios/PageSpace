@@ -153,13 +153,13 @@ describe('POST /api/stripe/create-credit-topup', () => {
   });
 
   it('MON-4 creates a checkout for a valid custom credit count, priced from the rate', async () => {
-    const credits = 1234; // within [min, max]; $12.34 at 100 credits per dollar
+    const credits = 1234; // within [min, max]; $123.40 at 10 credits per dollar
     const response = await POST(req({ credits }));
     expect(response.status).toBe(200);
 
     const arg = mockCheckoutCreate.mock.calls[0][0];
     expect(arg.line_items[0].price_data.unit_amount).toBe(centsFromCredits(credits));
-    expect(arg.line_items[0].price_data.unit_amount).toBe(1234);
+    expect(arg.line_items[0].price_data.unit_amount).toBe(12_340);
     expect(arg.metadata).toEqual(
       expect.objectContaining({
         kind: 'credit_pack',
@@ -171,19 +171,19 @@ describe('POST /api/stripe/create-credit-topup', () => {
     );
   });
 
-  it.each([502, 803, 1003, 32_766])(
+  it.each([52, 83, 103, 4_997])(
     'MON-5 (partial) a custom top-up of %i credits sends Stripe an exact integer amount',
     async (credits) => {
-      // These counts drift under divide-then-multiply ((502 / 100) * 100 !== 502) and sit
-      // inside the default custom top-up bounds, so they reach checkout.
+      // Odd counts inside the default custom top-up bounds, so they reach checkout; each
+      // must reach Stripe as exact integer cents (ten per credit), never 520.0000000001.
       const response = await POST(req({ credits }));
       expect(response.status).toBe(200);
 
       const arg = mockCheckoutCreate.mock.calls[0][0];
       const unitAmount = arg.line_items[0].price_data.unit_amount;
       expect(Number.isInteger(unitAmount)).toBe(true);
-      expect(unitAmount).toBe(credits);
-      expect(arg.metadata.packCents).toBe(String(credits));
+      expect(unitAmount).toBe(credits * 10);
+      expect(arg.metadata.packCents).toBe(String(credits * 10));
     },
   );
 

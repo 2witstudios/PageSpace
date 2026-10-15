@@ -64,10 +64,10 @@ beforeEach(() => {
     '/api/orgs/org_nw/members/activity': { activity: [{ userId: 'u_jono', driveCount: 6, lastActiveAt: new Date().toISOString() }, { userId: 'u_marcus', driveCount: 3, lastActiveAt: null }] },
     '/api/orgs/org_nw/seat-caps': {
       walletId: 'w_pool',
-      seatAllowanceCents: 150,
+      seatAllowanceCents: 1_500,
       seats: [
-        { userId: 'u_jono', displayName: 'Jono', dailyCapCents: null, monthlyCapCents: null, monthlyLimitCents: 150, monthlyRemainingCents: 150, dailyRemainingCents: null },
-        { userId: 'u_marcus', displayName: 'Marcus', dailyCapCents: 50, monthlyCapCents: null, monthlyLimitCents: 150, monthlyRemainingCents: 54, dailyRemainingCents: 50 },
+        { userId: 'u_jono', displayName: 'Jono', dailyCapCents: null, monthlyCapCents: null, monthlyLimitCents: 1_500, monthlyRemainingCents: 1_500, dailyRemainingCents: null },
+        { userId: 'u_marcus', displayName: 'Marcus', dailyCapCents: 500, monthlyCapCents: null, monthlyLimitCents: 1_500, monthlyRemainingCents: 540, dailyRemainingCents: 500 },
       ],
     },
   };
@@ -142,7 +142,7 @@ describe('Members & seats', () => {
     const monthly = screen.getByLabelText('Monthly cap');
     await userEvent.type(monthly, '120');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(mocks.setOrgSeatCap).toHaveBeenCalledWith('org_nw', 'u_marcus', { dailyCapCents: 50, monthlyCapCents: 120 }));
+    await waitFor(() => expect(mocks.setOrgSeatCap).toHaveBeenCalledWith('org_nw', 'u_marcus', { dailyCapCents: 500, monthlyCapCents: 1_200 }));
   });
 
   it('WAL-7 (partial): with no caps, saving empty fields turns on the default caps', async () => {

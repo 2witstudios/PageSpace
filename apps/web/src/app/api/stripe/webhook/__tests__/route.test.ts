@@ -1207,8 +1207,8 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledTimes(1);
       expect(mockSendTopupReceiptEmail).toHaveBeenCalledWith({
         session,
-        // MON-4: pack_25 is 2,500 credits; the label is a credit count, never a dollar figure (UI-12).
-        packLabel: '2,500 credits',
+        // MON-4: pack_25 is 250 credits; the label is a credit count, never a dollar figure (UI-12).
+        packLabel: '250 credits',
         email: 'buyer@example.com',
         userName: 'Test User',
         eventId: event.id,

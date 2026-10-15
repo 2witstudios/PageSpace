@@ -295,20 +295,20 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
     });
   });
 
-  describe('WAL-7 per-consumer caps (daily and monthly, UTC) on every wallet leg — unset is unlimited, enabling takes the D-OW-31 defaults (50 credits a day, 1,000 a month) — alert the funder once at 80% and 100%, and a kill switch pauses a wallet: a drive wallet, or the org pool and everything it funds', () => {
-    it('enabling caps with nothing named stores 50 credits a day and 1,000 a month; a window set to null, and a person with no row, are unlimited', async () => {
+  describe('WAL-7 per-consumer caps (daily and monthly, UTC) on every wallet leg — unset is unlimited, enabling takes the D-OW-31 defaults (5 credits a day, 100 a month) — alert the funder once at 80% and 100%, and a kill switch pauses a wallet: a drive wallet, or the org pool and everything it funds', () => {
+    it('enabling caps with nothing named stores 5 credits a day and 100 a month; a window set to null, and a person with no row, are unlimited', async () => {
       const w = world as World;
-      expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: credits(50), monthlyCents: credits(1_000) });
+      expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: credits(5), monthlyCents: credits(100) });
       expect(await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, {}, 'session')).toMatchObject({ ok: true });
       expect(await listDriveWalletCaps(credentialActor(w.anaId, null), w.productId, 'session')).toMatchObject({
         ok: true,
-        caps: [{ userId: w.marcusId, dailyCapCents: credits(50), monthlyCapCents: credits(1_000) }],
+        caps: [{ userId: w.marcusId, dailyCapCents: credits(5), monthlyCapCents: credits(100) }],
       });
       await setDriveWalletCap(credentialActor(w.anaId, null), w.productId, w.marcusId, { monthlyCents: null }, 'session');
       const read = await getDriveWallet(credentialActor(w.marcusId, null), w.productId, 'session');
-      expect(read.ok && read.wallet && 'myCap' in read.wallet ? read.wallet.myCap : null).toMatchObject({ dailyRemainingCents: credits(50), monthlyRemainingCents: null });
+      expect(read.ok && read.wallet && 'myCap' in read.wallet ? read.wallet.myCap : null).toMatchObject({ dailyRemainingCents: credits(5), monthlyRemainingCents: null });
       // Lena has no cap row: unlimited within the wallet, so a call far past Marcus's daily cap passes.
-      expect(await canConsumeAI(w.lenaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(60) })).toMatchObject({ allowed: true });
+      expect(await canConsumeAI(w.lenaId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(6) })).toMatchObject({ allowed: true });
     });
 
     it('the gate refuses past the daily and then the monthly UTC window by name, charging nothing; the funders get one 80% and one 100% alert per window', async () => {
@@ -442,10 +442,10 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       expect(await updateDriveWallet(credentialActor(w.anaId, null), w.productId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
       const chris = await listSpendChoices(w.chrisId, w.productId);
       expect(chris.map((c) => c.source)).toEqual(['drive_wallet', 'own_credits']);
-      expect(chris[0].remainingCents).toBe(credits(50));
+      expect(chris[0].remainingCents).toBe(credits(5));
       const guestView = await getDriveWallet(credentialActor(w.chrisId, null), w.productId, 'session');
       expect(guestView.ok && guestView.wallet && 'myCap' in guestView.wallet ? guestView.wallet.myCap : null)
-        .toMatchObject({ dailyRemainingCents: credits(50), monthlyRemainingCents: credits(1_000) });
+        .toMatchObject({ dailyRemainingCents: credits(5), monthlyRemainingCents: credits(100) });
     });
   });
 
@@ -469,7 +469,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: false, refusal: { reason: 'guest_drive_wallet_off' } });
       expect(await updateDriveWallet(credentialActor(w.anaId, null), w.sideId, { guestSpendEnabled: true }, 'session')).toMatchObject({ ok: true });
-      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: credits(60) }))
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: credits(6) }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
       expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.sideId, 'drive_wallet'), estCostCents: 5 }))
         .toMatchObject({ allowed: true, walletId: w.sideWalletId });
@@ -487,7 +487,7 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       expect(await db.select().from(walletFundingLegs).where(eq(walletFundingLegs.walletId, w.productWalletId))).toHaveLength(1);
 
       // Chris (outside the former org) is a member of a personal drive now — no guest switch, no guest cap.
-      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(60) }))
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(6) }))
         .toMatchObject({ allowed: true, walletId: w.productWalletId });
       const view = await getDriveWallet(credentialActor(w.chrisId, null), w.productId, 'session');
       expect(view.ok && view.wallet && 'myCap' in view.wallet ? view.wallet.myCap : null).toMatchObject({ dailyRemainingCents: null, monthlyRemainingCents: null });
@@ -555,12 +555,12 @@ describe('wallet access, visibility and controls (real Postgres)', () => {
       expect(await leadSkips(w)).toEqual(['guest_drive_wallet_off']);
     });
 
-    it('SPEND-6 (partial) with the switch on a guest\'s mention spends the drive wallet, bounded by the default caps (50 credits a day) though no cap row exists', async () => {
+    it('SPEND-6 (partial) with the switch on a guest\'s mention spends the drive wallet, bounded by the default caps (5 credits a day) though no cap row exists', async () => {
       const w = world as World;
       await updateDriveWallet(credentialActor(w.anaId, null), w.productId, { guestSpendEnabled: true }, 'session');
       expect(await canConsumeAI(w.chrisId, 'free', { spend: personTriggeredSpend(w.productId), estCostCents: 5 }))
         .toMatchObject({ allowed: true, walletId: w.productWalletId });
-      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(50) }))
+      expect(await canConsumeAI(w.chrisId, 'free', { spend: driveSpend(w.productId, 'drive_wallet'), estCostCents: credits(5) }))
         .toMatchObject({ allowed: false, refusal: { reason: 'source_cap_reached' } });
       expect(await db.select().from(walletConsumerCaps).where(eq(walletConsumerCaps.walletId, w.productWalletId))).toHaveLength(0);
     });

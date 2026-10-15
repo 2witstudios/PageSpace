@@ -59,20 +59,20 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
   });
 
   it('MON-2 (independent review on #2649, D-OW-17) shows the server-supplied planCredits figure on the Pro card, not the plan module\'s own built-in number', async () => {
-    // 777 is deliberately NOT a figure PLANS.pro resolves to (900): a dropped
+    // 7,770¢ (777 credits) is deliberately NOT a figure PLANS.pro resolves to (900¢): a dropped
     // override would render the module's own number and this assertion fails,
     // never passing vacuously.
     mockStatusResponse({
       subscriptionTier: 'free',
-      planCredits: { free: 500, pro: 777, business: 7777 },
+      planCredits: { free: 500, pro: 7770, business: 77770 },
     });
 
     render(<PlanPage />);
 
     // Scoped to the plan-included-credits testid on the CARDS specifically —
     // the Feature Comparison table's "Credits" row renders the identical
-    // string via creditsCellPhrase for the free tier ("500 credits to start"),
-    // so an unscoped getByText('500 credits to start') matches two elements
+    // string via creditsCellPhrase for the free tier ("50 credits to start"),
+    // so an unscoped getByText('50 credits to start') matches two elements
     // and throws (caught in review: this test was red as first committed).
     // getPersonalPlans('free') orders plans ['free', 'pro'], and the card grid
     // maps that array in order, so index 0 is the Free card and index 1 is Pro.
@@ -81,9 +81,9 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
       expect(cards).toHaveLength(2);
     });
     const [freeCard, proCard] = screen.getAllByTestId('plan-included-credits');
-    expect(freeCard).toHaveTextContent('500 credits to start');
+    expect(freeCard).toHaveTextContent('50 credits to start');
     // The card that actually matters for this regression: the server-supplied
-    // override (777), not the plan module's own built-in number (900).
+    // override (777), not the plan module's own built-in number (90).
     expect(proCard).toHaveTextContent('777 credits included each month');
   });
 });

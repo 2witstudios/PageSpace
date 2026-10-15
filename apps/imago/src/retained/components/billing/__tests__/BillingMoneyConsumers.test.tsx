@@ -48,5 +48,5 @@ it('the native custom topup dollar input buys canonical credits', async () => {
   expect(amount.getAttribute('max')).toBe('500');
   fireEvent.change(amount, { target: { value: '10' } });
   fireEvent.keyDown(amount, { key: 'Enter' });
-  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/stripe/create-credit-topup', { credits: 1000 }));
+  await waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/stripe/create-credit-topup', { credits: 100 }));
 });
