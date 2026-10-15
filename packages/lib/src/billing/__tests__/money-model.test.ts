@@ -170,12 +170,10 @@ describe('MON-5 (partial) one definition of a credit', () => {
     // break on one. At the A-11 rate one credit is exactly ten cents, so the oracle is the
     // input times ten (an independent value, not the implementation's formula restated).
     expect(CREDITS_PER_DOLLAR).toBe(10);
-    for (let credits = 0; credits <= 10_000; credits++) {
-      const cents = centsFromCredits(credits);
-      if (!Number.isInteger(cents) || cents !== credits * 10) {
-        expect.fail(`centsFromCredits(${credits}) returned ${cents}`);
-      }
-    }
+    const counts = Array.from({ length: 10_001 }, (_, credits) => credits);
+    // Collected rather than asserted per value, so a regression names every bad count at once.
+    expect(counts.filter((credits) => centsFromCredits(credits) !== credits * 10)).toEqual([]);
+    expect(counts.map(centsFromCredits).every(Number.isInteger)).toBe(true);
     expect(centsFromCredits(7)).toBe(70);
   });
 
@@ -183,11 +181,10 @@ describe('MON-5 (partial) one definition of a credit', () => {
     // A cent amount that is not a whole number of credits is a fractional count (7¢ is
     // 0.7 credits); it must still come back to the same whole cents, never 7.000000000000001.
     expect(CREDITS_PER_DOLLAR).toBe(10);
-    for (let cents = 0; cents <= 100_000; cents++) {
-      const credits = creditsFromCents(cents);
-      if (cents % 10 === 0 && credits !== cents / 10) expect.fail(`creditsFromCents(${cents}) returned ${credits}`);
-      if (centsFromCredits(credits) !== cents) expect.fail(`round trip of ${cents}¢ returned ${centsFromCredits(credits)}`);
-    }
+    const amounts = Array.from({ length: 100_001 }, (_, cents) => cents);
+    expect(amounts.filter((cents) => centsFromCredits(creditsFromCents(cents)) !== cents)).toEqual([]);
+    const wholeCredits = Array.from({ length: 10_001 }, (_, credits) => credits);
+    expect(wholeCredits.filter((credits) => creditsFromCents(credits * 10) !== credits)).toEqual([]);
     expect(creditsFromCents(70)).toBe(7);
   });
 
