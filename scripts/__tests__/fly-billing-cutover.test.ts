@@ -12,7 +12,12 @@ fs.appendFileSync(process.env.CALLS, args.join(' ') + '\\n');
 const app = args[args.indexOf('--app') + 1];
 const drained = process.env.CALLS + '.' + app;
 if (args[0] === 'config' && process.env.MODE === 'save-fails') process.exit(1);
-if (args[0] === 'config') fs.writeFileSync(args[args.indexOf('--config') + 1], '# original config');
+if (args[0] === 'config') {
+  const path = args[args.indexOf('--config') + 1];
+  // flyctl resolves --config as an existing input before fetching/saving it.
+  if (!fs.existsSync(path)) { console.error('config file not found at specified path'); process.exit(1); }
+  fs.writeFileSync(path, '# original config');
+}
 if (args[0] === 'scale' && args[2].endsWith('=0')) fs.writeFileSync(drained, 'yes');
 if (args[0] === 'scale' && !args[2].endsWith('=0') && fs.existsSync(drained)) fs.unlinkSync(drained);
 if (args[0] === 'machines') console.log(JSON.stringify(process.env.MODE === 'empty' || (fs.existsSync(drained) && process.env.MODE !== 'remains') ? [] : [{ id: 'old', state: 'stopped', region: 'iad', config: { metadata: { fly_process_group: 'app' } } }]));
