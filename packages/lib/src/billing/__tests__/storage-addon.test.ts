@@ -135,8 +135,12 @@ describe('storage add-on core', () => {
     });
   });
 
-  it('given a long payer id, should keep the idempotency key within Stripe limits', () => {
-    expect(storageAddonIdempotencyKey({ kind: 'org', id: 'x'.repeat(400) }, { a: 1 }).length).toBeLessThanOrEqual(255);
+  it('given the longest allowed payer id, should keep the idempotency key within Stripe limits', () => {
+    expect(storageAddonIdempotencyKey({ kind: 'org', id: 'x'.repeat(150) }, { a: 1 }).length).toBeLessThanOrEqual(255);
+  });
+
+  it('given a payer id too long for a key, should refuse rather than shorten it', () => {
+    expect(() => storageAddonIdempotencyKey({ kind: 'org', id: 'x'.repeat(151) }, { a: 1 })).toThrow(/payer id/);
   });
 
   it('given subscription items, should find the storage item only by an unambiguous configured price', () => {

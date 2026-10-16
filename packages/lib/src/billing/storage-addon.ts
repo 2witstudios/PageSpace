@@ -104,11 +104,20 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Stripe idempotency key for one storage write; ≤ 255 chars whatever the payer id. */
+/** Longest payer id a key carries verbatim (user and org ids are cuid2, at most 32 chars). */
+const MAX_KEY_PAYER_ID = 150;
+
+/**
+ * Stripe idempotency key for one storage write, at most 255 chars. The payer id is used
+ * verbatim, never hashed; an id too long for a key is refused rather than shortened, so two
+ * payers can never share a key.
+ */
 export function storageAddonIdempotencyKey(payer: StorageAddonPayer, params: unknown): string {
+  if (payer.id.length === 0 || payer.id.length > MAX_KEY_PAYER_ID) {
+    throw new Error(`storage add-on payer id must be 1-${MAX_KEY_PAYER_ID} characters`);
+  }
   const digest = createHash('sha256').update(stableJson(params)).digest('hex').slice(0, 32);
-  const id = payer.id.length > 150 ? createHash('sha256').update(payer.id).digest('hex') : payer.id;
-  return `pagespace-${payer.kind}:${id}:storage-quantity:${digest}`;
+  return `pagespace-${payer.kind}:${payer.id}:storage-quantity:${digest}`;
 }
 
 /**
