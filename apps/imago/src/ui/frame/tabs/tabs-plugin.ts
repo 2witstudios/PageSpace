@@ -1,17 +1,15 @@
 import type { UiSlice, UiState } from '../../store/state';
-import { goBack, goForward, navigateTabs, openTabInBackground, parseTabs, visit, type History, type Tab } from './tabs-model';
+import { activeTabOf, navigateTabs, openTabInBackground, parseTabs, rewindTab, stepTab, type Tab, type TabStrip } from './tabs-model';
 
 type TabsResources = {
   /** The open tabs of the drive named by `tabsKey` (DEC-C6: client state, per drive). */
   readonly openTabs: readonly Tab[];
-  /** The tab the viewer is in (its path): a navigation loads into it. Null when none is. */
+  /** The tab the viewer is in (its id): a navigation loads into it. Null when none is. */
   readonly activeTab: string | null;
   /** The next navigation opens a new tab instead of loading into the active one (New tab). */
   readonly newTabPending: boolean;
   /** Whose tabs are loaded: the storage key they were read from; null before the first read. */
   readonly tabsKey: string | null;
-  /** Back and Forward in this window. */
-  readonly tabHistory: History | null;
 };
 
 const withTabs = (state: UiState, patch: Partial<TabsResources>): UiState => ({
@@ -19,59 +17,74 @@ const withTabs = (state: UiState, patch: Partial<TabsResources>): UiState => ({
   resources: { ...state.resources, ...patch },
 });
 
+const stripOf = (state: UiState): TabStrip => ({ tabs: state.resources.openTabs, active: state.resources.activeTab });
+
+const withActiveTab = (state: UiState, tab: Tab): UiState =>
+  withTabs(state, { openTabs: state.resources.openTabs.map((entry) => (entry.id === tab.id ? tab : entry)) });
+
+const step = (state: UiState, direction: 'back' | 'forward'): UiState => {
+  const active = activeTabOf(stripOf(state));
+  const next = active === null ? null : stepTab(active, direction);
+  return next === null ? state : withActiveTab(state, next);
+};
+
+export type SyncTabs = {
+  readonly key: string;
+  readonly stored: string | null;
+  /** The tab path of where the viewer is now; null when that is not a tab's object. */
+  readonly path: string | null;
+  /** The id a tab gets if this navigation opens one. */
+  readonly id: string;
+  /** The browser's own Back or Forward brought the viewer here. */
+  readonly pop: boolean;
+};
+
 /**
- * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it
- * reads that drive's stored tabs first, then loads the current page (if it is a tab's
- * object) into the active tab, as browser tabs do, and records the visit for Back and
- * Forward. New tabs open only when asked for: New tab, ⌘/Ctrl-click or middle-click.
+ * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it reads
+ * that drive's stored tabs first, then loads the current page (if it is a tab's object) into
+ * the active tab as a step in that tab's own history, as browser tabs do. The browser's Back
+ * and Forward move within the active tab's history. New tabs open only when asked for: New
+ * tab, ⌘/Ctrl-click or middle-click.
  */
 export const tabsPlugin = {
-  resources: (): TabsResources => ({ openTabs: [], activeTab: null, newTabPending: false, tabsKey: null, tabHistory: null }),
+  resources: (): TabsResources => ({ openTabs: [], activeTab: null, newTabPending: false, tabsKey: null }),
   transactions: {
-    syncTabs: (
-      state: UiState,
-      { key, stored, path, tab }: { readonly key: string; readonly stored: string | null; readonly path: string; readonly tab: Tab | null },
-    ): UiState => {
+    syncTabs: (state: UiState, { key, stored, path, id, pop }: SyncTabs): UiState => {
       const { resources } = state;
       const loaded = resources.tabsKey === key;
-      const base = loaded
-        ? { tabs: resources.openTabs, active: resources.activeTab }
-        : { tabs: parseTabs(stored), active: null };
-      const strip = tab === null ? base : navigateTabs(base, tab, resources.newTabPending);
-      const newTabPending = tab === null ? resources.newTabPending : false;
-      const history = resources.tabHistory;
-      const tabHistory = history === null ? { back: [], current: path, forward: [] } : visit(history, path);
+      const base: TabStrip = loaded ? stripOf(state) : { tabs: parseTabs(stored), active: null };
+      const active = activeTabOf(base);
+      const rewound = path !== null && pop && active !== null ? rewindTab(active, path) : null;
+      const strip =
+        path === null || (rewound !== null && rewound === active)
+          ? base
+          : rewound !== null
+            ? { tabs: base.tabs.map((tab) => (tab.id === rewound.id ? rewound : tab)), active: base.active }
+            : navigateTabs(base, path, id, resources.newTabPending);
+      const newTabPending = path === null ? resources.newTabPending : false;
       const unchanged =
+        loaded &&
         strip.tabs === resources.openTabs &&
         strip.active === resources.activeTab &&
-        newTabPending === resources.newTabPending &&
-        loaded &&
-        tabHistory === history;
+        newTabPending === resources.newTabPending;
       return unchanged
         ? state
-        : withTabs(state, { openTabs: strip.tabs, activeTab: strip.active, newTabPending, tabsKey: key, tabHistory });
+        : withTabs(state, { openTabs: strip.tabs, activeTab: strip.active, newTabPending, tabsKey: key });
     },
     setTabs: (state: UiState, openTabs: readonly Tab[]): UiState => {
       const { activeTab } = state.resources;
-      const stillOpen = activeTab !== null && openTabs.some((tab) => tab.path === activeTab);
+      const stillOpen = activeTab !== null && openTabs.some((tab) => tab.id === activeTab);
       return withTabs(state, { openTabs, activeTab: stillOpen ? activeTab : null });
     },
-    openBackgroundTab: (state: UiState, tab: Tab): UiState => {
-      const { openTabs, activeTab } = state.resources;
-      const strip = openTabInBackground({ tabs: openTabs, active: activeTab }, tab);
-      return strip.tabs === openTabs ? state : withTabs(state, { openTabs: strip.tabs });
-    },
+    activateTab: (state: UiState, id: string): UiState =>
+      state.resources.activeTab === id || !state.resources.openTabs.some((tab) => tab.id === id)
+        ? state
+        : withTabs(state, { activeTab: id }),
+    openBackgroundTab: (state: UiState, { path, id }: { readonly path: string; readonly id: string }): UiState =>
+      withTabs(state, { openTabs: openTabInBackground(stripOf(state), path, id).tabs }),
     setNewTabPending: (state: UiState, newTabPending: boolean): UiState =>
       state.resources.newTabPending === newTabPending ? state : withTabs(state, { newTabPending }),
-    stepBack: (state: UiState, _: void): UiState => {
-      const history = state.resources.tabHistory;
-      const back = history === null ? null : goBack(history);
-      return back === null ? state : withTabs(state, { tabHistory: back });
-    },
-    stepForward: (state: UiState, _: void): UiState => {
-      const history = state.resources.tabHistory;
-      const forward = history === null ? null : goForward(history);
-      return forward === null ? state : withTabs(state, { tabHistory: forward });
-    },
+    stepBack: (state: UiState, _: void): UiState => step(state, 'back'),
+    stepForward: (state: UiState, _: void): UiState => step(state, 'forward'),
   },
 } satisfies UiSlice;

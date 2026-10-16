@@ -1,59 +1,119 @@
 import type { Stage } from '../stage/stage';
 
 /**
- * One open tab (SPEC v3.3 tab bar): whatever fills the middle, keyed by its imago path. Its
- * title and type icon are read from the page API when it renders, never stored (DEC-C6).
+ * One open tab (SPEC v3.3 tab bar), browser-style as in classic: whatever fills the middle,
+ * at its imago path, with its own Back and Forward. Its title and type icon are read from
+ * the page API when it renders, never stored (DEC-C6).
  */
-export type Tab = { readonly path: string };
+export type Tab = {
+  readonly id: string;
+  readonly path: string;
+  /** The places this tab showed before `path`, oldest first. */
+  readonly back: readonly string[];
+  /** The places Back left behind, nearest first. */
+  readonly forward: readonly string[];
+};
+
+/** How many places a tab remembers each way. */
+export const TAB_HISTORY_LIMIT = 50;
+
+export const newTab = (id: string, path: string): Tab => ({ id, path, back: [], forward: [] });
 
 /** The middle's object is a tab; the chat, a section index or the empty middle are not. */
-export const tabFor = (stage: Stage, pathname: string): Tab | null =>
-  stage.object === null ? null : { path: pathname };
+export const tabPathFor = (stage: Stage, pathname: string): string | null => (stage.object === null ? null : pathname);
 
-/** The open tabs and which of them the viewer is in (its path), as browser tabs work. */
+/** The open tabs and the one the viewer is in (its id). */
 export type TabStrip = { readonly tabs: readonly Tab[]; readonly active: string | null };
 
-const indexOfPath = (tabs: readonly Tab[], path: string | null): number =>
-  path === null ? -1 : tabs.findIndex((entry) => entry.path === path);
+export const activeTabOf = (strip: TabStrip): Tab | null => strip.tabs.find((tab) => tab.id === strip.active) ?? null;
 
 /** Inserts a tab just after the active one, or after the last when none is active. */
-const insertBeside = (tabs: readonly Tab[], active: string | null, tab: Tab): readonly Tab[] => {
-  const at = indexOfPath(tabs, active);
-  return at < 0 ? [...tabs, tab] : [...tabs.slice(0, at + 1), tab, ...tabs.slice(at + 1)];
+const insertBeside = (strip: TabStrip, tab: Tab): readonly Tab[] => {
+  const at = strip.tabs.findIndex((entry) => entry.id === strip.active);
+  return at < 0 ? [...strip.tabs, tab] : [...strip.tabs.slice(0, at + 1), tab, ...strip.tabs.slice(at + 1)];
+};
+
+const replaceTab = (tabs: readonly Tab[], tab: Tab): readonly Tab[] => tabs.map((entry) => (entry.id === tab.id ? tab : entry));
+
+/** A new step in a tab: the current place goes on its Back list and Forward is dropped. */
+export const visitInTab = (tab: Tab, path: string): Tab =>
+  path === tab.path ? tab : { ...tab, path, back: [...tab.back, tab.path].slice(-TAB_HISTORY_LIMIT), forward: [] };
+
+/**
+ * A navigation to a tab's object, as browser tabs (and classic) work: it loads into the active
+ * tab as a new step in that tab's history. With no active tab (first load, or after it closed)
+ * the viewer's tab for that page is picked up again, else one opens; New tab always opens one,
+ * beside the active tab. `id` names the tab if one opens.
+ */
+export const navigateTabs = (strip: TabStrip, path: string, id: string, inNewTab = false): TabStrip => {
+  const active = activeTabOf(strip);
+  if (active !== null && !inNewTab) {
+    const next = visitInTab(active, path);
+    return next === active ? strip : { tabs: replaceTab(strip.tabs, next), active: active.id };
+  }
+  if (active === null && !inNewTab) {
+    const open = strip.tabs.find((tab) => tab.path === path);
+    if (open !== undefined) return { tabs: strip.tabs, active: open.id };
+  }
+  return { tabs: insertBeside(strip, newTab(id, path)), active: id };
+};
+
+/** Opens a tab without leaving the current one (⌘/Ctrl-click, middle-click), beside the active tab. */
+export const openTabInBackground = (strip: TabStrip, path: string, id: string): TabStrip => ({
+  tabs: insertBeside(strip, newTab(id, path)),
+  active: strip.active,
+});
+
+/** Back or Forward one step in a tab; null when there is nowhere to go. */
+export const stepTab = (tab: Tab, direction: 'back' | 'forward'): Tab | null => {
+  if (direction === 'back') {
+    const previous = tab.back.at(-1);
+    return previous === undefined
+      ? null
+      : { ...tab, path: previous, back: tab.back.slice(0, -1), forward: [tab.path, ...tab.forward].slice(0, TAB_HISTORY_LIMIT) };
+  }
+  const [next, ...rest] = tab.forward;
+  return next === undefined ? null : { ...tab, path: next, back: [...tab.back, tab.path].slice(-TAB_HISTORY_LIMIT), forward: rest };
 };
 
 /**
- * A navigation to a tab's object, the way browser tabs (and classic) work: it loads into the
- * active tab, replacing what that tab showed. A page that already has a tab switches to it;
- * with no active tab, or when the viewer asked for a new one, it opens beside the active tab.
+ * The browser's own Back or Forward (popstate) landed on `path`: move the tab to that place in
+ * its history, the nearest match either way, rather than adding a step. Null when the place is
+ * not in the tab's history.
  */
-export const navigateTabs = (strip: TabStrip, tab: Tab, inNewTab = false): TabStrip => {
-  const { tabs, active } = strip;
-  if (tabs.some((entry) => entry.path === tab.path)) return active === tab.path ? strip : { tabs, active: tab.path };
-  const at = indexOfPath(tabs, active);
-  if (at < 0 || inNewTab) return { tabs: insertBeside(tabs, active, tab), active: tab.path };
-  return { tabs: tabs.map((entry, index) => (index === at ? tab : entry)), active: tab.path };
+export const rewindTab = (tab: Tab, path: string): Tab | null => {
+  if (path === tab.path) return tab;
+  const back = tab.back.lastIndexOf(path);
+  if (back >= 0) {
+    return {
+      ...tab,
+      path,
+      back: tab.back.slice(0, back),
+      forward: [...tab.back.slice(back + 1), tab.path, ...tab.forward].slice(0, TAB_HISTORY_LIMIT),
+    };
+  }
+  const forward = tab.forward.indexOf(path);
+  if (forward >= 0) {
+    return {
+      ...tab,
+      path,
+      back: [...tab.back, tab.path, ...tab.forward.slice(0, forward)].slice(-TAB_HISTORY_LIMIT),
+      forward: tab.forward.slice(forward + 1),
+    };
+  }
+  return null;
 };
-
-/** Opens a tab without leaving the current one (⌘/Ctrl-click, middle-click); an open one stays put. */
-export const openTabInBackground = (strip: TabStrip, tab: Tab): TabStrip =>
-  strip.tabs.some((entry) => entry.path === tab.path) ? strip : { tabs: insertBeside(strip.tabs, strip.active, tab), active: strip.active };
 
 /**
  * Closes a tab. Closing the active one moves to its right neighbour, else its left; closing
- * the last tab leaves nothing to show, so the middle closes (`next` null).
+ * the last tab leaves nothing to show (`next` null).
  */
-export const closeTab = (
-  tabs: readonly Tab[],
-  path: string,
-  activePath: string | null,
-): { readonly tabs: readonly Tab[]; readonly next: string | null } => {
-  const index = tabs.findIndex((tab) => tab.path === path);
-  if (index < 0) return { tabs, next: null };
-  const rest = tabs.filter((_, at) => at !== index);
-  if (path !== activePath) return { tabs: rest, next: null };
-  const neighbour = rest[index] ?? rest[index - 1];
-  return { tabs: rest, next: neighbour?.path ?? null };
+export const closeTab = (strip: TabStrip, id: string): { readonly tabs: readonly Tab[]; readonly next: Tab | null } => {
+  const index = strip.tabs.findIndex((tab) => tab.id === id);
+  if (index < 0) return { tabs: strip.tabs, next: null };
+  const rest = strip.tabs.filter((_, at) => at !== index);
+  if (id !== strip.active) return { tabs: rest, next: null };
+  return { tabs: rest, next: rest[index] ?? rest[index - 1] ?? null };
 };
 
 /**
@@ -69,37 +129,28 @@ export const sectionPath = (stage: Stage): string => {
     : drive;
 };
 
-/** Back and Forward in the tab bar: the places visited in this window, in order. */
-export type History = {
-  readonly back: readonly string[];
-  readonly current: string;
-  readonly forward: readonly string[];
-};
+const isImagoPath = (value: unknown): value is string =>
+  typeof value === 'string' && value.startsWith('/') && !value.startsWith('//');
 
-export const visit = (history: History, path: string): History =>
-  path === history.current ? history : { back: [...history.back, history.current], current: path, forward: [] };
+const pathsOf = (value: unknown): readonly string[] => (Array.isArray(value) ? value.filter(isImagoPath) : []);
 
-export const goBack = (history: History): History | null => {
-  const previous = history.back.at(-1);
-  return previous === undefined
-    ? null
-    : { back: history.back.slice(0, -1), current: previous, forward: [history.current, ...history.forward] };
-};
-
-export const goForward = (history: History): History | null => {
-  const [next, ...rest] = history.forward;
-  return next === undefined ? null : { back: [...history.back, history.current], current: next, forward: rest };
-};
-
-/** Stored tabs, as written by the tab bar: anything that is not an imago path is dropped. */
+/**
+ * Stored tabs, as written by the tab bar: anything that is not an imago path is dropped. Tabs
+ * stored before they had ids or history get them here.
+ */
 export const parseTabs = (stored: string | null): readonly Tab[] => {
   if (stored === null) return [];
   try {
     const value: unknown = JSON.parse(stored);
     if (!Array.isArray(value)) return [];
-    return value.flatMap((entry: unknown) => {
-      const path = typeof entry === 'object' && entry !== null ? (entry as { path?: unknown }).path : undefined;
-      return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') ? [{ path }] : [];
+    const seen = new Set<string>();
+    return value.flatMap((entry: unknown, index): Tab[] => {
+      if (typeof entry !== 'object' || entry === null) return [];
+      const { id, path, back, forward } = entry as { id?: unknown; path?: unknown; back?: unknown; forward?: unknown };
+      if (!isImagoPath(path)) return [];
+      const tabId = typeof id === 'string' && id !== '' && !seen.has(id) ? id : `stored-${index}`;
+      seen.add(tabId);
+      return [{ id: tabId, path, back: pathsOf(back).slice(-TAB_HISTORY_LIMIT), forward: pathsOf(forward).slice(0, TAB_HISTORY_LIMIT) }];
     });
   } catch {
     return [];
@@ -108,6 +159,9 @@ export const parseTabs = (stored: string | null): readonly Tab[] => {
 
 /** imago's own storage key per drive, never classic's `tabs-storage` (DEC-C6). */
 export const tabsStorageKey = (driveKey: string): string => `imago:tabs:${driveKey}`;
+
+/** A fresh tab id (no crypto.randomUUID: it needs a secure context, which on-prem may not have). */
+export const createTabId = (): string => `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 
 /** The modifier clicks that open a link in a new tab in a browser: ⌘/Ctrl-click and middle-click. */
 export const isNewTabClick = (event: Pick<MouseEvent, 'button' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean =>

@@ -7,14 +7,14 @@ import { pageTabOf, tabLabelFor } from '../tabs/tab-label';
 import type { OpenTabs } from '../tabs/use-open-tabs';
 import { renderOpenPageRow, renderOpenPagesSheet } from './phone-open-pages.render';
 
-type RowProps = { readonly path: string; readonly current: boolean; readonly onClose: () => void };
+type RowProps = { readonly path: string; readonly current: boolean; readonly onOpen: () => void; readonly onClose: () => void };
 
 /** A page row's title and type come from the page API, sharing the page view's cache. */
-function PageRow({ path, pageId, current, onClose }: RowProps & { readonly pageId: string }) {
+function PageRow({ path, pageId, current, onOpen, onClose }: RowProps & { readonly pageId: string }) {
   const { data } = useSWR<unknown>(pageKey(pageId));
   const page = pageTabOf(data);
   const look = page === null ? { icon: 'page' as const, hue: null } : pageTypeIcons[page.type];
-  return renderOpenPageRow({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, current, onClose });
+  return renderOpenPageRow({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, current, onOpen, onClose });
 }
 
 function Row(props: RowProps) {
@@ -36,7 +36,13 @@ export type PhoneOpenPagesProps = {
 export function PhoneOpenPages({ open, onDismiss }: PhoneOpenPagesProps) {
   return renderOpenPagesSheet({
     rows: open.tabs.map((tab) => (
-      <Row key={tab.path} path={tab.path} current={tab.path === open.pathname} onClose={() => open.close(tab.path, 'stay')} />
+      <Row
+        key={tab.id}
+        path={tab.path}
+        current={open.isCurrent(tab)}
+        onOpen={() => open.select(tab.id)}
+        onClose={() => open.close(tab.id, 'stay')}
+      />
     )),
     onDismiss,
     onCloseAll: open.closeAll,

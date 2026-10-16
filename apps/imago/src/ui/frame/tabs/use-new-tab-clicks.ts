@@ -5,7 +5,7 @@ import { IMAGO_BASE_PATH } from '@/lib/auth/sign-in-url';
 import { useUIStore } from '@/retained/stores/useUIStore';
 import { dispatch, transactions } from '../../store/transactions';
 import { stageFor, type Stage } from '../stage/stage';
-import { imagoPathOf, isNewTabClick, tabFor } from './tabs-model';
+import { createTabId, imagoPathOf, isNewTabClick, tabPathFor } from './tabs-model';
 
 /**
  * ⌘/Ctrl-click and middle-click on a link to a page in this drive open it as a tab beside the
@@ -22,10 +22,9 @@ export function useNewTabClicks(stage: Stage): void {
       const path = imagoPathOf(anchor.href, window.location.origin, IMAGO_BASE_PATH);
       if (path === null) return;
       const target = stageFor(path);
-      const tab = tabFor(target, path);
-      if (tab === null || target.driveId !== driveId) return;
+      if (tabPathFor(target, path) === null || target.driveId !== driveId) return;
       event.preventDefault();
-      dispatch(transactions.openBackgroundTab, tab);
+      dispatch(transactions.openBackgroundTab, { path, id: createTabId() });
     };
     document.addEventListener('click', onClick, true);
     document.addEventListener('auxclick', onClick, true);
