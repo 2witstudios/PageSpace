@@ -5,6 +5,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- The pricing page and Choose Your Plan page are easier to read: each plan's included credits, top-up rate, storage and models sit in a clear spec list, and Business's team terms (seats, extra-seat credits and checkout) have their own labeled panel instead of cramped small print. Choose Your Plan now centers its two personal plans side by side.
+
+- Credits are now a larger unit, so every balance, allowance, cap and pack shows one-tenth the number it did. What you have, and what things cost, is unchanged. A custom top-up must now be a whole number of credits; an amount that is not is refused rather than rounded.
+
 - Pro now includes 10 GB of storage (up from 2 GB) and no longer limits how many files you can store. Business organizations no longer have a file-count limit either. Free is unchanged at 500 MB and 100 files.
 
 - Need more room? Pro members and Business organization Owners can now add extra storage in 50 GB blocks for $5 a month each (Settings › Usage, or the organization's Plan & seats page). Added storage is charged right away for the rest of the billing period; removing it takes effect at the end of the period, and no files are ever deleted. When an upload is refused for lack of space, the message now says why and links to where you can get more.

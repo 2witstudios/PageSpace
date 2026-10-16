@@ -46,8 +46,10 @@ import {
 
 // Northwind Labs fixture (Sequence Spec Part 2): Product's wallet holds 1,200 credits,
 // Engineering's 900 is over, the pool holds 9,000. Marcus is a member, Chris Rowe a guest.
-// Whole cents, as every wallet-core output is.
-const c = (credits: number): number => Math.round(centsFromCredits(credits));
+// Amounts are whole cents of credit value, as every wallet-core output is; `c` names a
+// fixture amount, never a credit count (the credit-denominated defaults are asserted
+// through centsFromCredits below).
+const c = (cents: number): number => cents;
 const RESERVE = c(5);
 
 const productWallet = (spendable: number, status: SpendLeg['status'] = 'active'): SpendLeg => ({
@@ -664,8 +666,8 @@ describe('settleOvershoot', () => {
 
 describe('evaluateCaps', () => {
   const TEN_A_DAY_HUNDRED_A_MONTH = { dailyCents: c(10), monthlyCents: c(100) };
-  it('WAL-7 (partial) [D-OW-31] defaults on enable are 50 credits a day and 1,000 a month, from the one credit definition', () => {
-    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: Math.round(centsFromCredits(50)), monthlyCents: Math.round(centsFromCredits(1_000)) });
+  it('WAL-7 (partial) [D-OW-31] defaults on enable are 5 credits a day and 100 a month, from the one credit definition', () => {
+    expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: Math.round(centsFromCredits(5)), monthlyCents: Math.round(centsFromCredits(100)) });
   });
 
   it.each([
@@ -724,7 +726,7 @@ describe('evaluateCaps', () => {
 });
 
 describe('writing a per-consumer cap', () => {
-  it('WAL-7 (partial) [D-OW-31] enabling caps with nothing named takes the defaults, 50 credits a day and 1,000 a month', () => {
+  it('WAL-7 (partial) [D-OW-31] enabling caps with nothing named takes the defaults, 5 credits a day and 100 a month', () => {
     expect(planConsumerCapWrite({}, null)).toEqual({ kind: 'set', caps: DEFAULT_CONSUMER_CAPS });
     expect(DEFAULT_CONSUMER_CAPS).toEqual({ dailyCents: c(50), monthlyCents: c(1_000) });
   });
@@ -743,13 +745,13 @@ describe('writing a per-consumer cap', () => {
 
 describe('seat allowance — the per-consumer monthly cap on the org pool', () => {
   it('WAL-2 (partial) [D-OW-31] the seat allowance is its own constant: the per-consumer cap defaults never move it', () => {
-    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(Math.round(centsFromCredits(100)));
+    expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(Math.round(centsFromCredits(10)));
     expect(DEFAULT_SEAT_ALLOWANCE_CENTS).not.toBe(DEFAULT_CONSUMER_CAPS.monthlyCents);
     const source = readFileSync(fileURLToPath(new URL('../wallet-core.ts', import.meta.url)), 'utf8');
     expect(source).not.toMatch(/DEFAULT_SEAT_ALLOWANCE_CENTS[^=\n]*=[^\n]*DEFAULT_CONSUMER_CAPS/);
   });
 
-  it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default, 100 credits', () => {
+  it('WAL-2 (partial) the seat allowance is never unlimited: with nothing set it is the D20.5 monthly default, 10 credits', () => {
     expect(DEFAULT_SEAT_ALLOWANCE_CENTS).toBe(c(100));
     expect(seatAllowanceCents({ consumerMonthlyCapCents: null, policySeatAllowanceCents: null })).toBe(DEFAULT_SEAT_ALLOWANCE_CENTS);
   });

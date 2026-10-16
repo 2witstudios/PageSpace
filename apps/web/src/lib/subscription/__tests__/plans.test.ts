@@ -232,8 +232,8 @@ describe('MON-2 the settings/plan client component patches its credit copy from 
       // withCreditsCents must prefer the server value, not the module's own.
       const patched = withCreditsCents(PLANS.pro, 900);
       expect(patched.limits.monthlyCreditsCents).toBe(900);
-      expect(patched.includedCredits).toBe('900 credits included each month');
-      expect(patched.features[0].name).toBe('900 credits/month');
+      expect(patched.includedCredits).toBe('90 credits included each month');
+      expect(patched.features[0].name).toBe('90 credits/month');
     });
 
     it('touches only the credit-derived fields — id, price, and every other feature are untouched', () => {
@@ -245,8 +245,8 @@ describe('MON-2 the settings/plan client component patches its credit copy from 
 
     it('renders the one-time starter phrasing for a non-refilling tier (free)', () => {
       const patched = withCreditsCents(PLANS.free, 500);
-      expect(patched.includedCredits).toBe('500 credits to start');
-      expect(patched.features[0].name).toBe('500 credits to start');
+      expect(patched.includedCredits).toBe('50 credits to start');
+      expect(patched.features[0].name).toBe('50 credits to start');
     });
   });
 

@@ -13,7 +13,7 @@ import { monthlyCreditsPhrase } from '@/retained/lib/subscription/credits';
 export const OUT_OF_CREDITS_COPY =
   'You have run out of credits. Add credits or wait for your monthly allowance to reset.';
 
-/** Pro's monthly allowance, from the plan constants: "Upgrade to Pro — 900 credits/month". */
+/** Pro's monthly allowance, from the plan constants: "Upgrade to Pro — 90 credits/month". */
 export const UPGRADE_TO_PRO_LABEL = `Upgrade to Pro — ${monthlyCreditsPhrase('pro')}`;
 
 /** Imago's own plan page (the Imago shell prefixes its base path). */

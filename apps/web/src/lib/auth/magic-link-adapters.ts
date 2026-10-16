@@ -33,6 +33,7 @@ export const buildMagicLinkPorts = (): MagicLinkPorts => ({
         provider: 'email',
         role: 'user',
         tokenVersion: 1,
+        subscriptionTier: 'free',
         tosAcceptedAt,
       };
       const [created] = await db

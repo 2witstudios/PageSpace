@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { centsFromCredits } from '../money-model';
 import {
   orgPoolRefillGrant,
   orgSubscriptionFundingBasis,
@@ -25,7 +24,8 @@ import {
   type DonationInput,
 } from '../wallet-funding';
 
-const c = (credits: number): number => Math.round(centsFromCredits(credits));
+// Fixture amounts are whole cents of credit value, never credit counts.
+const c = (cents: number): number => cents;
 const BASE_CENTS = 5000; // Business list price, $50
 const SEAT_CENTS = 1000; // one extra seat, $10
 const base = { amount: BASE_CENTS };

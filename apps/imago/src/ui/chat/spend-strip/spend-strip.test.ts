@@ -7,7 +7,7 @@ describe('spendSourceOf() (IMC-2.4)', () => {
     assert({
       given: "apps/web's credit balance with billing on",
       should: 'spend from Your credits, with the funded balance left',
-      actual: spendSourceOf({ billingEnabled: true, spendable: 612, monthly: { remaining: 612 }, topup: { remaining: 0 } }),
+      actual: spendSourceOf({ billingEnabled: true, spendable: 6120, monthly: { remaining: 6120 }, topup: { remaining: 0 } }),
       expected: { label: 'Your credits', left: '612 credits left' },
     });
   });
@@ -38,14 +38,14 @@ describe('spendSourceOf() (IMC-2.4)', () => {
 describe('creditsLabel()', () => {
   test('whole numbers, never dollars or decimals', () => {
     assert({
-      given: 'balances of 1120, 1482.7, 0 and -14.2',
+      given: 'balances of 11,200¢, 14,827¢, 0 and -142¢',
       should: 'read as whole credits with thousands separators',
-      actual: [1120, 1482.7, 0, -14.2].map(creditsLabel),
+      actual: [11_200, 14_827, 0, -142].map(creditsLabel),
       expected: ['1,120 credits', '1,483 credits', '0 credits', '-14 credits'],
     });
   });
 
   test('one credit', () => {
-    assert({ given: 'a balance of 1', should: 'say credit', actual: creditsLabel(1), expected: '1 credit' });
+    assert({ given: 'a balance of one credit (10¢)', should: 'say credit', actual: creditsLabel(10), expected: '1 credit' });
   });
 });

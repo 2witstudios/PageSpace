@@ -47,7 +47,7 @@ jobs:
       # (onnxruntime) content detection fails to load on Node 24 — so it is
       # excluded here and run separately below on its own Node 22 runtime.
       - name: Setup Node.js (24 — web/realtime runtime)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: '24'
 
@@ -121,6 +121,7 @@ jobs:
       # populated the cache. The download is the expensive part and the cache
       # already removes it; apt with everything present costs seconds.
       - name: Install Chromium (cross-DOM parse-equality suite)
+        id: chromium
         # `--with-deps` shells out to `apt-get update`, which exits non-zero if
         # ANY configured source fails — and Playwright treats that as fatal
         # (exit 100). The runner image ships Google's Chrome apt repo, and on
@@ -162,19 +163,38 @@ jobs:
       # this file) reads these back after CI — see scripts/check-spec-coverage.ts's module
       # comment for why coverage is derived from what actually PASSED rather than parsed from
       # test source.
+      #
+      # `--continue=dependencies-successful`: turbo's default (`never`) stops scheduling the
+      # remaining packages the moment one package's tests fail, so one red package would leave
+      # every not-yet-started package without a reporter file and the spec-coverage gate would
+      # report their IDs MISSING. With it every package whose build succeeded still runs and
+      # writes its JSON; turbo still exits non-zero if any task failed, so the step stays red.
+      #
+      # EVERY SUITE STEP AFTER THIS ONE runs even when this step fails, and the job still fails.
+      # They are independent of it (separate packages or vitest contexts, row-scoped DB fixtures),
+      # and before this they were skipped by the default `success()` condition, so one timed-out
+      # web test also dropped the db/lib/imago integration suites, the processor, backfill and
+      # infrastructure suites. Their results then never reached spec-coverage, which failed on
+      # AUD-2, ORG-1, ORG-3, POL-3 and SEAT-3, IDs named only by those suites. Each step's `if`
+      # names its real prerequisite instead: `!cancelled()` keeps a manual cancel a cancel, and
+      # `steps.<id>.outcome == 'success'` stops it running when what it depends on failed
+      # (`chromium` succeeds only if every setup step before it did). A failed step can never be
+      # turned green by a later one, so the job's result is still the honest failure.
       - name: Run tests with coverage (Node 24)
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: >-
-          bunx turbo run test:coverage --filter='!@pagespace/processor' --
+          bunx turbo run test:coverage --filter='!@pagespace/processor' --continue=dependencies-successful --
           --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the
       # processor on the runtime it actually deploys to.
       - name: Setup Node.js (22 — processor runtime)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        id: node22
+        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: '22'
 
@@ -183,11 +203,12 @@ jobs:
       # chain — the thing that makes the audit log tamper-evident — was
       # unverified on every run.
       - name: Run processor tests with coverage (Node 22)
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: >-
-          bunx turbo run test:coverage --filter='@pagespace/processor' --
+          bunx turbo run test:coverage --filter='@pagespace/processor' --continue=dependencies-successful --
           --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # Backfill scripts have their own vitest context (scripts/vitest.config.ts)
@@ -207,6 +228,7 @@ jobs:
       # `describe.skipIf(!url)` had been reporting the whole audit-store cutover
       # rehearsal as "skipped" in every run that ever executed it.
       - name: Run backfill script tests
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
@@ -221,6 +243,7 @@ jobs:
       # it seeded), so this step is not order-dependent — it does not empty the
       # app database out from under anything else.
       - name: Run packages/db integration suites
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
@@ -239,6 +262,7 @@ jobs:
       # These suites assume a UTC server: several assert on write-time clocks,
       # and a non-UTC session timezone makes them fail by exactly the offset.
       - name: Run packages/lib integration suites
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         env:
           TZ: UTC
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
@@ -251,6 +275,7 @@ jobs:
       # Postgres (revoked, expired and replayed tokens), so it lives outside the
       # hermetic unit run like the packages above.
       - name: Run apps/imago integration suites
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/imago' test:integration
@@ -267,6 +292,8 @@ jobs:
       # regression in the reachability probe (or a silently broken bring-up) cannot vanish into
       # an otherwise-green job the way the crash this replaced did.
       - name: Bring up local Infisical OSS (store adapter integration suite)
+        id: infisical-up
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         working-directory: packages/lib/src/agent-accounts/store/infisical-dev
         run: |
           # Fetch the unchanged fixture tags through Google's public Docker Hub cache.
@@ -299,6 +326,8 @@ jobs:
           }
 
       - name: Bootstrap Infisical dev admin (CI-only, throwaway instance)
+        id: infisical-bootstrap
+        if: ${{ !cancelled() && steps.infisical-up.outcome == 'success' }}
         run: |
           boot=$(curl -sf -X POST http://localhost:8080/api/v1/admin/bootstrap \
             -H "Content-Type: application/json" \
@@ -313,6 +342,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run Infisical store adapter integration suite
+        if: ${{ !cancelled() && steps.infisical-bootstrap.outcome == 'success' }}
         working-directory: packages/lib
         env:
           TZ: UTC
@@ -350,6 +380,7 @@ jobs:
       # files — including upgrade-doc.test.ts, the only check on the operator
       # upgrade notes — ran nowhere. Invoked directly instead.
       - name: Run infrastructure tests
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         run: >-
           bun run test:infra --
           --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
@@ -359,6 +390,7 @@ jobs:
       # no CI job runs. Runs after the suites above so a citation and its target are checked
       # against the same tree. See docs/2.0-architecture/agent-sessions-evidence.md.
       - name: Check evidence manifest
+        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
         run: bun run scripts/check-evidence-manifest.ts
 
       - name: Postgres connection report
@@ -371,7 +403,7 @@ jobs:
 
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-reports
           path: |
@@ -386,7 +418,7 @@ jobs:
       # run, rather than hiding it from the gate behind a job-level short-circuit.
       - name: Upload Vitest JSON test results (for the spec-coverage job)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vitest-json-results
           path: |
@@ -500,7 +532,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
       - name: Setup Node.js (24 — the web/realtime runtime)
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: '24'
 
@@ -634,7 +666,7 @@ jobs:
       # job — check-spec-coverage.ts is the one that must say so, explicitly, not silently pass.
       - name: Upload Playwright JSON results (for the spec-coverage job)
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-json-results
           path: apps/e2e/test-results/playwright-results.json
@@ -642,7 +674,7 @@ jobs:
           if-no-files-found: warn
       - name: Upload Playwright report and traces
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: |

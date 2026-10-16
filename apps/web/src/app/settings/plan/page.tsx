@@ -422,7 +422,7 @@ export default function PlanPage() {
 
       {/* Plan Cards - Only show when not in checkout */}
       {!checkoutPlan && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 pt-6 pb-4">
+        <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-6 pt-6 pb-4 md:grid-cols-2">
           {plans.map((plan) => (
             <PlanCard
               key={plan.id}

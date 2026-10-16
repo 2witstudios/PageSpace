@@ -100,10 +100,10 @@ describe('createOrgPlanNote', () => {
   it('UI-6 (partial) UI-12 (partial): price in dollars, credits as a plain count, no trial', () => {
     const note = createOrgPlanNote(orgPlanQuote(13));
     expect(note.headline).toBe('Business · $50 a month with 5 seats, $10 per extra seat.');
-    expect(note.body).toContain('You and 12 people make 13 seats: $130 a month with 7,800 credits a month.');
+    expect(note.body).toContain('You and 12 people make 13 seats: $130 a month with 780 credits a month.');
     expect(note.body).toContain('ready once that first payment goes through');
     expect(note.body).not.toMatch(/trial/i);
-    expect(note.body).not.toMatch(/\$7,800|\$78/);
+    expect(note.body).not.toMatch(/\$780\b/);
   });
 
   it('explains that extra seats are billed as people are invited, since the first payment covers the included seats', () => {
@@ -112,7 +112,7 @@ describe('createOrgPlanNote', () => {
   });
 
   it('speaks to one person alone', () => {
-    expect(createOrgPlanNote(orgPlanQuote(1)).body).toContain('Just you is 1 seat: $50 a month with 3,000 credits a month.');
+    expect(createOrgPlanNote(orgPlanQuote(1)).body).toContain('Just you is 1 seat: $50 a month with 300 credits a month.');
   });
 });
 

@@ -39,7 +39,7 @@ import OrgPoliciesPage from '../page';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.notice = undefined;
-  mocks.policies = { ...DEFAULT_ORG_POLICIES, guests: 'approve', publicShareLinks: false, persistentEnvironments: false, seatAllowanceCents: 150 };
+  mocks.policies = { ...DEFAULT_ORG_POLICIES, guests: 'approve', publicShareLinks: false, persistentEnvironments: false, seatAllowanceCents: 1_500 };
   mocks.patchOrgPolicies.mockResolvedValue({ policies: mocks.policies, changed: [], suspended: {}, restored: {}, blocked: {} });
 });
 
@@ -91,7 +91,7 @@ describe('org Policies page', () => {
     await userEvent.clear(input);
     await userEvent.type(input, '200');
     await userEvent.click(screen.getAllByRole('button', { name: 'Save' })[0]);
-    await waitFor(() => expect(mocks.patchOrgPolicies).toHaveBeenCalledWith('org_nw', { seatAllowanceCents: 200 }));
+    await waitFor(() => expect(mocks.patchOrgPolicies).toHaveBeenCalledWith('org_nw', { seatAllowanceCents: 2_000 }));
   });
 
   it('POL-6 (partial): raising the floor while an Open drive sits below it lists those drives', async () => {
