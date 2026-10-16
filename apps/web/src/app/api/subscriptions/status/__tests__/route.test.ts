@@ -189,7 +189,7 @@ describe('GET /api/subscriptions/status', () => {
         cancelAtPeriodEnd: false,
       });
       expect(body.storage.tier).toBe('pro');
-      expect(body.storage.quota).toBe(2 * 1024 * 1024 * 1024); // 2GB
+      expect(body.storage.quota).toBe(10 * 1024 * 1024 * 1024); // 10GB
     });
 
     it('A-9 refuses a retired personal Business tier and omits grandfathering', async () => {
@@ -351,7 +351,7 @@ describe('GET /api/subscriptions/status', () => {
   describe('Storage quota by tier', () => {
     const tierQuotaTests = [
       { tier: 'free', expectedQuota: 500 * 1024 * 1024, description: '500MB' },
-      { tier: 'pro', expectedQuota: 2 * 1024 * 1024 * 1024, description: '2GB' },
+      { tier: 'pro', expectedQuota: 10 * 1024 * 1024 * 1024, description: '10GB' },
       { tier: 'business', expectedQuota: 500 * 1024 * 1024, description: 'Free fallback for retired personal Business' },
     ];
 

@@ -66,6 +66,9 @@ export interface StoredOrgSeatLinkage {
   stripeSeatItemId: string;
   extraSeatQuantity: number;
   seatRevision: number;
+  /** The storage add-on item and its quantity, mirrored like the seat item. */
+  stripeStorageItemId?: string | null;
+  storageBlocks?: number;
 }
 
 export type OrgSeatItemMirrorPatch = Partial<StoredOrgSeatLinkage>;
@@ -94,6 +97,12 @@ export function planOrgSeatItemMirror(input: {
     patch.extraSeatQuantity = linkage.seatItem.quantity;
     patch.seatRevision = input.stored.seatRevision + 1;
   }
+  // The storage item as Stripe holds it now. Grace and the storage revision are app-owned:
+  // every app-side change bumps the revision, so a Stripe-side change cannot collide a key.
+  const storageItemId = linkage.storageItem?.id ?? null;
+  const storageBlocks = linkage.storageItem?.quantity ?? 0;
+  if (storageItemId !== (input.stored.stripeStorageItemId ?? null)) patch.stripeStorageItemId = storageItemId;
+  if (storageBlocks !== (input.stored.storageBlocks ?? 0)) patch.storageBlocks = storageBlocks;
   return patch;
 }
 

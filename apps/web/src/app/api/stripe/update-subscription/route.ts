@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { personalPlanItems } from '@/lib/stripe/price-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isPersonalPlanPriceId } from '@/lib/subscription/plans';
@@ -89,8 +90,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const currentItemId = subscription.items.data[0]?.id;
-    if (!currentItemId) {
+    // The plan item, never items[0]: a storage add-on item may ride along.
+    const personalItems = personalPlanItems(subscription.items);
+    const currentItemId = personalItems?.planItem.id;
+    if (!personalItems || !currentItemId) {
       return NextResponse.json(
         { error: 'No subscription items found' },
         { status: 400 }
@@ -102,8 +105,12 @@ export async function POST(request: NextRequest) {
       // Use subscription schedule to properly defer downgrade to period end.
       // This ensures the user keeps their current plan features until the
       // billing cycle ends, then automatically switches to the new plan.
-      const subscriptionItem = subscription.items.data[0];
+      const subscriptionItem = personalItems.planItem;
       const currentPriceId = subscriptionItem.price.id;
+      // Carry the storage add-on through both phases: a plan change never drops it.
+      const storagePhaseItems = personalItems.storageItem && (personalItems.storageItem.quantity ?? 0) > 0
+        ? [{ price: personalItems.storageItem.price.id, quantity: personalItems.storageItem.quantity ?? 0 }]
+        : [];
       const currentPeriodEnd = subscriptionItem.current_period_end;
 
       // Check if subscription already has a schedule attached
@@ -127,12 +134,12 @@ export async function POST(request: NextRequest) {
       await stripe.subscriptionSchedules.update(schedule.id, {
         phases: [
           {
-            items: [{ price: currentPriceId }],
+            items: [{ price: currentPriceId }, ...storagePhaseItems],
             start_date: schedule.phases[0].start_date,
             end_date: currentPeriodEnd,
           },
           {
-            items: [{ price: priceId }],
+            items: [{ price: priceId }, ...storagePhaseItems],
             start_date: currentPeriodEnd,
           },
         ],

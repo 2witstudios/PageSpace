@@ -135,6 +135,11 @@ const storagePhrase = (tier: SubscriptionTier) =>
   `${formatTierBytes(TIER_PLAN_LIMITS[tier].quotaBytes)} storage`;
 const maxFilePhrase = (tier: SubscriptionTier) =>
   `${formatTierBytes(TIER_PLAN_LIMITS[tier].maxFileSize)} max file size`;
+// "Nx more than Free" copy, computed so it follows the limits table.
+const storageVsFree = (tier: SubscriptionTier) =>
+  `${Math.round(TIER_PLAN_LIMITS[tier].quotaBytes / TIER_PLAN_LIMITS.free.quotaBytes)}x more than Free`;
+const fileSizeVsFree = (tier: SubscriptionTier) =>
+  `${Math.round(TIER_PLAN_LIMITS[tier].maxFileSize / TIER_PLAN_LIMITS.free.maxFileSize)}x larger files`;
 
 export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
   free: {
@@ -184,8 +189,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: monthlyCreditsPhrase('pro'), included: true, description: 'Refills every month; unused credits carry over' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Advanced AI reasoning' },
-      { name: storagePhrase('pro'), included: true, description: '4x more than Free' },
-      { name: maxFilePhrase('pro'), included: true, description: '5x larger files' },
+      { name: storagePhrase('pro'), included: true, description: storageVsFree('pro') },
+      { name: 'Unlimited files', included: true },
+      { name: maxFilePhrase('pro'), included: true, description: fileSizeVsFree('pro') },
       { name: 'Priority processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Community support', included: true },
@@ -208,8 +214,9 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
       { name: monthlyCreditsPhrase('business'), included: true, description: 'One shared pool for the organization, larger with every extra seat' },
       { name: 'Buy more credits anytime', included: true },
       { name: 'Standard + Pro AI models', included: true, description: 'Maximum AI reasoning' },
-      { name: storagePhrase('business'), included: true, description: '100x more than Free' },
-      { name: maxFilePhrase('business'), included: true, description: '20x larger files' },
+      { name: storagePhrase('business'), included: true, description: storageVsFree('business') },
+      { name: 'Unlimited files', included: true },
+      { name: maxFilePhrase('business'), included: true, description: fileSizeVsFree('business') },
       { name: 'Enterprise processing', included: true },
       { name: 'Priority support', included: true },
       { name: 'Enterprise features', included: true },

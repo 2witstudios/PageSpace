@@ -241,7 +241,7 @@ function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
  * on the invoice id. The balance write only runs if the grant row was newly inserted.
  */
-async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier): Promise<void> {
+async function applyMonthlyRefill(event: FundingEvent, tierOverride?: SubscriptionTier, planPaidCents?: number): Promise<void> {
   const obj = event.data.object;
   const stripeRef = obj.id ?? null;
   if (!stripeRef) {
@@ -271,7 +271,7 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   // an admin flipping the flag on an existing, already-processed subscription).
   const gifted = isGiftInvoice(obj) || (await isGiftedSubscriber(user.id));
   const grant = grantForInvoice({
-    amountPaidCents: obj.amount_paid,
+    amountPaidCents: planPaidCents === undefined ? obj.amount_paid : Math.min(planPaidCents, obj.amount_paid ?? 0),
     billingReason: obj.billing_reason,
     hasSubscriptionParent: invoiceHasSubscriptionParent(obj),
     gifted,
@@ -484,6 +484,12 @@ export interface FundingOptions {
    * Top-ups do not use this field.
    */
   tier?: SubscriptionTier;
+  /**
+   * The part of invoice.amount_paid that bought the PLAN, when the invoice also
+   * carries lines that are not the plan (a storage add-on). Storage revenue never
+   * sizes the AI-credit grant. Absent: the whole amount_paid is the plan's.
+   */
+  planPaidCents?: number;
 }
 
 export async function applyStripeFunding(event: FundingEvent, opts?: FundingOptions): Promise<void> {
@@ -493,7 +499,7 @@ export async function applyStripeFunding(event: FundingEvent, opts?: FundingOpti
   try {
     switch (action.kind) {
       case 'monthly_refill':
-        await applyMonthlyRefill(event, opts?.tier);
+        await applyMonthlyRefill(event, opts?.tier, opts?.planPaidCents);
         break;
       case 'topup':
         await applyTopupFunding(event, action.packCents);

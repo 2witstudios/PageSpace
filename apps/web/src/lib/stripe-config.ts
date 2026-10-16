@@ -30,6 +30,13 @@ interface StripeConfig {
     businessBase: string;
     extraSeat: string;
   };
+  /**
+   * The storage add-on price (STORAGE_ADDON: one 50GB block a month), sold as a
+   * quantity item on a Pro or an org Business subscription. Its lines never grant
+   * a plan nor size an AI-credit grant. Empty means the price does not exist in
+   * that mode yet: the add-on is not offered and every purchase refuses (fails closed).
+   */
+  storageAddonPriceId: string;
 }
 
 const config: Record<'test' | 'live', StripeConfig> = {
@@ -46,6 +53,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQXAvPRnBcvXFsoeKQE6H0u', // org base (D-OW-20)
       extraSeat: 'price_1UQXAwPRnBcvXFso1TqKRFSM',    // per extra seat (D-OW-20)
     },
+    storageAddonPriceId: '', // TODO: $5/month per 50GB block — create in Stripe test mode
   },
   live: {
     portalConfigurationIds: {
@@ -61,6 +69,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
       extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
     },
+    storageAddonPriceId: '', // TODO: $5/month per 50GB block — create in Stripe live mode
   },
 };
 

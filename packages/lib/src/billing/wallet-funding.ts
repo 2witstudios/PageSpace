@@ -81,6 +81,8 @@ export interface OrgInvoiceLine {
 export interface OrgPoolPriceIds {
   basePriceId?: string | null;
   seatPriceId?: string | null;
+  /** The storage add-on price: its lines are the org's, but never refill the credit pool. */
+  storagePriceId?: string | null;
 }
 
 /** An invoice line that is neither the Business base nor the extra-seat item (MON-3). */
@@ -100,6 +102,8 @@ export interface OrgPoolLineSelection {
   refillLines: Array<OrgInvoiceLine>;
   /** Every other line on the invoice, excluded from the refill and reported for the log. */
   unrecognized: Array<UnrecognizedOrgInvoiceLine>;
+  /** Storage add-on lines: recognized, paid for, and never part of the pool refill. */
+  storageLines?: Array<OrgInvoiceLine>;
 }
 
 /** The price id a line bills, read off Stripe's pricing.price_details (an id or an expanded price). */
@@ -130,20 +134,25 @@ export function selectOrgPoolRefillLines(
 ): OrgPoolLineSelection {
   const basePriceId = prices.basePriceId || null;
   const seatPriceId = prices.seatPriceId || null;
+  const storagePriceId = prices.storagePriceId && prices.storagePriceId !== basePriceId && prices.storagePriceId !== seatPriceId
+    ? prices.storagePriceId
+    : null;
   const refillLines: Array<OrgInvoiceLine> = [];
   const unrecognized: Array<UnrecognizedOrgInvoiceLine> = [];
+  const storageLines: Array<OrgInvoiceLine> = [];
   for (const line of lines) {
     const priceId = orgInvoiceLinePriceId(line);
     const subscriptionItemId = orgInvoiceLineItemId(line);
     const recognized =
       subscriptionItemId !== null && priceId !== null && basePriceId !== seatPriceId && (priceId === basePriceId || priceId === seatPriceId);
     if (recognized) refillLines.push(line as OrgInvoiceLine);
+    else if (subscriptionItemId !== null && priceId !== null && priceId === storagePriceId) storageLines.push(line as OrgInvoiceLine);
     else unrecognized.push({ priceId, subscriptionItemId, amountCents: wholeCents(line?.amount) });
   }
   const hasVerifiedGiftPrice = refillLines.some((line) =>
     typeof line.amount === 'number' && Number.isFinite(line.amount) && line.amount >= 0,
   ) && !unrecognized.some((line) => line.subscriptionItemId !== null && line.amountCents >= 0);
-  return { refillLines, unrecognized, hasVerifiedGiftPrice };
+  return { refillLines, unrecognized, storageLines, hasVerifiedGiftPrice };
 }
 
 export interface OrgPoolRefillInput {

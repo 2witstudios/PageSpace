@@ -107,6 +107,9 @@ export const WALLET_ERROR_CODES = [
   'billing_disabled',
   'not_a_consumer',
   'not_org_member',
+  // storage add-on: not sold here (unconfigured, no subscription, a gifted plan), or the card declined
+  'storage_addon_unavailable',
+  'payment_declined',
 ] as const;
 
 export const ORG_API_ERROR_CODES = [

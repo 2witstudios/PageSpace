@@ -4,7 +4,7 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
-import { tierFromInvoiceLines } from '@/lib/stripe/price-config';
+import { isStorageAddonConfigured, isStorageAddonPrice, personalSubscriptionItems, planPaidCentsFromInvoiceLines, tierFromInvoiceLines, toPersonalSubscriptionItems } from '@/lib/stripe/price-config';
 import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
@@ -323,9 +323,13 @@ export async function POST(request: NextRequest) {
             // applies the correct (paid) tier's ratio. Replays are dedupe'd twice: the
             // stripe_events marker above short-circuits a redelivered event, and the
             // ledger's stripeRef unique index makes the grant itself exactly-once.
+            // Storage add-on lines on the same invoice never size the AI-credit grant.
             await applyStripeFunding(
               { ...event, data: { ...event.data, object: invoice } },
-              { tier: tierFromInvoice(invoice) },
+              {
+                tier: tierFromInvoice(invoice),
+                planPaidCents: planPaidCentsFromInvoiceLines(invoice.lines?.data ?? [], invoice.amount_paid),
+              },
             );
             return false;
           });
@@ -444,6 +448,20 @@ function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
   return tierFromInvoiceLines(invoice.lines?.data ?? []);
 }
 
+/**
+ * The storage add-on item as Stripe holds it NOW. Subscription events can arrive
+ * out of order (a multi-step quantity change emits one per step, and a snapshot from
+ * before the item was created can land after it), so the item is re-read from the
+ * live subscription rather than taken from the event snapshot.
+ */
+async function currentStorageItem(subscriptionId: string): Promise<{ id: string; quantity: number } | null> {
+  const items = await stripe.subscriptionItems.list({ subscription: subscriptionId, limit: 100 });
+  const storage = items.data.filter((item) => isStorageAddonPrice(item.price.id));
+  if (storage.length !== 1) return null;
+  const quantity = storage[0].quantity ?? 0;
+  return { id: storage[0].id, quantity: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0 };
+}
+
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string;
 
@@ -468,11 +486,20 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     throw new Error(`Subscription ${subscription.id} has no items`);
   }
 
-  // A personal subscription has exactly one plan item. The empty identity marks
-  // an ambiguous/truncated collection in the mirror so reconciliation cannot
-  // resurrect access from its first item.
-  const stripePriceId = subscription.items.data.length === 1 && !subscription.items.has_more
-    ? firstItem.price.id : '';
+  // A personal subscription has exactly one plan item, plus at most one storage
+  // add-on item. The empty identity marks an ambiguous/truncated collection in the
+  // mirror so reconciliation cannot resurrect access from its first item.
+  const shape = personalSubscriptionItems(
+    toPersonalSubscriptionItems(subscription.items.data),
+    subscription.items.has_more,
+  );
+  const planItem = shape
+    ? subscription.items.data.find((item) => item.id === shape.planItem.id) ?? firstItem
+    : firstItem;
+  const stripePriceId = shape ? shape.planItem.priceId : '';
+  // Re-read even when the snapshot has no storage item: an event from before the item
+  // existed can arrive after the purchase, and must not erase the paid blocks.
+  const storage = shape && isStorageAddonConfigured() ? await currentStorageItem(subscription.id) : null;
 
   // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
   // an entitled (active/trialing) row maps through the price→tier map; anything
@@ -484,9 +511,9 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     getPersonalTierFromPrice,
   ).tier;
 
-  // Get period from the first subscription item (API version 2025-08-27 change)
+  // Get period from the plan item (API version 2025-08-27 change)
   // Use intersection type to safely extend SubscriptionItem with the new fields
-  const itemWithPeriod = firstItem as Stripe.SubscriptionItem & {
+  const itemWithPeriod = planItem as Stripe.SubscriptionItem & {
     current_period_start: number;
     current_period_end: number;
   };
@@ -497,7 +524,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   if (!currentPeriodStartTs || !currentPeriodEndTs) {
     loggers.api.error('Missing period dates for subscription (checked item-level)', undefined, {
       subscriptionId: subscription.id,
-      itemId: firstItem.id,
+      itemId: planItem.id,
       start: currentPeriodStartTs,
       end: currentPeriodEndTs
     });
@@ -537,6 +564,8 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       stripeScheduleId: subscription.schedule ? String(subscription.schedule) : null,
       scheduledPriceId: null,
       scheduledChangeDate: null,
+      stripeStorageItemId: storage?.id ?? null,
+      storageBlocks: storage?.quantity ?? 0,
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
@@ -546,6 +575,11 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
         currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
         gifted: isGifted,
+        // The storage item as Stripe holds it now. Grace (blocks paid through period
+        // end) and the revision are app-owned: every app-side change bumps the revision,
+        // so a Stripe-side change here can never make the next app key collide.
+        stripeStorageItemId: storage?.id ?? null,
+        storageBlocks: storage?.quantity ?? 0,
         // Clear schedule fields if schedule was released/completed
         ...(subscription.schedule === null && {
           stripeScheduleId: null,

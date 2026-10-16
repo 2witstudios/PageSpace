@@ -431,6 +431,25 @@ describe('orgSubscriptionItems — the linkage stored on the org', () => {
   });
 });
 
+describe('orgSubscriptionItems — with a storage add-on item', () => {
+  const WITH_STORAGE: OrgBusinessPrices = { ...PRICES, storagePriceId: 'price_storage' };
+  const storageItem = { id: 'si_storage', priceId: 'price_storage', quantity: 3 };
+
+  it('given base, seat and one storage item, should link all three', () => {
+    expect(orgSubscriptionItems(candidate({ items: [...candidate().items, storageItem] }), WITH_STORAGE)).toEqual({
+      baseItemId: 'si_base', seatItem: { id: 'si_seat', quantity: 0 }, storageItem: { id: 'si_storage', quantity: 3 },
+    });
+  });
+
+  it('given a storage item while no storage price is configured, should refuse the subscription', () => {
+    expect(orgSubscriptionItems(candidate({ items: [...candidate().items, storageItem] }), PRICES)).toBeNull();
+  });
+
+  it('given two storage items, should refuse the subscription', () => {
+    expect(orgSubscriptionItems(candidate({ items: [...candidate().items, storageItem, { ...storageItem, id: 'si_storage_2' }] }), WITH_STORAGE)).toBeNull();
+  });
+});
+
 describe('planSeatQuantitySync — raising or lowering the extra-seat quantity', () => {
   const stored = { seatItemId: 'si_seat', extraSeatQuantity: 0, seatRevision: 0 };
 

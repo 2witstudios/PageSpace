@@ -211,6 +211,19 @@ describe('applyStripeFunding', () => {
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
+  it('given an invoice that also bought storage blocks, should size the grant from the plan share only', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
+    const cap: Captured = {};
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb(refillTx(cap, [{ id: 'led_1' }], 0));
+    });
+
+    // $15 Pro + $15 of storage paid; only the $15 plan share funds AI credits.
+    await applyStripeFunding(paidInvoiceEvent(3000), { tier: 'pro', planPaidCents: 1500 });
+
+    expect(cap.ledgerValues).toMatchObject({ amountCents: tierAllowanceCents('pro'), paidCents: 1500 });
+  });
+
   it('invoice.paid adds the tier allowance to the current balance, sets the period, and writes a monthly_grant row', async () => {
     mockDb.select.mockReturnValue(userSelectReturning(PRO_USER));
     const cap: Captured = {};

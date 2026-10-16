@@ -152,6 +152,14 @@ export const orgSubscriptions = pgTable('org_subscriptions', {
   // that passed later than this was missed and is caught up, prorated, on the next sweep; null
   // until the sweep first sees the row (it then records the current period start).
   seatsReconciledThrough: timestamp('seatsReconciledThrough', { mode: 'date' }),
+  // Storage add-on (STORAGE_ADDON blocks): an optional third item, created on the first
+  // purchase. `storageBlocks` is what Stripe was last set to; after a decrease the blocks
+  // already paid for stay entitled until storageGraceUntil (removal at period end).
+  stripeStorageItemId: text('stripeStorageItemId'),
+  storageBlocks: integer('storageBlocks').default(0).notNull(),
+  storageGraceBlocks: integer('storageGraceBlocks').default(0).notNull(),
+  storageGraceUntil: timestamp('storageGraceUntil', { mode: 'date' }),
+  storageRevision: integer('storageRevision').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).default(utcNow).notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).default(utcNow).notNull().$onUpdate(() => new Date()),
 });

@@ -158,7 +158,7 @@ describe('PlanPage (/account/plan)', () => {
           'Credits50 credits to start90 credits/mo',
           'AI modelsStandardStandard + Pro',
           'Buy more credits100 credits per $10100 credits per $10',
-          'Storage500MB2GB',
+          'Storage500MB10GB',
           'Max File Size50MB250MB',
         ],
       },
