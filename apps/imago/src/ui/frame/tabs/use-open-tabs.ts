@@ -6,11 +6,24 @@ import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import type { UiState } from '../../store/state';
 import { stageFor, type Stage } from '../stage/stage';
-import { closeTab, createTabId, sectionPath, tabPathFor, tabsStorageKey, type Tab } from './tabs-model';
+import { basePathRelative } from '@/lib/auth/sign-in-url';
+import { closeTab, createTabId, popDirection, sectionPath, serializeTabs, tabPathFor, tabsStorageKey, type Tab } from './tabs-model';
 
 const selectTabs = (state: UiState) => state.resources.openTabs;
 const selectActive = (state: UiState) => state.resources.activeTab;
 const selectKey = (state: UiState) => state.resources.tabsKey;
+
+/**
+ * The browser's position in this window's history (the Navigation API), so a popstate can say
+ * which way it went; null where the browser does not offer it.
+ */
+const historyIndex = (): number | null => {
+  const navigation = (window as { navigation?: { currentEntry?: { index?: number } | null } }).navigation;
+  const index = navigation?.currentEntry?.index;
+  return typeof index === 'number' && index >= 0 ? index : null;
+};
+
+type Popped = { readonly path: string | null; readonly index: number | null };
 
 /** localStorage, which can throw (private windows, blocked site data): tabs then live for the session. */
 const storage = {
@@ -61,33 +74,39 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   const activeId = useUiState(selectActive);
   const loadedKey = useUiState(selectKey);
   const key = tabsStorageKey(driveKey);
-  // Set by the browser's own Back or Forward: the next sync moves within the active tab's
-  // history instead of adding a step.
-  const popped = useRef(false);
+  // Set by the browser's own Back or Forward: where it landed, so only the sync for that very
+  // place moves within the active tab's history instead of adding a step.
+  const popped = useRef<Popped | null>(null);
+  // Where the browser was in its history at the last sync.
+  const lastIndex = useRef<number | null>(null);
 
   useEffect(() => {
     const onPopState = () => {
-      popped.current = true;
+      popped.current = { path: basePathRelative(window.location.pathname), index: historyIndex() };
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   useEffect(() => {
-    const pop = popped.current;
-    popped.current = false;
+    const landed = popped.current;
+    popped.current = null;
+    const pop = landed !== null && landed.path === pathname;
+    const direction = pop ? popDirection(lastIndex.current, landed.index) : null;
+    lastIndex.current = historyIndex();
     dispatch(transactions.syncTabs, {
       key,
       stored: storage.read(key),
       path: tabPathFor(stageFor(pathname), pathname),
       id: createTabId(),
       pop,
+      direction,
     });
   }, [key, pathname]);
 
   useEffect(() => {
-    if (loadedKey === key) storage.write(key, JSON.stringify(tabs));
-  }, [tabs, loadedKey, key]);
+    if (loadedKey === key) storage.write(key, serializeTabs({ tabs, active: activeId }));
+  }, [tabs, activeId, loadedKey, key]);
 
   const isCurrent = (tab: Tab) => tab.id === activeId && tab.path === pathname;
 
@@ -102,11 +121,12 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
       const onScreen = closing !== undefined && isCurrent(closing);
       const result = closeTab({ tabs, active: activeId }, id);
       dispatch(transactions.setTabs, result.tabs);
+      // The neighbour becomes active even off screen (on a section or the chat), so the next
+      // page loads into it rather than opening a tab.
+      if (result.next !== null) dispatch(transactions.activateTab, result.next.id);
       if (!onScreen) return;
-      if (result.next !== null) {
-        dispatch(transactions.activateTab, result.next.id);
-        router.push(result.next.path);
-      } else if (whenLast === 'section') router.push(sectionPath(stage));
+      if (result.next !== null) router.push(result.next.path);
+      else if (whenLast === 'section') router.push(sectionPath(stage));
     },
     closeAll: () => dispatch(transactions.setTabs, []),
   };

@@ -2,24 +2,26 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { createInitialState } from '../../store/state';
 import type { UiState } from '../../store/state';
-import { newTab } from './tabs-model';
+import { newTab, serializeTabs } from './tabs-model';
 import { tabsPlugin, type SyncTabs } from './tabs-plugin';
 
 const { syncTabs, setTabs, activateTab, openBackgroundTab, setNewTabPending, stepBack, stepForward } = tabsPlugin.transactions;
 const key = 'imago:tabs:d1';
-const stored = JSON.stringify([newTab('p', '/d1/files/pricing')]);
+const stored = serializeTabs({ tabs: [newTab('p', '/d1/files/pricing')], active: 'p' });
 const nav = (path: string | null, extra: Partial<SyncTabs> = {}): SyncTabs => ({ key, stored: null, path, id: `id-${path}`, pop: false, ...extra });
 const paths = (state: UiState) => state.resources.openTabs.map((tab) => tab.path);
 const first = () => syncTabs(createInitialState(), nav('/d1/files/pricing', { stored }));
 
 describe('tabsPlugin (IMC-1.5)', () => {
   test('first navigation in a drive reads its stored tabs', () => {
-    const state = syncTabs(createInitialState(), nav('/d1/files/plan', { stored }));
+    const legacy = JSON.stringify([{ path: '/d1/files/pricing' }]);
+    const state = syncTabs(createInitialState(), nav('/d1/files/plan', { stored: legacy }));
+    const withActive = syncTabs(createInitialState(), nav('/d1/files/plan', { stored }));
     assert({
-      given: "a drive's stored tabs and a page none of them shows",
-      should: 'restore them and open the page as a new active tab',
-      actual: [paths(state), state.resources.activeTab],
-      expected: [['/d1/files/pricing', '/d1/files/plan'], 'id-/d1/files/plan'],
+      given: "a drive's stored tabs and a page none of them shows, with and without a stored active tab",
+      should: 'open the page as a new active tab, or load it into the stored active tab',
+      actual: [paths(state), state.resources.activeTab, paths(withActive), withActive.resources.activeTab],
+      expected: [['/d1/files/pricing', '/d1/files/plan'], 'id-/d1/files/plan', ['/d1/files/plan'], 'p'],
     });
   });
 
@@ -132,6 +134,28 @@ describe('tabsPlugin (IMC-1.5)', () => {
       should: 'leave no active tab, so the next page opens a new one',
       actual: setTabs(first(), []).resources.activeTab,
       expected: null,
+    });
+  });
+
+  test('a reload keeps the stored active tab', () => {
+    const twin = serializeTabs({ tabs: [newTab('p', '/d1/files/pricing'), newTab('q', '/d1/files/pricing')], active: 'q' });
+    assert({
+      given: 'two tabs on one page with the second active, then a reload',
+      should: 'restore the second as active',
+      actual: syncTabs(createInitialState(), nav('/d1/files/pricing', { stored: twin })).resources.activeTab,
+      expected: 'q',
+    });
+  });
+
+  test('the browser’s Forward picks the forward visit', () => {
+    const steps = ['/d1/files/plan', '/d1/files/pricing', '/d1/files/ops'].reduce((state, path) => syncTabs(state, nav(path)), first());
+    const onPlan = stepBack(stepBack(steps, undefined), undefined);
+    const forward = syncTabs(onPlan, nav('/d1/files/pricing', { pop: true, direction: 'forward' }));
+    assert({
+      given: 'pricing → plan → pricing → ops, Back twice, then the browser’s Forward to pricing',
+      should: 'keep ops ahead and pricing behind',
+      actual: [forward.resources.openTabs[0]?.back, forward.resources.openTabs[0]?.forward],
+      expected: [['/d1/files/pricing', '/d1/files/plan'], ['/d1/files/ops']],
     });
   });
 });

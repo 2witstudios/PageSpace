@@ -9,7 +9,10 @@ import {
   newTab,
   openTabInBackground,
   parseTabs,
+  popDirection,
+  restoreActive,
   rewindTab,
+  serializeTabs,
   sectionPath,
   stepTab,
   tabPathFor,
@@ -196,6 +199,81 @@ describe('rewindTab()', () => {
   });
 });
 
+describe('rewindTab() with a page visited twice', () => {
+  // plan → pricing → plan → ops, then Back twice: on pricing, plan on both sides.
+  const twice = [pricing.path, plan.path, ops.path].reduce(visitInTab, plan);
+  const onPricing = stepTab(stepTab(twice, 'back') ?? twice, 'back') ?? twice;
+
+  test('the browser’s Forward', () => {
+    assert({
+      given: 'the browser going Forward to a page that is also one step Back',
+      should: 'take the Forward visit, keeping ops ahead',
+      actual: rewindTab(onPricing, plan.path, 'forward'),
+      expected: { ...plan, path: plan.path, back: [plan.path, pricing.path], forward: [ops.path] },
+    });
+  });
+
+  test('the browser’s Back', () => {
+    assert({
+      given: 'the browser going Back to that page',
+      should: 'take the Back visit',
+      actual: rewindTab(onPricing, plan.path, 'back'),
+      expected: { ...plan, path: plan.path, back: [], forward: [pricing.path, plan.path, ops.path] },
+    });
+  });
+
+  test('a direction that does not match', () => {
+    assert({
+      given: 'the browser going Back to a page only ahead in the tab',
+      should: 'leave it to an ordinary navigation',
+      actual: rewindTab(onPricing, ops.path, 'back'),
+      expected: null,
+    });
+  });
+});
+
+describe('popDirection()', () => {
+  test('from history positions', () => {
+    assert({
+      given: 'a lower position, a higher one, the same one and an unknown one',
+      should: 'say back, forward, or nothing',
+      actual: [popDirection(4, 2), popDirection(2, 3), popDirection(2, 2), popDirection(null, 2)],
+      expected: ['back', 'forward', null, null],
+    });
+  });
+});
+
+describe('restoreActive()', () => {
+  const strip = { tabs: [plan, pricing, newTab('dup', pricing.path)], active: 'dup' };
+
+  test('the stored active tab shows this page', () => {
+    assert({
+      given: 'two tabs on the same page and the second one stored as active',
+      should: 'keep the second one active (its own history)',
+      actual: restoreActive(strip, pricing.path).active,
+      expected: 'dup',
+    });
+  });
+
+  test('another tab shows this page', () => {
+    assert({
+      given: 'a reload on a page the stored active tab does not show',
+      should: 'make the tab that shows it active',
+      actual: restoreActive(strip, plan.path).active,
+      expected: plan.id,
+    });
+  });
+
+  test('no tab shows this page, or it is not a tab', () => {
+    assert({
+      given: 'a page no tab shows, and a section index',
+      should: 'keep the stored active tab',
+      actual: [restoreActive(strip, '/d1/files/other').active, restoreActive(strip, null).active],
+      expected: ['dup', 'dup'],
+    });
+  });
+});
+
 describe('closeTab()', () => {
   test('closing the active tab moves to its right neighbour', () => {
     assert({
@@ -253,8 +331,8 @@ describe('parseTabs()', () => {
     assert({
       given: 'a stored list with a bad entry',
       should: 'keep only well-formed imago paths, with their history',
-      actual: parseTabs(JSON.stringify([visited, { path: 'https://evil' }, { nope: 1 }, ops])),
-      expected: [visited, ops],
+      actual: parseTabs(serializeTabs({ tabs: [visited, { ...ops, path: 'https://evil' }, ops], active: ops.id })),
+      expected: { tabs: [visited, ops], active: ops.id },
     });
   });
 
@@ -263,7 +341,7 @@ describe('parseTabs()', () => {
       given: 'the old stored shape, path only, and a repeated id',
       should: 'give each tab a unique id and an empty history',
       actual: parseTabs(JSON.stringify([{ path: plan.path }, { id: 'x', path: pricing.path }, { id: 'x', path: ops.path }])),
-      expected: [newTab('stored-0', plan.path), newTab('x', pricing.path), newTab('stored-2', ops.path)],
+      expected: { tabs: [newTab('stored-0', plan.path), newTab('x', pricing.path), newTab('stored-2', ops.path)], active: null },
     });
   });
 
@@ -271,8 +349,8 @@ describe('parseTabs()', () => {
     assert({
       given: 'nothing, and text that is not JSON',
       should: 'start with no tabs',
-      actual: [parseTabs(null), parseTabs('{')],
-      expected: [[], []],
+      actual: [parseTabs(null), parseTabs('{'), parseTabs(JSON.stringify({ tabs: [plan], active: 'gone' }))],
+      expected: [{ tabs: [], active: null }, { tabs: [], active: null }, { tabs: [plan], active: null }],
     });
   });
 });

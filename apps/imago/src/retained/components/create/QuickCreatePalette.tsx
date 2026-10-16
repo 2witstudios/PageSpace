@@ -232,9 +232,15 @@ export default function QuickCreatePalette() {
           parentId: effectiveParentId,
           title: name.trim() || undefined,
         });
-        closeQuickCreate();
-        await swrMutate(`/api/drives/${driveId}/pages`);
-        await navigateToPage(page.id, driveId);
+        // Close only once the navigation is under way (the tab bar's New tab
+        // request is withdrawn by the next press after the palette closes),
+        // and close even if that fails: the page exists either way.
+        try {
+          await swrMutate(`/api/drives/${driveId}/pages`);
+          await navigateToPage(page.id, driveId);
+        } finally {
+          closeQuickCreate();
+        }
       } catch (error) {
         toast.error((error as Error).message);
       } finally {
@@ -257,9 +263,12 @@ export default function QuickCreatePalette() {
         ...(contentMode && { contentMode }),
       });
 
-      closeQuickCreate();
-      await swrMutate(`/api/drives/${driveId}/pages`);
-      await navigateToPage(newPage.id, driveId);
+      try {
+        await swrMutate(`/api/drives/${driveId}/pages`);
+        await navigateToPage(newPage.id, driveId);
+      } finally {
+        closeQuickCreate();
+      }
     } catch (error) {
       toast.error((error as Error).message ?? 'Failed to create page');
     } finally {

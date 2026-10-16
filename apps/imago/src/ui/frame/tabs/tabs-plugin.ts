@@ -1,5 +1,16 @@
 import type { UiSlice, UiState } from '../../store/state';
-import { activeTabOf, navigateTabs, openTabInBackground, parseTabs, rewindTab, stepTab, type Tab, type TabStrip } from './tabs-model';
+import {
+  activeTabOf,
+  navigateTabs,
+  openTabInBackground,
+  parseTabs,
+  restoreActive,
+  rewindTab,
+  stepTab,
+  type PopDirection,
+  type Tab,
+  type TabStrip,
+} from './tabs-model';
 
 type TabsResources = {
   /** The open tabs of the drive named by `tabsKey` (DEC-C6: client state, per drive). */
@@ -37,6 +48,8 @@ export type SyncTabs = {
   readonly id: string;
   /** The browser's own Back or Forward brought the viewer here. */
   readonly pop: boolean;
+  /** Which way it went, when the browser can say. */
+  readonly direction?: PopDirection;
 };
 
 /**
@@ -49,12 +62,12 @@ export type SyncTabs = {
 export const tabsPlugin = {
   resources: (): TabsResources => ({ openTabs: [], activeTab: null, newTabPending: false, tabsKey: null }),
   transactions: {
-    syncTabs: (state: UiState, { key, stored, path, id, pop }: SyncTabs): UiState => {
+    syncTabs: (state: UiState, { key, stored, path, id, pop, direction = null }: SyncTabs): UiState => {
       const { resources } = state;
       const loaded = resources.tabsKey === key;
-      const base: TabStrip = loaded ? stripOf(state) : { tabs: parseTabs(stored), active: null };
+      const base: TabStrip = loaded ? stripOf(state) : restoreActive(parseTabs(stored), path);
       const active = activeTabOf(base);
-      const rewound = path !== null && pop && active !== null ? rewindTab(active, path) : null;
+      const rewound = path !== null && pop && active !== null ? rewindTab(active, path, direction) : null;
       const strip =
         path === null || (rewound !== null && rewound === active)
           ? base

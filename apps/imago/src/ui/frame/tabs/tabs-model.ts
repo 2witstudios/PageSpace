@@ -76,15 +76,27 @@ export const stepTab = (tab: Tab, direction: 'back' | 'forward'): Tab | null => 
   return next === undefined ? null : { ...tab, path: next, back: [...tab.back, tab.path].slice(-TAB_HISTORY_LIMIT), forward: rest };
 };
 
+/** Which way the browser's own Back or Forward went; null when the browser cannot say. */
+export type PopDirection = 'back' | 'forward' | null;
+
+/** The direction between two history positions (the Navigation API's entry index), if known. */
+export const popDirection = (from: number | null, to: number | null): PopDirection =>
+  from === null || to === null || from === to ? null : to < from ? 'back' : 'forward';
+
 /**
  * The browser's own Back or Forward (popstate) landed on `path`: move the tab to that place in
- * its history, the nearest match either way, rather than adding a step. Null when the place is
- * not in the tab's history.
+ * its history rather than adding a step. The direction picks the side to look in, so a page
+ * visited twice resolves to the right visit; without one, the nearer match wins (Back on a tie).
+ * Null when the place is not in the tab's history that way.
  */
-export const rewindTab = (tab: Tab, path: string): Tab | null => {
+export const rewindTab = (tab: Tab, path: string, direction: PopDirection = null): Tab | null => {
   if (path === tab.path) return tab;
-  const back = tab.back.lastIndexOf(path);
-  if (back >= 0) {
+  const back = direction === 'forward' ? -1 : tab.back.lastIndexOf(path);
+  const forward = direction === 'back' ? -1 : tab.forward.indexOf(path);
+  const backSteps = back < 0 ? Infinity : tab.back.length - back;
+  const forwardSteps = forward < 0 ? Infinity : forward + 1;
+  if (backSteps === Infinity && forwardSteps === Infinity) return null;
+  if (backSteps <= forwardSteps) {
     return {
       ...tab,
       path,
@@ -92,16 +104,23 @@ export const rewindTab = (tab: Tab, path: string): Tab | null => {
       forward: [...tab.back.slice(back + 1), tab.path, ...tab.forward].slice(0, TAB_HISTORY_LIMIT),
     };
   }
-  const forward = tab.forward.indexOf(path);
-  if (forward >= 0) {
-    return {
-      ...tab,
-      path,
-      back: [...tab.back, tab.path, ...tab.forward.slice(0, forward)].slice(-TAB_HISTORY_LIMIT),
-      forward: tab.forward.slice(forward + 1),
-    };
-  }
-  return null;
+  return {
+    ...tab,
+    path,
+    back: [...tab.back, tab.path, ...tab.forward.slice(0, forward)].slice(-TAB_HISTORY_LIMIT),
+    forward: tab.forward.slice(forward + 1),
+  };
+};
+
+/**
+ * Which tab is active when a drive's tabs are loaded: the stored active tab if it shows this
+ * page, else a tab that does, else the stored active tab (the page then loads into it).
+ */
+export const restoreActive = (strip: TabStrip, path: string | null): TabStrip => {
+  const stored = activeTabOf(strip);
+  if (path === null || stored?.path === path) return strip;
+  const showing = strip.tabs.find((tab) => tab.path === path);
+  return { tabs: strip.tabs, active: showing?.id ?? stored?.id ?? null };
 };
 
 /**
@@ -134,28 +153,40 @@ const isImagoPath = (value: unknown): value is string =>
 
 const pathsOf = (value: unknown): readonly string[] => (Array.isArray(value) ? value.filter(isImagoPath) : []);
 
+const parseTabList = (value: unknown): readonly Tab[] => {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry: unknown, index): Tab[] => {
+    if (typeof entry !== 'object' || entry === null) return [];
+    const { id, path, back, forward } = entry as { id?: unknown; path?: unknown; back?: unknown; forward?: unknown };
+    if (!isImagoPath(path)) return [];
+    const tabId = typeof id === 'string' && id !== '' && !seen.has(id) ? id : `stored-${index}`;
+    seen.add(tabId);
+    return [{ id: tabId, path, back: pathsOf(back).slice(-TAB_HISTORY_LIMIT), forward: pathsOf(forward).slice(0, TAB_HISTORY_LIMIT) }];
+  });
+};
+
 /**
- * Stored tabs, as written by the tab bar: anything that is not an imago path is dropped. Tabs
- * stored before they had ids or history get them here.
+ * Stored tabs, as written by the tab bar ({ tabs, active }): anything that is not an imago path
+ * is dropped. Tabs stored before they had ids, history or a saved active tab (a bare list) get
+ * them here.
  */
-export const parseTabs = (stored: string | null): readonly Tab[] => {
-  if (stored === null) return [];
+export const parseTabs = (stored: string | null): TabStrip => {
+  if (stored === null) return { tabs: [], active: null };
   try {
     const value: unknown = JSON.parse(stored);
-    if (!Array.isArray(value)) return [];
-    const seen = new Set<string>();
-    return value.flatMap((entry: unknown, index): Tab[] => {
-      if (typeof entry !== 'object' || entry === null) return [];
-      const { id, path, back, forward } = entry as { id?: unknown; path?: unknown; back?: unknown; forward?: unknown };
-      if (!isImagoPath(path)) return [];
-      const tabId = typeof id === 'string' && id !== '' && !seen.has(id) ? id : `stored-${index}`;
-      seen.add(tabId);
-      return [{ id: tabId, path, back: pathsOf(back).slice(-TAB_HISTORY_LIMIT), forward: pathsOf(forward).slice(0, TAB_HISTORY_LIMIT) }];
-    });
+    if (Array.isArray(value)) return { tabs: parseTabList(value), active: null };
+    if (typeof value !== 'object' || value === null) return { tabs: [], active: null };
+    const { tabs, active } = value as { tabs?: unknown; active?: unknown };
+    const list = parseTabList(tabs);
+    return { tabs: list, active: typeof active === 'string' && list.some((tab) => tab.id === active) ? active : null };
   } catch {
-    return [];
+    return { tabs: [], active: null };
   }
 };
+
+/** What the tab bar stores per drive. */
+export const serializeTabs = (strip: TabStrip): string => JSON.stringify({ tabs: strip.tabs, active: strip.active });
 
 /** imago's own storage key per drive, never classic's `tabs-storage` (DEC-C6). */
 export const tabsStorageKey = (driveKey: string): string => `imago:tabs:${driveKey}`;
