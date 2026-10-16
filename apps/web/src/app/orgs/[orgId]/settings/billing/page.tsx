@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useOrgAdminRead, useOrgSeats, useOrgWalletRealtime } from '@/hooks/useOrgs';
 import { OrgBadge } from '@/components/orgs/OrgBadge';
+import { OrgStorageCard } from '@/components/orgs/OrgStorageCard';
 import { goToOrgBillingPortal } from '@/components/orgs/OrgBillingBanner';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
 import { isOrgKey, orgReadKeys, setOrgPoolPaused, setOrgSeatAutoAdd, type OrgPoolSplit } from '@/lib/orgs/org-api';
@@ -137,6 +138,7 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
             </div>
           </CardContent>
         </Card>
+        <OrgStorageCard orgId={orgId} role={role} />
       </div>
 
       <Card id="pool" className="mb-4">

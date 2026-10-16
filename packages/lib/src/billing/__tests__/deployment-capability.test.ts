@@ -15,7 +15,7 @@ describe('deployment capability independent of personal billing', () => {
     expect(storage.tier).toBe('business');
     expect(storage.quotaBytes).toBe(50 * 1024 ** 3);
     expect(storage.maxConcurrentUploads).toBe(10);
-    expect(storage.maxFileCount).toBe(5000);
+    expect(storage.maxFileCount).toBe(0);
     for (const tier of TIERS) expect(deploymentCapabilityTier(tier, mode)).toBe('business');
   });
 

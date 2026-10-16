@@ -4,10 +4,18 @@ vi.mock('../../stripe-config', () => ({
   stripeConfig: {
     priceIds: { pro: 'price_pro' },
     orgPriceIds: { businessBase: 'price_org_business', extraSeat: 'price_extra_seat' },
+    storageAddonPriceId: 'price_storage',
   },
 }));
 
-import { getTierFromPrice, getPersonalTierFromPrice, tierFromInvoiceLines } from '../price-config';
+import {
+  getTierFromPrice,
+  getPersonalTierFromPrice,
+  tierFromInvoiceLines,
+  planPaidCentsFromInvoiceLines,
+  personalSubscriptionItems,
+  isStorageAddonPrice,
+} from '../price-config';
 
 const subscriptionLine = (price: string | { id: string } | null) => ({
   parent: { subscription_item_details: { subscription_item: 'si_personal' } },
@@ -63,5 +71,55 @@ describe('personal invoice identity across subscription lines', () => {
     expect(tierFromInvoiceLines([subscriptionLine('price_unknown')])).toBe('free');
     expect(tierFromInvoiceLines([subscriptionLine(null)])).toBe('free');
     expect(tierFromInvoiceLines([])).toBe('free');
+  });
+});
+
+describe('storage add-on lines', () => {
+  const line = (price: string, amount: number) => ({ ...subscriptionLine(price), amount });
+
+  it('given a Pro invoice with storage lines, should still resolve Pro', () => {
+    expect(tierFromInvoiceLines([line('price_pro', 1500), line('price_storage', 1000)])).toBe('pro');
+  });
+
+  it('given only storage lines, should grant no plan', () => {
+    expect(tierFromInvoiceLines([line('price_storage', 1000)])).toBe('free');
+  });
+
+  it('given the storage price is the only one recognized as storage, should not treat a stranger as storage', () => {
+    expect(isStorageAddonPrice('price_storage')).toBe(true);
+    expect(isStorageAddonPrice('price_other')).toBe(false);
+    expect(isStorageAddonPrice('')).toBe(false);
+  });
+
+  it('given an invoice with no storage line, should leave the grant sizing alone', () => {
+    expect(planPaidCentsFromInvoiceLines([line('price_pro', 1500)], 1500)).toBeUndefined();
+  });
+
+  it('given Pro + 3 blocks, should size the grant from the Pro share of what was paid only', () => {
+    expect(planPaidCentsFromInvoiceLines([line('price_pro', 1500), line('price_storage', 1500)], 3000)).toBe(1500);
+    // Tax on top is shared proportionally.
+    expect(planPaidCentsFromInvoiceLines([line('price_pro', 1500), line('price_storage', 1500)], 3300)).toBe(1650);
+  });
+
+  it('given a storage-only proration invoice, should size no grant', () => {
+    expect(planPaidCentsFromInvoiceLines([line('price_storage', 834)], 834)).toBe(0);
+  });
+});
+
+describe('personal subscription item shape', () => {
+  const item = (id: string, priceId: string, quantity = 1) => ({ id, priceId, quantity });
+
+  it('given Pro alone or Pro + storage, should find the plan and storage items', () => {
+    expect(personalSubscriptionItems([item('a', 'price_pro')], false)).toEqual({ planItem: item('a', 'price_pro'), storageItem: null });
+    expect(personalSubscriptionItems([item('b', 'price_storage', 3), item('a', 'price_pro')], false))
+      .toEqual({ planItem: item('a', 'price_pro'), storageItem: item('b', 'price_storage', 3) });
+  });
+
+  it('given a stranger item, two plan items, two storage items or a truncated list, should refuse', () => {
+    expect(personalSubscriptionItems([item('a', 'price_pro'), item('x', 'price_other')], false)).toBeNull();
+    expect(personalSubscriptionItems([item('a', 'price_pro'), item('b', 'price_pro')], false)).toBeNull();
+    expect(personalSubscriptionItems([item('a', 'price_pro'), item('b', 'price_storage'), item('c', 'price_storage')], false)).toBeNull();
+    expect(personalSubscriptionItems([item('a', 'price_pro')], true)).toBeNull();
+    expect(personalSubscriptionItems([item('b', 'price_storage')], false)).toBeNull();
   });
 });

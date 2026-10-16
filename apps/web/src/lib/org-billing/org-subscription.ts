@@ -693,7 +693,11 @@ export function defaultOrgBillingDeps(): OrgBillingDeps {
   // The app client is a lazy proxy: no key is read until the first real Stripe call.
   return {
     stripe: stripeOrgBilling(appStripe),
-    prices: () => ({ basePriceId: stripeConfig.orgPriceIds.businessBase, seatPriceId: stripeConfig.orgPriceIds.extraSeat }),
+    prices: () => ({
+      basePriceId: stripeConfig.orgPriceIds.businessBase,
+      seatPriceId: stripeConfig.orgPriceIds.extraSeat,
+      storagePriceId: stripeConfig.storageAddonPriceId,
+    }),
     countSeats: countOrgSeats,
   };
 }

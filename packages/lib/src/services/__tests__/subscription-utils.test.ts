@@ -32,8 +32,8 @@ describe('subscription-utils', () => {
       expect(getStorageQuotaFromSubscription('business')).toBe(50 * 1024 * 1024 * 1024);
     });
 
-    it('should return 2GB for pro', () => {
-      expect(getStorageQuotaFromSubscription('pro')).toBe(2 * 1024 * 1024 * 1024);
+    it('should return 10GB for pro', () => {
+      expect(getStorageQuotaFromSubscription('pro')).toBe(10 * 1024 * 1024 * 1024);
     });
 
     it('should return 500MB for free', () => {
@@ -61,13 +61,13 @@ describe('subscription-utils', () => {
       const config = getStorageConfigFromSubscription('business');
       expect(config.tier).toBe('business');
       expect(config.maxFileSize).toBe(1024 * 1024 * 1024);
-      expect(config.maxFileCount).toBe(5000);
+      expect(config.maxFileCount).toBe(0);
     });
 
     it('should return pro config', () => {
       const config = getStorageConfigFromSubscription('pro');
       expect(config.tier).toBe('pro');
-      expect(config.quotaBytes).toBe(2 * 1024 * 1024 * 1024);
+      expect(config.quotaBytes).toBe(10 * 1024 * 1024 * 1024);
     });
 
     it('should return free config', () => {

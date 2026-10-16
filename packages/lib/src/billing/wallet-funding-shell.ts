@@ -112,6 +112,8 @@ export interface OrgPoolRefillOptions {
    */
   basePriceId?: string;
   seatPriceId?: string;
+  /** The storage add-on price: its lines are recognized (not logged as strangers) and never refill. */
+  storagePriceId?: string;
 }
 
 /**
@@ -163,7 +165,7 @@ export async function applyOrgPoolRefill(invoice: OrgInvoice, opts: OrgPoolRefil
   // invoice item (or any line on an unrecognized price) is excluded and logged with its
   // price id and amount, so a misconfiguration is visible instead of silently funding the pool.
   const { input: grantInput, unrecognized } = orgInvoiceFundingInput(invoice, {
-    prices: { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId },
+    prices: { basePriceId: opts.basePriceId, seatPriceId: opts.seatPriceId, storagePriceId: opts.storagePriceId },
     storedSubscriptionId: stored?.stripeSubscriptionId ?? null,
     giftedExtraSeats: stored?.giftedExtraSeats ?? null,
   });

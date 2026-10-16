@@ -2430,6 +2430,13 @@
       "when": 1791906770000,
       "tag": "0377_wallet_leg_included_cents",
       "breakpoints": true
+    },
+    {
+      "idx": 347,
+      "version": "7",
+      "when": 1792110230314,
+      "tag": "0378_storage_addon",
+      "breakpoints": true
     }
   ]
 }

@@ -49,6 +49,8 @@ const SESSION_ONLY: Record<string, { cite: Citation; why: string }> = {
   'POST /api/orgs/:param/billing/portal': { cite: 'billing', why: 'a Stripe billing-portal session' },
   'GET /api/orgs/:param/billing/seats': { cite: 'billing', why: 'the Stripe seat quantity' },
   'PATCH /api/orgs/:param/billing/seats': { cite: 'billing', why: 'changes the Stripe seat quantity' },
+  'GET /api/orgs/:param/billing/storage': { cite: 'billing', why: 'the Stripe storage add-on quantity' },
+  'PATCH /api/orgs/:param/billing/storage': { cite: 'billing', why: 'changes the Stripe storage add-on quantity (charges the org card)' },
   'POST /api/orgs/:param/billing/subscription': { cite: 'billing', why: 'starts or reactivates the Stripe subscription' },
   'POST /api/drives/:param/wallet': { cite: 'D-OW-26', why: 'creates (funds) a drive wallet' },
   'PATCH /api/drives/:param/wallet': { cite: 'D-OW-26', why: 'allocates, pauses or changes a drive wallet' },

@@ -694,6 +694,11 @@
       "import": "./dist/billing/subscription-tiers.js",
       "require": "./dist/billing/subscription-tiers.js"
     },
+    "./billing/storage-addon": {
+      "types": "./dist/billing/storage-addon.d.ts",
+      "import": "./dist/billing/storage-addon.js",
+      "require": "./dist/billing/storage-addon.js"
+    },
     "./billing/subscription-tier-sync": {
       "types": "./dist/billing/subscription-tier-sync.d.ts",
       "import": "./dist/billing/subscription-tier-sync.js",

@@ -54,6 +54,11 @@ export const ORG_CUSTOMER_KIND = 'organization';
 export interface OrgBusinessPrices {
   basePriceId: string;
   seatPriceId: string;
+  /**
+   * The storage add-on price: an optional third item the org may add after it is
+   * provisioned. Empty or absent means no storage item is recognized.
+   */
+  storagePriceId?: string;
 }
 
 /** A-8: the extra-seat item's quantity, from the one client-safe plan-quote module. */
@@ -243,23 +248,35 @@ export function orgPaymentStep(input: { subscriptionStatus: string; latestInvoic
 export interface OrgSubscriptionItemLinkage {
   baseItemId: string;
   seatItem: { id: string; quantity: number };
+  /** The storage add-on item, when the org has bought storage. */
+  storageItem?: { id: string; quantity: number } | null;
 }
 
 /**
  * The verified item identity of the org Business plan PageSpace creates: exactly the base
- * price once and the extra-seat price once, nothing else, every item on one page. Anything
- * else (a missing seat item, an extra price, a truncated item list) is null: never mirrored as
- * the plan, never repaired in place ([D-OW-44]).
+ * price once and the extra-seat price once, plus at most one storage add-on item, nothing
+ * else, every item on one page. Anything else (a missing seat item, a stranger price, a
+ * truncated item list) is null: never mirrored as the plan, never repaired in place ([D-OW-44]).
  */
 export function orgSubscriptionItems(sub: Pick<OrgSubscriptionCandidate, 'items' | 'itemsHasMore'>, prices: OrgBusinessPrices): OrgSubscriptionItemLinkage | null {
   if (sub.itemsHasMore || !prices.basePriceId || !prices.seatPriceId || prices.basePriceId === prices.seatPriceId) return null;
+  const storagePriceId = prices.storagePriceId && prices.storagePriceId !== prices.basePriceId && prices.storagePriceId !== prices.seatPriceId
+    ? prices.storagePriceId
+    : null;
   const bases = sub.items.filter(i => i.priceId === prices.basePriceId);
   const seats = sub.items.filter(i => i.priceId === prices.seatPriceId);
-  if (bases.length !== 1 || seats.length !== 1 || sub.items.length !== 2) return null;
+  const storages = storagePriceId ? sub.items.filter(i => i.priceId === storagePriceId) : [];
+  if (bases.length !== 1 || seats.length !== 1 || storages.length > 1 || sub.items.length !== 2 + storages.length) return null;
   const [base] = bases;
   const [seat] = seats;
   if (base.quantity !== 1 || !base.id || !seat.id || seat.id === base.id || !Number.isSafeInteger(seat.quantity) || seat.quantity < 0) return null;
-  return { baseItemId: base.id, seatItem: { id: seat.id, quantity: seat.quantity } };
+  const [storage] = storages;
+  if (storage && (!storage.id || storage.id === base.id || storage.id === seat.id || !Number.isSafeInteger(storage.quantity) || storage.quantity < 0)) return null;
+  return {
+    baseItemId: base.id,
+    seatItem: { id: seat.id, quantity: seat.quantity },
+    ...(storage ? { storageItem: { id: storage.id, quantity: storage.quantity } } : {}),
+  };
 }
 
 /** A Stripe subscription as the reactivation decision reads it: what Stripe says NOW. */

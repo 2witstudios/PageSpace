@@ -173,6 +173,10 @@ export const revokeOrgInvitation = (orgId: string, invitationId: string) =>
 
 export const setOrgSeatAutoAdd = (orgId: string, autoAdd: boolean) => patch<{ autoAdd: boolean }>(orgKeys.seats(orgId), { autoAdd });
 
+/** Owner only: the org's storage blocks. An increase charges now; a decrease applies at period end. */
+export const setOrgStorageBlocks = (orgId: string, blocks: number) =>
+  patch<{ blocks: number; entitledBlocks: number; graceUntil: string | null; charged: boolean }>(orgReadKeys.storage(orgId), { blocks });
+
 /** WAL-7: the org pool's kill switch (Owner and Admins). A paused pool funds no seat and no drive wallet. */
 export const setOrgPoolPaused = (orgId: string, paused: boolean) =>
   patch<{ walletId: string; status: 'active' | 'paused' | 'over' }>(`${orgKeys.detail(orgId)}/pool`, { paused });
@@ -214,6 +218,7 @@ export const orgReadKeys = {
   pool: (orgId: string) => `/api/orgs/${orgId}/pool`,
   trashedDrives: (orgId: string) => `/api/orgs/${orgId}/drives/trashed`,
   invoices: (orgId: string) => `/api/orgs/${orgId}/billing/invoices`,
+  storage: (orgId: string) => `/api/orgs/${orgId}/billing/storage`,
 } as const;
 
 export const changeOrgMemberRole = (orgId: string, userId: string, role: 'ADMIN' | 'MEMBER') =>

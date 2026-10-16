@@ -13,6 +13,8 @@ vi.mock('../storage-repository', () => ({
     countFiles: vi.fn(),
     findDriveBillingFacts: vi.fn(),
     sumOrgFileBytes: vi.fn(),
+    findUserStorageAddon: vi.fn().mockResolvedValue(undefined),
+    findOrgStorageAddon: vi.fn().mockResolvedValue(undefined),
     findOrgDriveIds: vi.fn(),
     updateStorageInTx: vi.fn(),
     insertStorageEvent: vi.fn(),
@@ -72,6 +74,7 @@ import {
   updateStorageUsage,
   calculateActualStorageUsage,
   getOrgFileCount,
+  getOrgStorageQuota,
   getUserFileCount,
   reconcileStorageUsage,
   userReferencesContentHash,
@@ -140,6 +143,53 @@ describe('storage-limits', () => {
       });
       const result = await getUserStorageQuota('user-1');
       expect(result).toMatchObject({ tier: 'free', usedBytes: 100, quotaBytes: 500 * 1024 * 1024 });
+    });
+
+    describe('storage add-on', () => {
+      const GB = 1024 * 1024 * 1024;
+      const future = new Date(Date.now() + 86_400_000);
+      const past = new Date(Date.now() - 86_400_000);
+
+      it('given a Pro user with 2 blocks, should add 100GB to the quota', async () => {
+        vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'pro' });
+        vi.mocked(storageRepository.findUserStorageAddon).mockResolvedValueOnce({ blocks: 2, graceBlocks: 0, graceUntil: null });
+        const result = await getUserStorageQuota('user-1');
+        expect(result).toMatchObject({ tier: 'pro', quotaBytes: 2 * GB + 100 * GB, addonBlocks: 2, addonBytes: 100 * GB });
+      });
+
+      it('given a decrease still paid through period end, should keep the paid blocks until the grace expires', async () => {
+        vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'pro' });
+        vi.mocked(storageRepository.findUserStorageAddon).mockResolvedValueOnce({ blocks: 1, graceBlocks: 3, graceUntil: future });
+        expect((await getUserStorageQuota('user-1'))!.addonBlocks).toBe(3);
+        vi.mocked(storageRepository.findUserStorageAddon).mockResolvedValueOnce({ blocks: 1, graceBlocks: 3, graceUntil: past });
+        expect((await getUserStorageQuota('user-1'))!.addonBlocks).toBe(1);
+      });
+
+      it('given a Free user, should never read or count add-on blocks', async () => {
+        vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'free' });
+        vi.mocked(storageRepository.findUserStorageAddon).mockClear();
+        const result = await getUserStorageQuota('user-1');
+        expect(result).toMatchObject({ quotaBytes: 500 * 1024 * 1024, addonBytes: 0 });
+        expect(storageRepository.findUserStorageAddon).not.toHaveBeenCalled();
+      });
+
+      it('given a deployment without billing, should not count add-on blocks', async () => {
+        vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+        try {
+          vi.mocked(storageRepository.findUserForStorage).mockResolvedValue({ id: 'user-1', storageUsedBytes: 0, subscriptionTier: 'pro' });
+          vi.mocked(storageRepository.findUserStorageAddon).mockResolvedValueOnce({ blocks: 2, graceBlocks: 0, graceUntil: null });
+          expect((await getUserStorageQuota('user-1'))!.addonBytes).toBe(0);
+        } finally {
+          vi.unstubAllEnvs();
+        }
+      });
+
+      it('given an org with blocks, should add them to the Business quota', async () => {
+        vi.mocked(storageRepository.sumOrgFileBytes).mockResolvedValueOnce(10 * GB);
+        vi.mocked(storageRepository.findOrgStorageAddon).mockResolvedValueOnce({ blocks: 4, graceBlocks: 0, graceUntil: null });
+        const quota = await getOrgStorageQuota('org-1');
+        expect(quota).toMatchObject({ quotaBytes: 250 * GB, usedBytes: 10 * GB, availableBytes: 240 * GB, addonBlocks: 4 });
+      });
     });
 
     it('getUserStorageQuota_withNullSubscriptionTier_defaultsToFree', async () => {

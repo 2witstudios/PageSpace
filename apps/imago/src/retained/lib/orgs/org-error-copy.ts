@@ -103,6 +103,8 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   billing_disabled: 'Credits cannot be added on this deployment.',
   not_a_consumer: 'That person cannot spend in this drive.',
   not_org_member: 'That person is not a member of this organization.',
+  storage_addon_unavailable: 'Extra storage is not available for this organization. Contact support if you need more space.',
+  payment_declined: 'The payment was declined. Update the payment method and try again. Nothing was charged.',
 };
 
 /** The registered `code` on an API refusal, or null for anything else. */

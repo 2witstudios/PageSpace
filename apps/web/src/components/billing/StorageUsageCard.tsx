@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -8,10 +9,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { HardDrive, RefreshCw, AlertTriangle, TrendingUp, Clock, Database } from 'lucide-react';
+import { HardDrive, RefreshCw, AlertTriangle, TrendingUp, Clock, Database, Plus } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
-import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import { StorageAddonDialog, type StorageAddonState } from './StorageAddonDialog';
 
 interface StorageInfo {
   quota: {
@@ -24,6 +27,7 @@ interface StorageInfo {
     formattedUsed: string;
     formattedQuota: string;
     formattedAvailable: string;
+    addonBytes?: number;
   };
   tierInfo: {
     name: string;
@@ -36,6 +40,12 @@ interface StorageInfo {
   largestFiles: Array<{ id: string; title: string; mimeType: string; formattedSize: string }>;
   recentFiles: Array<{ id: string; title: string; mimeType: string; createdAt: string; formattedSize: string }>;
   storageByDrive: Array<{ driveId: string; driveName: string; fileCount: number; totalSize: number; formattedSize: string }>;
+}
+
+/** GET /api/stripe/storage-addon */
+interface PersonalStorageAddon extends StorageAddonState {
+  available: boolean;
+  tier: string;
 }
 
 const formatBytes = (bytes: number): string => {
@@ -56,6 +66,27 @@ export function StorageUsageCard() {
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [reconciling, setReconciling] = useState(false);
+  const [addon, setAddon] = useState<PersonalStorageAddon | null>(null);
+  const [addonOpen, setAddonOpen] = useState(false);
+  const { showBilling } = useBillingVisibility();
+
+  const fetchAddon = async () => {
+    try {
+      const response = await fetchWithAuth('/api/stripe/storage-addon');
+      if (response.ok) setAddon(await response.json());
+    } catch {
+      // The add-on is optional chrome: the storage view works without it.
+    }
+  };
+
+  const changeAddon = async (blocks: number) => {
+    const result = await post<{ blocks: number; entitledBlocks: number; graceUntil: string | null; charged: boolean }>(
+      '/api/stripe/storage-addon',
+      { blocks },
+    );
+    toast.success(result.charged ? 'Storage added' : 'Storage updated');
+    await Promise.all([fetchStorageInfo(), fetchAddon()]);
+  };
 
   const fetchStorageInfo = async (reconcile = false) => {
     try {
@@ -77,6 +108,10 @@ export function StorageUsageCard() {
   useEffect(() => {
     fetchStorageInfo();
   }, []);
+
+  useEffect(() => {
+    if (showBilling) fetchAddon();
+  }, [showBilling]);
 
   const handleReconcile = () => {
     setReconciling(true);
@@ -120,6 +155,9 @@ export function StorageUsageCard() {
   }
 
   const { quota, tierInfo, fileTypeBreakdown, largestFiles, recentFiles, storageByDrive, totalFiles } = storageInfo;
+  const extraBytes = quota.addonBytes ?? 0;
+  const canBuyStorage = showBilling && addon?.available === true;
+  const canUpgrade = showBilling && quota.tier === 'free';
 
   return (
     <Card>
@@ -133,12 +171,33 @@ export function StorageUsageCard() {
             <CardDescription>
               {quota.formattedUsed} of {quota.formattedQuota} used
               <Badge variant="secondary" className="ml-2 text-xs">{tierInfo.name}</Badge>
+              {extraBytes > 0 && (
+                <Badge variant="outline" className="ml-2 text-xs">+{formatBytes(extraBytes)} extra</Badge>
+              )}
             </CardDescription>
+            {addon?.graceUntil && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Your extra storage drops to {formatBytes(addon.blocks * addon.blockBytes)} on {new Date(addon.graceUntil).toLocaleDateString()}.
+              </p>
+            )}
           </div>
-          <Button onClick={handleReconcile} disabled={reconciling} variant="outline" size="sm">
-            <RefreshCw className={`h-4 w-4 mr-2 ${reconciling ? 'animate-spin' : ''}`} />
-            Reconcile
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {canBuyStorage && (
+              <Button onClick={() => setAddonOpen(true)} size="sm">
+                <Plus className="h-4 w-4 mr-2" />
+                {addon && addon.blocks > 0 ? 'Change storage' : 'Add storage'}
+              </Button>
+            )}
+            {canUpgrade && (
+              <Button asChild size="sm">
+                <Link href="/settings/plan">Upgrade for more storage</Link>
+              </Button>
+            )}
+            <Button onClick={handleReconcile} disabled={reconciling} variant="outline" size="sm">
+              <RefreshCw className={`h-4 w-4 mr-2 ${reconciling ? 'animate-spin' : ''}`} />
+              Reconcile
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -150,7 +209,11 @@ export function StorageUsageCard() {
             </AlertTitle>
             <AlertDescription>
               You have used {Math.round(quota.utilizationPercent)}% of your storage quota.
-              {quota.warningLevel === 'critical' && ' Consider deleting some files to free up space.'}
+              {quota.warningLevel === 'critical' && (canBuyStorage
+                ? ' Delete some files or add more storage to keep uploading.'
+                : canUpgrade
+                  ? ' Delete some files or upgrade to Pro for more storage.'
+                  : ' Consider deleting some files to free up space.')}
             </AlertDescription>
           </Alert>
         )}
@@ -239,6 +302,16 @@ export function StorageUsageCard() {
           </Section>
         </div>
       </CardContent>
+      {addon && canBuyStorage && (
+        <StorageAddonDialog
+          open={addonOpen}
+          onOpenChange={setAddonOpen}
+          addon={addon}
+          baseQuotaBytes={quota.quotaBytes - extraBytes}
+          payerLabel="Your"
+          onSubmit={changeAddon}
+        />
+      )}
     </Card>
   );
 }

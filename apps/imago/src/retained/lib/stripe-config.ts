@@ -30,6 +30,8 @@ interface StripeConfig {
     businessBase: string;
     extraSeat: string;
   };
+  /** The storage add-on price (mirrors apps/web stripe-config); empty = not sold yet. */
+  storageAddonPriceId: string;
 }
 
 const config: Record<'test' | 'live', StripeConfig> = {
@@ -46,6 +48,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQXAvPRnBcvXFsoeKQE6H0u', // org base (D-OW-20)
       extraSeat: 'price_1UQXAwPRnBcvXFso1TqKRFSM',    // per extra seat (D-OW-20)
     },
+    storageAddonPriceId: '',
   },
   live: {
     portalConfigurationIds: {
@@ -61,6 +64,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
       extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
     },
+    storageAddonPriceId: '',
   },
 };
 

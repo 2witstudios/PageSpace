@@ -5,6 +5,9 @@ import { reserveUploadSlot } from './pending-uploads';
 import { getAdvisoryLockPool } from '@pagespace/db/db';
 import { throwIfLockLost, withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { payerForDrive, type BillingPayer, type DriveBillingFacts } from '../billing/sandbox-payer';
+import { entitledStorageBlocks, storageAddonBytes } from '../billing/storage-addon';
+import { isBillingEnabled } from '../deployment-mode';
+import type { StorageAddonRecord } from './storage-repository';
 
 // Re-exported for existing consumers; the canonical table lives in subscription-utils.
 export { STORAGE_TIERS };
@@ -17,6 +20,10 @@ export interface StorageQuota {
   utilizationPercent: number;
   tier: SubscriptionTier;
   warningLevel: 'none' | 'warning' | 'critical';
+  /** Bytes of quotaBytes that come from storage add-on blocks (0 when none). */
+  addonBytes?: number;
+  /** Storage add-on blocks the payer holds right now (paid-through grace included). */
+  addonBlocks?: number;
 }
 
 /**
@@ -51,7 +58,13 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
   const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
   const storageConfig = getStorageConfigFromSubscription(subscriptionTier);
 
-  const quotaBytes = storageConfig.quotaBytes;
+  // Storage add-on blocks ride on a paid plan only, and only where PageSpace bills
+  // (tenant/on-prem already resolve to Business limits above).
+  const addonBlocks = isBillingEnabled() && storageConfig.tier === 'pro'
+    ? addonBlocksOf(await storageRepository.findUserStorageAddon(userId))
+    : 0;
+  const addonBytes = storageAddonBytes(addonBlocks);
+  const quotaBytes = storageConfig.quotaBytes + addonBytes;
   const usedBytes = user.storageUsedBytes || 0;
   const availableBytes = Math.max(0, quotaBytes - usedBytes);
   const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
@@ -63,8 +76,15 @@ export async function getUserStorageQuota(userId: string): Promise<StorageQuota 
     availableBytes,
     utilizationPercent,
     tier: storageConfig.tier,
-    warningLevel: getWarningLevel(utilizationPercent)
+    warningLevel: getWarningLevel(utilizationPercent),
+    addonBytes,
+    addonBlocks,
   };
+}
+
+/** Blocks a mirrored add-on entitles right now (0 when there is none). */
+export function addonBlocksOf(addon: StorageAddonRecord | null | undefined, now: Date = new Date()): number {
+  return addon ? entitledStorageBlocks(addon, now) : 0;
 }
 
 /**
@@ -136,9 +156,11 @@ export function decideFileCount<Q extends AnyStorageQuota>(input: { quota: Q; fi
  * An org's quota over its derived usage (pure). Every org is on Business (SEAT-8), so the
  * Business storage limits apply; a lapsed org's restrictions are SEAT-9's, not storage's.
  */
-export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number }): OrgStorageQuota {
+export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number; addonBlocks?: number }): OrgStorageQuota {
   const storageConfig = getStorageConfigFromSubscription('business');
-  const quotaBytes = storageConfig.quotaBytes;
+  const addonBlocks = input.addonBlocks ?? 0;
+  const addonBytes = storageAddonBytes(addonBlocks);
+  const quotaBytes = storageConfig.quotaBytes + addonBytes;
   const usedBytes = toByteCount(input.usedBytes);
   const utilizationPercent = quotaBytes > 0 ? (usedBytes / quotaBytes) * 100 : 0;
   return {
@@ -149,14 +171,21 @@ export function buildOrgStorageQuota(input: { orgId: string; usedBytes: number }
     utilizationPercent,
     tier: storageConfig.tier,
     warningLevel: getWarningLevel(utilizationPercent),
+    addonBytes,
+    addonBlocks,
   };
 }
 
 /**
- * The org's storage quota over its derived usage (WAL-9): SUM(files.sizeBytes) across its drives.
+ * The org's storage quota over its derived usage (WAL-9): SUM(files.sizeBytes) across its drives,
+ * plus any storage add-on blocks on its live Business subscription (none while lapsed).
  */
 export async function getOrgStorageQuota(orgId: string): Promise<OrgStorageQuota> {
-  return buildOrgStorageQuota({ orgId, usedBytes: await storageRepository.sumOrgFileBytes(orgId) });
+  const [usedBytes, addon] = await Promise.all([
+    storageRepository.sumOrgFileBytes(orgId),
+    isBillingEnabled() ? storageRepository.findOrgStorageAddon(orgId) : Promise.resolve(undefined),
+  ]);
+  return buildOrgStorageQuota({ orgId, usedBytes, addonBlocks: addonBlocksOf(addon) });
 }
 
 /**

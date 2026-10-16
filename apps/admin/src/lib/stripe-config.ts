@@ -18,6 +18,8 @@ interface StripeConfig {
   priceIds: { pro: string };
   /** Organization plan identities; empty live IDs refuse provisioning. */
   orgPriceIds: { businessBase: string; extraSeat: string };
+  /** The storage add-on price (mirrors apps/web stripe-config); empty = not sold yet. */
+  storageAddonPriceId: string;
 }
 
 const config: Record<'test' | 'live', StripeConfig> = {
@@ -34,6 +36,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQXAvPRnBcvXFsoeKQE6H0u',
       extraSeat: 'price_1UQXAwPRnBcvXFso1TqKRFSM',
     },
+    storageAddonPriceId: '',
   },
   live: {
     portalConfigurationIds: {
@@ -49,6 +52,7 @@ const config: Record<'test' | 'live', StripeConfig> = {
       businessBase: 'price_1UQUXPPRnBcvXFsoIu4Bcxt3',
       extraSeat: 'price_1UQUXiPRnBcvXFso0992O0dz',
     },
+    storageAddonPriceId: '',
   },
 };
 
