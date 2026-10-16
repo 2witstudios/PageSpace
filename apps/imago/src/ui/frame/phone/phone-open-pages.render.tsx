@@ -24,14 +24,16 @@ export type OpenPageRowProps = {
   /** The type hue class (text-type-*), or none for screens. */
   readonly hue: string | null;
   readonly current: boolean;
+  /** The row's link was followed: make its tab the active one. */
+  readonly onOpen: () => void;
   readonly onClose: () => void;
 };
 
 /** One row: the type icon and title as a link, then its close control (36px). */
-export function renderOpenPageRow({ path, title, icon, hue, current, onClose }: OpenPageRowProps): ReactNode {
+export function renderOpenPageRow({ path, title, icon, hue, current, onOpen, onClose }: OpenPageRowProps): ReactNode {
   return (
     <div key={path} className={phoneSheetRowClass(current)} data-tab-path={path}>
-      <Link href={path} prefetch={true} className={phoneSheetLinkClass}>
+      <Link href={path} prefetch={true} className={phoneSheetLinkClass} onClick={(event) => !event.defaultPrevented && onOpen()}>
         <span className={hue ?? 'text-ink-muted'} aria-hidden="true">
           {renderIcon({ name: icon, size: 18 })}
         </span>

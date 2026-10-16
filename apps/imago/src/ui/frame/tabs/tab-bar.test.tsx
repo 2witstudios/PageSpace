@@ -5,7 +5,7 @@ import { assert } from 'riteway/vitest';
 import { createApiClient } from '@/api/client';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { createInitialState } from '../../store/state';
-import { setUiState } from '../../store/store';
+import { getUiState, setUiState } from '../../store/store';
 import { mount, unmountAll } from '../../test-support/dom';
 import { stageFor } from '../stage/stage';
 import { TabBar } from './tab-bar';
@@ -111,8 +111,48 @@ describe('TabBar (IMC-1.5)', () => {
     assert({
       given: 'a drive tool opened',
       should: 'append it to the stored tabs, never touching classic’s tabs-storage',
-      actual: [JSON.parse(window.localStorage.getItem(tabsStorageKey('d1')) ?? '[]').length, window.localStorage.getItem('tabs-storage')],
+      actual: [JSON.parse(window.localStorage.getItem(tabsStorageKey('d1')) ?? '{}').tabs.length, window.localStorage.getItem('tabs-storage')],
       expected: [4, null],
+    });
+  });
+
+  test('⌘-click opens a background tab', async () => {
+    const root = render();
+    await settle(() => {
+      if (tabs(root).length !== 3) throw new Error('tabs not loaded');
+    });
+    const link = document.createElement('a');
+    link.href = '/imago/d1/files/notes';
+    document.body.append(link);
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true });
+    act(() => {
+      link.dispatchEvent(event);
+    });
+    link.remove();
+    assert({
+      given: 'a ⌘-clicked link to another page in the drive',
+      should: 'add its tab beside the active one, stay put and keep the browser from opening a tab',
+      actual: [tabs(root).map((tab) => tab.getAttribute('data-tab-path')), tabs(root).map((tab) => tab.getAttribute('aria-selected')), navigation.pushed, event.defaultPrevented],
+      expected: [['/d1/files/plan', '/d1/files/notes', '/d1/files/pricing', '/d1/messages/ops'], ['true', 'false', 'false', 'false'], [], true],
+    });
+  });
+
+  test('closing the active tab from a section', async () => {
+    window.localStorage.setItem(
+      tabsStorageKey('d1'),
+      JSON.stringify({ tabs: [{ id: 'a', path: '/d1/files/plan' }, { id: 'b', path: '/d1/files/pricing' }], active: 'a' }),
+    );
+    navigation.pathname = '/d1/files';
+    const root = render();
+    await settle(() => {
+      if (!titles(root).includes('Pricing Model')) throw new Error('tabs not loaded');
+    });
+    act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Q4 Launch Plan"]')?.click());
+    assert({
+      given: 'the active tab closed while the viewer is on the Files section',
+      should: 'make its neighbour active without leaving the section',
+      actual: [getUiState().resources.activeTab, navigation.pushed],
+      expected: ['b', []],
     });
   });
 });

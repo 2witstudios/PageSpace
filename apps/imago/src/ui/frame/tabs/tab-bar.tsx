@@ -2,28 +2,29 @@
 
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
-import { useUIStore } from '@/retained/stores/useUIStore';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
-import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
-import type { UiState } from '../../store/state';
 import { pageKey } from '../../files/page-object/page-object';
 import type { Stage } from '../stage/stage';
-import { goBack, goForward } from './tabs-model';
+import { activeTabOf, stepTab } from './tabs-model';
 import { useOpenTabs } from './use-open-tabs';
+import { requestNewTab, useNewTabClicks } from './use-new-tab-clicks';
 import { pageTabOf, tabLabelFor } from './tab-label';
 import { renderTab, renderTabBar } from './tab-bar.render';
 
-const selectHistory = (state: UiState) => state.resources.tabHistory;
-
-type TabItemProps = { readonly path: string; readonly selected: boolean; readonly onClose: () => void };
+type TabItemProps = {
+  readonly path: string;
+  readonly selected: boolean;
+  readonly onOpen: () => void;
+  readonly onClose: () => void;
+};
 
 /** A page tab's title and type come from the page API, sharing the page view's cache. */
-function PageTab({ path, pageId, selected, onClose }: TabItemProps & { readonly pageId: string }) {
+function PageTab({ path, pageId, selected, onOpen, onClose }: TabItemProps & { readonly pageId: string }) {
   const { data } = useSWR<unknown>(pageKey(pageId));
   const page = pageTabOf(data);
   const look = page === null ? { icon: 'page' as const, hue: null } : pageTypeIcons[page.type];
-  return renderTab({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, selected, onClose });
+  return renderTab({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, selected, onOpen, onClose });
 }
 
 function TabItem(props: TabItemProps) {
@@ -40,35 +41,43 @@ export type TabBarProps = {
 };
 
 /**
- * The open-pages tab bar (IMC-1.5). Every navigation opens the middle's object as a tab and
- * records the visit; tabs persist per drive under imago's own key. Closing the active tab
- * moves to its neighbour, and closing the last one closes the middle (its section, where
- * Imago is the ground).
+ * The open-pages tab bar (IMC-1.5). Browser-style, as in classic: a navigation loads into the
+ * active tab, and Back and Forward step through that tab's own history (off a tab, on a section
+ * or the chat, Back returns to the active tab). New tab, ⌘/Ctrl-click and middle-click open
+ * new tabs. Tabs persist per drive under imago's own key.
  */
 export function TabBar({ stage, driveKey }: TabBarProps) {
   const router = useRouter();
-  const { tabs, pathname, close } = useOpenTabs(stage, driveKey);
-  const history = useUiState(selectHistory);
+  const open = useOpenTabs(stage, driveKey);
+  useNewTabClicks(stage);
 
-  const back = history === null ? null : goBack(history);
-  const forward = history === null ? null : goForward(history);
+  const active = activeTabOf({ tabs: open.tabs, active: open.activeId });
+  const onTab = active !== null && active.path === open.pathname;
+  const back = onTab ? stepTab(active, 'back') : active;
+  const forward = onTab ? stepTab(active, 'forward') : null;
 
   return renderTabBar({
-    tabs: tabs.map((tab) => (
-      <TabItem key={tab.path} path={tab.path} selected={tab.path === pathname} onClose={() => close(tab.path)} />
+    tabs: open.tabs.map((tab) => (
+      <TabItem
+        key={tab.id}
+        path={tab.path}
+        selected={open.isCurrent(tab)}
+        onOpen={() => open.select(tab.id)}
+        onClose={() => open.close(tab.id)}
+      />
     )),
     canBack: back !== null,
     canForward: forward !== null,
     onBack: () => {
       if (back === null) return;
-      dispatch(transactions.stepBack, undefined);
-      router.push(back.current);
+      if (onTab) dispatch(transactions.stepBack, undefined);
+      router.push(back.path);
     },
     onForward: () => {
       if (forward === null) return;
       dispatch(transactions.stepForward, undefined);
-      router.push(forward.current);
+      router.push(forward.path);
     },
-    onNew: () => useUIStore.getState().openQuickCreate(null),
+    onNew: requestNewTab,
   });
 }

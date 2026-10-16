@@ -11,15 +11,17 @@ export type TabRenderProps = {
   /** The type hue class (text-type-*), or none for screens. */
   readonly hue: string | null;
   readonly selected: boolean;
+  /** The tab's link was followed: make it the active tab. */
+  readonly onOpen: () => void;
   readonly onClose: () => void;
 };
 
 /** One tab: its type icon and title as a link, then its close control. */
 export function renderTab(props: TabRenderProps): ReactNode {
-  const { path, title, icon, hue, selected, onClose } = props;
+  const { path, title, icon, hue, selected, onOpen, onClose } = props;
   return (
     <div role="tab" aria-selected={selected} className={tabClass(selected)} data-tab-path={path}>
-      <Link href={path} prefetch={true} className={tabLinkClass}>
+      <Link href={path} prefetch={true} className={tabLinkClass} onClick={(event) => !event.defaultPrevented && onOpen()}>
         <span className={hue ?? 'text-ink-muted'} aria-hidden="true">
           {renderIcon({ name: icon, size: 14 })}
         </span>

@@ -9,6 +9,7 @@ import { phoneDocBodyClass } from './phone-doc-class';
 import { PhoneAsk } from './phone-ask';
 import { PhoneChatBack } from './phone-chat-back';
 import { PhoneOpenPages } from './phone-open-pages';
+import { newTab } from '../tabs/tabs-model';
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/d1/files/plan', useRouter: () => ({ push: () => {} }) }));
 
@@ -79,7 +80,15 @@ describe('PhoneOpenPages rows', () => {
     const view = mount(
       <ImagoSWRProvider client={client}>
         <PhoneOpenPages
-          open={{ tabs: [{ path: '/dm/c1' }, { path: '/d1/settings/general' }], pathname: '/dm/c1', close: () => {}, closeAll: () => {} }}
+          open={{
+            tabs: [newTab('t1', '/dm/c1'), newTab('t2', '/d1/settings/general')],
+            activeId: 't1',
+            pathname: '/dm/c1',
+            isCurrent: (tab) => tab.id === 't1',
+            select: () => {},
+            close: () => {},
+            closeAll: () => {},
+          }}
           onDismiss={() => {}}
         />
       </ImagoSWRProvider>,
