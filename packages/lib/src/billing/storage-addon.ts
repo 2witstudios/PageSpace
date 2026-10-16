@@ -129,8 +129,15 @@ export function planStorageAddonChange(input: {
   /** End of the subscription's current billing period. */
   periodEnd: Date;
   now: Date;
+  /**
+   * Unique per user-initiated change. Stripe caches an idempotency key's response,
+   * errors included, and a failed change does not move the revision, so without it a
+   * retry after a declined card would replay the decline, or replay a cached restore
+   * step without restoring and then prorate from the wrong quantity.
+   */
+  attemptId: string;
 }): StorageAddonChangePlan {
-  const { payer, stored, target, periodEnd, now } = input;
+  const { payer, stored, target, periodEnd, now, attemptId } = input;
   if (!isValidStorageBlockCount(target)) return { kind: 'invalid', reason: 'out_of_range' };
   const current = wholeBlocks(stored.blocks);
   if (target === current) return { kind: 'noop' };
@@ -149,6 +156,7 @@ export function planStorageAddonChange(input: {
       idempotencyKey: storageAddonIdempotencyKey(payer, {
         itemId: stored.itemId ?? 'new',
         revision: stored.revision,
+        attemptId,
         step: index,
         quantity,
         prorationBehavior,
@@ -217,6 +225,8 @@ export async function applyStorageAddonChange(input: {
   target: number;
   periodEnd: Date;
   now: Date;
+  /** See {@link planStorageAddonChange}: one per user-initiated change. */
+  attemptId: string;
   port: StorageAddonPort;
 }): Promise<StorageAddonApplyResult> {
   const plan = planStorageAddonChange(input);
@@ -242,6 +252,7 @@ export async function applyStorageAddonChange(input: {
           idempotencyKey: storageAddonIdempotencyKey(input.payer, {
             itemId,
             revision: input.stored.revision,
+            attemptId: input.attemptId,
             rollback: true,
             quantity: input.stored.blocks,
           }),

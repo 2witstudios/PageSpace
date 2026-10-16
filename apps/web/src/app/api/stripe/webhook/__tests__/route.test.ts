@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type Stripe from 'stripe';
 import { stripeConfig } from '@/lib/stripe-config';
 
 // Mock Stripe - use vi.hoisted to ensure mocks are available before vi.mock
-const { mockStripeWebhooksConstructEvent, mockListLineItems, StripeError, mockGetPersonalTierFromPrice } = vi.hoisted(() => {
+const { mockStripeWebhooksConstructEvent, mockListLineItems, StripeError, mockGetPersonalTierFromPrice, mockSubscriptionItemsList, storageAddon } = vi.hoisted(() => {
   const StripeError = class extends Error {
     constructor(message: string) {
       super(message);
@@ -15,12 +15,25 @@ const { mockStripeWebhooksConstructEvent, mockListLineItems, StripeError, mockGe
     mockListLineItems: vi.fn(),
     StripeError,
     mockGetPersonalTierFromPrice: vi.fn((priceId: string) => priceId === 'price_pro' ? 'pro' : 'free'),
+    mockSubscriptionItemsList: vi.fn(),
+    /** The storage add-on price as the webhook sees it; '' = not sold (the default). */
+    storageAddon: { priceId: '' },
+  };
+});
+
+vi.mock('@/lib/stripe/price-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/stripe/price-config')>();
+  return {
+    ...actual,
+    isStorageAddonConfigured: () => storageAddon.priceId !== '',
+    isStorageAddonPrice: (priceId: string | null | undefined) => !!priceId && priceId === storageAddon.priceId,
   };
 });
 
 vi.mock('@/lib/stripe', () => ({
   stripe: {
     invoices: { listLineItems: mockListLineItems },
+    subscriptionItems: { list: mockSubscriptionItemsList },
     webhooks: {
       constructEvent: mockStripeWebhooksConstructEvent,
     },
@@ -681,6 +694,40 @@ describe('POST /api/stripe/webhook', () => {
       expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
         set: expect.objectContaining({ stripePriceId: '' }),
       }));
+    });
+
+    describe('storage add-on mirror', () => {
+      afterEach(() => { storageAddon.priceId = ''; });
+
+      it('given a stale snapshot without the storage item, should mirror the item Stripe holds now instead of erasing it', async () => {
+        storageAddon.priceId = 'price_storage';
+        mockSubscriptionItemsList.mockResolvedValue({ data: [
+          { id: 'si_123', price: { id: 'price_pro' }, quantity: 1 },
+          { id: 'si_storage', price: { id: 'price_storage' }, quantity: 2 },
+        ] });
+        const subscription = mockSubscription({ priceId: 'price_pro' });
+        const event = mockStripeEvent('customer.subscription.updated', subscription);
+        mockStripeWebhooksConstructEvent.mockReturnValue(event);
+        const response = await POST(new Request('https://example.com/api/stripe/webhook', {
+          method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+        }) as import('next/server').NextRequest);
+        expect(response.status).toBe(200);
+        expect(mockSubscriptionItemsList).toHaveBeenCalledWith({ subscription: 'sub_123', limit: 100 });
+        expect(mockTxInsertOnConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+          set: expect.objectContaining({ stripePriceId: 'price_pro', stripeStorageItemId: 'si_storage', storageBlocks: 2 }),
+        }));
+        expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'pro' }));
+      });
+
+      it('given the add-on is not sold, should not call Stripe for storage', async () => {
+        const subscription = mockSubscription({ priceId: 'price_pro' });
+        const event = mockStripeEvent('customer.subscription.updated', subscription);
+        mockStripeWebhooksConstructEvent.mockReturnValue(event);
+        await POST(new Request('https://example.com/api/stripe/webhook', {
+          method: 'POST', body: JSON.stringify(event), headers: { 'stripe-signature': 'valid_signature' },
+        }) as import('next/server').NextRequest);
+        expect(mockSubscriptionItemsList).not.toHaveBeenCalled();
+      });
     });
 
     const tierPriceTests = [

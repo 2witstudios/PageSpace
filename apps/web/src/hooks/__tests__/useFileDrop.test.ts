@@ -411,14 +411,26 @@ describe('useFileDrop', () => {
 describe('quotaDenial', () => {
   it('given a 413 on a personal quota, should surface the reason and point at the usage page', async () => {
     const { quotaDenial } = await import('../useFileDrop');
-    expect(quotaDenial({ status: 413, body: { allowed: false, reason: 'Insufficient storage: need 2 GB, have 1 GB available', quota: { userId: 'u1' } } }))
+    expect(quotaDenial({ status: 413, body: { allowed: false, reason: 'Insufficient storage: need 2 GB, have 1 GB available', requiredBytes: 2, quota: { userId: 'u1', availableBytes: 1 } } }))
       .toEqual({ reason: 'Insufficient storage: need 2 GB, have 1 GB available', manageHref: '/settings/usage' });
   });
 
   it('given a 413 on an org quota, should point at the org billing page', async () => {
     const { quotaDenial } = await import('../useFileDrop');
-    expect(quotaDenial({ status: 413, body: { reason: 'Insufficient storage', quota: { orgId: 'org 1' } } })?.manageHref)
+    expect(quotaDenial({ status: 413, body: { reason: 'Insufficient storage', requiredBytes: 2, quota: { orgId: 'org 1', availableBytes: 1 } } })?.manageHref)
       .toBe('/orgs/org%201/settings/billing');
+  });
+
+  it('given a file over the per-file limit, should show the reason without offering storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 1000, tier: 'pro' } } }))
+      .toEqual({ reason: 'File exceeds pro tier limit of 250MB', manageHref: null });
+  });
+
+  it('given the Free file-count cap, should point at the usage page to upgrade', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File count limit reached (100 files max for free tier)', requiredBytes: 1, quota: { userId: 'u1', availableBytes: 1000, tier: 'free' } } })?.manageHref)
+      .toBe('/settings/usage');
   });
 
   it('given any other error, should not treat it as a quota denial', async () => {

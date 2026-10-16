@@ -4,7 +4,7 @@ import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
 import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
-import { personalSubscriptionItems, planPaidCentsFromInvoiceLines, tierFromInvoiceLines, toPersonalSubscriptionItems } from '@/lib/stripe/price-config';
+import { isStorageAddonConfigured, isStorageAddonPrice, personalSubscriptionItems, planPaidCentsFromInvoiceLines, tierFromInvoiceLines, toPersonalSubscriptionItems } from '@/lib/stripe/price-config';
 import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
@@ -450,18 +450,16 @@ function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
 
 /**
  * The storage add-on item as Stripe holds it NOW. Subscription events can arrive
- * out of order (a multi-step quantity change emits one per step), so the quantity
- * is re-read rather than taken from the event snapshot. A deleted item is none.
+ * out of order (a multi-step quantity change emits one per step, and a snapshot from
+ * before the item was created can land after it), so the item is re-read from the
+ * live subscription rather than taken from the event snapshot.
  */
-async function currentStorageItem(itemId: string): Promise<{ id: string; quantity: number } | null> {
-  try {
-    const item = await stripe.subscriptionItems.retrieve(itemId);
-    const quantity = item.quantity ?? 0;
-    return { id: item.id, quantity: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0 };
-  } catch (error) {
-    if (error instanceof Stripe.errors.StripeError && error.statusCode === 404) return null;
-    throw error;
-  }
+async function currentStorageItem(subscriptionId: string): Promise<{ id: string; quantity: number } | null> {
+  const items = await stripe.subscriptionItems.list({ subscription: subscriptionId, limit: 100 });
+  const storage = items.data.filter((item) => isStorageAddonPrice(item.price.id));
+  if (storage.length !== 1) return null;
+  const quantity = storage[0].quantity ?? 0;
+  return { id: storage[0].id, quantity: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0 };
 }
 
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
@@ -499,7 +497,9 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     ? subscription.items.data.find((item) => item.id === shape.planItem.id) ?? firstItem
     : firstItem;
   const stripePriceId = shape ? shape.planItem.priceId : '';
-  const storage = shape?.storageItem ? await currentStorageItem(shape.storageItem.id) : null;
+  // Re-read even when the snapshot has no storage item: an event from before the item
+  // existed can arrive after the purchase, and must not erase the paid blocks.
+  const storage = shape && isStorageAddonConfigured() ? await currentStorageItem(subscription.id) : null;
 
   // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
   // an entitled (active/trialing) row maps through the price→tier map; anything

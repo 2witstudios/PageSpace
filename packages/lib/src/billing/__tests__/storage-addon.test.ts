@@ -16,6 +16,7 @@ import { STORAGE_ADDON } from '../subscription-tiers';
 const GB = 1024 ** 3;
 const now = new Date('2026-10-15T00:00:00Z');
 const periodEnd = new Date('2026-11-01T00:00:00Z');
+const attemptId = 'attempt_1';
 const payer = { kind: 'user' as const, id: 'user_1' };
 const stored = (over: Partial<StoredStorageAddon> = {}): StoredStorageAddon => ({
   itemId: 'si_1', blocks: 0, graceBlocks: 0, graceUntil: null, revision: 3, ...over,
@@ -55,15 +56,15 @@ describe('storage add-on core', () => {
 
   describe('planStorageAddonChange', () => {
     it('given the same quantity, should do nothing', () => {
-      expect(planStorageAddonChange({ payer, stored: stored({ blocks: 2 }), target: 2, periodEnd, now })).toEqual({ kind: 'noop' });
+      expect(planStorageAddonChange({ payer, stored: stored({ blocks: 2 }), target: 2, periodEnd, now, attemptId })).toEqual({ kind: 'noop' });
     });
 
     it('given a quantity over the ceiling, should refuse', () => {
-      expect(planStorageAddonChange({ payer, stored: stored(), target: 21, periodEnd, now })).toEqual({ kind: 'invalid', reason: 'out_of_range' });
+      expect(planStorageAddonChange({ payer, stored: stored(), target: 21, periodEnd, now, attemptId })).toEqual({ kind: 'invalid', reason: 'out_of_range' });
     });
 
     it('given a first purchase, should create the item with an immediate prorated charge', () => {
-      const plan = planStorageAddonChange({ payer, stored: EMPTY_STORAGE_ADDON, target: 2, periodEnd, now });
+      const plan = planStorageAddonChange({ payer, stored: EMPTY_STORAGE_ADDON, target: 2, periodEnd, now, attemptId });
       expect(plan).toMatchObject({
         kind: 'apply',
         charges: true,
@@ -73,7 +74,7 @@ describe('storage add-on core', () => {
     });
 
     it('given a decrease, should lower Stripe now without proration and keep the paid blocks until period end', () => {
-      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 3 }), target: 1, periodEnd, now });
+      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 3 }), target: 1, periodEnd, now, attemptId });
       expect(plan).toMatchObject({
         kind: 'apply',
         charges: false,
@@ -83,12 +84,12 @@ describe('storage add-on core', () => {
     });
 
     it('given a second decrease in the same period, should keep the larger paid quantity as grace', () => {
-      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 2, graceBlocks: 4, graceUntil: periodEnd }), target: 0, periodEnd, now });
+      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 2, graceBlocks: 4, graceUntil: periodEnd }), target: 0, periodEnd, now, attemptId });
       expect(plan).toMatchObject({ kind: 'apply', next: { blocks: 0, graceBlocks: 4, graceUntil: periodEnd } });
     });
 
     it('given an increase within blocks already paid this period, should not charge and keep the grace', () => {
-      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 3, periodEnd, now });
+      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 3, periodEnd, now, attemptId });
       expect(plan).toMatchObject({
         kind: 'apply',
         charges: false,
@@ -98,7 +99,7 @@ describe('storage add-on core', () => {
     });
 
     it('given an increase beyond the paid grace, should restore the paid quantity free then charge only the new blocks', () => {
-      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 5, periodEnd, now });
+      const plan = planStorageAddonChange({ payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 5, periodEnd, now, attemptId });
       expect(plan).toMatchObject({
         kind: 'apply',
         charges: true,
@@ -112,18 +113,25 @@ describe('storage add-on core', () => {
 
     it('given an expired grace, should charge the whole increase', () => {
       const plan = planStorageAddonChange({
-        payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: new Date('2026-10-01T00:00:00Z') }), target: 2, periodEnd, now,
+        payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: new Date('2026-10-01T00:00:00Z') }), target: 2, periodEnd, now, attemptId,
       });
       expect(plan).toMatchObject({ kind: 'apply', charges: true, steps: [{ quantity: 2, prorationBehavior: 'always_invoice' }] });
     });
 
     it('given the same change replayed, should reuse the idempotency keys; a later change should not', () => {
-      const a = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now });
-      const b = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now });
-      const later = planStorageAddonChange({ payer, stored: stored({ blocks: 1, revision: 4 }), target: 2, periodEnd, now });
+      const a = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId });
+      const b = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId });
+      const later = planStorageAddonChange({ payer, stored: stored({ blocks: 1, revision: 4 }), target: 2, periodEnd, now, attemptId });
       if (a.kind !== 'apply' || b.kind !== 'apply' || later.kind !== 'apply') throw new Error('expected apply');
       expect(a.steps[0].idempotencyKey).toBe(b.steps[0].idempotencyKey);
       expect(later.steps[0].idempotencyKey).not.toBe(a.steps[0].idempotencyKey);
+    });
+
+    it('given a retry of the same change after a failure, should use fresh keys so Stripe does not replay the cached decline', () => {
+      const first = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId: 'attempt_1' });
+      const retry = planStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId: 'attempt_2' });
+      if (first.kind !== 'apply' || retry.kind !== 'apply') throw new Error('expected apply');
+      expect(retry.steps[0].idempotencyKey).not.toBe(first.steps[0].idempotencyKey);
     });
   });
 
@@ -158,7 +166,7 @@ describe('applyStorageAddonChange', () => {
 
   it('given a first purchase, should create the item and store its id', async () => {
     const { port, calls } = fakePort();
-    const result = await applyStorageAddonChange({ payer, stored: EMPTY_STORAGE_ADDON, target: 2, periodEnd, now, port });
+    const result = await applyStorageAddonChange({ payer, stored: EMPTY_STORAGE_ADDON, target: 2, periodEnd, now, attemptId, port });
     expect(calls).toEqual([{ op: 'create', quantity: 2, prorationBehavior: 'always_invoice' }]);
     expect(result).toMatchObject({ kind: 'applied', charged: true, stored: { itemId: 'si_new', blocks: 2, revision: 1 } });
   });
@@ -166,7 +174,7 @@ describe('applyStorageAddonChange', () => {
   it('given a declined card on the charging step of a two-step increase, should undo the free restore', async () => {
     const { port, calls } = fakePort({ failOn: (q) => q === 5 });
     const result = await applyStorageAddonChange({
-      payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 5, periodEnd, now, port,
+      payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 5, periodEnd, now, attemptId, port,
     });
     expect(result.kind).toBe('failed');
     expect(calls).toEqual([
@@ -177,7 +185,7 @@ describe('applyStorageAddonChange', () => {
 
   it('given a declined card on a single-step increase, should write nothing else', async () => {
     const { port, calls } = fakePort({ failOn: () => true });
-    const result = await applyStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, port });
+    const result = await applyStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId, port });
     expect(result.kind).toBe('failed');
     expect(calls).toEqual([]);
   });

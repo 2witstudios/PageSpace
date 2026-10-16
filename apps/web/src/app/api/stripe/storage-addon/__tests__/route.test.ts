@@ -169,6 +169,14 @@ describe('/api/stripe/storage-addon', () => {
     expect(mockUpdateSet).not.toHaveBeenCalled();
   });
 
+  it('given Stripe unreachable (not a card decline), POST should answer 502 without claiming a decline', async () => {
+    mockRetrieve.mockResolvedValue(stripeSub(null));
+    mockItemCreate.mockRejectedValue(new StripeError('Connection reset', 'StripeConnectionError'));
+    const res = await post(1);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toMatch(/could not reach the payment provider/);
+  });
+
   it('given a subscription with a stranger item, POST should refuse to touch it', async () => {
     mockRetrieve.mockResolvedValue({
       ...stripeSub(null),

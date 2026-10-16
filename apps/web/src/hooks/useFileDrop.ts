@@ -201,14 +201,24 @@ export function useFileDrop({
 }
 
 /**
- * The storage check's 413 refusal: its reason, and where the payer can get more storage
- * (their own usage page, or the org's billing page for an org drive).
+ * The storage check's 413 refusal: its reason, and, when more storage would resolve it,
+ * where the payer can get it (their own usage page, or the org's billing page for an org drive).
  */
 export function quotaDenial(error: unknown): { reason: string; manageHref: string | null } | null {
   const { status, body } = (error ?? {}) as { status?: unknown; body?: unknown };
   if (status !== 413 || !body || typeof body !== 'object') return null;
-  const { reason, quota } = body as { reason?: unknown; quota?: { orgId?: unknown; userId?: unknown } };
+  const { reason, quota, requiredBytes } = body as {
+    reason?: unknown;
+    requiredBytes?: unknown;
+    quota?: { orgId?: unknown; userId?: unknown; availableBytes?: unknown; tier?: unknown };
+  };
   if (typeof reason !== 'string' || reason.length === 0) return null;
+  // More storage (or, on Free, a paid plan) only helps when space ran out, or when Free's
+  // file-count cap was hit. A file over the per-file limit is refused whatever the quota.
+  const outOfSpace = typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
+    && requiredBytes > quota.availableBytes;
+  const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
+  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null };
   const manageHref = typeof quota?.orgId === 'string'
     ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing`
     : typeof quota?.userId === 'string'

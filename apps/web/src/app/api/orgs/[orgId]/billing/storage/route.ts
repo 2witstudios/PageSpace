@@ -8,7 +8,7 @@ import { entitledStorageBlocks } from '@pagespace/lib/billing/storage-addon';
 import type { OrgApiErrorCode } from '@pagespace/lib/organizations/api-error-codes';
 import { authorizeOrgBillingRequest, ORG_READ_AUTH, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { getOrgStorageSummary, setOrgStorageBlocks } from '@/lib/org-billing/storage-billing';
-import { storageAddonFailureMessage } from '@/lib/stripe/storage-addon-billing';
+import { classifyStorageAddonFailure } from '@/lib/stripe/storage-addon-billing';
 
 type Context = { params: Promise<{ orgId: string }> };
 
@@ -62,8 +62,11 @@ export async function PATCH(request: Request, context: Context) {
       return NextResponse.json({ error: 'Invalid request body', code: 'invalid_request' }, { status: 400 });
     }
     if (result.kind === 'failed') {
-      loggers.api.warn('Org storage add-on change refused', { orgId, error: result.error instanceof Error ? result.error.message : String(result.error) });
-      return NextResponse.json({ error: storageAddonFailureMessage(result.error), code: 'payment_declined' }, { status: 402 });
+      const failure = classifyStorageAddonFailure(result.error);
+      loggers.api.warn('Org storage add-on change refused', { orgId, declined: failure.declined, error: result.error instanceof Error ? result.error.message : String(result.error) });
+      return failure.declined
+        ? NextResponse.json({ error: failure.message, code: 'payment_declined' }, { status: 402 })
+        : NextResponse.json({ error: failure.message, code: 'billing_provider_unreachable' }, { status: 502 });
     }
     if (result.kind === 'applied') {
       auditRequest(request, {

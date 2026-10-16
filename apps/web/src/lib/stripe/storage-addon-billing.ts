@@ -36,10 +36,15 @@ export function stripeStorageAddonPort(client: Stripe, subscriptionId: string): 
   };
 }
 
-/** A user-facing reason for a refused storage write. */
-export function storageAddonFailureMessage(error: unknown): string {
+/**
+ * How a refused storage write is reported. Only a card decline is a payment refusal (and,
+ * since the charging step is the one that failed, nothing was charged for it). Anything
+ * else (network, Stripe outage) is the provider being unreachable, with no claim about
+ * charges.
+ */
+export function classifyStorageAddonFailure(error: unknown): { declined: boolean; message: string } {
   if (error instanceof Stripe.errors.StripeError && error.type === 'StripeCardError') {
-    return error.message || 'Your card was declined. Update your payment method and try again.';
+    return { declined: true, message: error.message || 'Your card was declined. Update your payment method and try again.' };
   }
-  return 'The storage change could not be completed. Nothing was charged.';
+  return { declined: false, message: 'We could not reach the payment provider. Try again in a moment.' };
 }

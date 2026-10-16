@@ -6,7 +6,8 @@ import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe } from '@/lib/stripe';
 import { isStorageAddonConfigured, personalPlanItems } from '@/lib/stripe/price-config';
-import { storageAddonFailureMessage, stripeStorageAddonPort } from '@/lib/stripe/storage-addon-billing';
+import { randomUUID } from 'crypto';
+import { classifyStorageAddonFailure, stripeStorageAddonPort } from '@/lib/stripe/storage-addon-billing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
@@ -124,6 +125,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Extra storage is not available on a gifted plan. Contact support.' }, { status: 403 });
     }
 
+    // Set once Stripe has accepted the change, so a failed mirror write below is logged
+    // with everything needed to reconcile it (Stripe writes cannot roll back).
+    let appliedInStripe: { blocks: number; graceBlocks: number; graceUntil: Date | null; revision: number; itemId: string | null } | null = null;
+    const attemptId = randomUUID();
     const outcome = await db.transaction(async (tx) => {
       // Serialize changes per subscription: the plan reads the stored revision and grace.
       const [row] = await tx.select().from(subscriptions).where(eq(subscriptions.id, live.id)).for('update');
@@ -147,9 +152,11 @@ export async function POST(request: NextRequest) {
         target,
         periodEnd: new Date(periodEndTs * 1000),
         now: new Date(),
+        attemptId,
         port: stripeStorageAddonPort(stripe, subscription.id),
       });
       if (result.kind === 'applied') {
+        appliedInStripe = result.stored;
         await tx.update(subscriptions)
           .set({
             stripeStorageItemId: result.stored.itemId,
@@ -162,6 +169,13 @@ export async function POST(request: NextRequest) {
           .where(eq(subscriptions.id, row.id));
       }
       return { kind: 'result' as const, result, before: stored.blocks, subscriptionId: subscription.id };
+    }).catch((error: unknown) => {
+      if (appliedInStripe) {
+        loggers.api.error('Storage add-on applied in Stripe but the subscription mirror was not saved; reconcile it', error instanceof Error ? error : undefined, {
+          userId, subscriptionRowId: live.id, applied: appliedInStripe,
+        });
+      }
+      throw error;
     });
 
     if (outcome.kind === 'missing') return NextResponse.json({ error: 'No active subscription found' }, { status: 400 });
@@ -173,8 +187,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `blocks must be a whole number from 0 to ${STORAGE_ADDON.maxBlocks}` }, { status: 400 });
     }
     if (result.kind === 'failed') {
-      loggers.api.warn('Storage add-on change refused', { userId, target, error: result.error instanceof Error ? result.error.message : String(result.error) });
-      return NextResponse.json({ error: storageAddonFailureMessage(result.error) }, { status: 402 });
+      const failure = classifyStorageAddonFailure(result.error);
+      loggers.api.warn('Storage add-on change refused', { userId, target, declined: failure.declined, error: result.error instanceof Error ? result.error.message : String(result.error) });
+      return NextResponse.json({ error: failure.message }, { status: failure.declined ? 402 : 502 });
     }
 
     if (result.kind === 'applied') {
