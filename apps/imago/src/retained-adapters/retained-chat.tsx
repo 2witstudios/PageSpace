@@ -127,7 +127,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
     conversationId={selection.conversationId} driveId={selection.driveId} context="page" isReadOnly={selection.isReadOnly} /></RetainedSurface>;
   const shownId = selection?.conversationId ?? conversationId;
   if (!page || (resolving && !selection && !shownId)) return renderLoadingState('Opening chat…');
-  if (!shownId) return <RetainedSurface><div className="@container flex h-full min-w-0 min-h-0 flex-col bg-background">
+  if (!shownId) return <RetainedSurface className="bg-tint"><div className="@container flex h-full min-w-0 min-h-0 flex-col">
     <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">{home
       ? <HomeWelcome />
       : <ChatMessagesArea messages={[]} isLoading={false} isStreaming={false} />}</div>

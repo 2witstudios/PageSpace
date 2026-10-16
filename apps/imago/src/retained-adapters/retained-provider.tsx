@@ -56,7 +56,7 @@ export function RetainedProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function RetainedSurface({ children, fill = true }: { children: ReactNode; fill?: boolean }) {
+export function RetainedSurface({ children, fill = true, className }: { children: ReactNode; fill?: boolean; className?: string }) {
   const { preference } = useThemePreference();
   const [systemDark, setSystemDark] = useState(false);
   useEffect(() => {
@@ -67,5 +67,5 @@ export function RetainedSurface({ children, fill = true }: { children: ReactNode
     return () => media.removeEventListener('change', sync);
   }, []);
   const dark = preference === 'dark' || (preference === 'system' && systemDark);
-  return <div className={`retained-ui${dark ? ' dark' : ''}`} style={{ height: fill ? '100%' : undefined, minHeight: 0, overflow: fill ? 'auto' : undefined }}>{children}</div>;
+  return <div className={`retained-ui${dark ? ' dark' : ''}${className ? ` ${className}` : ''}`} style={{ height: fill ? '100%' : undefined, minHeight: 0, overflow: fill ? 'auto' : undefined }}>{children}</div>;
 }
