@@ -42,8 +42,9 @@ export type OpenTabs = {
 };
 
 /**
- * The open tabs of a drive: every navigation opens the middle's object as a tab, and tabs persist
- * per drive under imago's own key. The tab bar and the phone's open-pages sheet both read them.
+ * The open tabs of a drive: a navigation loads the middle's object into the active tab (a new
+ * tab only when there is none, or one was asked for), and tabs persist per drive under imago's
+ * own key. The tab bar and the phone's open-pages sheet both read them.
  */
 export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   const pathname = usePathname() ?? '/';

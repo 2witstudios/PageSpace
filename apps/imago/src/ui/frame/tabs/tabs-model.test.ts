@@ -5,7 +5,10 @@ import {
   closeTab,
   goBack,
   goForward,
-  openTab,
+  imagoPathOf,
+  isNewTabClick,
+  navigateTabs,
+  openTabInBackground,
   parseTabs,
   sectionPath,
   tabFor,
@@ -39,23 +42,107 @@ describe('tabFor() (IMC-1.5)', () => {
   });
 });
 
-describe('openTab()', () => {
-  test('appends a new tab', () => {
+describe('navigateTabs()', () => {
+  const strip = { tabs: [plan, pricing], active: plan.path };
+
+  test('a navigation loads into the active tab', () => {
     assert({
-      given: 'the canon tabs and a fourth page',
-      should: 'append it after the last tab',
-      actual: openTab([plan, pricing], ops).map((tab) => tab.path),
-      expected: ['/d1/files/plan', '/d1/files/pricing', '/d1/messages/ops'],
+      given: 'Q4 Launch Plan active and another page opened',
+      should: 'replace the active tab in place, as a browser tab does, and keep it active',
+      actual: navigateTabs(strip, ops),
+      expected: { tabs: [ops, pricing], active: ops.path },
+    });
+  });
+
+  test('a page that already has a tab', () => {
+    assert({
+      given: 'a navigation to a page open in another tab',
+      should: 'switch to that tab and leave the active one as it was',
+      actual: navigateTabs(strip, pricing),
+      expected: { tabs: [plan, pricing], active: pricing.path },
+    });
+  });
+
+  test('the active tab again', () => {
+    assert({
+      given: 'a navigation to the active tab',
+      should: 'return the same strip',
+      actual: navigateTabs(strip, plan) === strip,
+      expected: true,
+    });
+  });
+
+  test('no active tab', () => {
+    assert({
+      given: 'tabs but none active (the viewer was on a section index)',
+      should: 'open the page as a new tab after the last one',
+      actual: navigateTabs({ tabs: [plan, pricing], active: null }, ops),
+      expected: { tabs: [plan, pricing, ops], active: ops.path },
+    });
+  });
+
+  test('New tab asked for', () => {
+    assert({
+      given: 'a navigation that asked for a new tab',
+      should: 'insert it beside the active tab and activate it',
+      actual: navigateTabs(strip, ops, true),
+      expected: { tabs: [plan, ops, pricing], active: ops.path },
+    });
+  });
+});
+
+describe('openTabInBackground()', () => {
+  test('opens beside the active tab without leaving it', () => {
+    assert({
+      given: 'a ⌘-clicked page with Q4 Launch Plan active',
+      should: 'insert it after the active tab and keep the active one',
+      actual: openTabInBackground({ tabs: [plan, pricing], active: plan.path }, ops),
+      expected: { tabs: [plan, ops, pricing], active: plan.path },
     });
   });
 
   test('an open tab stays where it is', () => {
-    const tabs = [plan, pricing];
+    const strip = { tabs: [plan, pricing], active: plan.path };
     assert({
       given: 'a page that already has a tab',
-      should: 'return the same list',
-      actual: openTab(tabs, plan) === tabs,
+      should: 'return the same strip',
+      actual: openTabInBackground(strip, pricing) === strip,
       expected: true,
+    });
+  });
+});
+
+describe('isNewTabClick()', () => {
+  const click = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false };
+  test('the browser new-tab gestures', () => {
+    assert({
+      given: 'a plain click, ⌘-click, Ctrl-click, middle-click and ⇧⌘-click',
+      should: 'treat only ⌘/Ctrl-click and middle-click as new tab',
+      actual: [
+        click,
+        { ...click, metaKey: true },
+        { ...click, ctrlKey: true },
+        { ...click, button: 1 },
+        { ...click, metaKey: true, shiftKey: true },
+      ].map(isNewTabClick),
+      expected: [false, true, true, true, false],
+    });
+  });
+});
+
+describe('imagoPathOf()', () => {
+  test('links inside imago', () => {
+    const origin = 'http://localhost:3006';
+    assert({
+      given: 'an imago link, the imago root, a classic link and another origin',
+      should: 'give the basePath-relative path for imago links only',
+      actual: [
+        imagoPathOf('/imago/d1/files/plan', origin, '/imago'),
+        imagoPathOf('/imago', origin, '/imago'),
+        imagoPathOf('/dashboard', origin, '/imago'),
+        imagoPathOf('https://example.com/imago/d1', origin, '/imago'),
+      ],
+      expected: ['/d1/files/plan', '/', null, null],
     });
   });
 });

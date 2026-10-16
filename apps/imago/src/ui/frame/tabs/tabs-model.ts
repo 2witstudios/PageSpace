@@ -10,9 +10,34 @@ export type Tab = { readonly path: string };
 export const tabFor = (stage: Stage, pathname: string): Tab | null =>
   stage.object === null ? null : { path: pathname };
 
-/** A new tab goes after the last one (CANON "Open tabs"); an open one stays put. */
-export const openTab = (tabs: readonly Tab[], tab: Tab): readonly Tab[] =>
-  tabs.some((entry) => entry.path === tab.path) ? tabs : [...tabs, tab];
+/** The open tabs and which of them the viewer is in (its path), as browser tabs work. */
+export type TabStrip = { readonly tabs: readonly Tab[]; readonly active: string | null };
+
+const indexOfPath = (tabs: readonly Tab[], path: string | null): number =>
+  path === null ? -1 : tabs.findIndex((entry) => entry.path === path);
+
+/** Inserts a tab just after the active one, or after the last when none is active. */
+const insertBeside = (tabs: readonly Tab[], active: string | null, tab: Tab): readonly Tab[] => {
+  const at = indexOfPath(tabs, active);
+  return at < 0 ? [...tabs, tab] : [...tabs.slice(0, at + 1), tab, ...tabs.slice(at + 1)];
+};
+
+/**
+ * A navigation to a tab's object, the way browser tabs (and classic) work: it loads into the
+ * active tab, replacing what that tab showed. A page that already has a tab switches to it;
+ * with no active tab, or when the viewer asked for a new one, it opens beside the active tab.
+ */
+export const navigateTabs = (strip: TabStrip, tab: Tab, inNewTab = false): TabStrip => {
+  const { tabs, active } = strip;
+  if (tabs.some((entry) => entry.path === tab.path)) return active === tab.path ? strip : { tabs, active: tab.path };
+  const at = indexOfPath(tabs, active);
+  if (at < 0 || inNewTab) return { tabs: insertBeside(tabs, active, tab), active: tab.path };
+  return { tabs: tabs.map((entry, index) => (index === at ? tab : entry)), active: tab.path };
+};
+
+/** Opens a tab without leaving the current one (⌘/Ctrl-click, middle-click); an open one stays put. */
+export const openTabInBackground = (strip: TabStrip, tab: Tab): TabStrip =>
+  strip.tabs.some((entry) => entry.path === tab.path) ? strip : { tabs: insertBeside(strip.tabs, strip.active, tab), active: strip.active };
 
 /**
  * Closes a tab. Closing the active one moves to its right neighbour, else its left; closing
@@ -83,3 +108,23 @@ export const parseTabs = (stored: string | null): readonly Tab[] => {
 
 /** imago's own storage key per drive, never classic's `tabs-storage` (DEC-C6). */
 export const tabsStorageKey = (driveKey: string): string => `imago:tabs:${driveKey}`;
+
+/** The modifier clicks that open a link in a new tab in a browser: ⌘/Ctrl-click and middle-click. */
+export const isNewTabClick = (event: Pick<MouseEvent, 'button' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean =>
+  !event.shiftKey && !event.altKey && (event.button === 1 || (event.button === 0 && (event.metaKey || event.ctrlKey)));
+
+/**
+ * The basePath-relative path a link points to inside imago, or null for anything else (another
+ * origin, classic, a download).
+ */
+export const imagoPathOf = (href: string, origin: string, basePath: string): string | null => {
+  let url: URL;
+  try {
+    url = new URL(href, origin);
+  } catch {
+    return null;
+  }
+  if (url.origin !== origin) return null;
+  if (url.pathname === basePath) return '/';
+  return url.pathname.startsWith(`${basePath}/`) ? url.pathname.slice(basePath.length) : null;
+};

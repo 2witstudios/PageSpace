@@ -3,7 +3,7 @@ import { assert } from 'riteway/vitest';
 import { createInitialState } from '../../store/state';
 import { tabsPlugin } from './tabs-plugin';
 
-const { syncTabs, setTabs, stepBack, stepForward } = tabsPlugin.transactions;
+const { syncTabs, setTabs, openBackgroundTab, setNewTabPending, stepBack, stepForward } = tabsPlugin.transactions;
 const plan = { path: '/d1/files/plan' };
 const stored = JSON.stringify([{ path: '/d1/files/pricing' }]);
 
@@ -37,6 +37,49 @@ describe('tabsPlugin (IMC-1.5)', () => {
       should: 'show only that drive’s tabs',
       actual: other.resources.openTabs.map((tab) => tab.path),
       expected: ['/d2/files/x'],
+    });
+  });
+
+  test('navigating loads into the active tab', () => {
+    const first = syncTabs(createInitialState(), { key: 'imago:tabs:d1', stored, path: '/d1/files/pricing', tab: { path: '/d1/files/pricing' } });
+    const next = syncTabs(first, { key: 'imago:tabs:d1', stored: null, path: plan.path, tab: plan });
+    assert({
+      given: 'a stored tab open and another page opened from it',
+      should: 'replace the active tab rather than open a new one',
+      actual: [next.resources.openTabs.map((tab) => tab.path), next.resources.activeTab],
+      expected: [['/d1/files/plan'], '/d1/files/plan'],
+    });
+  });
+
+  test('New tab', () => {
+    const first = syncTabs(createInitialState(), { key: 'imago:tabs:d1', stored, path: '/d1/files/pricing', tab: { path: '/d1/files/pricing' } });
+    const next = syncTabs(setNewTabPending(first, true), { key: 'imago:tabs:d1', stored: null, path: plan.path, tab: plan });
+    assert({
+      given: 'New tab asked for, then a page opened',
+      should: 'open it as a new tab and clear the request',
+      actual: [next.resources.openTabs.map((tab) => tab.path), next.resources.newTabPending],
+      expected: [['/d1/files/pricing', '/d1/files/plan'], false],
+    });
+  });
+
+  test('openBackgroundTab', () => {
+    const first = syncTabs(createInitialState(), { key: 'imago:tabs:d1', stored, path: '/d1/files/pricing', tab: { path: '/d1/files/pricing' } });
+    const next = openBackgroundTab(first, plan);
+    assert({
+      given: 'a ⌘-clicked page',
+      should: 'add its tab and stay in the active one',
+      actual: [next.resources.openTabs.map((tab) => tab.path), next.resources.activeTab],
+      expected: [['/d1/files/pricing', '/d1/files/plan'], '/d1/files/pricing'],
+    });
+  });
+
+  test('setTabs drops a closed active tab', () => {
+    const first = syncTabs(createInitialState(), { key: 'imago:tabs:d1', stored, path: '/d1/files/pricing', tab: { path: '/d1/files/pricing' } });
+    assert({
+      given: 'the active tab closed',
+      should: 'leave no active tab, so the next page opens a new one',
+      actual: setTabs(first, []).resources.activeTab,
+      expected: null,
     });
   });
 

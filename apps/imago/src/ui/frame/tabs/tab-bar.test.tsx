@@ -115,4 +115,25 @@ describe('TabBar (IMC-1.5)', () => {
       expected: [4, null],
     });
   });
+
+  test('⌘-click opens a background tab', async () => {
+    const root = render();
+    await settle(() => {
+      if (tabs(root).length !== 3) throw new Error('tabs not loaded');
+    });
+    const link = document.createElement('a');
+    link.href = '/imago/d1/files/notes';
+    document.body.append(link);
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true });
+    act(() => {
+      link.dispatchEvent(event);
+    });
+    link.remove();
+    assert({
+      given: 'a ⌘-clicked link to another page in the drive',
+      should: 'add its tab beside the active one, stay put and keep the browser from opening a tab',
+      actual: [tabs(root).map((tab) => tab.getAttribute('data-tab-path')), tabs(root).map((tab) => tab.getAttribute('aria-selected')), navigation.pushed, event.defaultPrevented],
+      expected: [['/d1/files/plan', '/d1/files/notes', '/d1/files/pricing', '/d1/messages/ops'], ['true', 'false', 'false', 'false'], [], true],
+    });
+  });
 });

@@ -2,7 +2,6 @@
 
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
-import { useUIStore } from '@/retained/stores/useUIStore';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
 import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
@@ -11,6 +10,7 @@ import { pageKey } from '../../files/page-object/page-object';
 import type { Stage } from '../stage/stage';
 import { goBack, goForward } from './tabs-model';
 import { useOpenTabs } from './use-open-tabs';
+import { requestNewTab, useNewTabClicks } from './use-new-tab-clicks';
 import { pageTabOf, tabLabelFor } from './tab-label';
 import { renderTab, renderTabBar } from './tab-bar.render';
 
@@ -40,8 +40,9 @@ export type TabBarProps = {
 };
 
 /**
- * The open-pages tab bar (IMC-1.5). Every navigation opens the middle's object as a tab and
- * records the visit; tabs persist per drive under imago's own key. Closing the active tab
+ * The open-pages tab bar (IMC-1.5). Browser-style, as in classic: a navigation loads into the
+ * active tab and records the visit; New tab, ⌘/Ctrl-click and middle-click open new tabs.
+ * Tabs persist per drive under imago's own key. Closing the active tab
  * moves to its neighbour, and closing the last one closes the middle (its section, where
  * Imago is the ground).
  */
@@ -49,6 +50,7 @@ export function TabBar({ stage, driveKey }: TabBarProps) {
   const router = useRouter();
   const { tabs, pathname, close } = useOpenTabs(stage, driveKey);
   const history = useUiState(selectHistory);
+  useNewTabClicks(stage);
 
   const back = history === null ? null : goBack(history);
   const forward = history === null ? null : goForward(history);
@@ -69,6 +71,6 @@ export function TabBar({ stage, driveKey }: TabBarProps) {
       dispatch(transactions.stepForward, undefined);
       router.push(forward.current);
     },
-    onNew: () => useUIStore.getState().openQuickCreate(null),
+    onNew: requestNewTab,
   });
 }
