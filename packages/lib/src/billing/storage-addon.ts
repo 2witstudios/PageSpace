@@ -220,7 +220,16 @@ export type StorageAddonApplyResult =
   | { kind: 'invalid'; reason: 'out_of_range' }
   | { kind: 'applied'; stored: StoredStorageAddon; charged: boolean }
   /** A write was refused (a declined card on the charging step). Stripe is back where it started. */
-  | { kind: 'failed'; error: unknown };
+  | {
+      kind: 'failed';
+      error: unknown;
+      /**
+       * Set only when undoing an earlier step also failed: Stripe still holds this item at
+       * this quantity, which differs from the stored mirror. The caller must log it for
+       * reconciliation (the webhook mirrors the live quantity, but not the paid grace).
+       */
+      unresolved?: { itemId: string; quantity: number; rollbackError: unknown };
+    };
 
 /**
  * Run a planned storage change against Stripe. `stored.blocks` must be Stripe's live
@@ -254,18 +263,22 @@ export async function applyStorageAddonChange(input: {
       lastApplied = step.quantity;
     } catch (error) {
       if (lastApplied !== null && itemId !== null && lastApplied !== input.stored.blocks) {
-        await input.port.updateItem({
-          itemId,
-          quantity: input.stored.blocks,
-          prorationBehavior: 'none',
-          idempotencyKey: storageAddonIdempotencyKey(input.payer, {
+        try {
+          await input.port.updateItem({
             itemId,
-            revision: input.stored.revision,
-            attemptId: input.attemptId,
-            rollback: true,
             quantity: input.stored.blocks,
-          }),
-        });
+            prorationBehavior: 'none',
+            idempotencyKey: storageAddonIdempotencyKey(input.payer, {
+              itemId,
+              revision: input.stored.revision,
+              attemptId: input.attemptId,
+              rollback: true,
+              quantity: input.stored.blocks,
+            }),
+          });
+        } catch (rollbackError) {
+          return { kind: 'failed', error, unresolved: { itemId, quantity: lastApplied, rollbackError } };
+        }
       }
       return { kind: 'failed', error };
     }

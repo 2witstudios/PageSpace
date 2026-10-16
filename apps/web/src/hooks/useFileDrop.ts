@@ -215,7 +215,8 @@ export function quotaDenial(error: unknown): { reason: string; manageHref: strin
   if (typeof reason !== 'string' || reason.length === 0) return null;
   // More storage (or, on Free, a paid plan) only helps when space ran out, or when Free's
   // file-count cap was hit. A file over the per-file limit is refused whatever the quota.
-  const outOfSpace = typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
+  const outOfSpace = !reason.startsWith('File exceeds ')
+    && typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
     && requiredBytes > quota.availableBytes;
   const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
   if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null };

@@ -187,6 +187,21 @@ describe('applyStorageAddonChange', () => {
     ]);
   });
 
+  it('given the rollback also fails, should report the quantity Stripe was left at instead of throwing', async () => {
+    let calls = 0;
+    const port = {
+      createItem: async () => ({ id: 'si_new' }),
+      updateItem: async () => {
+        calls += 1;
+        if (calls > 1) throw new Error(calls === 2 ? 'card_declined' : 'stripe_down');
+      },
+    };
+    const result = await applyStorageAddonChange({
+      payer, stored: stored({ blocks: 1, graceBlocks: 3, graceUntil: periodEnd }), target: 5, periodEnd, now, attemptId, port,
+    });
+    expect(result).toMatchObject({ kind: 'failed', unresolved: { itemId: 'si_1', quantity: 3 } });
+  });
+
   it('given a declined card on a single-step increase, should write nothing else', async () => {
     const { port, calls } = fakePort({ failOn: () => true });
     const result = await applyStorageAddonChange({ payer, stored: stored({ blocks: 1 }), target: 2, periodEnd, now, attemptId, port });

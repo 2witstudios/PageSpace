@@ -427,6 +427,12 @@ describe('quotaDenial', () => {
       .toEqual({ reason: 'File exceeds pro tier limit of 250MB', manageHref: null });
   });
 
+  it('given a file over the per-file limit that is also larger than the space left, should still not offer storage', async () => {
+    const { quotaDenial } = await import('../useFileDrop');
+    expect(quotaDenial({ status: 413, body: { reason: 'File exceeds pro tier limit of 250MB', requiredBytes: 300, quota: { userId: 'u1', availableBytes: 100, tier: 'pro' } } })?.manageHref)
+      .toBeNull();
+  });
+
   it('given the Free file-count cap, should point at the usage page to upgrade', async () => {
     const { quotaDenial } = await import('../useFileDrop');
     expect(quotaDenial({ status: 413, body: { reason: 'File count limit reached (100 files max for free tier)', requiredBytes: 1, quota: { userId: 'u1', availableBytes: 1000, tier: 'free' } } })?.manageHref)

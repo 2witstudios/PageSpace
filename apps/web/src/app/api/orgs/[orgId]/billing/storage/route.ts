@@ -62,6 +62,11 @@ export async function PATCH(request: Request, context: Context) {
       return NextResponse.json({ error: 'Invalid request body', code: 'invalid_request' }, { status: 400 });
     }
     if (result.kind === 'failed') {
+      if (result.unresolved) {
+        loggers.api.error('Org storage add-on change failed and its rollback failed; Stripe item differs from org_subscriptions, reconcile it', result.unresolved.rollbackError instanceof Error ? result.unresolved.rollbackError : undefined, {
+          orgId, itemId: result.unresolved.itemId, stripeQuantity: result.unresolved.quantity, mirrorBlocks: outcome.before,
+        });
+      }
       const failure = classifyStorageAddonFailure(result.error);
       loggers.api.warn('Org storage add-on change refused', { orgId, declined: failure.declined, error: result.error instanceof Error ? result.error.message : String(result.error) });
       return failure.declined

@@ -187,6 +187,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `blocks must be a whole number from 0 to ${STORAGE_ADDON.maxBlocks}` }, { status: 400 });
     }
     if (result.kind === 'failed') {
+      if (result.unresolved) {
+        loggers.api.error('Storage add-on change failed and its rollback failed; Stripe item differs from the mirror, reconcile it', result.unresolved.rollbackError instanceof Error ? result.unresolved.rollbackError : undefined, {
+          userId, itemId: result.unresolved.itemId, stripeQuantity: result.unresolved.quantity, mirrorBlocks: outcome.before,
+        });
+      }
       const failure = classifyStorageAddonFailure(result.error);
       loggers.api.warn('Storage add-on change refused', { userId, target, declined: failure.declined, error: result.error instanceof Error ? result.error.message : String(result.error) });
       return NextResponse.json({ error: failure.message }, { status: failure.declined ? 402 : 502 });
