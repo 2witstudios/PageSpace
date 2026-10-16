@@ -371,7 +371,9 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'id', 'orgId', 'stripeSubscriptionId', 'stripeBasePriceId', 'stripeBaseItemId',
       'stripeSeatPriceId', 'stripeSeatItemId', 'extraSeatQuantity', 'seatRevision',
       'status', 'gifted', 'giftedExtraSeats', 'giftRevision', 'collectionMethod', 'currentPeriodStart', 'currentPeriodEnd',
-      'cancelAtPeriodEnd', 'seatsReconciledThrough', 'createdAt', 'updatedAt',
+      'cancelAtPeriodEnd', 'seatsReconciledThrough',
+      'stripeStorageItemId', 'storageBlocks', 'storageGraceBlocks', 'storageGraceUntil', 'storageRevision',
+      'createdAt', 'updatedAt',
     ],
   },
 
