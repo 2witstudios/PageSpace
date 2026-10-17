@@ -13,11 +13,16 @@ permissions:
 
 jobs:
   unit-tests:
-    name: Unit Tests
+    name: Unit Tests (${{ matrix.suite }})
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [lib, web, other]
+
     env:
-      # This job builds apps/web — see the NODE_OPTIONS note on the lint job.
+      # Coverage instrumentation can exceed Node's default heap on large suites.
       NODE_OPTIONS: --max-old-space-size=6144
 
     services:
@@ -54,8 +59,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build packages
-        run: bun run build
+      # Migration entrypoints import DB schema through workspace dist exports.
+      # Build only their dependency, rather than every deployable application.
+      - name: Build database package
+        run: bunx turbo run build --filter='@pagespace/db'
 
       - name: Generate migrations
         env:
@@ -102,11 +109,13 @@ jobs:
       # branch re-downloads it, and this repo has no CI concurrency group, so
       # superseded runs never cancel and each one pays again.
       - name: Resolve Playwright version (cache key)
+        if: matrix.suite == 'other'
         id: playwright-version
         run: echo "version=$(node -p "require('playwright-core/package.json').version")" >> "$GITHUB_OUTPUT"
         working-directory: packages/editor
 
       - name: Cache Playwright browsers
+        if: matrix.suite == 'other'
         id: playwright-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -121,6 +130,7 @@ jobs:
       # populated the cache. The download is the expensive part and the cache
       # already removes it; apt with everything present costs seconds.
       - name: Install Chromium (cross-DOM parse-equality suite)
+        if: matrix.suite == 'other'
         id: chromium
         # `--with-deps` shells out to `apt-get update`, which exits non-zero if
         # ANY configured source fails — and Playwright treats that as fatal
@@ -182,18 +192,28 @@ jobs:
       # turned green by a later one, so the job's result is still the honest failure.
       - name: Run tests with coverage (Node 24)
         env:
+          SUITE: ${{ matrix.suite }}
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
-        run: >-
-          bunx turbo run test:coverage --filter='!@pagespace/processor' --continue=dependencies-successful --
-          --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
+        # Keep ^build: workspace exports resolve to dist. The mobile wrappers
+        # have no coverage scripts but pull web#build into Turbo's graph.
+        # Separate runners give lib and web independent CPU and Postgres budgets;
+        # lib's serial singleFork isolation is unchanged.
+        run: |
+          case "$SUITE" in
+            lib) filters=(--filter='@pagespace/lib') ;;
+            web) filters=(--filter='web') ;;
+            other) filters=(--filter='!@pagespace/lib' --filter='!web' --filter='!@pagespace/processor' --filter='!@pagespace/ios' --filter='!@pagespace/android') ;;
+          esac
+          bunx turbo run test:coverage "${filters[@]}" --continue=dependencies-successful -- \
+            --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
 
       # apps/processor ships on Node 22 (apps/processor/Dockerfile). Magika's
       # onnxruntime native bindings fail to initialize on Node 24, so test the
       # processor on the runtime it actually deploys to.
       - name: Setup Node.js (22 — processor runtime)
         id: node22
-        if: ${{ !cancelled() && steps.chromium.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.chromium.outcome == 'success' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
         with:
           node-version: '22'
@@ -203,7 +223,7 @@ jobs:
       # chain — the thing that makes the audit log tamper-evident — was
       # unverified on every run.
       - name: Run processor tests with coverage (Node 22)
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
@@ -228,7 +248,7 @@ jobs:
       # `describe.skipIf(!url)` had been reporting the whole audit-store cutover
       # rehearsal as "skipped" in every run that ever executed it.
       - name: Run backfill script tests
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
@@ -243,7 +263,7 @@ jobs:
       # it seeded), so this step is not order-dependent — it does not empty the
       # app database out from under anything else.
       - name: Run packages/db integration suites
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
@@ -262,7 +282,7 @@ jobs:
       # These suites assume a UTC server: several assert on write-time clocks,
       # and a non-UTC session timezone makes them fail by exactly the offset.
       - name: Run packages/lib integration suites
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         env:
           TZ: UTC
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
@@ -275,7 +295,7 @@ jobs:
       # Postgres (revoked, expired and replayed tokens), so it lives outside the
       # hermetic unit run like the packages above.
       - name: Run apps/imago integration suites
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
         run: bun run --filter '@pagespace/imago' test:integration
@@ -293,7 +313,7 @@ jobs:
       # an otherwise-green job the way the crash this replaced did.
       - name: Bring up local Infisical OSS (store adapter integration suite)
         id: infisical-up
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         working-directory: packages/lib/src/agent-accounts/store/infisical-dev
         run: |
           # Fetch the unchanged fixture tags through Google's public Docker Hub cache.
@@ -327,7 +347,7 @@ jobs:
 
       - name: Bootstrap Infisical dev admin (CI-only, throwaway instance)
         id: infisical-bootstrap
-        if: ${{ !cancelled() && steps.infisical-up.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.infisical-up.outcome == 'success' }}
         run: |
           boot=$(curl -sf -X POST http://localhost:8080/api/v1/admin/bootstrap \
             -H "Content-Type: application/json" \
@@ -342,7 +362,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Run Infisical store adapter integration suite
-        if: ${{ !cancelled() && steps.infisical-bootstrap.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.infisical-bootstrap.outcome == 'success' }}
         working-directory: packages/lib
         env:
           TZ: UTC
@@ -371,7 +391,7 @@ jobs:
           exit $vitest_status
 
       - name: Tear down local Infisical OSS
-        if: always()
+        if: always() && matrix.suite == 'other'
         working-directory: packages/lib/src/agent-accounts/store/infisical-dev
         run: docker compose down -v
 
@@ -380,7 +400,7 @@ jobs:
       # files — including upgrade-doc.test.ts, the only check on the operator
       # upgrade notes — ran nowhere. Invoked directly instead.
       - name: Run infrastructure tests
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         run: >-
           bun run test:infra --
           --reporter=default --reporter=json --outputFile.json=test-results/vitest-results.json
@@ -390,22 +410,18 @@ jobs:
       # no CI job runs. Runs after the suites above so a citation and its target are checked
       # against the same tree. See docs/2.0-architecture/agent-sessions-evidence.md.
       - name: Check evidence manifest
-        if: ${{ !cancelled() && steps.node22.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.suite == 'other' && steps.node22.outcome == 'success' }}
         run: bun run scripts/check-evidence-manifest.ts
 
       - name: Postgres connection report
         if: always()
         run: scripts/ci-pg-connection-sampler.sh report "$RUNNER_TEMP/pg-connections.log"
 
-      - name: Coverage report
-        if: always()
-        run: node scripts/coverage-report.mjs
-
       - name: Upload coverage artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage-reports
+          name: coverage-${{ matrix.suite }}
           path: |
             apps/*/coverage/coverage-summary.json
             packages/*/coverage/coverage-summary.json
@@ -417,6 +433,51 @@ jobs:
       # this job's slice. `if: always()` so a suite failure upstream still uploads whatever DID
       # run, rather than hiding it from the gate behind a job-level short-circuit.
       - name: Upload Vitest JSON test results (for the spec-coverage job)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vitest-json-${{ matrix.suite }}
+          path: |
+            packages/*/test-results/*.json
+            apps/*/test-results/*.json
+            scripts/test-results/*.json
+            infrastructure/test-results/*.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  coverage-report:
+    name: Combined coverage and test results
+    needs: [unit-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Download coverage suites
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      - name: Download Vitest suites
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: vitest-json-*
+          merge-multiple: true
+      - name: Coverage report
+        if: always()
+        run: node scripts/coverage-report.mjs
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-reports
+          path: |
+            apps/*/coverage/coverage-summary.json
+            packages/*/coverage/coverage-summary.json
+          retention-days: 30
+      - name: Upload Vitest JSON test results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -751,7 +812,7 @@ jobs:
   spec-coverage:
     name: Spec ID coverage
     runs-on: ubuntu-latest
-    needs: [unit-tests, e2e]
+    needs: [unit-tests, coverage-report, e2e]
     if: always()
 
     steps:

@@ -56,6 +56,16 @@ import { sendEmail } from '../email-service';
 import { DirectMessageEmail } from '../../email-templates/DirectMessageEmail';
 import { sendNotificationEmail, sendOrgInvitationEmail, sendPendingDriveInvitationEmail } from '../notification-email-service';
 
+import { DriveInvitationEmail } from '../../email-templates/DriveInvitationEmail';
+import { ConnectionRequestEmail } from '../../email-templates/ConnectionRequestEmail';
+import { PageSharedEmail } from '../../email-templates/PageSharedEmail';
+import { CollaboratorAddedEmail } from '../../email-templates/CollaboratorAddedEmail';
+import { ConnectionAcceptedEmail } from '../../email-templates/ConnectionAcceptedEmail';
+import { ConnectionRejectedEmail } from '../../email-templates/ConnectionRejectedEmail';
+import { PermissionRevokedEmail } from '../../email-templates/PermissionRevokedEmail';
+import { PermissionUpdatedEmail } from '../../email-templates/PermissionUpdatedEmail';
+import { DriveJoinedEmail } from '../../email-templates/DriveJoinedEmail';
+import { DriveRoleChangedEmail } from '../../email-templates/DriveRoleChangedEmail';
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
   query: {
@@ -74,6 +84,47 @@ describe('notification-email-service', () => {
     mockDb.query.emailNotificationPreferences.findFirst.mockResolvedValue(null); // default enabled
     mockDb.query.users.findFirst.mockResolvedValue({ name: 'Test User', email: 'test@example.com' });
     mockDb.insert.mockReturnValue({ values: vi.fn().mockResolvedValue(undefined) });
+  });
+
+  it.each([
+    ['DRIVE_INVITED', DriveInvitationEmail, { inviterName: 'Someone', driveName: 'a workspace' }],
+    ['NEW_DIRECT_MESSAGE', DirectMessageEmail, { senderName: 'Someone', messagePreview: 'New message received' }],
+    ['CONNECTION_REQUEST', ConnectionRequestEmail, { requesterName: 'Someone' }],
+    ['PAGE_SHARED', PageSharedEmail, { sharerName: 'Someone', pageTitle: 'a page', permissions: ['view'] }],
+    ['PERMISSION_GRANTED', PageSharedEmail, { sharerName: 'Someone', pageTitle: 'a page', permissions: ['view'] }],
+    ['CONNECTION_ACCEPTED', ConnectionAcceptedEmail, { accepterName: 'Someone' }],
+    ['CONNECTION_REJECTED', ConnectionRejectedEmail, { rejecterName: 'Someone' }],
+    ['PERMISSION_REVOKED', PermissionRevokedEmail, { pageTitle: 'a page' }],
+    ['PERMISSION_UPDATED', PermissionUpdatedEmail, { pageTitle: 'a page', permissions: ['view'] }],
+    ['DRIVE_JOINED', DriveJoinedEmail, { driveName: 'a workspace' }],
+    ['DRIVE_ROLE_CHANGED', DriveRoleChangedEmail, { driveName: 'a workspace', newRole: 'member' }],
+  ] as const)('renders safe template defaults for %s with missing metadata', async (type, template, defaults) => {
+    await sendNotificationEmail({ userId: 'user-1', type, metadata: {} });
+    expect(template).toHaveBeenCalledWith(expect.objectContaining({
+      ...defaults, userName: 'Test User',
+      unsubscribeUrl: expect.stringMatching(/^https:\/\/pagespace.ai\/api\/notifications\/unsubscribe\/ps_unsub_/),
+    }));
+    expect(sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: 'test@example.com' }));
+  });
+
+  it('uses safe defaults when edit access is granted without display metadata', async () => {
+    await sendNotificationEmail({ userId: 'user-1', type: 'PERMISSION_GRANTED', metadata: { permissions: { canEdit: true } } });
+    expect(CollaboratorAddedEmail).toHaveBeenCalledWith(expect.objectContaining({ adderName: 'Someone', pageTitle: 'a page' }));
+    expect(sendEmail).toHaveBeenCalledOnce();
+  });
+
+  it('records non-Error delivery failures even when the recipient disappeared', async () => {
+    vi.mocked(sendEmail).mockRejectedValueOnce('delivery unavailable');
+    mockDb.query.users.findFirst.mockResolvedValueOnce({ name: 'Test User', email: 'test@example.com' }).mockResolvedValueOnce(null);
+    const values = vi.fn().mockResolvedValue(undefined);
+    mockDb.insert.mockReturnValue({ values });
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await expect(sendNotificationEmail({ userId: 'user-1', type: 'DRIVE_JOINED', metadata: {} })).resolves.toBeUndefined();
+      expect(values).toHaveBeenCalledWith(expect.objectContaining({ success: false, recipientEmail: 'unknown', errorMessage: 'Unknown error' }));
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('should skip when user has notifications disabled', async () => {
