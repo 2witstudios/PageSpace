@@ -1,12 +1,12 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Icon } from '../../components/icon/icon';
+import { renderIconButton } from '../../components/icon-button/icon-button.render';
 import { ListGroup } from '../../components/list-group/list-group';
 import { renderEmptyState, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import type { Progress } from '../task-tree/task-tree';
 import type { TaskViewId } from '../task-views/task-views';
 import {
-  newListClass,
   taskListBarClass,
   taskListCountClass,
   taskListEmptyClass,
@@ -51,15 +51,16 @@ export type TaskViewRenderProps = {
   readonly onSelect: () => void;
 };
 
+/** The Tasks head's + : an untitled list at the drive's top, opened so it can be renamed. */
+export function renderNewListButton(onNew: () => void): ReactNode {
+  return renderIconButton({ name: 'plus', label: 'New list', onClick: onNew });
+}
+
 /** The smart views, each with its count; picking one filters the ground. */
-export function renderTaskViews({ views, onNewList }: { readonly views: readonly TaskViewRenderProps[]; readonly onNewList: () => void }): ReactNode {
+export function renderTaskViews({ views }: { readonly views: readonly TaskViewRenderProps[] }): ReactNode {
   return (
     <section aria-label="Views" className="flex flex-col gap-1">
-      <button type="button" className={newListClass} onClick={onNewList}>
-        <Icon name="plus" />
-        New list
-      </button>
-      <p className={`${tasksPaneLabelClass} mt-3`}>Views</p>
+      <p className={tasksPaneLabelClass}>Views</p>
       {views.map((view) => {
         const warn = view.warn && view.count !== undefined && view.count > 0;
         return (
