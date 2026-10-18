@@ -1,0 +1,209 @@
+# Imago Liquid Metal — design
+
+- **Status:** Proposed (design + working prototype; not yet in `apps/imago`)
+- **Date:** 2026-10-18
+- **Prototype:** `prototypes/imago-liquid-metal/index.html` (one file, WebGL2, no dependencies)
+- **Related:** ADR 0007 (Imago app, token-locked design system), `apps/imago/src/app/globals.css` (tokens), `apps/imago/src/ui/chat/use-agent-chat` (`AgentTurnStatus`)
+
+## 1. What we are making
+
+Imago is represented by a blob of liquid metal: a living, polished mirror that merges, splits, breathes and reacts while the agent listens, thinks and speaks. *Imago* is Latin for image, likeness, or reflection, so the material is the name. Imago has no colour of its own. Everything it shows is reflected from the person's work around it.
+
+The reference concept is Apple's Liquid Glass, taken as a visual idea rather than a material to copy:
+
+| Liquid Glass | Liquid Metal (this design) |
+|---|---|
+| Transmissive lens: bends what is **behind** it | Opaque mirror: shows what is **around and in front of** it |
+| Lensing concentrates at the edges, where content is most bent | Reflection compresses at the rim, where the surrounding UI is most squeezed |
+| Specular highlights move with device tilt | The studio key light moves with tilt (phone) or the pointer (desktop) |
+| Shapes merge and separate like droplets (`GlassEffectContainer`, union) | Droplets merge and separate with a smooth-min signed distance field |
+| Gel-like flex on touch, illuminates from the touch point | Underdamped springs (gel overshoot); a press squashes and sends a ripple |
+| Adapts its tint to light/dark content behind it | Adapts its studio to the theme, and keeps a contrast floor on any page |
+
+## 2. Why this is hard
+
+A mirror on a flat screen breaks most of the assumptions that make a mirror read as a mirror. Each problem below has a decision in §3.
+
+1. **The front of a mirror shows the viewer, and a screen cannot see the viewer.** Seen head-on, most of a convex mirror's face reflects what is in front of it. On a screen, that is the person, which the screen does not know.
+2. **Browsers do not let you read DOM pixels.** Liquid Glass on the web gets by because `backdrop-filter` hands the effect the pixels *behind* the element. A mirror needs the pixels *around* it, and no shipping API provides them (see §5.2).
+3. **A mirror in a uniform room disappears.** Chrome in a white room is white. Imago's chat column is one flat neutral, so a physically honest mirror vanishes into it in light mode and turns into a black hole in dark mode.
+4. **Reflections of text shimmer.** Glyphs compressed 10–50× and swept by motion alias into noise.
+5. **Feedback.** The blob sits inside the chat it reflects, and messages stream in under it. The reflection must not include itself, and it must not cost a full re-render for each token.
+6. **Scale.** The same character must read at 200px (empty chat), 28px (chat header) and 18px (inline "thinking" glyph).
+7. **Budget.** It lives in the always-mounted shell (ADR 0007 §4), so it runs for the whole session, on Capacitor WebViews too.
+
+## 3. Decisions
+
+### D1. Three-zone optics: studio, flag, page
+
+Imago is viewed orthographically from above, as a chrome ball resting on the page is seen from a camera overhead. For a surface normal `n` and view ray `V = (0,0,-1)`, the reflected ray is `R = V − 2(V·n)n`, so `R.z = 2·n.z² − 1`. That gives three zones that come straight from the geometry:
+
+| Zone | Where | `R` | What it reflects |
+|---|---|---|---|
+| **Face** | centre, `n.z > ~0.8` | points at the viewer (`R.z ≫ 0`) | **The studio:** a designed light environment standing in for the viewer's room |
+| **Flag** | a ring, `R.z ∈ ~[0.08, 0.46]` | near the horizon | **A flag:** the black card product photographers set at the horizon to give chrome an edge. It is inverted in dark mode (§D3) |
+| **Rim** | outer band, `n.z < 0.707` | back toward the page (`R.z < 0`) | **The page:** the ray is intersected with the page plane `z=0` at `q = P.xy + R.xy · (P.z / −R.z)` and samples the interface there |
+
+The rim does for Imago what lensing does for Liquid Glass. The interface around the blob slides across its edge, compressed toward the silhouette. Panes, the blue accent, the send button and the text lines of the open page all show up in it. It is a convex mirror, so things on the left appear on the left rim.
+
+Two corrections keep this readable:
+
+- **Contact occlusion.** The page directly under the blob lies in the blob's own shadow, so page samples near contact are darkened by `smoothstep(sdf(q))` (down to 18%). This gives the dark contact ring real chrome has, and it is what keeps the blob visible on a page of one flat colour.
+- **A finite page.** Grazing rays travel far (`t → ∞`). Past about 1.2–3.2 blob units the page fades into the flag, so the silhouette gets a dark edge on a light page and a light edge on a dark page, instead of dissolving.
+
+Material: polished silver, Schlick Fresnel with `F0 ≈ (0.96, 0.955, 0.94)`, plus cheap SDF ambient occlusion where droplets meet. Roughness ("polish") blurs both the studio (wider softboxes) and the page (higher mip level).
+
+### D2. The world: a proxy painted from layout and tokens, not a screenshot
+
+The engine keeps one low-resolution **world texture** of the viewport (¼ scale), painted in Canvas 2D from what the shell already knows:
+
+- elements marked `data-metal-env` are painted as rounded rects in their computed background colour (panes, rail, cards, chips, swatches, the composer);
+- text inside `data-metal-ink` roots is painted as **one bar per line box** (`Range.getClientRects()`), in the text's own colour at about 55% to stand in for glyph coverage;
+- `<canvas>` (Imago itself) and `<textarea>` are skipped, so there is no feedback loop.
+
+At blob scale the reflected surround is compressed 10–50× and blurred by the mip chain, so what survives is structure, tone and accent. Glyphs would only alias (§2.4), so line bars are better than a screenshot, not just cheaper. A screenshot also costs more and would need consent.
+
+**Repaint triggers:** resize, theme change, scroll (capture phase), a `MutationObserver` on the shell (debounced to one paint per frame), and `document.fonts.ready`. Cost: about 1–2ms on CPU at ¼ scale. While a reply streams, repaints are throttled to 10/s.
+
+### D3. The studio is a theme token set, and the flag is always the page's opposite
+
+The face reflects a studio defined as tokens beside the existing ones, so the theme switch restyles Imago with no code path of its own:
+
+```css
+--metal-room:  light-dark(oklch(0.86 0.006 230), oklch(0.2 0 0));        /* walls */
+--metal-sky:   light-dark(oklch(0.985 0.002 230), oklch(0.42 0.004 230)); /* overhead */
+--metal-flag:  light-dark(oklch(0.22 0.01 230), oklch(0.78 0.004 230));   /* horizon card */
+--metal-key:   light-dark(oklch(1 0 0), oklch(0.97 0.003 230));           /* softbox */
+```
+
+The rule that makes both themes work: **the flag is the opposite of the page.** In light mode a black card outlines the blob. In dark mode a light strip rim-lights it. The prototype showed that a physically consistent dark studio gives a black ball with no edge.
+
+The engine resolves tokens by setting them as a hidden probe's `color` (custom properties come back from `getComputedStyle` unresolved, and `light-dark()` resolves only through a real property), then reading the bytes from a 1px canvas. This holds to the token-locked rule (ADR 0007 §4): there are no literal colours in the engine.
+
+### D4. The viewer's side of the mirror
+
+The studio's **key light follows device tilt** (`DeviceOrientationEvent`, after a permission prompt on iOS) on phones, and the **pointer** on desktop. That is Liquid Glass's tilt-tracked specular, and it is what makes the mirror feel present in the room.
+
+**Optional: a true mirror.** With explicit, per-session consent, the front camera could feed the studio map, so Imago would literally show the viewer: blurred, low-resolution, processed on the device and never uploaded. It is the strongest expression of the name and also the riskiest privacy surface we would add. It is off by default and **not in v1** (see §10).
+
+### D5. The body: a droplet field on gel springs
+
+- **Shape:** 2–4 spheres combined with polynomial smooth-min (`k` ≈ 0.2–0.3), ray-marched in a single fragment shader (72 steps max, orthographic). One core droplet plus orbiting satellites that merge into it and pull away. Surface "churn" is a low-amplitude trig field. A "pulse" is a decaying radial ripple from the core.
+- **Motion:** every parameter chases its mood target on an **underdamped spring** (stiffness 90, damping 11, ζ ≈ 0.58). That overshoot is the gel feel. Orbits advance by integrating phase (`phase += speed·dt`), so a change of speed never makes the droplets jump.
+- **Gaze:** the core leans toward the pointer within about 420px, and toward the composer while listening.
+- **Touch:** pressing the hero squashes it (spring velocity impulse) and sends a pulse, like Liquid Glass's flex on touch.
+- **Silhouette anti-aliasing:** on a miss, the closest approach along the ray (`minD`, `pMin`) is shaded with coverage `1 − smoothstep(0, ~1.3px, minD)`. That gives clean edges at 18px without supersampling.
+
+### D6. Moods, derived from state that already exists
+
+The mood comes from a pure function of state Imago already has. The engine never invents state.
+
+```ts
+type ImagoMood = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
+moodFor({ status, composerFocused }: { status: AgentTurnStatus; composerFocused: boolean }): ImagoMood
+// 'error' → error · 'submitted' → thinking · 'streaming' → speaking
+// 'ready' + composer focused → listening · otherwise idle
+```
+
+| Mood | Body | Core / satellites / orbit | Speed | Merge `k` | Churn | Other |
+|---|---|---|---|---|---|---|
+| idle | slow breathing, lazy orbit | .40 / .15 / .44 | .30 | .22 | .10 | breathe 3.5% |
+| listening | pulls in tight, leans toward the composer | .43 / .11 / .30 | .16 | .27 | .04 | lean .17, slightly taller |
+| thinking | satellites race, split and remerge | .36 / .17 / .47 | 1.6 | .30 | .38 | |
+| speaking | ripples on each streamed token | .42 / .13 / .36 | .55 | .26 | .16 | pulse += .32 per token |
+| error | sags, slows, tarnishes | .39 / .09 / .20 | .05 | .20 | 0 | roughness .45, dim .4, squash .82 |
+
+Typing in the composer adds a small pulse per keystroke, so Imago visibly takes in the words. Mood is never the only signal: the status text stays in an `aria-live` region (§8).
+
+### D7. Size classes
+
+| Class | Where | Droplets | Churn / pulse | Contact shadow |
+|---|---|---|---|---|
+| `hero` (≈200px) | empty chat, Imago home | 4 | full | yes (light mode) |
+| `avatar` (≈28px) | chat header, agent picker, ask pill | 3 | half / yes | faint |
+| `glyph` (≈18px) | inline in a streaming message | 2 | none | none |
+
+A glyph cannot carry choreography, so it carries only mood: droplet tension, speed and tarnish.
+
+## 4. Architecture in `apps/imago`
+
+One engine, many views. Browsers cap live WebGL contexts at about 16 and destroy the oldest when a page goes over, so a context per blob would fail in a long session.
+
+```
+apps/imago/src/ui/metal/
+  metal-mood.ts            pure: moodFor(), MOODS targets, size classes        (unit-tested)
+  metal-springs.ts         pure: makeSprings(), stepSprings(), droplet layout   (unit-tested)
+  metal-optics.ts          pure TS mirror of the zone maths, for tests          (unit-tested)
+  metal-world.ts           DOM → world texture painter (data-metal-env / -ink)
+  metal-studio.ts          token probe → linear-RGB studio uniforms
+  metal-renderer.ts        WebGL2 program, shader source, draw(view)
+  metal-engine.ts          singleton: view registry, rAF scheduler, budgets, context loss
+  imago-blob.tsx           <ImagoBlob size="hero|avatar|glyph" mood=… />  (container)
+  imago-blob.render.tsx    the <canvas role="img">                          (render)
+  imago-blob-class.ts      class module, exact-string tested per house style
+```
+
+- **Rendering:** one offscreen WebGL2 canvas. For each visible view: set the viewport to its device-pixel size, draw, then `drawImage` the region into that view's own 2D canvas in the same task. Views therefore stay in normal DOM flow, z-order and clipping (popovers cover them correctly), unlike a full-screen overlay canvas.
+- **Coordinates:** each view passes its viewport rect, so its reflection samples the world at its true position. Two blobs on screen show different reflections.
+- **Context loss:** handle `webglcontextlost` and `webglcontextrestored`. Views show the still fallback (§8) until the context is restored.
+- **Store:** the mood is read through `useUiState` selectors (the composer focus flag plus chat status). The engine subscribes outside React, so a frame never re-renders React.
+- **Tokens:** new `--metal-*` colour tokens in `globals.css` (every one `light-dark()`, enforced by `theme.test.ts`) and size tokens for the three classes in `frame.css`. No arbitrary Tailwind values.
+- **Marking the world:** `data-metal-env` on the rail, panes, cards and composer, and `data-metal-ink` on text roots. That is opt-in and cheap, and one test asserts that the shell's major regions carry it.
+
+## 5. Environment capture: options considered
+
+### 5.1 Chosen: the proxy painter (D2)
+
+It works in every engine, costs about 1–2ms per repaint, is theme-correct by construction, has no privacy surface, and is what you would want visually at this scale anyway.
+
+### 5.2 Rejected for now
+
+- **HTML-in-Canvas** (`drawElementImage` / `texElementSubImage2D`, attribute `layoutsubtree` → `content="drawable"`). It can only draw **descendants of the canvas**, so it cannot see the shell around Imago unless the shell lives inside a canvas. It is also still behind a flag or origin trial in Chromium only. Revisit if it gains a way to draw arbitrary elements. It would then replace the painter behind the same world-texture interface.
+- **`backdrop-filter: url(#svg)` + `feDisplacementMap`.** This is how web Liquid Glass demos work. It is Chromium-only, it can only see pixels *behind* the element's own box (a mirror needs the surround, so the box would have to be inflated and masked), and the displacement map would need regenerating every frame as the blob morphs.
+- **DOM rasterisation (html2canvas-style).** 50–300ms per capture, unreliable with cross-origin images and backdrop filters, and it would put glyph detail into the reflection that we would then have to blur away.
+- **`-moz-element()`.** Firefox only.
+
+## 6. Performance budget
+
+| Item | Budget |
+|---|---|
+| GPU per hero frame (400², 4 droplets) | ≤ 1ms on integrated GPUs |
+| World repaint (CPU) | ≤ 2ms; at most one per frame, 10/s while streaming |
+| Frame rate | 60fps while the mood is changing or the pointer is near; drops to 20fps after 3s of idle; stops when the view is offscreen (`IntersectionObserver`) or the document is hidden |
+| Device pixel ratio | capped at 2 |
+| Memory | one context, one world texture (¼ viewport, with mips) |
+
+## 7. Motion and reduced motion
+
+- `prefers-reduced-motion: reduce`: no ambient motion (no orbit, breathing, churn or pulses). Mood changes jump to their targets, and the blob re-renders only when the mood, theme or layout changes. A still mirror is still a mirror, and the reflections stay correct.
+- The motion curve for anything outside the engine stays `--ease-pane`.
+
+## 8. Accessibility and fallbacks
+
+- `role="img"` with `aria-label="Imago"`. The state is always also in text (the existing status line, `aria-live="polite"`). Mood is decoration, never the only signal.
+- When the blob is a control (the ask pill), the button wrapping it carries the focus halo. The canvas is never focusable itself.
+- **No WebGL2 / context lost:** a still chrome made from a CSS radial gradient of the same `--metal-*` tokens (key spot, sky, room, flag ring). It is honest and theme-correct, and it does not move.
+- `prefers-reduced-transparency` does not apply: the metal is opaque.
+
+## 9. What the prototype established
+
+- **The three-zone model works.** The rim visibly carries the open page's accent, swatches and text bars, and shifts as the blob moves or the layout changes.
+- **The washout is real, and occlusion plus a finite page fix it.** The first pass was a pale blob on the pale chat column. Contact occlusion and fading the far page into the flag gave it a chrome silhouette with no colour of its own.
+- **Dark mode needs the inverted flag.** With a dark flag, the dark-mode blob was a black hole. A light horizon strip fixed it (D3).
+- **One shared context with blits per view** renders three simultaneous views (hero, avatar, inline glyph) without errors, even in headless Chromium on SwiftShader (software GL). It has not yet been profiled on real devices.
+
+## 10. Open questions for the owner
+
+1. **True mirror (camera):** ship it later as an opt-in, or never? (D4)
+2. **Pure silver or a trace of blue?** The design keeps the metal neutral so the accent appears only by reflection, which follows "the accent is the only colour". A faint blue in `F0` would tie Imago to the brand but stop it being a mirror.
+3. **Where it appears in v1:** hero and avatar only, or also the inline glyph and the collapsed ask pill?
+4. **Does Imago reflect other agents?** In a side chat with another agent, should Imago's avatar still be metal, and do user agents get a material of their own?
+5. **Mood vocabulary:** do we need more moods (`waiting on you` for `ask_user`, `working` for long tool runs) beyond the five turn states?
+
+## 11. Rollout
+
+1. Pure modules and their tests (mood, springs, optics maths), plus tokens and the theme test.
+2. Engine, renderer and world painter behind `NEXT_PUBLIC_IMAGO_METAL` (env only, like `IMAGO_ENABLED`).
+3. `<ImagoBlob>` in the empty chat (hero) and the chat header (avatar). Mark the world.
+4. Inline glyph on streaming messages, the ask pill, and the agent picker.
+5. Performance pass on Capacitor iOS/Android WebViews, then remove the flag.

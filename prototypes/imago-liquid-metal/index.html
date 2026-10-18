@@ -1,0 +1,722 @@
+<title>Imago Liquid Metal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a working Imago shell (rail · page · Imago column) with the metal blob living in it,
+   and a quiet control strip above. The shell is the environment the mirror reflects.
+   Tokens are PageSpace's own neutrals and blue accent (apps/imago/src/app/globals.css),
+   plus the metal "studio": the room the blob reflects where it faces the viewer. */
+:root {
+  --bg: oklch(0.995 0.002 240);
+  --surface: oklch(0.98 0.003 230);
+  --surface-raised: oklch(1 0 0);
+  --surface-overlay: oklch(0.94 0.003 230);
+  --surface-sunken: oklch(0.96 0.003 230);
+  --hairline: oklch(0.9 0.005 230 / 0.8);
+  --border: oklch(0.9 0.005 230);
+  --ink: oklch(0.15 0.01 220);
+  --ink-muted: oklch(0.48 0.015 220);
+  --ink-faint: oklch(0.6 0.01 220);
+  --accent: oklch(0.5 0.16 235);
+  --accent-soft: oklch(0.5 0.16 235 / 0.1);
+  --accent-ink: oklch(0.98 0.005 235);
+  --warn: #b45309;
+  --shadow: 0 1px 2px rgba(20, 32, 26, 0.08), 0 12px 40px rgba(20, 32, 26, 0.08);
+
+  /* The studio: what the mirror shows where it faces the viewer. */
+  --metal-room: oklch(0.86 0.006 230);
+  --metal-sky: oklch(0.985 0.002 230);
+  --metal-flag: oklch(0.22 0.01 230);
+  --metal-key: oklch(1 0 0);
+  --metal-key-gain: 1.5;
+  --metal-shadow: 0.2;
+
+  --font-body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --ease-pane: cubic-bezier(0.32, 0.72, 0, 1);
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: oklch(0.17 0 0);
+    --surface: oklch(0.2 0 0);
+    --surface-raised: oklch(0.23 0 0);
+    --surface-overlay: oklch(0.28 0 0);
+    --surface-sunken: oklch(0.14 0 0);
+    --hairline: oklch(0.94 0 0 / 0.12);
+    --border: oklch(0.32 0 0);
+    --ink: oklch(0.97 0 0);
+    --ink-muted: oklch(0.7 0 0);
+    --ink-faint: oklch(0.56 0 0);
+    --accent: oklch(0.62 0.16 235);
+    --accent-soft: oklch(0.62 0.16 235 / 0.18);
+    --accent-ink: oklch(0.17 0 0);
+    --warn: #fbbf24;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --metal-room: oklch(0.2 0 0);
+    --metal-sky: oklch(0.42 0.004 230);
+    --metal-flag: oklch(0.78 0.004 230);
+    --metal-key: oklch(0.97 0.003 230);
+    --metal-key-gain: 1.25;
+    --metal-shadow: 0.0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: oklch(0.17 0 0);
+  --surface: oklch(0.2 0 0);
+  --surface-raised: oklch(0.23 0 0);
+  --surface-overlay: oklch(0.28 0 0);
+  --surface-sunken: oklch(0.14 0 0);
+  --hairline: oklch(0.94 0 0 / 0.12);
+  --border: oklch(0.32 0 0);
+  --ink: oklch(0.97 0 0);
+  --ink-muted: oklch(0.7 0 0);
+  --ink-faint: oklch(0.56 0 0);
+  --accent: oklch(0.62 0.16 235);
+  --accent-soft: oklch(0.62 0.16 235 / 0.18);
+  --accent-ink: oklch(0.17 0 0);
+  --warn: #fbbf24;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --metal-room: oklch(0.2 0 0);
+  --metal-sky: oklch(0.42 0.004 230);
+  --metal-flag: oklch(0.78 0.004 230);
+  --metal-key: oklch(0.97 0.003 230);
+  --metal-key-gain: 1.25;
+  --metal-shadow: 0.0;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 14px/1.6 var(--font-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 32px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+
+.top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 24px; }
+.top h1 { margin: 0; font-size: 1.4375rem; font-weight: 600; letter-spacing: -0.01em; line-height: 1.15; text-wrap: balance; }
+.top p { margin: 4px 0 0; color: var(--ink-muted); max-width: 62ch; font-size: 0.8125rem; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.seg { display: inline-flex; padding: 2px; border-radius: 10px; background: var(--surface-overlay); gap: 2px; }
+.seg button {
+  font: 500 0.75rem/1 var(--font-body); color: var(--ink-muted); background: transparent; border: 0;
+  height: 28px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+}
+.seg button[aria-pressed="true"] { background: var(--surface-raised); color: var(--ink); box-shadow: var(--shadow); }
+.btn {
+  font: 500 0.75rem/1 var(--font-body); height: 32px; padding: 0 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface-raised); color: var(--ink);
+}
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 1px var(--accent); }
+.label { font: 500 0.6875rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+.range { display: inline-flex; align-items: center; gap: 8px; }
+.range input { width: 110px; accent-color: var(--accent); }
+
+/* ---- The shell (the environment) ---- */
+.shell {
+  display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 380px);
+  height: 640px; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--hairline); background: var(--bg);
+}
+.rail { background: var(--surface); border-right: 1px solid var(--hairline); display: flex; flex-direction: column; align-items: center; gap: 8px; padding-block: 14px; }
+.rail i { display: block; width: 32px; height: 32px; border-radius: 8px; background: var(--surface-overlay); }
+.rail i.on { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.page { min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg); }
+.page-head { height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 20px; border-bottom: 1px solid var(--hairline); color: var(--ink-muted); font-size: 0.8125rem; }
+.page-body { padding: 28px 40px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+.page-body h2 { margin: 0; font-size: 1.875rem; line-height: 1.15; letter-spacing: -0.015em; font-weight: 600; text-wrap: balance; }
+.page-body p { margin: 0; max-width: 62ch; color: var(--ink); }
+.callout { border-radius: 10px; background: var(--accent-soft); padding: 14px 16px; color: var(--ink); max-width: 62ch; }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatch { width: 92px; height: 64px; border-radius: 10px; }
+.chip { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 0.75rem; font-weight: 500; width: max-content; }
+
+.imago { min-width: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--hairline); }
+.imago-head { height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--hairline); font-weight: 500; }
+.imago-head .who { display: inline-flex; align-items: center; gap: 8px; }
+.imago-head .state { margin-left: auto; font: 400 0.6875rem/1 var(--font-mono); color: var(--ink-faint); letter-spacing: 0.04em; }
+.imago-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 14px; padding: 18px 16px; }
+.hero { display: flex; flex-direction: column; align-items: center; gap: 4px; padding-top: 6px; }
+.hero p { margin: 0; color: var(--ink-muted); font-size: 0.8125rem; text-align: center; max-width: 34ch; }
+.msg { border-radius: 14px; padding: 10px 12px; max-width: 92%; font-size: 0.8125rem; }
+.msg.you { align-self: flex-end; background: var(--accent); color: var(--accent-ink); }
+.msg.imago { align-self: flex-start; background: var(--surface-raised); box-shadow: var(--shadow); display: flex; gap: 8px; align-items: flex-start; }
+.msg.imago .text { min-width: 0; }
+.composer { margin: 10px 12px 12px; border-radius: 16px; background: var(--surface-raised); box-shadow: var(--shadow); border: 1px solid var(--hairline); padding: 10px 10px 10px 14px; display: flex; gap: 8px; align-items: flex-end; }
+.composer textarea { flex: 1; min-width: 0; resize: none; border: 0; background: transparent; color: var(--ink); font: 400 0.8125rem/1.5 var(--font-body); height: 40px; padding: 2px 0; }
+.composer textarea:focus-visible { box-shadow: none; }
+.send { width: 32px; height: 32px; border-radius: 999px; border: 0; background: var(--accent); color: var(--accent-ink); cursor: pointer; font-size: 15px; flex: none; }
+
+/* Blob views: a 2D canvas each; the engine blits into them from one shared WebGL2 context. */
+canvas.blob { display: block; flex: none; }
+canvas.blob.hero-size { width: 200px; height: 200px; margin: -10px 0 -14px; touch-action: none; cursor: grab; }
+canvas.blob.avatar-size { width: 30px; height: 30px; margin: -4px; }
+canvas.blob.glyph-size { width: 22px; height: 22px; margin: -2px; }
+
+/* What the mirror sees: the proxy world texture, shown on request. */
+.sees { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 16px; align-items: start; }
+.sees figure { margin: 0; border-radius: 10px; overflow: hidden; border: 1px solid var(--hairline); background: var(--surface); }
+.sees canvas { display: block; width: 100%; max-width: 560px; margin: 0 auto; height: auto; image-rendering: pixelated; }
+.sees figcaption { font-size: 0.75rem; color: var(--ink-muted); padding: 8px 12px; }
+.legend { display: flex; flex-direction: column; gap: 10px; font-size: 0.8125rem; color: var(--ink-muted); }
+.legend b { color: var(--ink); font-weight: 600; }
+.legend .row { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 10px; align-items: start; }
+.legend .dot { width: 12px; height: 12px; border-radius: 4px; margin-top: 4px; }
+.fallback { padding: 12px 14px; border-radius: 10px; background: var(--surface-overlay); color: var(--ink-muted); font-size: 0.8125rem; }
+
+@media (max-width: 920px) {
+  .shell { grid-template-columns: minmax(0, 1fr) minmax(0, 360px); }
+  .rail { display: none; }
+  .page-body { padding: 22px 24px; }
+}
+@media (max-width: 680px) {
+  .shell { grid-template-columns: minmax(0, 1fr); height: 600px; }
+  .page { display: none; }
+  .sees { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Imago Liquid Metal</h1>
+      <p>A mirror blob for Imago. Its rim reflects the interface around it, compressed the way a chrome ball on a desk shows the room. Its face reflects a lit studio, because the screen cannot see the person in front of it. Move the pointer, focus the composer, or send a message.</p>
+    </div>
+    <div class="controls" role="group" aria-label="Prototype controls">
+      <span class="label">Mood</span>
+      <div class="seg" id="mood">
+        <button type="button" data-mood="auto" aria-pressed="true">Auto</button>
+        <button type="button" data-mood="idle" aria-pressed="false">Idle</button>
+        <button type="button" data-mood="listening" aria-pressed="false">Listening</button>
+        <button type="button" data-mood="thinking" aria-pressed="false">Thinking</button>
+        <button type="button" data-mood="speaking" aria-pressed="false">Speaking</button>
+        <button type="button" data-mood="error" aria-pressed="false">Error</button>
+      </div>
+      <div class="seg" id="theme" aria-label="Theme">
+        <button type="button" data-theme-set="system" aria-pressed="true">System</button>
+        <button type="button" data-theme-set="light" aria-pressed="false">Light</button>
+        <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+      </div>
+      <label class="range" for="polish"><span class="label">Polish</span><input id="polish" type="range" min="0" max="100" value="88"></label>
+      <button type="button" class="btn" id="zones" aria-pressed="false">Show reflection zones</button>
+    </div>
+  </header>
+
+  <div class="shell" id="shell">
+    <nav class="rail" data-metal-env aria-label="Rail">
+      <i class="on" data-metal-env></i><i data-metal-env></i><i data-metal-env></i><i data-metal-env></i><i data-metal-env></i>
+    </nav>
+    <section class="page" data-metal-env aria-label="Open page">
+      <div class="page-head" data-metal-ink>Home / Launch plan</div>
+      <div class="page-body" data-metal-ink>
+        <h2>Spring launch plan</h2>
+        <p>We ship the new onboarding on May 4. Pricing copy is final; the help center still needs screenshots for the drive picker and the share sheet.</p>
+        <div class="callout" data-metal-env>Imago drafted the checklist below from last week's standup notes. Review before Friday.</div>
+        <div class="swatches">
+          <div class="swatch" data-metal-env style="background: oklch(0.72 0.12 60)"></div>
+          <div class="swatch" data-metal-env style="background: oklch(0.62 0.14 160)"></div>
+          <div class="swatch" data-metal-env style="background: var(--accent)"></div>
+          <div class="swatch" data-metal-env style="background: var(--ink)"></div>
+        </div>
+        <p>Open questions: who owns the launch email, and do we keep the waitlist page live after launch day?</p>
+        <span class="chip" data-metal-env>Assign owners</span>
+      </div>
+    </section>
+    <aside class="imago" data-metal-env aria-label="Imago">
+      <div class="imago-head" data-metal-ink>
+        <span class="who"><canvas class="blob avatar-size" data-blob="avatar" role="img" aria-label="Imago"></canvas>Imago</span>
+        <span class="state" id="stateText" aria-live="polite">idle</span>
+      </div>
+      <div class="imago-body" id="chat" data-metal-ink>
+        <div class="hero">
+          <canvas class="blob hero-size" data-blob="hero" role="img" aria-label="Imago"></canvas>
+          <p>Ask about this page, or anything in your drives.</p>
+        </div>
+      </div>
+      <form class="composer" id="composer" data-metal-env>
+        <textarea id="prompt" aria-label="Message Imago" placeholder="Ask Imago…">What's left before launch?</textarea>
+        <button class="send" type="submit" aria-label="Send">↑</button>
+      </form>
+    </aside>
+  </div>
+
+  <div class="sees">
+    <figure>
+      <canvas id="worldView" width="320" height="160" aria-label="The world texture the mirror samples"></canvas>
+      <figcaption>What Imago sees: the proxy world, painted from the shell's layout and theme tokens at quarter resolution. Text becomes line bars; nothing is screenshotted.</figcaption>
+    </figure>
+    <div class="legend">
+      <div class="row"><span class="dot" style="background: oklch(0.7 0.15 235)"></span><span><b>Rim: your interface.</b> Where the surface tilts past 45°, the reflected ray hits the page plane. Panes, the accent, and text lines slide across the edge as the blob moves.</span></div>
+      <div class="row"><span class="dot" style="background: oklch(0.35 0.02 230)"></span><span><b>Dark band: the flag.</b> A black card at the studio horizon, as product photographers use on chrome. It keeps the silhouette readable on a white page.</span></div>
+      <div class="row"><span class="dot" style="background: oklch(0.92 0.01 90)"></span><span><b>Face: the studio.</b> The viewer's side of the glass. A soft key light follows the pointer, as Liquid Glass's highlights follow the phone's tilt.</span></div>
+      <p class="fallback" id="glNote" hidden>WebGL2 is unavailable here, so the blob falls back to a still chrome gradient.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// ---------------------------------------------------------------- color resolution
+// Custom properties come back unresolved from getComputedStyle, so each token goes through a
+// probe's `color` (which resolves var(), oklch and light-dark) and then a 1px canvas for sRGB bytes.
+const probe = document.createElement('span');
+probe.style.display = 'none';
+document.body.appendChild(probe);
+const px = document.createElement('canvas'); px.width = px.height = 1;
+const pxc = px.getContext('2d', { willReadFrequently: true });
+function rgba(css) {
+  pxc.clearRect(0, 0, 1, 1); pxc.fillStyle = '#000'; pxc.fillStyle = css; pxc.fillRect(0, 0, 1, 1);
+  const d = pxc.getImageData(0, 0, 1, 1).data;
+  return [d[0] / 255, d[1] / 255, d[2] / 255, d[3] / 255];
+}
+function token(name) { probe.style.color = `var(${name})`; return rgba(getComputedStyle(probe).color); }
+function tokenNumber(name) { return parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name)) || 0; }
+
+// ---------------------------------------------------------------- the world (proxy environment)
+// The mirror cannot read DOM pixels, so the engine paints a stand-in of the viewport from
+// layout and tokens: surfaces as filled rounded rects, text as line bars. At blob scale the
+// reflection is compressed 10-50x and blurred by roughness; structure, tone and accent survive,
+// glyphs would not.
+const WORLD_SCALE = 0.25;
+const world = document.createElement('canvas');
+const wctx = world.getContext('2d');
+const blobCanvases = new Set();
+
+function paintWorld() {
+  const W = Math.max(8, Math.ceil(innerWidth * WORLD_SCALE));
+  const H = Math.max(8, Math.ceil(innerHeight * WORLD_SCALE));
+  if (world.width !== W || world.height !== H) { world.width = W; world.height = H; }
+  const s = WORLD_SCALE;
+  wctx.setTransform(1, 0, 0, 1, 0, 0);
+  wctx.fillStyle = getComputedStyle(document.body).backgroundColor;
+  wctx.fillRect(0, 0, W, H);
+  wctx.setTransform(s, 0, 0, s, 0, 0);
+  for (const el of document.querySelectorAll('[data-metal-env]')) {
+    const cs = getComputedStyle(el);
+    const r = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight || r.width === 0) continue;
+    if (rgba(cs.backgroundColor)[3] > 0) {
+      wctx.fillStyle = cs.backgroundColor;
+      wctx.beginPath(); wctx.roundRect(r.left, r.top, r.width, r.height, parseFloat(cs.borderTopLeftRadius) || 0); wctx.fill();
+    }
+    const sh = cs.boxShadow.includes('inset') && cs.boxShadow.match(/(rgb|oklch|color)\([^)]*\)/);
+    if (sh) { wctx.strokeStyle = sh[0]; wctx.lineWidth = 2 / s; wctx.stroke(); }
+  }
+  // Text: one bar per line box, in the text's own color at glyph coverage.
+  const range = document.createRange();
+  for (const root of document.querySelectorAll('[data-metal-ink]')) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (!n.nodeValue.trim()) continue;
+      const host = n.parentElement;
+      if (!host || host.closest('canvas,textarea')) continue;
+      const cs = getComputedStyle(host);
+      wctx.fillStyle = cs.color; wctx.globalAlpha = 0.55;
+      range.selectNodeContents(n);
+      for (const r of range.getClientRects()) {
+        if (r.bottom < 0 || r.top > innerHeight) continue;
+        const h = r.height * 0.5;
+        wctx.fillRect(r.left, r.top + (r.height - h) / 2, r.width, h);
+      }
+      wctx.globalAlpha = 1;
+    }
+    // Rendered bubbles and the composer read as surfaces too.
+    for (const el of root.querySelectorAll('.msg')) {
+      const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+      wctx.globalCompositeOperation = 'destination-over';
+      wctx.fillStyle = cs.backgroundColor; wctx.beginPath(); wctx.roundRect(r.left, r.top, r.width, r.height, 14); wctx.fill();
+      wctx.globalCompositeOperation = 'source-over';
+    }
+  }
+  worldDirty = false; worldVersion++;
+  const wv = document.getElementById('worldView');
+  if (wv) {
+    wv.width = W; wv.height = H;
+    wv.getContext('2d').drawImage(world, 0, 0);
+  }
+}
+let worldDirty = true, worldVersion = 0;
+const markWorld = () => { worldDirty = true; };
+
+// ---------------------------------------------------------------- moods and springs
+// Each mood is a set of targets; every parameter chases its target on an underdamped spring
+// (zeta ~0.58), which is what gives transitions the gel overshoot Liquid Glass has.
+const MOODS = {
+  idle:      { core: .40, sat: .15, orbit: .44, speed: .30, k: .22, churn: .10, lean: .07, rough: 0, dim: 0,   squash: 1,    breathe: .035 },
+  listening: { core: .43, sat: .11, orbit: .30, speed: .16, k: .27, churn: .04, lean: .17, rough: 0, dim: 0,   squash: 1.05, breathe: .02 },
+  thinking:  { core: .36, sat: .17, orbit: .47, speed: 1.6, k: .30, churn: .38, lean: .03, rough: .03, dim: 0, squash: .95, breathe: .05 },
+  speaking:  { core: .42, sat: .13, orbit: .36, speed: .55, k: .26, churn: .16, lean: .08, rough: 0, dim: 0,   squash: 1,    breathe: .03 },
+  error:     { core: .39, sat: .09, orbit: .20, speed: .05, k: .20, churn: 0,   lean: 0,   rough: .45, dim: .4, squash: .82,  breathe: 0 },
+};
+const KEYS = Object.keys(MOODS.idle);
+function makeSprings(mood) { const s = {}; for (const k of KEYS) s[k] = { x: MOODS[mood][k], v: 0 }; return s; }
+function stepSprings(s, target, dt) {
+  const K = 90, D = 11;
+  for (const k of KEYS) { const p = s[k]; const a = K * (target[k] - p.x) - D * p.v; p.v += a * dt; p.x += p.v * dt; }
+}
+
+// ---------------------------------------------------------------- renderer (one shared WebGL2 context)
+const VERT = `#version 300 es
+in vec2 aPos; out vec2 vUv;
+void main(){ vUv = aPos*0.5+0.5; gl_Position = vec4(aPos,0.,1.); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 o;
+uniform vec2 uRes;       // view size in device px
+uniform vec4 uRect;      // view rect in CSS px within the viewport
+uniform vec2 uViewport;  // viewport CSS px
+uniform float uScale;    // CSS px per world unit (view spans -1..1)
+uniform sampler2D uWorld;
+uniform vec4 uBalls[6];
+uniform int uCount;
+uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain;
+uniform vec3 uKeyDir, uRoom, uSky, uFlag, uKey, uFloor;
+
+float smin(float a, float b, float k){ float h = max(k-abs(a-b),0.)/k; return min(a,b) - h*h*k*.25; }
+float sdf(vec3 p){
+  p.z /= uSquash;
+  float d = 1e5;
+  for(int i=0;i<6;i++){ if(i>=uCount) break; d = smin(d, length(p-uBalls[i].xyz)-uBalls[i].w, uK); }
+  float t = uTime;
+  d += uChurn*.035*sin(p.x*9.+t*1.7)*sin(p.y*8.-t*1.3)*sin(p.z*7.+t*.9);
+  float r = length(p.xy-uBalls[0].xy);
+  d += uPulse*.03*sin(r*16.-t*10.)*exp(-r*2.);
+  return d*min(1.,uSquash);
+}
+vec3 nrm(vec3 p){
+  const vec2 e = vec2(1.,-1.)*.0015;
+  return normalize(e.xyy*sdf(p+e.xyy)+e.yyx*sdf(p+e.yyx)+e.yxy*sdf(p+e.yxy)+e.xxx*sdf(p+e.xxx));
+}
+vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
+
+// The viewer's hemisphere: a designed studio, since a screen cannot see who is in front of it.
+vec3 studio(vec3 R, float rough){
+  vec3 c = mix(uRoom, uSky, smoothstep(-.3, .9, R.y*.8 + R.z*.4));
+  float w = .03 + rough*.35;
+  c += uKey * uKeyGain * smoothstep(.955-w, .985, dot(R, normalize(uKeyDir)));
+  vec3 fd = normalize(vec3(-uKeyDir.x*.9, -.35, .55));
+  c += uKey * .45 * uKeyGain * smoothstep(.93-w, .975, dot(R, fd));
+  // The flag: a black card along the horizon, so chrome keeps an edge on a white page.
+  float flag = 1. - smoothstep(.08, .46, R.z);
+  return mix(c, uFlag, flag*.92);
+}
+// The page plane: reflect into z=0 and read the proxy world there.
+vec3 world(vec3 P, vec3 R, float rough){
+  float t = P.z / max(-R.z, 1e-3);
+  vec2 q = P.xy + R.xy*t;
+  vec2 css = uRect.xy + uRect.zw*.5 + vec2(q.x, -q.y)*uScale;
+  vec2 uv = css/uViewport;
+  float lod = log2(1. + t*2.5) + rough*5. + 1.;
+  vec3 c = lin(textureLod(uWorld, clamp(uv, vec2(.001), vec2(.999)), lod).rgb);
+  float outside = max(max(-uv.x, uv.x-1.), max(-uv.y, uv.y-1.));
+  c = mix(c, uFloor, smoothstep(0., .08, outside));
+  // The page right under the blob sits in its own occlusion, so contact reflections go dark.
+  // This is what keeps a mirror visible on a page of one flat colour.
+  float occl = smoothstep(-.02, .42, sdf(vec3(q, .02)));
+  c *= mix(.18, 1., occl);
+  // The page is finite: grazing rays run past it into the studio's dark horizon, which gives
+  // the silhouette its dark chrome edge on a white page.
+  return mix(c, uFlag, smoothstep(1.2, 3.2, t)*.85);
+}
+
+vec4 shade(vec3 P){
+  vec3 n = nrm(P);
+  vec3 V = vec3(0.,0.,-1.);
+  vec3 R = reflect(V, n);
+  float rough = uRough;
+  float wPlane = 1. - smoothstep(-.07, .05, R.z);
+  vec3 env = mix(studio(R, rough), world(P, R, rough), wPlane);
+  if(uZones > .5){
+    float flag = (1.-smoothstep(.08,.46,R.z))*(1.-wPlane);
+    env = mix(mix(vec3(.82,.8,.72), vec3(.05,.07,.1), flag), vec3(.12,.36,.85), wPlane);
+  }
+  // Polished silver: F0 near 1, Schlick toward white at grazing.
+  float cosT = clamp(n.z, 0., 1.);
+  vec3 F0 = vec3(.96,.955,.94);
+  vec3 F = F0 + (1.-F0)*pow(1.-cosT, 5.);
+  float ao = clamp(sdf(P+n*.09)/.09, 0., 1.);
+  vec3 col = env*F*mix(.55, 1., ao);
+  col *= 1. - uDim*.55;
+  return vec4(col, 1.);
+}
+
+void main(){
+  vec2 p = (vUv*2.-1.);
+  vec3 ro = vec3(p, 1.6);
+  float t = 0., minD = 1e5; vec3 pMin = ro; bool hit = false;
+  for(int i=0;i<72;i++){
+    vec3 q = ro + vec3(0.,0.,-1.)*t;
+    float d = sdf(q);
+    if(d < minD){ minD = d; pMin = q; }
+    if(d < .0008){ hit = true; break; }
+    t += d*.9;
+    if(t > 1.6) break;
+  }
+  float pxw = 2.6/uRes.x;
+  vec4 col = vec4(0.);
+  if(hit){ col = shade(pMin); }
+  else if(minD < pxw){
+    float a = 1. - smoothstep(0., pxw, minD);
+    col = vec4(shade(pMin).rgb, a);
+  }
+  // Contact shadow on the page: light mode only, as the house elevation goes flat in dark.
+  float sh = uShadow * (1.-smoothstep(-.02, .3, sdf(vec3(p+vec2(0.,.05), .02))));
+  vec3 c = pow(clamp(col.rgb/(1.+col.rgb*.12), 0., 1.), vec3(1./2.2));
+  float a = col.a + sh*(1.-col.a);
+  o = vec4(c*col.a, a);
+}`;
+
+const glCanvas = document.createElement('canvas');
+const gl = glCanvas.getContext('webgl2', { premultipliedAlpha: true, alpha: true, antialias: false });
+let prog, uni = {}, worldTex;
+function compile(type, src) {
+  const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+function initGL() {
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uKeyDir','uRoom','uSky','uFlag','uKey','uFloor'])
+    uni[n] = gl.getUniformLocation(prog, n);
+  worldTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, worldTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+let uploadedVersion = -1;
+function uploadWorld() {
+  if (uploadedVersion === worldVersion) return;
+  gl.bindTexture(gl.TEXTURE_2D, worldTex);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, world);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  uploadedVersion = worldVersion;
+}
+
+let studio = {};
+const linRGB = (c) => c.slice(0, 3).map((v) => Math.pow(v, 2.2));
+function readStudio() {
+  studio = {
+    room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')),
+    key: linRGB(token('--metal-key')), floor: linRGB(token('--bg')),
+    keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'),
+  };
+  markWorld();
+}
+
+// ---------------------------------------------------------------- views
+// Size classes: a glyph cannot carry choreography, so it gets fewer droplets and no churn.
+const SIZE = {
+  hero:   { drops: 4, churnScale: 1, interactive: true },
+  avatar: { drops: 3, churnScale: .5 },
+  glyph:  { drops: 2, churnScale: 0 },
+};
+const views = new Set();
+class BlobView {
+  constructor(canvas, kind) {
+    this.canvas = canvas; this.kind = kind; this.cfg = SIZE[kind];
+    this.ctx = canvas.getContext('2d');
+    this.springs = makeSprings('idle');
+    this.phase = Math.random() * 6; this.time = 0; this.pulse = 0; this.visible = true;
+    this.gaze = { x: 0, y: 0 };
+    blobCanvases.add(canvas); views.add(this);
+    if (this.cfg.interactive) {
+      canvas.addEventListener('pointerdown', () => { this.springs.squash.v -= 4.2; this.springs.core.v += 1.2; this.pulse = Math.min(1.2, this.pulse + .8); });
+    }
+    this.io = new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; });
+    this.io.observe(canvas);
+  }
+  dispose() { this.io.disconnect(); views.delete(this); blobCanvases.delete(this.canvas); }
+}
+
+// ---------------------------------------------------------------- state
+let mood = 'idle', moodOverride = 'auto', zones = false, polish = .88;
+const pointer = { x: innerWidth * .62, y: innerHeight * .3, has: false };
+const key = { x: .35, y: .55 };
+function effectiveMood() { return moodOverride === 'auto' ? mood : moodOverride; }
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (document.hidden) return;
+  const dt = Math.min(1 / 30, (now - (frame.last || now)) / 1000); frame.last = now;
+  const still = reduceMotion.matches;
+  if (worldDirty) paintWorld();
+  uploadWorld();
+
+  // The key light follows the pointer: the desktop stand-in for Liquid Glass's tilt-tracked highlights.
+  const nx = (pointer.x / innerWidth) * 2 - 1, ny = (pointer.y / innerHeight) * 2 - 1;
+  key.x += ((.3 + nx * .55) - key.x) * Math.min(1, dt * 4);
+  key.y += ((.5 - ny * .45) - key.y) * Math.min(1, dt * 4);
+
+  const m = effectiveMood();
+  document.getElementById('stateText').textContent = m;
+  for (const v of views) {
+    if (!v.visible) continue;
+    const target = { ...MOODS[m] };
+    target.rough = Math.max(target.rough, (1 - polish) * .6);
+    stepSprings(v.springs, target, still ? 1 : dt);
+    if (still) for (const k of KEYS) v.springs[k].v = 0;
+    const s = v.springs;
+    if (!still) { v.time += dt; v.phase += dt * s.speed.x; }
+    v.pulse *= Math.exp(-dt * 3.2);
+    render(v);
+  }
+}
+
+function render(v) {
+  const r = v.canvas.getBoundingClientRect();
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (v.canvas.width !== W || v.canvas.height !== H) { v.canvas.width = W; v.canvas.height = H; }
+  if (glCanvas.width < W || glCanvas.height < H) { glCanvas.width = Math.max(glCanvas.width, W); glCanvas.height = Math.max(glCanvas.height, H); }
+  const s = v.springs, t = v.time;
+  // Gaze: the core leans toward the pointer when it is near, toward the composer when listening.
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  let gx = 0, gy = 0;
+  if (pointer.has) {
+    const dx = pointer.x - cx, dy = pointer.y - cy, dist = Math.hypot(dx, dy);
+    const pull = Math.max(0, 1 - dist / 420);
+    gx = dx / (dist || 1) * pull; gy = -dy / (dist || 1) * pull;
+  }
+  if (effectiveMood() === 'listening') { gy -= .7; }
+  v.gaze.x += (gx - v.gaze.x) * .08; v.gaze.y += (gy - v.gaze.y) * .08;
+  const lean = s.lean.x;
+  const core = s.core.x * (1 + s.breathe.x * Math.sin(t * 1.3));
+  const balls = new Float32Array(24);
+  const cxw = v.gaze.x * lean, cyw = v.gaze.y * lean;
+  balls.set([cxw, cyw, core * s.squash.x, core], 0);
+  const n = v.cfg.drops;
+  for (let i = 1; i < n; i++) {
+    const a = v.phase * (1 + i * .17) + i * 2.094;
+    const orb = s.orbit.x * (1 + .12 * Math.sin(t * .8 + i * 1.7));
+    const rr = Math.max(.02, s.sat.x * (1 + .2 * Math.sin(t * 1.1 + i * 2)));
+    balls.set([cxw + Math.cos(a) * orb, cyw + Math.sin(a) * orb * .85, rr + .04 + .05 * Math.sin(t + i), rr], i * 4);
+  }
+  gl.viewport(0, 0, W, H);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(uni.uRes, W, H);
+  gl.uniform4f(uni.uRect, r.left, r.top, r.width, r.height);
+  gl.uniform2f(uni.uViewport, innerWidth, innerHeight);
+  gl.uniform1f(uni.uScale, r.width / 2);
+  gl.uniform1i(uni.uWorld, 0);
+  gl.uniform4fv(uni.uBalls, balls);
+  gl.uniform1i(uni.uCount, n);
+  gl.uniform1f(uni.uK, s.k.x);
+  gl.uniform1f(uni.uChurn, s.churn.x * v.cfg.churnScale);
+  gl.uniform1f(uni.uPulse, v.kind === 'glyph' ? 0 : v.pulse);
+  gl.uniform1f(uni.uRough, Math.max(0, s.rough.x));
+  gl.uniform1f(uni.uDim, Math.max(0, s.dim.x));
+  gl.uniform1f(uni.uSquash, Math.max(.5, s.squash.x));
+  gl.uniform1f(uni.uTime, t);
+  gl.uniform1f(uni.uZones, zones && v.kind === 'hero' ? 1 : 0);
+  gl.uniform1f(uni.uShadow, studio.shadow * (v.kind === 'hero' ? 1 : .5));
+  gl.uniform1f(uni.uKeyGain, studio.keyGain);
+  gl.uniform3f(uni.uKeyDir, key.x, key.y, .8);
+  gl.uniform3fv(uni.uRoom, studio.room); gl.uniform3fv(uni.uSky, studio.sky);
+  gl.uniform3fv(uni.uFlag, studio.flag); gl.uniform3fv(uni.uKey, studio.key); gl.uniform3fv(uni.uFloor, studio.floor);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  v.ctx.clearRect(0, 0, W, H);
+  v.ctx.drawImage(glCanvas, 0, glCanvas.height - H, W, H, 0, 0, W, H);
+}
+
+// ---------------------------------------------------------------- fallback
+function stillChrome() {
+  for (const c of document.querySelectorAll('canvas.blob')) {
+    c.style.borderRadius = '50%';
+    c.style.background = 'radial-gradient(circle at 38% 30%, var(--metal-key) 0 8%, var(--metal-sky) 18%, var(--metal-room) 48%, var(--metal-flag) 66%, var(--surface-overlay) 80%, var(--ink-faint) 100%)';
+    c.style.transform = 'scale(.8)';
+  }
+  document.getElementById('glNote').hidden = false;
+}
+
+// ---------------------------------------------------------------- the sample conversation
+const chat = document.getElementById('chat');
+const promptEl = document.getElementById('prompt');
+const REPLY = 'Three things are open. The help center needs drive-picker and share-sheet screenshots, the launch email has no owner, and nobody has decided whether the waitlist page stays up after May 4. I can draft the email and assign it to you if that helps.';
+let busy = false;
+function pulseAll(amount) { for (const v of views) v.pulse = Math.min(1.4, v.pulse + amount); }
+async function send(text) {
+  if (busy || !text.trim()) return;
+  busy = true;
+  const you = document.createElement('div'); you.className = 'msg you'; you.textContent = text; chat.appendChild(you);
+  promptEl.value = ''; promptEl.blur();
+  mood = 'thinking'; markWorld(); chat.scrollTop = chat.scrollHeight;
+  const bubble = document.createElement('div'); bubble.className = 'msg imago';
+  const glyph = document.createElement('canvas'); glyph.className = 'blob glyph-size'; glyph.setAttribute('role', 'img'); glyph.setAttribute('aria-label', 'Imago');
+  const body = document.createElement('div'); body.className = 'text'; body.textContent = 'Thinking…';
+  bubble.append(glyph, body); chat.appendChild(bubble);
+  const gv = gl ? new BlobView(glyph, 'glyph') : null;
+  if (!gl) stillChrome();
+  markWorld(); chat.scrollTop = chat.scrollHeight;
+  await wait(1400);
+  mood = 'speaking'; body.textContent = '';
+  for (const word of REPLY.split(' ')) {
+    body.textContent += (body.textContent ? ' ' : '') + word;
+    pulseAll(.32); markWorld(); chat.scrollTop = chat.scrollHeight;
+    await wait(55 + Math.random() * 90);
+  }
+  mood = 'idle'; busy = false;
+  if (gv) { await wait(600); gv.springs.core.v -= 1; }
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+document.getElementById('composer').addEventListener('submit', (e) => { e.preventDefault(); send(promptEl.value); });
+promptEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(promptEl.value); } });
+promptEl.addEventListener('focus', () => { if (!busy) mood = 'listening'; });
+promptEl.addEventListener('blur', () => { if (!busy && mood === 'listening') mood = 'idle'; });
+promptEl.addEventListener('input', () => pulseAll(.12));
+
+// ---------------------------------------------------------------- controls
+function pressOnly(group, btn) { for (const b of group.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === btn)); }
+document.getElementById('mood').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  moodOverride = b.dataset.mood; pressOnly(e.currentTarget, b);
+});
+document.getElementById('theme').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  const v = b.dataset.themeSet;
+  if (v === 'system') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', v);
+  pressOnly(e.currentTarget, b); readStudio();
+});
+document.getElementById('polish').addEventListener('input', (e) => { polish = e.target.value / 100; });
+document.getElementById('zones').addEventListener('click', (e) => { zones = !zones; e.currentTarget.setAttribute('aria-pressed', String(zones)); e.currentTarget.textContent = zones ? 'Hide reflection zones' : 'Show reflection zones'; });
+
+addEventListener('pointermove', (e) => { pointer.x = e.clientX; pointer.y = e.clientY; pointer.has = true; }, { passive: true });
+document.addEventListener('pointerleave', () => { pointer.has = false; });
+addEventListener('resize', markWorld);
+addEventListener('scroll', markWorld, { passive: true, capture: true });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readStudio);
+new MutationObserver(markWorld).observe(document.getElementById('shell'), { subtree: true, childList: true, characterData: true });
+document.fonts?.ready.then(markWorld);
+
+// ---------------------------------------------------------------- boot
+if (!gl) { stillChrome(); return; }
+try { initGL(); } catch (err) { console.error(err); stillChrome(); return; }
+readStudio();
+for (const c of document.querySelectorAll('canvas.blob')) new BlobView(c, c.dataset.blob);
+requestAnimationFrame(frame);
+})();
+</script>
