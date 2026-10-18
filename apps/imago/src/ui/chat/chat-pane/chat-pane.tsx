@@ -25,7 +25,6 @@ import { OutOfCreditsAlert } from './out-of-credits';
 import { ChipsRow } from '../chips-row/chips-row';
 import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
 import { ImagoHistory } from '../imago-history/imago-history';
-import { FilesIntro } from '../files-intro/files-intro';
 import { DmGround } from '@/ui/messages/dm-index/dm-index';
 import { TasksGround } from '@/ui/tasks/tasks-ground/tasks-ground';
 import { groundFor } from './ground';
@@ -124,7 +123,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     id: retainedSelection.agentId ?? 'retained-global-assistant',
     title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Imago' : 'Opening agent…'),
   } : chosenAgent;
-  // The Files ground: no page open, so the column opens with the drive's page count (IMC-2.12).
   // The Messages ground: on /dm, the people you can message (IMC-4.5).
   // The Tasks ground: the viewer's tasks on a drive's Tasks index (IMC-5.1).
   const ground = groundFor(stage);
@@ -164,12 +162,7 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     streamingMessageId: null,
     notice: agentsError !== undefined || conversationsError !== undefined ? NOTICES.load : lost ? NOTICES.lost(lost) : null,
     citationDriveId: stage.driveId ?? homeDriveId,
-    content: ground === 'files' && stage.driveId !== null ? (
-      <div className="flex h-full min-h-0 flex-col">
-        <FilesIntro driveId={stage.driveId} driveName={driveName} />
-        <div className="min-h-0 flex-1">{thread}</div>
-      </div>
-    ) : ground === 'dm' ? (
+    content: ground === 'dm' ? (
       <div className="flex h-full min-h-0 flex-col">
         <DmGround />
         <div className="min-h-0 flex-1">{thread}</div>
