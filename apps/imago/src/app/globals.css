@@ -266,12 +266,12 @@
   }
 }
 
-/* Imago's orb (ImagoOrb): the colour reflections drift across the mirror and the glints
-   twinkle; the reflected horizon and highlight stay put. Origins are in the 24-unit viewBox. */
-.imago-orb__swirl {
+/* Imago's orb (ImagoOrb): the liquid-metal reflections flow round the sphere and the glints
+   twinkle. Origins are in the orb's 24-unit viewBox. */
+.imago-orb__flow {
   transform-box: view-box;
   transform-origin: 12px 12px;
-  animation: imago-orb-swirl 9s linear infinite;
+  animation: imago-orb-flow 7s ease-in-out infinite alternate;
 }
 
 .imago-orb__glint {
@@ -285,9 +285,12 @@
   animation-delay: 1.4s;
 }
 
-@keyframes imago-orb-swirl {
+@keyframes imago-orb-flow {
+  from {
+    transform: rotate(-35deg);
+  }
   to {
-    transform: rotate(360deg);
+    transform: rotate(35deg);
   }
 }
 
