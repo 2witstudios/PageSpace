@@ -9,7 +9,7 @@ import {
 } from '@/retained/components/ui/popover';
 import { ScrollArea } from '@/retained/components/ui/scroll-area';
 import { Badge } from '@/retained/components/ui/badge';
-import { ChevronDown, Check, Loader2 } from 'lucide-react';
+import { ChevronDown, Check, Cpu, Loader2 } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
 import { toast } from 'sonner';
@@ -83,6 +83,11 @@ export interface ProviderModelSelectorProps {
   disabled?: boolean;
   /** The drive the chat runs in: its org's model allowlists decide what is offered (POL-8). */
   driveId?: string | null;
+  /**
+   * Sidebar toolbar: one icon button that opens a single popover holding both the provider and the
+   * model lists, so a thin composer never fits two labelled selectors (and their names) in a row.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -96,6 +101,7 @@ export function ProviderModelSelector({
   className,
   disabled = false,
   driveId = null,
+  compact = false,
 }: ProviderModelSelectorProps) {
   const [providerOpen, setProviderOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -346,6 +352,88 @@ export function ProviderModelSelector({
     [provider, model, onChange]
   );
 
+  // The two lists, shared by the inline pair and the compact popover.
+  const providerList = (
+    <div className="space-y-2">
+      {PROVIDER_GROUPS
+        .map((group) => ({
+          ...group,
+          providers: group.providers.filter((p) =>
+            isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
+          ),
+        }))
+        .filter((group) => group.providers.length > 0)
+        .map((group) => (
+          <div key={group.label}>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+              {group.label}
+            </div>
+            <div className="space-y-0.5">
+              {group.providers.map((p) => {
+                const isSelected = provider === p.id;
+                return (
+                  <Button
+                    key={p.id}
+                    variant={isSelected ? 'secondary' : 'ghost'}
+                    size="sm"
+                    disabled={isSaving}
+                    onClick={() => handleProviderSelect(p.id)}
+                    className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                  >
+                    <span className="truncate min-w-0">{p.name}</span>
+                    {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+
+  const modelList = (
+    <div className="space-y-0.5">
+      {isLoadingModels ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading models...
+        </div>
+      ) : availableModels.length === 0 ? (
+        <div className="text-xs text-muted-foreground px-2 py-2">
+          {provider === 'ollama' || provider === 'lmstudio'
+            ? 'No models found. Start your local server.'
+            : 'No models available'}
+        </div>
+      ) : (
+        availableModels.map(([modelId, modelName]) => {
+          const isSelected = model === modelId;
+          const accessible = isModelAccessible(provider as string, modelId);
+          return (
+            <Button
+              key={modelId}
+              variant={isSelected ? 'secondary' : 'ghost'}
+              size="sm"
+              disabled={isSaving || !accessible}
+              onClick={() => handleModelSelect(modelId)}
+              className="w-full justify-between text-xs h-7 px-2 min-w-0"
+            >
+              <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
+                {modelName}
+              </span>
+              {isSelected ? (
+                <Check className="h-3 w-3 shrink-0 ml-1" />
+              ) : !accessible ? (
+                <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
+                  Paid
+                </Badge>
+              ) : null}
+            </Button>
+          );
+        })
+      )}
+    </div>
+  );
+
   if (isLoading) {
     return (
       <Button
@@ -356,6 +444,46 @@ export function ProviderModelSelector({
       >
         <Loader2 className="h-3 w-3 animate-spin" />
       </Button>
+    );
+  }
+
+  if (compact) {
+    // One popover for both choices: the provider is changed in its list, the model in the other.
+    // Either close handler closes the single popover, so both flags move together.
+    return (
+      <Popover
+        open={providerOpen || modelOpen}
+        onOpenChange={(open) => {
+          setProviderOpen(open);
+          setModelOpen(open);
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            disabled={disabled || isSaving}
+            aria-label={`Model: ${providerDisplayName} ${modelDisplayName}`}
+            title={`${providerDisplayName} · ${modelDisplayName}`}
+            className={cn('h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent', className)}
+          >
+            <Cpu className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-60 p-0" align="end" sideOffset={8}>
+          <ScrollArea className="h-[360px] p-2">
+            <div className="space-y-3">
+              {providerList}
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+                  Model
+                </div>
+                {modelList}
+              </div>
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
     );
   }
 
@@ -376,41 +504,7 @@ export function ProviderModelSelector({
         </PopoverTrigger>
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[280px] p-2">
-            <div className="space-y-2">
-              {PROVIDER_GROUPS
-                .map((group) => ({
-                  ...group,
-                  providers: group.providers.filter((p) =>
-                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
-                  ),
-                }))
-                .filter((group) => group.providers.length > 0)
-                .map((group) => (
-                  <div key={group.label}>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
-                      {group.label}
-                    </div>
-                    <div className="space-y-0.5">
-                      {group.providers.map((p) => {
-                        const isSelected = provider === p.id;
-                        return (
-                          <Button
-                            key={p.id}
-                            variant={isSelected ? 'secondary' : 'ghost'}
-                            size="sm"
-                            disabled={isSaving}
-                            onClick={() => handleProviderSelect(p.id)}
-                            className="w-full justify-between text-xs h-7 px-2 min-w-0"
-                          >
-                            <span className="truncate min-w-0">{p.name}</span>
-                            {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-            </div>
+            {providerList}
           </ScrollArea>
         </PopoverContent>
       </Popover>
@@ -434,46 +528,7 @@ export function ProviderModelSelector({
         </PopoverTrigger>
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[200px] p-2">
-            <div className="space-y-0.5">
-              {isLoadingModels ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Loading models...
-                </div>
-              ) : availableModels.length === 0 ? (
-                <div className="text-xs text-muted-foreground px-2 py-2">
-                  {provider === 'ollama' || provider === 'lmstudio'
-                    ? 'No models found. Start your local server.'
-                    : 'No models available'}
-                </div>
-              ) : (
-                availableModels.map(([modelId, modelName]) => {
-                  const isSelected = model === modelId;
-                  const accessible = isModelAccessible(provider as string, modelId);
-                  return (
-                    <Button
-                      key={modelId}
-                      variant={isSelected ? 'secondary' : 'ghost'}
-                      size="sm"
-                      disabled={isSaving || !accessible}
-                      onClick={() => handleModelSelect(modelId)}
-                      className="w-full justify-between text-xs h-7 px-2 min-w-0"
-                    >
-                      <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
-                        {modelName}
-                      </span>
-                      {isSelected ? (
-                        <Check className="h-3 w-3 shrink-0 ml-1" />
-                      ) : !accessible ? (
-                        <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
-                          Paid
-                        </Badge>
-                      ) : null}
-                    </Button>
-                  );
-                })
-              )}
-            </div>
+            {modelList}
           </ScrollArea>
         </PopoverContent>
       </Popover>
