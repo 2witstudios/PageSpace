@@ -16,12 +16,12 @@ describe('groundFor()', () => {
     });
   });
 
-  test('the Tasks index, and an open list or task', () => {
+  test('the Tasks index has no chat ground: its list is the middle view', () => {
     assert({
       given: 'the Tasks index of a drive, a list open in it, and the Tasks index with no drive',
-      should: 'show the Tasks ground on the index only, and nothing with an object open or no drive',
+      should: 'leave the chat with no ground, since the Tasks index fills the middle instead',
       actual: [`/${DRIVE}/tasks`, `/${DRIVE}/tasks/${PAGE}`, '/tasks'].map((path) => groundFor(stageFor(path))),
-      expected: ['tasks', null, null],
+      expected: [null, null, null],
     });
   });
 });

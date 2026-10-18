@@ -12,6 +12,7 @@ import { MessagesPane } from '../../messages/messages-pane/messages-pane';
 import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { TasksGround } from '../../tasks/tasks-ground/tasks-ground';
 import { ToolPane } from '../tool-pane/tool-pane';
 import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
@@ -42,6 +43,7 @@ import { railDrive } from '../rail/rail-items';
 import {
   imagoStartsCollapsedAt,
   isHideableSection,
+  isTasksIndex,
   type HideableSection,
   isListSection,
   paneLayout,
@@ -245,7 +247,11 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
+        {missing
+          ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) })
+          : isTasksIndex(stage) && stage.driveId !== null
+            ? <TasksGround driveId={stage.driveId} />
+            : children}
       </div>
     </section>
   );

@@ -64,6 +64,10 @@ const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'sett
 
 export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
 
+/** A drive's Tasks index: its ground fills the middle, with Imago docked beside it as it does beside a page. */
+export const isTasksIndex = (stage: Stage): boolean =>
+  stage.section === 'tasks' && stage.driveId !== null && stage.object === null;
+
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'orgs', 'chat', 'settings', 'notifications', ...listSections];
 

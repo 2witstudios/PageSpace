@@ -28,7 +28,6 @@ import { ImagoHistory } from '../imago-history/imago-history';
 import { FilesIntro } from '../files-intro/files-intro';
 import { MessagesGround } from '@/ui/messages/messages-ground/messages-ground';
 import { DmGround } from '@/ui/messages/dm-index/dm-index';
-import { TasksGround } from '@/ui/tasks/tasks-ground/tasks-ground';
 import { groundFor } from './ground';
 import { usePathname } from 'next/navigation';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
@@ -127,7 +126,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
   } : chosenAgent;
   // The Files ground: no page open, so the column opens with the drive's page count (IMC-2.12).
   // The Messages ground: unread counts on a drive's index (IMC-4.2); on /dm, the people you can message (IMC-4.5).
-  // The Tasks ground: the viewer's tasks on a drive's Tasks index (IMC-5.1).
   const ground = groundFor(stage);
   // A side chat with an agent beside a page, before its first message: the invitation and chips (IMC-3.11).
   const sideChatEmpty = chosenAgent !== null && stage.object?.kind === 'page' && conversationId === null && !resolving;
@@ -173,11 +171,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     ) : ground === 'messages' || ground === 'dm' ? (
       <div className="flex h-full min-h-0 flex-col">
         {ground === 'dm' ? <DmGround /> : <MessagesGround />}
-        <div className="min-h-0 flex-1">{thread}</div>
-      </div>
-    ) : ground === 'tasks' && stage.driveId !== null ? (
-      <div className="flex h-full min-h-0 flex-col">
-        <TasksGround driveId={stage.driveId} />
         <div className="min-h-0 flex-1">{thread}</div>
       </div>
     ) : thread,
