@@ -7,7 +7,7 @@
 
 ## 1. What we are making
 
-Imago is represented by a blob of liquid metal: a living, polished mirror that merges, splits, breathes and reacts while the agent listens, thinks and speaks. *Imago* is Latin for image, likeness, or reflection, so the material is the name. Imago has no colour of its own. Everything it shows is reflected from the person's work around it.
+Imago is represented by an orb of liquid metal: a living, polished mirror. It stays one round body, and its surface swells, ripples and settles while the agent listens, thinks and speaks. *Imago* is Latin for image, likeness, or reflection, so the material is the name. Imago has no colour of its own. Everything it shows is reflected from the person's work around it.
 
 The reference concept is Apple's Liquid Glass, taken as a visual idea rather than a material to copy:
 
@@ -16,7 +16,7 @@ The reference concept is Apple's Liquid Glass, taken as a visual idea rather tha
 | Transmissive lens: bends what is **behind** it | Opaque mirror: shows what is **around and in front of** it |
 | Lensing concentrates at the edges, where content is most bent | Reflection compresses at the rim, where the surrounding UI is most squeezed |
 | Specular highlights move with device tilt | The studio key light moves with tilt (phone) or the pointer (desktop) |
-| Shapes merge and separate like droplets (`GlassEffectContainer`, union) | Droplets merge and separate with a smooth-min signed distance field |
+| Shapes merge and separate like droplets (`GlassEffectContainer`, union) | One orb. Bulges well up from inside and travel under the surface, joined by a smooth-min signed distance field, and never detach |
 | Gel-like flex on touch, illuminates from the touch point | Underdamped springs (gel overshoot); a press squashes and sends a ripple |
 | Adapts its tint to light/dark content behind it | Adapts its studio to the theme, and keeps a contrast floor on any page |
 
@@ -41,7 +41,7 @@ Imago is viewed orthographically from above, as a chrome ball resting on the pag
 | Zone | Where | `R` | What it reflects |
 |---|---|---|---|
 | **Face** | centre, `n.z > ~0.8` | points at the viewer (`R.z ≫ 0`) | **The studio:** a designed light environment standing in for the viewer's room |
-| **Flag** | a ring, `R.z ∈ ~[0.08, 0.46]` | near the horizon | **A flag:** the black card product photographers set at the horizon to give chrome an edge. It is inverted in dark mode (§D3) |
+| **Flag** | a ring, `R.z ∈ ~[0.08, 0.46]` | near the horizon | **A flag:** the black card product photographers set at the horizon to give chrome an edge |
 | **Rim** | outer band, `n.z < 0.707` | back toward the page (`R.z < 0`) | **The page:** the ray is intersected with the page plane `z=0` at `q = P.xy + R.xy · (P.z / −R.z)` and samples the interface there |
 
 The rim does for Imago what lensing does for Liquid Glass. The interface around the blob slides across its edge, compressed toward the silhouette. Panes, the blue accent, the send button and the text lines of the open page all show up in it. It is a convex mirror, so things on the left appear on the left rim.
@@ -49,7 +49,7 @@ The rim does for Imago what lensing does for Liquid Glass. The interface around 
 Two corrections keep this readable:
 
 - **Contact occlusion.** The page directly under the blob lies in the blob's own shadow, so page samples near contact are darkened by `smoothstep(sdf(q))` (down to 18%). This gives the dark contact ring real chrome has, and it is what keeps the blob visible on a page of one flat colour.
-- **A finite page.** Grazing rays travel far (`t → ∞`). Past about 1.2–3.2 blob units the page fades into the flag, so the silhouette gets a dark edge on a light page and a light edge on a dark page, instead of dissolving.
+- **A finite page.** Grazing rays travel far (`t → ∞`). Past about 1.5–3 orb units the page fades into the studio's **rim light**, which draws the silhouette: a dark edge on a light page, a bright strip on a dark one. Without it the edge dissolves.
 
 Material: polished silver, Schlick Fresnel with `F0 ≈ (0.96, 0.955, 0.94)`, plus cheap SDF ambient occlusion where droplets meet. Roughness ("polish") blurs both the studio (wider softboxes) and the page (higher mip level).
 
@@ -65,18 +65,29 @@ At blob scale the reflected surround is compressed 10–50× and blurred by the 
 
 **Repaint triggers:** resize, theme change, scroll (capture phase), a `MutationObserver` on the shell (debounced to one paint per frame), and `document.fonts.ready`. Cost: about 1–2ms on CPU at ¼ scale. While a reply streams, repaints are throttled to 10/s.
 
-### D3. The studio is a theme token set, and the flag is always the page's opposite
+### D3. The studio is a theme token set, and the rim light is always the page's opposite
 
 The face reflects a studio defined as tokens beside the existing ones, so the theme switch restyles Imago with no code path of its own:
 
 ```css
---metal-room:  light-dark(oklch(0.86 0.006 230), oklch(0.2 0 0));        /* walls */
---metal-sky:   light-dark(oklch(0.985 0.002 230), oklch(0.42 0.004 230)); /* overhead */
---metal-flag:  light-dark(oklch(0.22 0.01 230), oklch(0.78 0.004 230));   /* horizon card */
---metal-key:   light-dark(oklch(1 0 0), oklch(0.97 0.003 230));           /* softbox */
+--metal-room:      light-dark(oklch(0.86 0.006 230), oklch(0.3 0.003 230));   /* walls */
+--metal-sky:       light-dark(oklch(0.985 0.002 230), oklch(0.62 0.005 230)); /* overhead */
+--metal-flag:      light-dark(oklch(0.22 0.01 230), oklch(0.14 0 0));         /* horizon card */
+--metal-rim:       light-dark(oklch(0.22 0.01 230), oklch(0.9 0.003 230));    /* silhouette light */
+--metal-key:       light-dark(oklch(1 0 0), oklch(0.98 0.003 230));           /* softbox */
+/* numbers, per theme: key gain 1.5 / 1.6; page gain 1 / 1.7; contact shadow .2 / 0 */
 ```
 
-The rule that makes both themes work: **the flag is the opposite of the page.** In light mode a black card outlines the blob. In dark mode a light strip rim-lights it. The prototype showed that a physically consistent dark studio gives a black ball with no edge.
+What makes both themes work:
+
+- **The rim light is the opposite of the page.** On a light page a dark edge outlines the orb. On a dark page a crisp bright strip does, as in dark product photography of chrome.
+- **The flag stays dark in both themes**, so the face and the rim always have a dark band between them. That band is what reads as a curved, polished surface.
+- **Dark mode lifts the room and the page reflection** (page gain 1.7). This is not physical, but dark pages carry so little tone that an honest reflection is black on black. The prototype went through three versions:
+  1. A black ball with no edge.
+  2. A light flag, which gave a flat, blurry gray band.
+  3. The split above: a dark flag plus a bright rim light.
+
+  Version 3 is the first that keeps the sphere readable in dark mode.
 
 The engine resolves tokens by setting them as a hidden probe's `color` (custom properties come back from `getComputedStyle` unresolved, and `light-dark()` resolves only through a real property), then reading the bytes from a 1px canvas. This holds to the token-locked rule (ADR 0007 §4): there are no literal colours in the engine.
 
@@ -86,11 +97,16 @@ The studio's **key light follows device tilt** (`DeviceOrientationEvent`, after 
 
 **Optional: a true mirror.** With explicit, per-session consent, the front camera could feed the studio map, so Imago would literally show the viewer: blurred, low-resolution, processed on the device and never uploaded. It is the strongest expression of the name and also the riskiest privacy surface we would add. It is off by default and **not in v1** (see §10).
 
-### D5. The body: a droplet field on gel springs
+### D5. The body: one orb with liquid on its surface, on gel springs
 
-- **Shape:** 2–4 spheres combined with polynomial smooth-min (`k` ≈ 0.2–0.3), ray-marched in a single fragment shader (72 steps max, orthographic). One core droplet plus orbiting satellites that merge into it and pull away. Surface "churn" is a low-amplitude trig field. A "pulse" is a decaying radial ripple from the core.
+The first prototype orbited separate droplets around a core. In idle they read as limbs: a starfish, not an orb. The body is now **one orb**, and every liquid behaviour happens on or just under its surface:
+
+- **Orb:** a sphere (radius ≈ 0.54 of the view's half-width), ray-marched in a single fragment shader (72 steps max, orthographic).
+- **Surface modes:** smooth low-order polynomial modes on the unit direction from the centre: a quadrupole (`x²−y²`, `2xy`), an octupole (`x³−3xy²`, `3x²y−y³`), and a `z·x`/`z·y` term, each rotating slowly. Together they make the surface swell and settle like a drop of mercury. They are polynomials because an angle-based (`atan`) mode pinches at the pole facing the viewer, which showed up as a visible "+" in the face.
+- **Bulges:** 1–3 droplets *inside* the orb, each on a tilted great circle at `core − r + swell`, so they push the surface out by `swell` (0–0.06) as they travel. They are joined with polynomial smooth-min (`k` ≈ 0.22–0.26) and kept off the hidden underside. They never leave the orb.
+- **Churn and pulse:** churn is a faint high-frequency trig field. A pulse is a decaying radial ripple across the face.
 - **Motion:** every parameter chases its mood target on an **underdamped spring** (stiffness 90, damping 11, ζ ≈ 0.58). That overshoot is the gel feel. Orbits advance by integrating phase (`phase += speed·dt`), so a change of speed never makes the droplets jump.
-- **Gaze:** the core leans toward the pointer within about 420px, and toward the composer while listening.
+- **Gaze:** the orb barely moves. It leans by swinging its first bulge toward what it attends to (the pointer within about 420px, the composer while listening) and swelling it, so attention reads as the surface reaching out.
 - **Touch:** pressing the hero squashes it (spring velocity impulse) and sends a pulse, like Liquid Glass's flex on touch.
 - **Silhouette anti-aliasing:** on a miss, the closest approach along the ray (`minD`, `pMin`) is shaded with coverage `1 − smoothstep(0, ~1.3px, minD)`. That gives clean edges at 18px without supersampling.
 
@@ -105,25 +121,25 @@ moodFor({ status, composerFocused }: { status: AgentTurnStatus; composerFocused:
 // 'ready' + composer focused → listening · otherwise idle
 ```
 
-| Mood | Body | Core / satellites / orbit | Speed | Merge `k` | Churn | Other |
+| Mood | Body | Orb / bulge / swell | Bulge speed | Wobble | Churn | Other |
 |---|---|---|---|---|---|---|
-| idle | slow breathing, lazy orbit | .40 / .15 / .44 | .30 | .22 | .10 | breathe 3.5% |
-| listening | pulls in tight, leans toward the composer | .43 / .11 / .30 | .16 | .27 | .04 | lean .17, slightly taller |
-| thinking | satellites race, split and remerge | .36 / .17 / .47 | 1.6 | .30 | .38 | |
-| speaking | ripples on each streamed token | .42 / .13 / .36 | .55 | .26 | .16 | pulse += .32 per token |
-| error | sags, slows, tarnishes | .39 / .09 / .20 | .05 | .20 | 0 | roughness .45, dim .4, squash .82 |
+| idle | slow breathing, the surface swells and settles | .54 / .22 / .045 | .22 | .020 | .02 | breathe 2.2% |
+| listening | goes still and reaches toward the composer | .55 / .24 / .025 | .10 | .010 | .01 | lean .12, slightly taller |
+| thinking | currents race under the surface | .52 / .22 / .06 | 1.2 | .036 | .07 | |
+| speaking | ripples on each streamed token | .54 / .20 / .05 | .45 | .022 | .04 | pulse += .32 per token |
+| error | sags, stills, tarnishes | .52 / .16 / 0 | .04 | .004 | 0 | roughness .45, dim .4, squash .86 |
 
 Typing in the composer adds a small pulse per keystroke, so Imago visibly takes in the words. Mood is never the only signal: the status text stays in an `aria-live` region (§8).
 
 ### D7. Size classes
 
-| Class | Where | Droplets | Churn / pulse | Contact shadow |
+| Class | Where | Bulges | Wobble / churn / pulse | Contact shadow |
 |---|---|---|---|---|
-| `hero` (≈200px) | empty chat, Imago home | 4 | full | yes (light mode) |
-| `avatar` (≈28px) | chat header, agent picker, ask pill | 3 | half / yes | faint |
-| `glyph` (≈18px) | inline in a streaming message | 2 | none | none |
+| `hero` (≈200px) | empty chat, Imago home | 3 | full | yes (light mode) |
+| `avatar` (≈28px) | chat header, agent picker, ask pill | 2 | full / half / yes | faint |
+| `glyph` (≈18px) | inline in a streaming message | 1 | half / none / none | none |
 
-A glyph cannot carry choreography, so it carries only mood: droplet tension, speed and tarnish.
+A glyph cannot carry choreography, so it carries only mood: swell, speed and tarnish.
 
 ## 4. Architecture in `apps/imago`
 
@@ -189,7 +205,8 @@ It works in every engine, costs about 1–2ms per repaint, is theme-correct by c
 
 - **The three-zone model works.** The rim visibly carries the open page's accent, swatches and text bars, and shifts as the blob moves or the layout changes.
 - **The washout is real, and occlusion plus a finite page fix it.** The first pass was a pale blob on the pale chat column. Contact occlusion and fading the far page into the flag gave it a chrome silhouette with no colour of its own.
-- **Dark mode needs the inverted flag.** With a dark flag, the dark-mode blob was a black hole. A light horizon strip fixed it (D3).
+- **Dark mode needs its own studio.** The dark-mode blob went from a black hole, to a flat gray band, to a dark chrome body with a crisp bright rim (D3).
+- **Separate droplets read as a starfish.** One orb with surface modes and internal bulges reads as liquid metal and keeps the sphere (D5).
 - **One shared context with blits per view** renders three simultaneous views (hero, avatar, inline glyph) without errors, even in headless Chromium on SwiftShader (software GL). It has not yet been profiled on real devices.
 
 ## 10. Open questions for the owner

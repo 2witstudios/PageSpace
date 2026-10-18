@@ -28,8 +28,10 @@
   --metal-room: oklch(0.86 0.006 230);
   --metal-sky: oklch(0.985 0.002 230);
   --metal-flag: oklch(0.22 0.01 230);
+  --metal-rim: oklch(0.22 0.01 230);
   --metal-key: oklch(1 0 0);
   --metal-key-gain: 1.5;
+  --metal-page-gain: 1;
   --metal-shadow: 0.2;
 
   --font-body: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -54,11 +56,13 @@
     --accent-ink: oklch(0.17 0 0);
     --warn: #fbbf24;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --metal-room: oklch(0.2 0 0);
-    --metal-sky: oklch(0.42 0.004 230);
-    --metal-flag: oklch(0.78 0.004 230);
-    --metal-key: oklch(0.97 0.003 230);
-    --metal-key-gain: 1.25;
+    --metal-room: oklch(0.3 0.003 230);
+    --metal-sky: oklch(0.62 0.005 230);
+    --metal-flag: oklch(0.14 0 0);
+    --metal-rim: oklch(0.9 0.003 230);
+    --metal-key: oklch(0.98 0.003 230);
+    --metal-key-gain: 1.6;
+    --metal-page-gain: 1.7;
     --metal-shadow: 0.0;
     color-scheme: dark;
   }
@@ -79,11 +83,13 @@
   --accent-ink: oklch(0.17 0 0);
   --warn: #fbbf24;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --metal-room: oklch(0.2 0 0);
-  --metal-sky: oklch(0.42 0.004 230);
-  --metal-flag: oklch(0.78 0.004 230);
-  --metal-key: oklch(0.97 0.003 230);
-  --metal-key-gain: 1.25;
+  --metal-room: oklch(0.3 0.003 230);
+  --metal-sky: oklch(0.62 0.005 230);
+  --metal-flag: oklch(0.14 0 0);
+  --metal-rim: oklch(0.9 0.003 230);
+  --metal-key: oklch(0.98 0.003 230);
+  --metal-key-gain: 1.6;
+  --metal-page-gain: 1.7;
   --metal-shadow: 0.0;
   color-scheme: dark;
 }
@@ -353,12 +359,15 @@ const markWorld = () => { worldDirty = true; };
 // ---------------------------------------------------------------- moods and springs
 // Each mood is a set of targets; every parameter chases its target on an underdamped spring
 // (zeta ~0.58), which is what gives transitions the gel overshoot Liquid Glass has.
+// One orb. Its liquid behaviour lives on the surface: low-order wobble, and bulges that well up
+// from inside and travel around it (`swell` is how far a bulge pokes past the surface). Nothing
+// ever leaves the orb, so it never reads as separate pieces.
 const MOODS = {
-  idle:      { core: .40, sat: .15, orbit: .44, speed: .30, k: .22, churn: .10, lean: .07, rough: 0, dim: 0,   squash: 1,    breathe: .035 },
-  listening: { core: .43, sat: .11, orbit: .30, speed: .16, k: .27, churn: .04, lean: .17, rough: 0, dim: 0,   squash: 1.05, breathe: .02 },
-  thinking:  { core: .36, sat: .17, orbit: .47, speed: 1.6, k: .30, churn: .38, lean: .03, rough: .03, dim: 0, squash: .95, breathe: .05 },
-  speaking:  { core: .42, sat: .13, orbit: .36, speed: .55, k: .26, churn: .16, lean: .08, rough: 0, dim: 0,   squash: 1,    breathe: .03 },
-  error:     { core: .39, sat: .09, orbit: .20, speed: .05, k: .20, churn: 0,   lean: 0,   rough: .45, dim: .4, squash: .82,  breathe: 0 },
+  idle:      { core: .54, bulge: .22, swell: .045, speed: .22, k: .24, churn: .02, wobble: .020, lean: .05, rough: 0,   dim: 0,  squash: 1,    breathe: .022 },
+  listening: { core: .55, bulge: .24, swell: .025, speed: .10, k: .26, churn: .01, wobble: .010, lean: .12, rough: 0,   dim: 0,  squash: 1.03, breathe: .012 },
+  thinking:  { core: .52, bulge: .22, swell: .06, speed: 1.2, k: .26, churn: .07, wobble: .036, lean: .02, rough: .02, dim: 0, squash: .97,  breathe: .03 },
+  speaking:  { core: .54, bulge: .20, swell: .050, speed: .45, k: .24, churn: .04, wobble: .022, lean: .06, rough: 0,   dim: 0,  squash: 1,    breathe: .02 },
+  error:     { core: .52, bulge: .16, swell: 0,    speed: .04, k: .22, churn: 0,   wobble: .004, lean: 0,   rough: .45, dim: .4, squash: .86,  breathe: 0 },
 };
 const KEYS = Object.keys(MOODS.idle);
 function makeSprings(mood) { const s = {}; for (const k of KEYS) s[k] = { x: MOODS[mood][k], v: 0 }; return s; }
@@ -382,18 +391,30 @@ uniform float uScale;    // CSS px per world unit (view spans -1..1)
 uniform sampler2D uWorld;
 uniform vec4 uBalls[6];
 uniform int uCount;
-uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain;
-uniform vec3 uKeyDir, uRoom, uSky, uFlag, uKey, uFloor;
+uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain, uWobble, uPageGain;
+uniform vec3 uKeyDir, uRoom, uSky, uFlag, uRim, uKey, uFloor;
 
 float smin(float a, float b, float k){ float h = max(k-abs(a-b),0.)/k; return min(a,b) - h*h*k*.25; }
 float sdf(vec3 p){
   p.z /= uSquash;
-  float d = 1e5;
-  for(int i=0;i<6;i++){ if(i>=uCount) break; d = smin(d, length(p-uBalls[i].xyz)-uBalls[i].w, uK); }
   float t = uTime;
+  // The orb: a sphere whose surface carries slow low-order modes, like a drop of mercury settling.
+  vec3 q = p - uBalls[0].xyz;
+  float r = length(q) + 1e-4;
+  // Smooth polynomial surface modes (no angles, so no pinch at the pole facing the viewer),
+  // each rotating slowly so the surface swells and settles rather than spinning.
+  vec3 u = q / r;
+  float c2 = cos(t*.7), s2 = sin(t*.7), c3 = cos(t*-.45+1.3), s3 = sin(t*-.45+1.3);
+  float m2 = (u.x*u.x - u.y*u.y)*c2 + 2.*u.x*u.y*s2;
+  float m3 = (u.x*u.x*u.x - 3.*u.x*u.y*u.y)*c3 + (3.*u.x*u.x*u.y - u.y*u.y*u.y)*s3;
+  float mz = u.z*u.x*sin(t*.9) + u.z*u.y*cos(t*.6);
+  float modes = m2*.7 + m3*.6 + mz*.5;
+  float d = r - uBalls[0].w - uWobble*modes;
+  // Bulges: droplets inside the orb that push its surface out as they travel.
+  for(int i=1;i<6;i++){ if(i>=uCount) break; d = smin(d, length(p-uBalls[i].xyz)-uBalls[i].w, uK); }
   d += uChurn*.035*sin(p.x*9.+t*1.7)*sin(p.y*8.-t*1.3)*sin(p.z*7.+t*.9);
-  float r = length(p.xy-uBalls[0].xy);
-  d += uPulse*.03*sin(r*16.-t*10.)*exp(-r*2.);
+  float rp = length(p.xy-uBalls[0].xy);
+  d += uPulse*.03*sin(rp*16.-t*10.)*exp(-rp*2.);
   return d*min(1.,uSquash);
 }
 vec3 nrm(vec3 p){
@@ -426,10 +447,10 @@ vec3 world(vec3 P, vec3 R, float rough){
   // The page right under the blob sits in its own occlusion, so contact reflections go dark.
   // This is what keeps a mirror visible on a page of one flat colour.
   float occl = smoothstep(-.02, .42, sdf(vec3(q, .02)));
-  c *= mix(.18, 1., occl);
-  // The page is finite: grazing rays run past it into the studio's dark horizon, which gives
-  // the silhouette its dark chrome edge on a white page.
-  return mix(c, uFlag, smoothstep(1.2, 3.2, t)*.85);
+  c *= mix(.18, 1., occl) * uPageGain;
+  // The page is finite: grazing rays run past it into the studio's rim light, which draws the
+  // silhouette. Dark on a light page, a bright strip on a dark one.
+  return mix(c, uRim, smoothstep(1.5, 3.0, t)*.95);
 }
 
 vec4 shade(vec3 P){
@@ -497,7 +518,7 @@ function initGL() {
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uKeyDir','uRoom','uSky','uFlag','uKey','uFloor'])
+  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uWobble','uPageGain','uKeyDir','uRoom','uSky','uFlag','uRim','uKey','uFloor'])
     uni[n] = gl.getUniformLocation(prog, n);
   worldTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, worldTex);
@@ -520,9 +541,9 @@ let studio = {};
 const linRGB = (c) => c.slice(0, 3).map((v) => Math.pow(v, 2.2));
 function readStudio() {
   studio = {
-    room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')),
+    room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')), rim: linRGB(token('--metal-rim')),
     key: linRGB(token('--metal-key')), floor: linRGB(token('--bg')),
-    keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'),
+    keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'), pageGain: tokenNumber('--metal-page-gain') || 1,
   };
   markWorld();
 }
@@ -603,17 +624,31 @@ function render(v) {
   }
   if (effectiveMood() === 'listening') { gy -= .7; }
   v.gaze.x += (gx - v.gaze.x) * .08; v.gaze.y += (gy - v.gaze.y) * .08;
-  const lean = s.lean.x;
   const core = s.core.x * (1 + s.breathe.x * Math.sin(t * 1.3));
   const balls = new Float32Array(24);
-  const cxw = v.gaze.x * lean, cyw = v.gaze.y * lean;
-  balls.set([cxw, cyw, core * s.squash.x, core], 0);
+  // The orb barely moves; it leans by growing a bulge toward what it attends to.
+  const ox = v.gaze.x * s.lean.x * .25, oy = v.gaze.y * s.lean.x * .25, oz = core * s.squash.x;
+  balls.set([ox, oy, oz, core], 0);
   const n = v.cfg.drops;
+  const gazeMag = Math.min(1, Math.hypot(v.gaze.x, v.gaze.y));
   for (let i = 1; i < n; i++) {
-    const a = v.phase * (1 + i * .17) + i * 2.094;
-    const orb = s.orbit.x * (1 + .12 * Math.sin(t * .8 + i * 1.7));
-    const rr = Math.max(.02, s.sat.x * (1 + .2 * Math.sin(t * 1.1 + i * 2)));
-    balls.set([cxw + Math.cos(a) * orb, cyw + Math.sin(a) * orb * .85, rr + .04 + .05 * Math.sin(t + i), rr], i * 4);
+    // Each bulge travels a tilted great circle just inside the surface.
+    const a = v.phase * (1 + i * .23) + i * 2.094;
+    const tilt = .9 + i * .7 + .3 * Math.sin(t * .21 + i);
+    let dx = Math.cos(a), dy = Math.sin(a) * Math.cos(tilt), dz = Math.sin(a) * Math.sin(tilt);
+    if (dz < -.2) dz = -.2 - (dz + .2) * .3; // keep bulges off the hidden underside
+    if (i === 1 && gazeMag > .01) {
+      // The first bulge is attention: it swings toward the gaze and swells with it.
+      const w = gazeMag * Math.min(1, s.lean.x * 7);
+      dx = dx * (1 - w) + (v.gaze.x / gazeMag) * w;
+      dy = dy * (1 - w) + (v.gaze.y / gazeMag) * w;
+      dz = dz * (1 - w) + .25 * w;
+    }
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const rb = Math.max(.04, s.bulge.x * (1 + .15 * Math.sin(t * 1.1 + i * 2)));
+    const swell = s.swell.x * (1 + .5 * Math.sin(t * .9 + i * 1.9)) + (i === 1 ? s.lean.x * gazeMag * .3 : 0);
+    const dist = core - rb + swell;
+    balls.set([ox + dx / len * dist, oy + dy / len * dist, oz + dz / len * dist, rb], i * 4);
   }
   gl.viewport(0, 0, W, H);
   gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
@@ -625,6 +660,8 @@ function render(v) {
   gl.uniform4fv(uni.uBalls, balls);
   gl.uniform1i(uni.uCount, n);
   gl.uniform1f(uni.uK, s.k.x);
+  gl.uniform1f(uni.uWobble, s.wobble.x * (v.kind === 'glyph' ? .5 : 1));
+  gl.uniform1f(uni.uPageGain, studio.pageGain);
   gl.uniform1f(uni.uChurn, s.churn.x * v.cfg.churnScale);
   gl.uniform1f(uni.uPulse, v.kind === 'glyph' ? 0 : v.pulse);
   gl.uniform1f(uni.uRough, Math.max(0, s.rough.x));
@@ -636,7 +673,7 @@ function render(v) {
   gl.uniform1f(uni.uKeyGain, studio.keyGain);
   gl.uniform3f(uni.uKeyDir, key.x, key.y, .8);
   gl.uniform3fv(uni.uRoom, studio.room); gl.uniform3fv(uni.uSky, studio.sky);
-  gl.uniform3fv(uni.uFlag, studio.flag); gl.uniform3fv(uni.uKey, studio.key); gl.uniform3fv(uni.uFloor, studio.floor);
+  gl.uniform3fv(uni.uFlag, studio.flag); gl.uniform3fv(uni.uRim, studio.rim); gl.uniform3fv(uni.uKey, studio.key); gl.uniform3fv(uni.uFloor, studio.floor);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   v.ctx.clearRect(0, 0, W, H);
   v.ctx.drawImage(glCanvas, 0, glCanvas.height - H, W, H, 0, 0, W, H);
