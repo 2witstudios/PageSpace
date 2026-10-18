@@ -33,7 +33,7 @@ describe('palette classes', () => {
       actual: [paletteFieldClass, paletteInputClass, paletteScopeClass],
       expected: [
         'flex items-center gap-2 border-b border-hairline px-3 text-ink-muted',
-        'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint',
+        'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint focus-visible:shadow-none',
         'flex flex-none items-center gap-2 text-xs text-ink-muted',
       ],
     });
