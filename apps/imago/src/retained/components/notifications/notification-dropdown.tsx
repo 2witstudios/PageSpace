@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Settings, X } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
-import { ScrollArea } from '@/retained/components/ui/scroll-area';
 import {
   isShownNotification,
   groupForBell,
@@ -63,7 +62,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
         </Button>
       </div>
 
-      <ScrollArea className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {feed.isLoading && shown.length === 0 ? (
           <p className="p-4 text-center text-muted-foreground">Loading notifications...</p>
         ) : groups.length === 0 ? (
@@ -87,7 +86,7 @@ export default function NotificationDropdown({ onClose }: NotificationDropdownPr
             ))}
           </div>
         )}
-      </ScrollArea>
+      </div>
 
       <div className="shrink-0 border-t p-2">
         <Link
