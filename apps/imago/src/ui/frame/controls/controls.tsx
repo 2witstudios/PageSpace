@@ -53,7 +53,7 @@ export function CloseImago(): ReactNode {
 export function AskPill({ label = 'Ask' }: { readonly label?: string }): ReactNode {
   return (
     <button type="button" className={askPillClass} onClick={() => dispatch(transactions.expandImago, undefined)}>
-      {renderIcon({ name: 'sparkle', size: 12 })}
+      {renderIcon({ name: 'imago', size: 12 })}
       {label}
     </button>
   );

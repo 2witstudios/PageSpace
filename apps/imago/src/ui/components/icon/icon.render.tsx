@@ -1,5 +1,6 @@
 import type { ReactNode, SVGProps } from 'react';
 import { cn } from '../../cn';
+import { ImagoOrb } from '../imago-orb/imago-orb';
 import { icons, type IconName } from './icon-names';
 
 export type IconProps = {
@@ -27,6 +28,7 @@ export function renderIcon({
   className,
   ...rest
 }: IconProps): ReactNode {
+  if (name === 'imago') return <ImagoOrb size={size} className={className} />;
   const Glyph = icons[name];
   return (
     <Glyph

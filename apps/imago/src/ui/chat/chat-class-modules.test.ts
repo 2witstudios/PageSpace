@@ -15,7 +15,6 @@ import {
 } from './chat-pane/chat-pane-class';
 import { chatMessageClass } from './chat-message/chat-message-class';
 import {
-  agentTileClass,
   pickerFooterClass,
   pickerGroupLabelClass,
   pickerHeadClass,
@@ -215,7 +214,6 @@ const moduleClasses = [
   chatEmptyClass,
   chatNoticeClass,
   pickerTriggerClass,
-  ...([true, false] as const).flatMap((imago) => (['head', 'row'] as const).map((size) => agentTileClass(imago, size))),
   pickerPopoverClass,
   pickerHeadClass,
   pickerGroupLabelClass,

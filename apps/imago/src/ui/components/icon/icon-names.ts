@@ -40,7 +40,6 @@ import {
   Send,
   Settings,
   Share2,
-  Sparkles,
   Sun,
   Square,
   SquareTerminal,
@@ -71,7 +70,6 @@ export const icons = {
   folder: Folder,
   page: FileText,
   plus: Plus,
-  sparkle: Sparkles,
   send: Send,
   share: Share2,
   grid: LayoutGrid,
@@ -92,7 +90,7 @@ export const icons = {
   monitor: Monitor,
   // The spine's drive tools and bell (IMC-1.4).
   activity: Activity,
-  agents: Sparkles,
+  agents: Bot,
   workflows: Workflow,
   members: Users,
   bell: Bell,
@@ -127,6 +125,10 @@ export const icons = {
   grip: GripVertical,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
-export type IconName = keyof typeof icons;
+/**
+ * `imago` is Imago's orb (ImagoOrb), drawn by renderIcon rather than from lucide, so it is
+ * named here and not in `icons`. Use it only for Imago itself, never for another agent.
+ */
+export type IconName = keyof typeof icons | 'imago';
 
 export const iconNames = Object.keys(icons) as readonly IconName[];

@@ -65,7 +65,7 @@ export function renderEmptyMiddle({ leading, recents, onAskImago }: EmptyMiddleR
             </div>
           )}
           <button type="button" className={askImagoClass} onClick={onAskImago}>
-            {renderIcon({ name: 'sparkle', size: 12 })}
+            {renderIcon({ name: 'imago', size: 12 })}
             Ask Imago
           </button>
         </div>

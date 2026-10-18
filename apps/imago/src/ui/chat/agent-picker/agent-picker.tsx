@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { ImagoOrb } from '../../components/imago-orb/imago-orb';
 import { renderIcon } from '../../components/icon/icon.render';
 import { headControlClass } from '../../frame/controls/controls-class';
 import { useDisclosure } from '../../frame/disclosure/use-disclosure';
 import type { AgentMenu } from '../chat-agents/chat-agents';
 import {
-  agentTileClass,
   pickerFooterClass,
   pickerGroupLabelClass,
   pickerHeadClass,
@@ -30,11 +30,9 @@ export type AgentPickerProps = {
   readonly onNewAgent: (() => void) | null;
 };
 
-const spark = (imago: boolean, size: 'head' | 'row'): ReactNode => (
-  <span className={agentTileClass(imago, size)} aria-hidden="true">
-    {renderIcon({ name: 'sparkle', size: size === 'head' ? 12 : 14 })}
-  </span>
-);
+/** Imago gets the orb; a drive agent gets no mark, as classic's agents list draws none. */
+const agentMark = (imago: boolean, size: 'head' | 'row'): ReactNode =>
+  imago ? <ImagoOrb size={size === 'head' ? 18 : 22} /> : null;
 
 /**
  * Who Imago's column talks to (C-Chat-AgentPicker): "Choose agent: <name>" opens a non-modal
@@ -52,7 +50,7 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
   return (
     <details ref={ref} className="relative" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className={pickerTriggerClass} aria-label={`Choose agent: ${agentName}`}>
-        {spark(imago, 'head')}
+        {agentMark(imago, 'head')}
         <span className="truncate">{agentName}</span>
         {renderIcon({ name: 'chevronDown', size: 11 })}
       </summary>
@@ -79,7 +77,7 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
                     className={pickerRowClass(checked, option.disabled)}
                     onClick={() => pick(option.value)}
                   >
-                    {spark(index === 0, 'row')}
+                    {agentMark(index === 0, 'row')}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-sm font-medium text-ink">{option.title}</span>
                       {option.meta === undefined ? null : <span className="truncate text-xs text-ink-muted">{option.meta}</span>}

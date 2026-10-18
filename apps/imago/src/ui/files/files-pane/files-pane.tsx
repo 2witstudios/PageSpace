@@ -9,6 +9,7 @@ import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import PageTree from '@/retained/components/layout/left-sidebar/page-tree/PageTree';
 import { useUIStore } from '@/retained/stores/useUIStore';
 import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useImagoAgents } from '../../chat/use-chat-data/use-chat-data';
 import { useFavorites } from '../favorites/favorites';
 import { ageLabel, drivePageHref, useRecents } from '../recents/recents';
 import { PaneGroup, PaneRow } from './pane-groups';
@@ -45,6 +46,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
   }, [fetchDrives]);
   const favorites = useFavorites(driveId);
   const recents = useRecents(driveId, 3);
+  const imagoPageId = useImagoAgents().agents?.find((agent) => agent.key === 'imago')?.pageId ?? null;
   const now = new Date();
   const canCreate = drives.find((drive) => drive.id === driveId)?.canCreatePages === true;
   const actions = renderNewPageButton({ create: (anchor) => useUIStore.getState().openQuickCreate(null, anchor), disabled: !canCreate });
@@ -63,7 +65,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
       {favorites.length === 0 ? null : (
         <PaneGroup label="Favorites">
           {favorites.map((page) => (
-            <PaneRow key={page.id} href={drivePageHref(driveId, page.id)} title={page.title} type={page.type} current={page.id === selectedPageId} roomy={phone} />
+            <PaneRow key={page.id} href={drivePageHref(driveId, page.id)} title={page.title} type={page.type} current={page.id === selectedPageId} roomy={phone} imago={page.id === imagoPageId} />
           ))}
         </PaneGroup>
       )}
@@ -78,6 +80,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
               current={false}
               meta={ageLabel(page.viewedAt, now)}
               roomy={phone}
+              imago={page.id === imagoPageId}
             />
           ))}
         </PaneGroup>

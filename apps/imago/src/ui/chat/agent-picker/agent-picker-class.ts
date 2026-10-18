@@ -4,14 +4,6 @@ import { cn } from '../../cn';
 export const pickerTriggerClass =
   'group -ml-1 flex h-8 cursor-pointer items-center gap-2 rounded-md px-1 text-sm font-semibold text-ink summary-plain hover:bg-fill';
 
-/** The 22px spark tile: spine blue for Imago, the agent hue for a drive agent. */
-export const agentTileClass = (imago: boolean, size: 'head' | 'row'): string =>
-  cn(
-    'flex flex-none items-center justify-center',
-    size === 'head' ? 'size-agent-tile rounded-md' : 'size-agent-row-tile rounded-lg',
-    imago ? 'bg-spine text-spine-on' : 'bg-agent-soft text-type-agent',
-  );
-
 /** The popover under the head (C-Chat-AgentPicker): a non-modal dialog. */
 export const pickerPopoverClass =
   'absolute top-full left-0 z-popover mt-1 flex w-agent-picker flex-col rounded-xl border border-hairline bg-surface-raised shadow-3';

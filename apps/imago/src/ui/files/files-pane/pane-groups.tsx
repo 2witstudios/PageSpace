@@ -40,14 +40,16 @@ export type PaneRowProps = {
   readonly meta?: string;
   /** A phone row: 44px tall. */
   readonly roomy?: boolean;
+  /** Imago's own page: drawn with the orb. Any other agent takes its page-type glyph. */
+  readonly imago?: boolean;
 };
 
-export function PaneRow({ href, title, type, current, meta, roomy = false }: PaneRowProps) {
+export function PaneRow({ href, title, type, current, meta, roomy = false, imago = false }: PaneRowProps) {
   const look = pageTypeIcons[type];
   return (
     <Link href={href} prefetch={true} className={paneRowClass(current, roomy)} aria-current={current ? 'page' : undefined}>
-      <span className={look.hue} aria-hidden="true">
-        {renderIcon({ name: look.icon, size: 15 })}
+      <span className={imago ? undefined : look.hue} aria-hidden="true">
+        {renderIcon({ name: imago ? 'imago' : look.icon, size: 15 })}
       </span>
       <span className="min-w-0 flex-1 truncate">{type === 'CHANNEL' ? `#${title}` : title}</span>
       {meta === undefined ? null : <span className="text-xs text-ink-faint">{meta}</span>}

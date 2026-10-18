@@ -266,6 +266,43 @@
   }
 }
 
+/* Imago's orb (ImagoOrb): the colour reflections drift across the mirror and the glints
+   twinkle; the reflected horizon and highlight stay put. Origins are in the 24-unit viewBox. */
+.imago-orb__swirl {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+  animation: imago-orb-swirl 9s linear infinite;
+}
+
+.imago-orb__glint {
+  transform-box: view-box;
+  transform-origin: 19.6px 4.6px;
+  animation: imago-orb-twinkle 2.8s ease-in-out infinite;
+}
+
+.imago-orb__glint--late {
+  transform-origin: 4.9px 16.6px;
+  animation-delay: 1.4s;
+}
+
+@keyframes imago-orb-swirl {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes imago-orb-twinkle {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.7);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+}
+
 /* Reduced motion cuts every duration to 0.01ms and every delay to zero:
    panes reach their stage width at once and nothing animates or scrolls
    smoothly. Not 0s: a 0s transition never starts, so transitionend never

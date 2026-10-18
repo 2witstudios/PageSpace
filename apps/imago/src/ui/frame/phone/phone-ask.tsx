@@ -15,7 +15,7 @@ export type PhoneAskProps =
 export function PhoneAsk({ href, onPress }: PhoneAskProps): ReactNode {
   const content = (
     <>
-      {renderIcon({ name: 'sparkle', size: 14 })}
+      {renderIcon({ name: 'imago', size: 14 })}
       Ask
     </>
   );

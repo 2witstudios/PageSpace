@@ -5,7 +5,7 @@ import { assert } from 'riteway/vitest';
 import { click, mount, press, unmountAll } from '../../test-support/dom';
 import { agentMenu } from '../chat-agents/chat-agents';
 import { AgentPicker, type AgentPickerProps } from './agent-picker';
-import { agentTileClass, pickerRowClass, pickerTriggerClass } from './agent-picker-class';
+import { pickerRowClass, pickerTriggerClass } from './agent-picker-class';
 
 afterEach(unmountAll);
 
@@ -53,15 +53,15 @@ describe('AgentPicker', () => {
     const { container } = show();
     assert({
       given: 'Imago talking, the picker closed',
-      should: 'name the agent in a labelled trigger with the spine spark tile, and keep the popover shut',
+      should: 'name the agent in a labelled trigger with the Imago orb, and keep the popover shut',
       actual: [
         summary(container)?.getAttribute('aria-label'),
         summary(container)?.className,
-        summary(container)?.firstElementChild?.className,
+        summary(container)?.firstElementChild?.tagName.toLowerCase(),
         summary(container)?.textContent,
         details(container)?.open,
       ],
-      expected: ['Choose agent: Imago', pickerTriggerClass, agentTileClass(true, 'head'), 'Imago', false],
+      expected: ['Choose agent: Imago', pickerTriggerClass, 'svg', 'Imago', false],
     });
   });
 
@@ -83,7 +83,7 @@ describe('AgentPicker', () => {
           row.getAttribute('aria-checked'),
           row.lastElementChild?.textContent === 'Active',
           row.className,
-          row.firstElementChild?.className,
+          row.firstElementChild?.tagName.toLowerCase(),
         ]),
         [...container.querySelectorAll('[role="radiogroup"] > div > div:not([role])')].map((label) => label.textContent),
       ],
@@ -93,8 +93,8 @@ describe('AgentPicker', () => {
         'Talk to',
         'Agent',
         [
-          ['Imago', 'Global · your chosen model', 'true', true, pickerRowClass(true, false), agentTileClass(true, 'row')],
-          ['Launch Agent', 'claude-sonnet-5-5 · Launch', 'false', false, pickerRowClass(false, false), agentTileClass(false, 'row')],
+          ['Imago', 'Global · your chosen model', 'true', true, pickerRowClass(true, false), 'svg'],
+          ['Launch Agent', 'claude-sonnet-5-5 · Launch', 'false', false, pickerRowClass(false, false), 'span'],
         ],
         ['Agents in Studio'],
       ],
