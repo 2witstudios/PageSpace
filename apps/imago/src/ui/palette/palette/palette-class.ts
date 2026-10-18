@@ -14,11 +14,15 @@ export const paletteSheetClass =
 /** The field row: the search icon, the input, and the scope toggle. */
 export const paletteFieldClass = 'flex items-center gap-2 border-b border-hairline px-3 text-ink-muted';
 
-/* Borderless inside the row. The palette opens focused, so the field carries
-   no halo of its own: the highlighted result marks where the keyboard is.
-   Composer height, base size: this is the one field. */
-export const paletteInputClass =
-  'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint focus-visible:shadow-none';
+/* Borderless inside the row. Composer height, base size: this is the one field.
+   While a result is highlighted the highlight marks where the keyboard is, so
+   the field drops its halo; with nothing highlighted (idle, loading, errored,
+   no matches) the halo stays, so focus is still visible. */
+export const paletteInputClass = (hasHighlight: boolean): string =>
+  cn(
+    'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint',
+    hasHighlight && 'focus-visible:shadow-none',
+  );
 
 /** "Include all workspaces" beside the field. */
 export const paletteScopeClass = 'flex flex-none items-center gap-2 text-xs text-ink-muted';
