@@ -142,7 +142,7 @@ describe('shell frame classes', () => {
       should: 'be the one 72px spine-blue column, lifted above the panes',
       actual: railClass,
       expected:
-        'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap bg-spine py-rail-y text-spine-ink',
+        'relative z-rail flex h-full min-h-0 w-rail-width flex-none flex-col items-center gap-rail-gap overflow-y-auto bg-spine py-rail-y text-spine-ink',
     });
   });
 
