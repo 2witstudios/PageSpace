@@ -71,6 +71,7 @@ vi.mock('@/ui/messages/dm-index/dm-index', () => ({
 vi.mock('@/ui/tasks/tasks-pane/tasks-pane', () => ({
   TasksPane: ({ driveId, selectedPageId }: { driveId: string; selectedPageId: string | null }) =>
     h('div', { 'data-tasks-pane': driveId, 'data-selected': selectedPageId ?? '' }),
+  NewTaskListAction: () => null,
 }));
 
 // The files pane loads its tree through SWR and realtime; its own suite

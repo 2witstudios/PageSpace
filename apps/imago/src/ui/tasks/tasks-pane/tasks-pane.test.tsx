@@ -6,10 +6,9 @@ import { ImagoSWRProvider } from '@/api/swr-provider';
 import { mount, unmountAll } from '../../test-support/dom';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
-import { TasksPane } from './tasks-pane';
+import { NewTaskListAction, TasksPane } from './tasks-pane';
 import { useTaskViewStore } from '../task-views/task-views';
 
-vi.mock('@/retained-adapters/create-actions', () => ({ CreateActions: () => null }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
@@ -64,12 +63,17 @@ const show = (routes: Record<string, FakeRoute>, selectedPageId: string | null =
 };
 
 describe('TasksPane', () => {
-  test('New list makes a task list and opens it', async () => {
-    const { web, container } = show({
+  test('New list in the head makes a task list and opens it', async () => {
+    const web = fakeWeb({
       [DRIVE]: lists([]),
       'POST /api/pages': () => Response.json({ id: 'n1', title: 'Untitled Task List', type: 'TASK_LIST', parentId: null, position: 0, isTrashed: false, updatedAt: '2026-10-01T00:00:00.000Z', createdAt: '2026-10-01T00:00:00.000Z' }),
     });
-    const button = [...container.querySelectorAll('button')].find((entry) => entry.textContent?.includes('New list'));
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <NewTaskListAction driveId="d1" />
+      </ImagoSWRProvider>,
+    );
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="New list"]');
     await act(async () => {
       button?.click();
     });

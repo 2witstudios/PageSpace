@@ -1,6 +1,5 @@
 'use client';
 
-import { CreateActions } from '@/retained-adapters/create-actions';
 import { useRouter } from 'next/navigation';
 import { useApiClient } from '@/api/swr-provider';
 import { createTaskList } from '@/ui/files/create-file/create-file';
@@ -8,7 +7,7 @@ import { localToday } from '../task-meta/task-meta';
 import { listProgress } from '../task-tree/task-tree';
 import { useDriveTaskLists, useTaskList, useTaskViewCounts } from '../use-tasks/use-tasks';
 import { taskViews, useTaskViewStore } from '../task-views/task-views';
-import { renderTaskListRow, renderTaskViews, renderTasksPane } from './tasks-pane.render';
+import { renderNewListButton, renderTaskListRow, renderTaskViews, renderTasksPane } from './tasks-pane.render';
 import { listMeta } from './list-meta';
 import { TaskSiblings, useTaskHolder } from './task-siblings';
 
@@ -17,6 +16,22 @@ export type TasksPaneProps = {
   /** The list open as the object, if any. */
   readonly selectedPageId: string | null;
 };
+
+/**
+ * The Tasks head's New list button. It makes an untitled task list at the drive's top and opens
+ * it, where it can be renamed.
+ */
+export function NewTaskListAction({ driveId }: { readonly driveId: string }) {
+  const { retry } = useDriveTaskLists(driveId);
+  const client = useApiClient();
+  const router = useRouter();
+  return renderNewListButton(() =>
+    void createTaskList(client, driveId).then((page) => {
+      retry();
+      router.push(`/${encodeURIComponent(driveId)}/tasks/${encodeURIComponent(page.id)}`);
+    }),
+  );
+}
 
 type TaskListRowProps = {
   readonly driveId: string;
@@ -47,19 +62,10 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   const view = useTaskViewStore((state) => state.view);
   const setView = useTaskViewStore((state) => state.setView);
   const holder = useTaskHolder(driveId, selectedPageId);
-  const client = useApiClient();
-  const router = useRouter();
-  // New list makes an untitled task list at the drive's top and opens it, where it can be renamed.
-  const newList = () =>
-    void createTaskList(client, driveId).then((page) => {
-      retry();
-      router.push(`/${encodeURIComponent(driveId)}/tasks/${encodeURIComponent(page.id)}`);
-    });
   if (holder !== null && selectedPageId !== null) {
     return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
   }
   const views = renderTaskViews({
-    onNewList: newList,
     views: taskViews.map((entry) => ({
       id: entry.id,
       label: entry.label,
@@ -73,7 +79,6 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   if (lists === undefined) {
     return (
       <>
-        <CreateActions driveId={driveId} />
         {views}
         {renderTasksPane(error === undefined ? { state: 'loading' } : { state: 'error', retry })}
       </>
@@ -81,7 +86,6 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   }
   return (
     <>
-      <CreateActions driveId={driveId} />
       {views}
       {renderTasksPane({
         state: 'ready',
