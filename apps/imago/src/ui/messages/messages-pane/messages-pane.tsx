@@ -1,6 +1,5 @@
 'use client';
 
-import { CreateActions } from '@/retained-adapters/create-actions';
 import type { ChannelThread, DirectThread } from '../message-model/message';
 import { useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
 import { InboxPane } from './inbox-pane';
@@ -55,11 +54,10 @@ const sectionOf = <T,>(
  */
 export function MessagesPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
   const unified = driveId !== null && selectedPageId === null && selectedConversationId === null;
-  return (
-    <>
-      <CreateActions driveId={driveId} messages />
-      {unified ? <InboxPane /> : <CompactPane driveId={driveId} selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />}
-    </>
+  return unified ? (
+    <InboxPane />
+  ) : (
+    <CompactPane driveId={driveId} selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />
   );
 }
 
