@@ -5,7 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-- The chat composer in a docked Imago column is one row: the model is a single button that opens the provider and model choices, so the names no longer clip against Send in a narrow column.
+- The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
 
 - Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
 
