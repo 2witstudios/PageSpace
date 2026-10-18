@@ -5,7 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette no longer shows a focus outline on its search field when it opens. The highlighted result marks where the keyboard is.
+- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
 
 - Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
 

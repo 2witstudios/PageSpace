@@ -322,7 +322,7 @@ export default function QuickCreatePalette() {
           Choose a page type to create · in <span className="font-medium text-foreground">{contextLabel}</span>
         </div>
       </div>
-      <CommandInput placeholder="Search page types…" aria-label="Search page types" autoFocus />
+      <CommandInput placeholder="Search page types…" aria-label="Search page types" autoFocus className="focus-visible:ring-0" />
       <CommandList aria-label="Page types" className="max-h-[360px]">
         <CommandEmpty>No matching types.</CommandEmpty>
         <CommandGroup>
@@ -368,7 +368,7 @@ export default function QuickCreatePalette() {
           onChange={(e) => setName(e.target.value)}
           placeholder={`Untitled ${selectedDisplayName}`}
           onKeyDown={handleKeyDownNameEntry}
-          className="h-9 text-sm"
+          className="h-9 text-sm focus-visible:ring-0"
         />
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" onClick={() => setPhase('type-select')} className="h-8 px-3.5">
