@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- The drive picker in Imago opens centered and full-size, as it does in the classic interface, instead of as a narrow panel pinned beside the sidebar.
+
 - Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
 
 - The pricing page and Choose Your Plan page are easier to read: each plan's included credits, top-up rate, storage and models sit in a clear spec list, and Business's team terms (seats, extra-seat credits and checkout) have their own labeled panel instead of cramped small print. Choose Your Plan now centers its two personal plans side by side.
