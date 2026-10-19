@@ -35,7 +35,7 @@ describe('notificationReply', () => {
     expect(notificationReply({ result: 'test' }).status).toBe(200);
     expect(notificationReply({ result: 'ignored', reason: 'type' }).status).toBe(200);
     expect(notificationReply({ result: 'refused', reason: 'unknown_user' }).status).toBe(200);
-    expect(notificationReply({ result: 'applied', kind: 'revoked', subscriptionTier: 'free' }).body).toEqual({ received: true, result: 'applied' });
+    expect(notificationReply({ result: 'applied', kind: 'revoked', subscriptionTier: 'free', userId: 'user_1' }).body).toEqual({ received: true, result: 'applied' });
   });
 });
 

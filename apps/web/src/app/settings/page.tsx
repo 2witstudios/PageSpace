@@ -24,14 +24,14 @@ export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
-  const { showBilling } = useBillingVisibility();
+  const { showBilling, channel: billingChannel } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
   const { isNative } = useCapacitor();
 
   const filterItems = (items: SettingsItem[]) =>
-    filterSettingsItems(items, { isDesktop, showBilling, isNative });
+    filterSettingsItems(items, { isDesktop, showBilling, isNative, billingChannel });
 
   const settingsSections: SettingsSection[] = [
     {
@@ -86,6 +86,15 @@ export default function SettingsPage() {
           href: "/settings/billing",
           available: true,
           mobileHidden: true,
+        },
+        {
+          // The iOS app has no Billing entry (Stripe); its plan sells through In-App Purchase.
+          title: "Plan",
+          description: "Your subscription",
+          icon: CreditCard,
+          href: "/settings/plan",
+          available: true,
+          appleChannelOnly: true,
         },
       ]),
     },

@@ -68,7 +68,9 @@ export function StorageUsageCard() {
   const [reconciling, setReconciling] = useState(false);
   const [addon, setAddon] = useState<PersonalStorageAddon | null>(null);
   const [addonOpen, setAddonOpen] = useState(false);
-  const { showBilling } = useBillingVisibility();
+  // Storage add-ons are Stripe-only (web); the upgrade CTA goes to /settings/plan,
+  // which also sells on the Apple channel.
+  const { showBilling, showPurchases } = useBillingVisibility();
 
   const fetchAddon = async () => {
     try {
@@ -157,7 +159,7 @@ export function StorageUsageCard() {
   const { quota, tierInfo, fileTypeBreakdown, largestFiles, recentFiles, storageByDrive, totalFiles } = storageInfo;
   const extraBytes = quota.addonBytes ?? 0;
   const canBuyStorage = showBilling && addon?.available === true;
-  const canUpgrade = showBilling && quota.tier === 'free';
+  const canUpgrade = showPurchases && quota.tier === 'free';
 
   return (
     <Card>

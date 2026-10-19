@@ -31,15 +31,18 @@ export {
 /**
  * Credit-balance explanations for the Usage card and the header tooltip.
  *
- * Where billing is hidden (the iOS app, Guideline 3.1.1) the copy states the
- * balance and when it renews, never how to buy more: no top-up, no upgrade.
+ * `canPurchase` is true wherever a store may sell (Stripe on the web, In-App
+ * Purchase in the iOS app with StoreKit — `useBillingVisibility().showPurchases`).
+ * Where nothing may be sold (billing channel 'none': older iOS binaries,
+ * Guideline 3.1.1, or billing-disabled deployments) the copy states the balance
+ * and when it renews, never how to buy more: no top-up, no upgrade.
  */
-export function creditBalanceCopy({ isFree, showBilling }: { isFree: boolean; showBilling: boolean }): {
+export function creditBalanceCopy({ isFree, canPurchase }: { isFree: boolean; canPurchase: boolean }): {
   description: string;
   inDebt: string;
   overage: string;
 } {
-  if (!showBilling) {
+  if (!canPurchase) {
     return isFree
       ? {
           description: 'Credits power AI features. Your starter credits are a one-time grant.',

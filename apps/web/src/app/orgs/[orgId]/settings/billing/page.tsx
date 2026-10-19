@@ -20,6 +20,7 @@ import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/Org
 import { isOrgKey, orgReadKeys, setOrgPoolPaused, setOrgSeatAutoAdd, type OrgPoolSplit } from '@/lib/orgs/org-api';
 import { invoiceLine, planFigures, poolFigures, seatFigures, type OrgInvoice } from '@/lib/orgs/org-billing';
 import { orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-error-copy';
+import { ORG_PLAN_MANAGED_TEXT } from '@/lib/iap/apple-store-core';
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
@@ -250,10 +251,12 @@ function BillingBody({ orgId, orgName, role, notice }: OrgSettingsContext) {
 }
 
 export default function OrgBillingPage() {
-  const { showBilling } = useBillingVisibility();
+  const { showBilling, channel } = useBillingVisibility();
+  // Org plans are web-only (Guideline 3.1.3(c)): the iOS app states it, with no CTA.
+  const unavailable = channel === 'apple' ? ORG_PLAN_MANAGED_TEXT : 'Billing is not available here.';
   return (
     <OrgSettingsShell title="Plan & seats" description={(orgName) => `${orgName} is billed separately from your personal plan.`}>
-      {(ctx) => (showBilling ? <BillingBody {...ctx} /> : <p className="text-muted-foreground">Billing is not available here.</p>)}
+      {(ctx) => (showBilling ? <BillingBody {...ctx} /> : <p className="text-muted-foreground">{unavailable}</p>)}
     </OrgSettingsShell>
   );
 }

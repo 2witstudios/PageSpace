@@ -14,6 +14,14 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
+import { ApplePlanPanel } from '@/components/billing/ApplePlanPanel';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import {
+  MANAGED_IN_APP_STORE_DETAIL,
+  MANAGED_IN_APP_STORE_TITLE,
+  type AppStoreSubscriptionSummary,
+  type BillingProvider,
+} from '@/lib/iap/apple-store-core';
 import {
   getPersonalPlans,
   getPlan,
@@ -46,12 +54,17 @@ interface SubscriptionData {
     scheduledPriceId?: string | null;
     scheduledChangeDate?: string | null;
   };
+  /** Who sells the current paid personal plan: Stripe (web), Apple (In-App Purchase), or neither. */
+  billingProvider?: BillingProvider;
+  appStore?: AppStoreSubscriptionSummary | null;
 }
 
 export default function PlanPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();
+  const { channel } = useBillingVisibility();
+  const isAppleChannel = channel === 'apple';
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +178,8 @@ export default function PlanPage() {
 
   const handlePlanSelect = async (targetTier: SubscriptionTier) => {
     if (!subscriptionData) return;
+    // Stripe never sells on the Apple channel, nor changes a plan the App Store sold.
+    if (isAppleChannel || subscriptionData.billingProvider === 'apple') return;
 
     const target = getPlan(targetTier);
     const currentTier = subscriptionData.subscriptionTier;
@@ -327,9 +342,12 @@ export default function PlanPage() {
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
     : null;
+  // Bought through the App Store: Stripe must not sell, change or cancel it here.
+  const managedInAppStore = !isAppleChannel && subscriptionData?.billingProvider === 'apple';
+  const proPlan = plans.find((plan) => plan.id === 'pro') ?? getPlan('pro');
 
   return (
-    <BillingGuard>
+    <BillingGuard surface="purchases">
     <div className="container mx-auto p-6 space-y-8">
       {/* Header */}
       <div>
@@ -385,8 +403,27 @@ export default function PlanPage() {
         </div>
       )}
 
+      {/* Web, but the plan was bought in the iOS app: no Stripe controls for it. */}
+      {managedInAppStore && (
+        <Alert data-testid="managed-in-app-store">
+          <AlertDescription>
+            <span className="font-medium">{MANAGED_IN_APP_STORE_TITLE}.</span> {MANAGED_IN_APP_STORE_DETAIL}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* iOS with StoreKit: In-App Purchase only — never Stripe checkout or a web price. */}
+      {isAppleChannel && (
+        <ApplePlanPanel
+          plan={proPlan}
+          subscriptionTier={subscriptionData?.subscriptionTier || 'free'}
+          billingProvider={subscriptionData?.billingProvider}
+          onChanged={fetchSubscriptionData}
+        />
+      )}
+
       {/* Embedded Checkout */}
-      {checkoutPlan && clientSecret && subscriptionId && (
+      {!isAppleChannel && checkoutPlan && clientSecret && subscriptionId && (
         <Card className="max-w-lg mx-auto relative">
           <CardHeader>
             <CardTitle>Complete Your Subscription</CardTitle>
@@ -421,7 +458,7 @@ export default function PlanPage() {
       )}
 
       {/* Plan Cards - Only show when not in checkout */}
-      {!checkoutPlan && (
+      {!isAppleChannel && !checkoutPlan && (
         <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-6 pt-6 pb-4 md:grid-cols-2">
           {plans.map((plan) => (
             <PlanCard
@@ -435,6 +472,9 @@ export default function PlanPage() {
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}
               cancellingSchedule={cancellingSchedule}
+              actionOverride={managedInAppStore ? (
+                <p className="text-center text-sm text-muted-foreground">{MANAGED_IN_APP_STORE_TITLE}</p>
+              ) : undefined}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}
@@ -516,7 +556,7 @@ export default function PlanPage() {
       )}
 
       {/* Plan Change Confirmation Dialog */}
-      {targetPlan && subscriptionData && (
+      {!isAppleChannel && !managedInAppStore && targetPlan && subscriptionData && (
         <PlanChangeConfirmation
           open={changePlanDialog}
           onOpenChange={setChangePlanDialog}

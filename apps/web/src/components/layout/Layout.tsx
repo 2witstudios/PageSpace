@@ -9,6 +9,7 @@ import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
+import { useAppleTransactionObserver } from "@/hooks/useAppleTransactionObserver";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -186,6 +187,9 @@ function Layout({ children }: LayoutProps) {
 
   // Keep the native app-icon badge in sync with the unread count (reactive SSOT projection)
   useNativeBadgeSync();
+
+  // iOS In-App Purchase: deliver renewals, Ask to Buy and interrupted purchases to the server
+  useAppleTransactionObserver(isAuthenticated);
 
   // Monitor performance
   usePerformanceMonitor();

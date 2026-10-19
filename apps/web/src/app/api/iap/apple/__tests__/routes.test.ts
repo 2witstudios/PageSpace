@@ -28,7 +28,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@pagespace/lib/billing/apple/apple-verify', async () => {
   class AppleVerificationError extends Error {
-    constructor(public readonly failure: string) { super(failure); }
+    constructor(public readonly failure: string, message: string) { super(message); }
   }
   return {
     AppleVerificationError,
@@ -115,9 +115,9 @@ describe('POST /api/iap/apple/transactions', () => {
   });
 
   it('answers 400 for a signature that does not verify, and 503 for one that could verify later', async () => {
-    mocks.verifyTransaction.mockRejectedValueOnce(new AppleVerificationError('invalid_signature'));
+    mocks.verifyTransaction.mockRejectedValueOnce(new AppleVerificationError('invalid_signature', 'did not verify'));
     expect((await postTransaction(req('/api/iap/apple/transactions', { signedTransaction: JWS }))).status).toBe(400);
-    mocks.verifyTransaction.mockRejectedValueOnce(new AppleVerificationError('retryable'));
+    mocks.verifyTransaction.mockRejectedValueOnce(new AppleVerificationError('retryable', 'try later'));
     expect((await postTransaction(req('/api/iap/apple/transactions', { signedTransaction: JWS }))).status).toBe(503);
     expect(mocks.applyAppleTransaction).not.toHaveBeenCalled();
   });
@@ -165,7 +165,7 @@ describe('POST /api/iap/apple/notifications', () => {
   });
 
   it('answers 400 for a payload that does not verify, before touching the database', async () => {
-    mocks.verifyNotification.mockRejectedValue(new AppleVerificationError('invalid_signature'));
+    mocks.verifyNotification.mockRejectedValue(new AppleVerificationError('invalid_signature', 'did not verify'));
     expect((await postNotification(req('/api/iap/apple/notifications', { signedPayload: JWS }))).status).toBe(400);
     expect((await postNotification(req('/api/iap/apple/notifications', { nothing: true }))).status).toBe(400);
     expect(mocks.insertValues).not.toHaveBeenCalled();

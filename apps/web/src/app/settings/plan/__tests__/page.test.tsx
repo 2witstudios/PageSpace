@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import PlanPage from '../page';
 
@@ -21,6 +22,42 @@ const mocks = vi.hoisted(() => ({
   fetchWithAuth: vi.fn(),
   post: vi.fn(),
   getCachedCSRFToken: vi.fn(() => 'csrf-token'),
+  channel: 'stripe' as 'stripe' | 'apple' | 'none',
+  purchaseAppleProduct: vi.fn(),
+}));
+
+vi.mock('@/hooks/useBillingVisibility', () => ({
+  useBillingVisibility: () => ({
+    channel: mocks.channel,
+    showBilling: mocks.channel === 'stripe',
+    hideBilling: mocks.channel !== 'stripe',
+    isReady: true,
+    showPurchases: mocks.channel !== 'none',
+  }),
+}));
+
+vi.mock('@/hooks/useAppleProducts', () => ({
+  useAppleProducts: () => ({
+    pro: {
+      kind: 'subscription',
+      productId: 'ai.pagespace.ios.pro.monthly',
+      tier: 'pro',
+      displayName: 'PageSpace Pro',
+      description: '',
+      displayPrice: '19,99 €',
+      subscriptionPeriod: { unit: 'month', value: 1 },
+    },
+    creditPacks: [],
+    products: [],
+    isLoading: false,
+    isError: false,
+  }),
+}));
+
+vi.mock('@/lib/iap/apple-store', () => ({
+  purchaseAppleProduct: mocks.purchaseAppleProduct,
+  restoreApplePurchases: vi.fn(),
+  manageAppleSubscriptions: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({
@@ -55,6 +92,7 @@ function mockStatusResponse(body: Record<string, unknown>) {
 describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.channel = 'stripe';
     mocks.getCachedCSRFToken.mockReturnValue('csrf-token');
   });
 
@@ -85,5 +123,78 @@ describe('PlanPage (D-OW-17: the real settings/plan regression guard)', () => {
     // The card that actually matters for this regression: the server-supplied
     // override (777), not the plan module's own built-in number (90).
     expect(proCard).toHaveTextContent('777 credits included each month');
+  });
+});
+
+describe('PlanPage on the Apple channel (iOS with StoreKit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.channel = 'apple';
+  });
+
+  it('sells Pro at StoreKit\'s localized price, with the disclosure and legal links, and no Stripe plan cards', async () => {
+    mockStatusResponse({ subscriptionTier: 'free', billingProvider: null, appStore: null });
+    render(<PlanPage />);
+
+    await waitFor(() => expect(screen.getByTestId('apple-plan-panel')).toBeInTheDocument());
+    expect(screen.getByTestId('apple-plan-price')).toHaveTextContent('19,99 €/month');
+    expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Restore Purchases' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Manage Subscription' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('apple-auto-renew-disclosure')).toHaveTextContent(/renews automatically each month/);
+    expect(screen.getByRole('link', { name: 'Terms of Use' })).toHaveAttribute('href', '/terms');
+    expect(screen.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/privacy');
+    // No web price, no Stripe upgrade CTA.
+    expect(screen.queryByTestId('plan-price')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Upgrade to/)).not.toBeInTheDocument();
+  });
+
+  it('offers Manage Subscription to an App Store subscriber', async () => {
+    mockStatusResponse({ subscriptionTier: 'pro', billingProvider: 'apple', appStore: { status: 'active' } });
+    render(<PlanPage />);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Manage Subscription' })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Subscribe' })).not.toBeInTheDocument();
+  });
+
+  it('says a Stripe plan is managed on the web — no button, no link', async () => {
+    mockStatusResponse({ subscriptionTier: 'pro', billingProvider: 'stripe', appStore: null });
+    render(<PlanPage />);
+
+    await waitFor(() => expect(screen.getByText('Your plan is managed on the web.')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Subscribe' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Manage Subscription' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore Purchases' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/https?:\/\//)).not.toBeInTheDocument();
+  });
+
+  it('buys Pro through In-App Purchase and never calls a Stripe route', async () => {
+    mockStatusResponse({ subscriptionTier: 'free', billingProvider: null, appStore: null });
+    mocks.purchaseAppleProduct.mockResolvedValue({ status: 'success', subscriptionTier: 'pro', kind: 'subscription' });
+    render(<PlanPage />);
+
+    const subscribe = await screen.findByRole('button', { name: 'Subscribe' });
+    await userEvent.click(subscribe);
+
+    await waitFor(() => expect(mocks.purchaseAppleProduct).toHaveBeenCalledWith('ai.pagespace.ios.pro.monthly'));
+    await waitFor(() => expect(screen.getByText('Your subscription is active.')).toBeInTheDocument());
+    expect(mocks.post).not.toHaveBeenCalledWith(expect.stringMatching(/^\/api\/stripe\//), expect.anything());
+  });
+});
+
+describe('PlanPage on the web for an App Store subscriber', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.channel = 'stripe';
+  });
+
+  it('shows "Managed in the App Store" instead of Stripe plan controls', async () => {
+    mockStatusResponse({ subscriptionTier: 'pro', billingProvider: 'apple', appStore: { status: 'active' } });
+    render(<PlanPage />);
+
+    await waitFor(() => expect(screen.getByTestId('managed-in-app-store')).toBeInTheDocument());
+    expect(screen.getByTestId('managed-in-app-store')).toHaveTextContent(/Settings › Apple ID › Subscriptions/);
+    expect(screen.queryByRole('button', { name: /Manage Billing|Downgrade to|Upgrade to/ })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('apple-plan-panel')).not.toBeInTheDocument();
   });
 });

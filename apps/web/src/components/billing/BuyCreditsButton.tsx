@@ -31,6 +31,7 @@ const TOPUP_MIN_CENTS = centsFromCredits(CREDIT_TOPUP_MIN_CREDITS);
 const TOPUP_MAX_CENTS = centsFromCredits(CREDIT_TOPUP_MAX_CREDITS);
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { useCreditBalance } from '@/hooks/useCreditBalance';
+import { AppleBuyCreditsButton } from '@/components/billing/AppleBuyCreditsButton';
 
 interface BuyCreditsButtonProps {
   /** Visual variant for the trigger button. */
@@ -59,7 +60,7 @@ export function BuyCreditsButton({
 }: BuyCreditsButtonProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { showBilling } = useBillingVisibility();
+  const { showBilling, channel } = useBillingVisibility();
   const { balance } = useCreditBalance();
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -103,9 +104,15 @@ export function BuyCreditsButton({
 
   const isLoading = loadingKey !== null;
 
-  // Hide on iOS Capacitor (App Store policy — no in-app Stripe purchases) and on
-  // billing-disabled deployments. Self-hiding here keeps every call site compliant,
+  // The iOS app with StoreKit sells the App Store credit packs instead (no custom
+  // amount, no Stripe). Self-routing here keeps every call site compliant,
   // including the out-of-credits chat error CTAs.
+  if (channel === 'apple') {
+    return <AppleBuyCreditsButton variant={variant} size={size} className={className} label={label} isFree={isFree} />;
+  }
+
+  // Hide on iOS binaries without StoreKit (App Store policy — no in-app Stripe
+  // purchases) and on billing-disabled deployments.
   if (!showBilling) return null;
 
   return (

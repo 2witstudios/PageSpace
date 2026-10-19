@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuthStore } from "@/stores/useAuthStore";
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
+import { AppStoreSubscriptionDeletionNotice } from "@/components/account/AppStoreSubscriptionDeletionNotice";
 import type { AppleSignInRevocation } from "@/components/account/SignInWithAppleDeletionNotice";
 import { postDeletionDestination } from "@/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
@@ -753,6 +754,7 @@ export default function AccountPage() {
               Account deletion is permanent and cannot be undone. All your data will be permanently deleted.
             </AlertDescription>
           </Alert>
+          <AppStoreSubscriptionDeletionNotice />
           <Button
             variant="destructive"
             className="mt-4"
