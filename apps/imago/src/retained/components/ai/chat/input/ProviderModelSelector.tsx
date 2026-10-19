@@ -69,6 +69,16 @@ function buildProviderGroups() {
   return groups.filter(g => g.providers.length > 0);
 }
 
+/** `openai/gpt-x-luna` → `Gpt X Luna`: a readable stand-in for an id the catalog does not name. */
+function readableModelId(modelId: string): string {
+  const name = modelId.slice(modelId.lastIndexOf('/') + 1);
+  return name
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 // Computed once at module load (deployment mode doesn't change at runtime)
 const PROVIDER_GROUPS = buildProviderGroups();
 
@@ -243,7 +253,9 @@ export function ProviderModelSelector({
       return lmstudioModels[model];
     }
 
-    return getModelDisplayName(provider, model);
+    const catalogName = getModelDisplayName(provider, model);
+    // Not in the catalog (a retired or runtime-only id): read the id as words rather than show it raw.
+    return catalogName === model ? readableModelId(model) : catalogName;
   }, [provider, model, ollamaModels, lmstudioModels]);
 
   // Check whether the deployment has this provider configured.
