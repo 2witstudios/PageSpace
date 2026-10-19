@@ -11,7 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appleRowEntitles } from '@pagespace/lib/billing/apple/apple-core';
 import { latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
-import { resolveBillingProvider } from '@/lib/iap-server/billing-provider';
+import { resolveBillingProvider } from '@/lib/iap-server/apple-http';
 
 /**
  * MON-2: the included-credit figure per tier, computed HERE from `tierAllowanceCents`

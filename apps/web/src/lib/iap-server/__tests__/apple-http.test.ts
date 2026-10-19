@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { notificationReply, readJwsField, transactionReply, verificationFailureReply } from '../apple-http';
+import { notificationReply, readJwsField, resolveBillingProvider, transactionReply, verificationFailureReply } from '../apple-http';
 
 describe('verificationFailureReply', () => {
   it('answers 400 for a payload that will never verify, so the device finishes it', () => {
@@ -62,5 +62,20 @@ describe('readJwsField', () => {
     expect(readJwsField({ signedTransaction: 'a.b.c d' }, 'signedTransaction')).toBeNull();
     expect(readJwsField({ signedTransaction: `${'a'.repeat(64_001)}.b.c` }, 'signedTransaction')).toBeNull();
     expect(readJwsField({ signedPayload: jws }, 'signedTransaction')).toBeNull();
+  });
+});
+
+describe('resolveBillingProvider', () => {
+  it('names the store that sells the current plan', () => {
+    expect(resolveBillingProvider({ stripeEntitled: true, appleEntitled: false })).toBe('stripe');
+    expect(resolveBillingProvider({ stripeEntitled: false, appleEntitled: true })).toBe('apple');
+  });
+
+  it('prefers Stripe when both do — the store the web can manage', () => {
+    expect(resolveBillingProvider({ stripeEntitled: true, appleEntitled: true })).toBe('stripe');
+  });
+
+  it('is null when no store entitles a paid plan', () => {
+    expect(resolveBillingProvider({ stripeEntitled: false, appleEntitled: false })).toBeNull();
   });
 });
