@@ -1,6 +1,7 @@
 'use client';
 
 import useSWR from 'swr';
+import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
 import { pageKey } from '../../files/page-object/page-object';
 import { pageTabOf, tabLabelFor } from '../tabs/tab-label';
@@ -13,8 +14,9 @@ type RowProps = { readonly path: string; readonly current: boolean; readonly onO
 function PageRow({ path, pageId, current, onOpen, onClose }: RowProps & { readonly pageId: string }) {
   const { data } = useSWR<unknown>(pageKey(pageId));
   const page = pageTabOf(data);
+  const imago = useImagoPageId() === pageId;
   const look = page === null ? { icon: 'page' as const, hue: null } : pageTypeIcons[page.type];
-  return renderOpenPageRow({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, current, onOpen, onClose });
+  return renderOpenPageRow({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, imago, current, onOpen, onClose });
 }
 
 function Row(props: RowProps) {

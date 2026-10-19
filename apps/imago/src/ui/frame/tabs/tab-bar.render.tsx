@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { IconName } from '../../components/icon/icon-names';
 import { renderIcon } from '../../components/icon/icon.render';
+import { renderPageIcon } from '../../metal/page-icon';
 import { tabBarClass, tabClass, tabCloseClass, tabControlClass, tabLinkClass, tabTitleClass } from './tab-bar-class';
 
 export type TabRenderProps = {
@@ -10,6 +11,8 @@ export type TabRenderProps = {
   readonly icon: IconName;
   /** The type hue class (text-type-*), or none for screens. */
   readonly hue: string | null;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: boolean;
   readonly selected: boolean;
   /** The tab's link was followed: make it the active tab. */
   readonly onOpen: () => void;
@@ -18,12 +21,12 @@ export type TabRenderProps = {
 
 /** One tab: its type icon and title as a link, then its close control. */
 export function renderTab(props: TabRenderProps): ReactNode {
-  const { path, title, icon, hue, selected, onOpen, onClose } = props;
+  const { path, title, icon, hue, imago, selected, onOpen, onClose } = props;
   return (
     <div role="tab" aria-selected={selected} className={tabClass(selected)} data-tab-path={path}>
       <Link href={path} prefetch={true} className={tabLinkClass} onClick={(event) => !event.defaultPrevented && onOpen()}>
         <span className={hue ?? 'text-ink-muted'} aria-hidden="true">
-          {renderIcon({ name: icon, size: 14 })}
+          {renderPageIcon({ icon, size: 14, imago })}
         </span>
         <span className={tabTitleClass}>{title}</span>
       </Link>

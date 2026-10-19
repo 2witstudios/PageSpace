@@ -13,6 +13,8 @@ export type AgentOption = {
   readonly disabled: boolean;
   /** The row's second line in the picker: "Global · your chosen model", or model · folder. */
   readonly meta?: string;
+  /** Imago's own row, drawn with its orb; every other agent has the sparkle tile. */
+  readonly imago?: true;
 };
 
 export type AgentGroup = {
@@ -37,7 +39,7 @@ const PENDING = 'pending:';
 const IMAGO_META = 'Global · your chosen model';
 
 const builtinOption = (agent: BuiltinAgentPointer): AgentOption => {
-  const meta = agent.key === 'imago' ? { meta: IMAGO_META } : {};
+  const meta = agent.key === 'imago' ? { meta: IMAGO_META, imago: true as const } : {};
   return agent.pageId === null
     ? { value: `${PENDING}${agent.key}`, title: agent.title, disabled: true, ...meta }
     : { value: agent.pageId, title: agent.title, disabled: false, ...meta };
@@ -57,6 +59,10 @@ const driveOption = (
 };
 
 const imagoOf = (builtins: readonly BuiltinAgentPointer[] | undefined) => builtins?.find((agent) => agent.key === 'imago');
+
+/** Imago's own page id, once its pointers have loaded and it is provisioned; null otherwise. */
+export const imagoPageIdOf = (builtins: readonly BuiltinAgentPointer[] | undefined): string | null =>
+  imagoOf(builtins)?.pageId ?? null;
 
 /**
  * The header's groups and choice. An agent chosen in another drive stays

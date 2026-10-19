@@ -131,6 +131,16 @@
   --elevation-ambient:
     0 1px 3px light-dark(rgba(0, 0, 0, 0.04), transparent),
     0 8px 24px light-dark(rgba(0, 0, 0, 0.06), transparent);
+
+  /* Imago's liquid metal (docs/imago/liquid-metal-engine.md §D3): the colours of the chrome
+     bands its orb reflects. The engine reads them through a probe, so the theme switch restyles
+     the orb with no code path of its own; its per-theme gains live in the engine. */
+  --metal-sky: light-dark(oklch(1 0.004 240), oklch(0.74 0.012 240));
+  --metal-room: light-dark(oklch(0.3 0.008 250), oklch(0.38 0.006 250));
+  --metal-warm: light-dark(oklch(0.62 0.075 55), oklch(0.52 0.075 55));
+  --metal-flag: light-dark(oklch(0.14 0.005 240), oklch(0.07 0 0));
+  --metal-rim: light-dark(oklch(0.22 0.01 230), oklch(0.78 0.006 240));
+  --metal-key: light-dark(oklch(1 0 0), oklch(0.98 0.003 230));
 }
 
 /* Colors. Names mirror the `:root` tokens; text ink is `ink` so classes read

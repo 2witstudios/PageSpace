@@ -5,6 +5,8 @@
 
 import React from 'react';
 import { Loader2 } from 'lucide-react';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
+import { useInImagoThread } from '@/ui/metal/imago-thread';
 
 interface StreamingIndicatorProps {
   /** Custom message to show instead of "Thinking..." */
@@ -20,6 +22,7 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
   message = 'Thinking...',
   className,
 }) => {
+  const imago = useInImagoThread();
   return (
     <div
       data-testid="streaming-indicator"
@@ -27,7 +30,8 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
       style={{ contain: 'layout style paint' }}
     >
       <div className="flex items-center space-x-2 text-gray-500">
-        <Loader2 className="h-4 w-4 animate-spin" style={{ willChange: 'transform' }} />
+        {/* Imago thinks as its orb; any other agent keeps the spinner (Imago maintained edit). */}
+        {imago ? <ImagoOrb size="glyph" live /> : <Loader2 className="h-4 w-4 animate-spin" style={{ willChange: 'transform' }} />}
         <span>{message}</span>
       </div>
     </div>

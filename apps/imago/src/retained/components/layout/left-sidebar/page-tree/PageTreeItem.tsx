@@ -374,6 +374,7 @@ export const PageTreeItem = React.memo(function PageTreeItem({
               >
                 <PageTypeIcon
                   type={item.type}
+                  pageId={item.id}
                   isTaskLinked={item.isTaskLinked}
                   className={cn(
                     "h-4 w-4 flex-shrink-0",

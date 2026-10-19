@@ -4,7 +4,7 @@ import { createInitialState } from '../store/state';
 import { transactions } from '../store/transactions';
 import { chatPlugin, isStreaming, shownConversationId } from './chat-plugin';
 
-const { startStreaming, endStreaming, setChatDraft, openConversation, startNewChat, selectAgent, loseAgent } = chatPlugin.transactions;
+const { startStreaming, endStreaming, setStreamingPhase, setChatDraft, openConversation, startNewChat, selectAgent, loseAgent } = chatPlugin.transactions;
 
 describe('chatPlugin', () => {
   test('nothing streaming', () => {
@@ -33,7 +33,7 @@ describe('chatPlugin', () => {
         ],
       ],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
+        { streaming: null, streamingPhase: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
         false,
         [null, '', null, false, 'thread'],
       ],
@@ -217,11 +217,11 @@ describe('chatPlugin slice', () => {
   test('its own resources and transactions', () => {
     assert({
       given: 'the chat slice',
-      should: 'start with nothing streaming, no draft, no conversation, Imago, no new chat and the thread, and own the streaming, draft, conversation, agent, new chat and History transactions',
+      should: 'start with nothing streaming and no phase, no draft, no conversation, Imago, no new chat and the thread, and own the streaming, phase, draft, conversation, agent, new chat and History transactions',
       actual: [chatPlugin.resources(), Object.keys(chatPlugin.transactions).sort()],
       expected: [
-        { streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
-        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'startNewChat', 'startStreaming', 'toggleChatHistory'],
+        { streaming: null, streamingPhase: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' },
+        ['endStreaming', 'loseAgent', 'openConversation', 'selectAgent', 'setChatDraft', 'setStreamingPhase', 'startNewChat', 'startStreaming', 'toggleChatHistory'],
       ],
     });
   });
@@ -255,6 +255,29 @@ describe('opening the open conversation from History (IMC-2.7)', () => {
       should: 'show the thread',
       actual: chatPlugin.transactions.openConversation(history, 'c1').resources.chatView,
       expected: 'thread',
+    });
+  });
+});
+
+describe('setStreamingPhase()', () => {
+  test('a turn moves from thinking to speaking and ends', () => {
+    const thinking = setStreamingPhase(createInitialState(), 'thinking');
+    const speaking = setStreamingPhase(thinking, 'speaking');
+    assert({
+      given: 'a send, then the reply starting, then the turn ending',
+      should: 'record thinking, then speaking, then nothing',
+      actual: [thinking.resources.streamingPhase, speaking.resources.streamingPhase, setStreamingPhase(speaking, null).resources.streamingPhase],
+      expected: ['thinking', 'speaking', null],
+    });
+  });
+
+  test('the same phase again', () => {
+    const thinking = setStreamingPhase(createInitialState(), 'thinking');
+    assert({
+      given: 'the phase it already has',
+      should: 'return the same snapshot',
+      actual: setStreamingPhase(thinking, 'thinking') === thinking,
+      expected: true,
     });
   });
 });

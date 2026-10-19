@@ -57,6 +57,7 @@ export function renderRail(props: RailRenderProps): ReactNode {
           <li key={entry.id}>
             {renderRailButton({
               icon: entry.icon,
+              imago: entry.imago,
               label: entry.label,
               href: entry.href,
               current: current(entry.id),
