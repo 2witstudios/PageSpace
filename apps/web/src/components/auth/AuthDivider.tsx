@@ -1,14 +1,14 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface AuthDividerProps {
   delay?: number;
 }
 
 export function AuthDivider({ delay = 0.4 }: AuthDividerProps) {
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <div
         role="separator"

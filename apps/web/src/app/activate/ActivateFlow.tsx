@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { ConsentScopeCard } from '@/components/auth/ConsentScopeCard';
 import {
   V3_BODY,
@@ -128,7 +128,7 @@ export function ActivateFlow({ initialUserCode }: ActivateFlowProps) {
     }
   }
 
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
 
   if (stepUpStatus === 'awaiting_email') {
     return (

@@ -2,7 +2,7 @@ import { Metadata } from 'next';
 import { WifiOff } from 'lucide-react';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { V3_BODY, V3_HEADING, V3_ICON_BOX_NEUTRAL } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { RefreshButton } from './refresh-button';
 
 export const metadata: Metadata = {
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 };
 
 export default function OfflinePage() {
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <AuthLayout classic="bare">
         <div className="flex flex-col">

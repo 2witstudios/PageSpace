@@ -51,7 +51,7 @@ async function submitValidForm() {
 
 describe('MagicLinkForm — v3 (Imago enabled)', () => {
   beforeEach(() => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
   });
 
   afterEach(() => {

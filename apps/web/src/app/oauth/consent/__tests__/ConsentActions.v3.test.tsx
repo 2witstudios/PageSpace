@@ -24,7 +24,7 @@ const props = {
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/oauth/consent?client_id=client-1');
-  vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+  vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
 });
 
 afterEach(() => {

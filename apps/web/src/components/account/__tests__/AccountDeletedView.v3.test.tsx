@@ -7,7 +7,7 @@ describe('AccountDeletedView — v3 (Imago enabled)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('given a deletion, should show the board copy as the page h1 with the sign-in link', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<AccountDeletedView showAppleSignInSteps={false} />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'Your account is being deleted' })).toBeInTheDocument();
@@ -17,7 +17,7 @@ describe('AccountDeletedView — v3 (Imago enabled)', () => {
   });
 
   it('given Apple revocation needs the user, should show the "One more step" copy with the steps', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<AccountDeletedView showAppleSignInSteps={true} />);
 
     expect(

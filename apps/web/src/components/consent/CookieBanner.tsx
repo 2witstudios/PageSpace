@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { useConsentStore } from '@/stores/useConsentStore';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 // v3 (Imago-enabled) look, per the Cookie consent board. Classic markup keeps its own classes.
 const V3 = {
@@ -31,7 +31,7 @@ export function CookieBanner() {
   const rejectNonEssential = useConsentStore((s) => s.rejectNonEssential);
   const saveCustom = useConsentStore((s) => s.saveCustom);
 
-  const imago = isImagoEnabled();
+  const imago = isV3AuthEnabled();
   const [customizing, setCustomizing] = useState(false);
   // Seed from the stored decision so a reopened banner reflects current choices.
   const [analytics, setAnalytics] = useState(

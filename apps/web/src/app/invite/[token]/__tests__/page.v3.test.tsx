@@ -38,7 +38,7 @@ describe('InvitePage v3 branch', () => {
   });
 
   it('Given Imago is enabled and a drive invite, should render the v3 frame and card', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     vi.mocked(resolveInviteContext).mockResolvedValue({
       ok: true,
       data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', role: 'MEMBER', email: 'a@b.c', isExistingUser: true },
@@ -52,7 +52,7 @@ describe('InvitePage v3 branch', () => {
   });
 
   it('Given Imago is enabled and an invalid token, should render the v3 invalid card', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     vi.mocked(resolveInviteContext).mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
 
     await renderPage();
@@ -62,7 +62,7 @@ describe('InvitePage v3 branch', () => {
   });
 
   it('Given Imago is off, should keep the classic invite markup', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     vi.mocked(resolveInviteContext).mockResolvedValue({
       ok: true,
       data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', role: 'MEMBER', email: 'a@b.c', isExistingUser: false },
@@ -75,7 +75,7 @@ describe('InvitePage v3 branch', () => {
   });
 
   it.each(['true', undefined])('Given an org invitation and Imago enabled=%s, should render its org card before the generic invalid card', async (enabled) => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', enabled);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', enabled);
     vi.mocked(resolveInviteContext).mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
     vi.mocked(loadOrgInvitePage).mockResolvedValue({
       view: 'sign_in', orgName: 'Northwind Labs', inviterName: 'Jono', role: 'MEMBER', invitedEmail: 'a@b.c',

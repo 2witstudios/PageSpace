@@ -1,4 +1,4 @@
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 /** Human labels for each emailable notification type, shared by /unsubscribe and /unsubscribe-success. */
 export const NOTIFICATION_TYPE_LABELS: Readonly<Record<string, string>> = {
@@ -18,5 +18,5 @@ export const NOTIFICATION_TYPE_LABELS: Readonly<Record<string, string>> = {
 
 /** Where "manage preferences" links point: the v3 account page when Imago is enabled. */
 export function getNotificationPreferencesHref(): string {
-  return isImagoEnabled() ? '/imago/account/notifications' : '/settings/notifications';
+  return isV3AuthEnabled() ? '/imago/account/notifications' : '/settings/notifications';
 }

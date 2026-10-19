@@ -23,7 +23,7 @@ describe('PasskeySignupButton — invite email lock hint', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('given Imago is enabled and an invite locks the email, should show the lock hint', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(
       <PasskeySignupButton csrfToken="csrf" lockedEmail="lena@studio.example" />,
     );
@@ -34,7 +34,7 @@ describe('PasskeySignupButton — invite email lock hint', () => {
   });
 
   it('given Imago is off, should not show the lock hint', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(
       <PasskeySignupButton csrfToken="csrf" lockedEmail="lena@studio.example" />,
     );

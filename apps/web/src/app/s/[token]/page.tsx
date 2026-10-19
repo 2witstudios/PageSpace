@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { resolveShareToken } from '@pagespace/lib/permissions/share-link-service';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { V3_BUTTON_SECONDARY, V3_H1, V3_LEAD } from '@/components/auth/authCardV3';
 import { DriveShareAccept } from './DriveShareAccept';
 import { PageShareAccept } from './PageShareAccept';
@@ -15,7 +15,7 @@ export default async function ShareLinkPage({ params }: ShareLinkPageProps) {
   const { token } = await params;
   const info = await resolveShareToken(token);
 
-  if (!info && isImagoEnabled()) {
+  if (!info && isV3AuthEnabled()) {
     return (
       <AuthLayout>
         <div>
