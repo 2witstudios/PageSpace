@@ -369,6 +369,15 @@ export function ProviderModelSelector({
     [provider, model, onChange]
   );
 
+  // Cross-provider search reads every choosable model, so the local lists load as soon as the
+  // compact picker opens rather than only when their tab is browsed.
+  const compactOpen = providerOpen || modelOpen;
+  useEffect(() => {
+    if (!compactOpen) return;
+    if (isProviderAvailable('ollama')) void fetchOllamaModels();
+    if (isProviderAvailable('lmstudio')) void fetchLMStudioModels();
+  }, [compactOpen, isProviderAvailable, fetchOllamaModels, fetchLMStudioModels]);
+
   // The two lists, shared by the inline pair and the compact popover.
   const providerList = (
     <div className="space-y-2">
@@ -471,10 +480,13 @@ export function ProviderModelSelector({
       isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
     );
     const modelsOf = (providerId: string): [string, string][] => {
-      if (providerId === 'ollama' && ollamaModels) return Object.entries(ollamaModels);
-      if (providerId === 'lmstudio' && lmstudioModels) return Object.entries(lmstudioModels);
-      const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
-      return config ? Object.entries(config.models).filter(([modelId]) => isOrgAllowed(providerId, modelId)) : [];
+      const entries = (): [string, string][] => {
+        if (providerId === 'ollama' && ollamaModels) return Object.entries(ollamaModels);
+        if (providerId === 'lmstudio' && lmstudioModels) return Object.entries(lmstudioModels);
+        const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+        return config ? Object.entries(config.models) : [];
+      };
+      return entries().filter(([modelId]) => isOrgAllowed(providerId, modelId));
     };
     const activeTab = compactTab ?? provider ?? choosableProviders[0]?.id ?? '';
     const query = compactQuery.trim().toLowerCase();
@@ -491,9 +503,19 @@ export function ProviderModelSelector({
           modelName,
         }));
 
+    const resetCompactBrowse = () => {
+      setCompactQuery('');
+      setCompactTab(null);
+    };
     const closeCompact = () => {
       setProviderOpen(false);
       setModelOpen(false);
+      resetCompactBrowse();
+    };
+    // A provider with no selectable model rows (Azure OpenAI's deployments) is chosen by its own row.
+    const chooseCompactProvider = async (providerId: string) => {
+      await handleProviderSelect(providerId);
+      resetCompactBrowse();
     };
     const selectCompactModel = async (providerId: string, modelId: string) => {
       if (providerId === provider && modelId === model) {
@@ -524,10 +546,7 @@ export function ProviderModelSelector({
         onOpenChange={(open) => {
           setProviderOpen(open);
           setModelOpen(open);
-          if (!open) {
-            setCompactQuery('');
-            setCompactTab(null);
-          }
+          if (!open) resetCompactBrowse();
         }}
       >
         <PopoverTrigger asChild>
@@ -568,11 +587,21 @@ export function ProviderModelSelector({
           )}
           <ScrollArea className="h-64 p-2">
             <div className="space-y-0.5">
-              {isLoadingModels && !query ? (
+              {isLoadingModels ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
                   <Loader2 className="h-3 w-3 animate-spin" />
                   Loading models...
                 </div>
+              ) : rows.length === 0 && !query && activeTab !== provider && choosableProviders.some((p) => p.id === activeTab) ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isSaving}
+                  onClick={() => void chooseCompactProvider(activeTab)}
+                  className="w-full justify-start text-xs h-7 px-2 min-w-0"
+                >
+                  Use {choosableProviders.find((p) => p.id === activeTab)?.name ?? activeTab}
+                </Button>
               ) : rows.length === 0 ? (
                 <div className="text-xs text-muted-foreground px-2 py-2">
                   {query ? `No models match “${compactQuery.trim()}”` : 'No models available'}
