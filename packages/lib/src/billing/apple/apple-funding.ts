@@ -342,7 +342,11 @@ async function upsertSubscription(tx: Tx, input: {
     }
     return;
   }
-  const newestSigned = !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
+  // lastSignedAt orders payloads WITHIN the current period: a newer period starts its own
+  // clock at its payload's signing time (a refund of the previous period signed later must
+  // not reject this period's own updates); within a period it only moves forward.
+  const startsNewPeriod = facts.purchaseDateMs > input.existing.latestPurchaseMs;
+  const advancesClock = startsNewPeriod || !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
   const next = nextSubscriptionState(input.existing, {
     status: incomingStatus,
     expiresAtMs: incomingExpiresMs,
@@ -359,9 +363,7 @@ async function upsertSubscription(tx: Tx, input: {
       expiresAt: new Date(next.expiresAtMs),
     } : {}),
     ...renewalChange,
-    // A delayed renewal for a newer period moves the period forward, but the signing clock on
-    // file never moves backwards.
-    ...(newestSigned ? { lastSignedAt: signedAt } : {}),
+    ...(advancesClock ? { lastSignedAt: signedAt } : {}),
     updatedAt: now,
   }).where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
 }

@@ -87,6 +87,27 @@ describe("DeleteAccountDialog", () => {
     expect(deleteButton().disabled).toBe(false)
   })
 
+  it("on reopen, waits for a fresh App Store answer instead of trusting a cached 'no subscription'", async () => {
+    const cache = new Map()
+    const props = { onClose: vi.fn(), onConfirm: vi.fn(), userEmail: "jono@studio.example", isDeleting: false, soloDrivesCount: 0 }
+    const tree = (isOpen: boolean) => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>
+        <DeleteAccountDialog isOpen={isOpen} {...props} />
+      </SWRConfig>
+    )
+    const { rerender } = render(tree(true))
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    await waitFor(() => expect(deleteButton().disabled).toBe(false))
+
+    // Closed, the user subscribes in the App Store; on reopen the check is still in flight.
+    rerender(tree(false))
+    vi.mocked(fetchWithAuth).mockImplementationOnce(() => new Promise<Response>(() => {}))
+    rerender(tree(true))
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(deleteButton().disabled).toBe(true)
+  })
+
   it("keeps Delete Account Permanently disabled until the email is typed and the App Store status is known", async () => {
     const { onConfirm } = renderDialog()
     fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })

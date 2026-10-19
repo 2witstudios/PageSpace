@@ -61,9 +61,10 @@ export const appStoreSubscriptions = pgTable('app_store_subscriptions', {
    */
   autoRenewSignedAt: timestamp('autoRenewSignedAt', { mode: 'date', withTimezone: true }),
   /**
-   * Apple's signedDate of the newest payload applied to this row. A payload signed
-   * earlier (a replayed device post, a delayed notification retry) changes nothing:
-   * Apple's own ordering, not arrival order, decides the state.
+   * Apple's signedDate of the newest payload applied for the CURRENT period. A payload for
+   * this period signed earlier (a replayed device post, a delayed notification retry)
+   * changes nothing: Apple's own ordering, not arrival order, decides the state. A newer
+   * period restarts it (apple-core subscriptionPayloadApplies).
    */
   lastSignedAt: timestamp('lastSignedAt', { mode: 'date', withTimezone: true }),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),

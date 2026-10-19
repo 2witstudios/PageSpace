@@ -296,7 +296,36 @@ describe('App Store subscription state follows Apple, not arrival order', () => 
     });
     const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
     expect(sub).toMatchObject({ status: 'active', latestTransactionId: renewal.transactionId, autoRenew: false });
-    expect(sub.lastSignedAt?.getTime()).toBe(now + 100);
+    // The new period's clock starts at its own payload; the preference keeps its own clock.
+    expect(sub.lastSignedAt?.getTime()).toBe(now);
+    expect(sub.autoRenewSignedAt?.getTime()).toBe(now + 100);
+  });
+
+  it('a refund of the new period applies after a delayed renewal, though the previous period\'s refund was signed later', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const now = Date.now();
+    const periodN = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY, signedDate: now - 31 * DAY });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: periodN, priceTier, config });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...periodN, revocationDate: now, signedDate: now + 50 }, renewal: null },
+      priceTier, config,
+    });
+    const renewal = subscriptionTxn(u.token, { originalTransactionId: original, purchaseDate: now - DAY, expiresDate: now + 29 * DAY, signedDate: now + 40 });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'DID_RENEW', subtype: null, status: 1, transaction: renewal, renewal: null },
+      priceTier, config,
+    });
+    expect(await tierOf(u.id)).toBe('pro');
+    // The new period's refund was signed after its renewal but before period N's refund.
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...renewal, revocationDate: now + 45, signedDate: now + 45 }, renewal: null },
+      priceTier, config,
+    });
+    const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    expect(sub.status).toBe('revoked');
+    expect(await tierOf(u.id)).toBe('free');
   });
 
   it('renewal preferences follow signing order even when older-period payloads arrive out of order', async () => {

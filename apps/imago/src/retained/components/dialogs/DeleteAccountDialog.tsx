@@ -76,7 +76,7 @@ export function DeleteAccountDialog({
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
   // A key of its own: this caches a boolean, not the status body other readers of the URL expect.
-  const { data: appStoreRenews, error: appStoreStatusError } = useSWR(
+  const { data: appStoreRenews, error: appStoreStatusError, isValidating: isAppStoreStatusValidating } = useSWR(
     isOpen ? (["/api/subscriptions/status", "app-store-renews"] as const) : null,
     fetchAppStoreRenews,
     { revalidateOnFocus: false },
@@ -84,9 +84,10 @@ export function DeleteAccountDialog({
 
   const isEmailMatch = emailConfirmation.trim().toLowerCase() === userEmail.toLowerCase();
   const isRefused = ownedOrganizations !== undefined && ownedOrganizations.length > 0;
-  // Confirming waits for the App Store answer. If it cannot be had, the warning shows
-  // anyway rather than blocking deletion on a billing read.
-  const isAppStoreStatusPending = isOpen && appStoreRenews === undefined && appStoreStatusError === undefined;
+  // Confirming waits for THIS open's App Store answer — a cached one may predate a new
+  // subscription. If it cannot be had, the warning shows anyway rather than blocking
+  // deletion on a billing read.
+  const isAppStoreStatusPending = isOpen && (isAppStoreStatusValidating || (appStoreRenews === undefined && appStoreStatusError === undefined));
   const showAppStoreNotice = appStoreRenews === true || appStoreStatusError !== undefined;
 
   const handleConfirm = () => {
