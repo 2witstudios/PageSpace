@@ -160,6 +160,7 @@ export function InputFooter({
         {!hideModelSelector && (
           <ProviderModelSelector
             className="min-w-0 overflow-hidden"
+            compact={compact}
             provider={selectedProvider}
             model={selectedModel}
             onChange={onProviderModelChange}
