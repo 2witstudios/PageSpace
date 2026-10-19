@@ -66,13 +66,14 @@ export async function GET(request: NextRequest) {
     // whichever store sells the current plan. Account deletion warns on it: deleting the
     // account never cancels an App Store subscription.
     const appStoreRenews = await hasRenewableAppleSubscription(db, user.id, new Date(), { autoRenewing: true });
-    // Entitlement comes from every App Store row, not just the latest-expiring one.
+    // Which store holds a live contract for a paid plan: one that entitles now, or one still
+    // collecting (Stripe past_due, Apple billing retry) that will resume without a new
+    // purchase. The other store must not sell a second subscription on top of it. Apple
+    // entitlement comes from every App Store row, not just the latest-expiring one.
     const appleTier = await appleEntitledTier(db, user.id, new Date());
     const billingProvider = resolveBillingProvider({
-      stripeEntitled: subscription !== null
-        && (subscription.status === 'active' || subscription.status === 'trialing')
-        && getPersonalTierFromPrice(subscription.stripePriceId) !== 'free',
-      appleEntitled: appleTier !== 'free',
+      stripeContract: subscription !== null && getPersonalTierFromPrice(subscription.stripePriceId) !== 'free',
+      appleContract: appleTier !== 'free' || appStoreRenews,
     });
 
     // Compute storage config from subscription tier

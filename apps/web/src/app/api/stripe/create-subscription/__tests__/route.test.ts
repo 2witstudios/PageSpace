@@ -78,7 +78,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 // The App Store mirror (lib billing/apple): no App Store plan unless a test sets one.
 const mockAppleEntitledTier = vi.hoisted(() => vi.fn(async () => 'free'));
-vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({ appleEntitledTier: mockAppleEntitledTier }));
+const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn(async () => false));
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
+  appleEntitledTier: mockAppleEntitledTier,
+  hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
+}));
 
 // Import after mocks
 import { POST } from '../route';
@@ -245,6 +249,23 @@ describe('POST /api/stripe/create-subscription', () => {
 
     expect(response.status).toBe(409);
     expect(body.code).toBe('managed_by_app_store');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('given an App Store subscription in billing retry, refuses a Stripe checkout: Apple resumes it without a new purchase', async () => {
+    mockHasRenewableAppleSubscription.mockResolvedValueOnce(true);
+    mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'free' })]);
+
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(409);
+    expect((await response.json()).code).toBe('managed_by_app_store');
+    expect(mockHasRenewableAppleSubscription).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.any(Date), { autoRenewing: true });
     expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
   });
 

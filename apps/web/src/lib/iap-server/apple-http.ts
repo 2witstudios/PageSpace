@@ -63,14 +63,15 @@ export function readJwsField(body: unknown, field: 'signedTransaction' | 'signed
   return value;
 }
 /**
- * Which store sells the user's current paid personal plan. Stripe first when both do
- * (it is the one the web can manage); null when neither entitles a paid plan.
+ * Which store holds the user's paid personal plan: a contract that entitles now or is still
+ * collecting a failed renewal. Stripe first when both do (it is the one the web can
+ * manage); null when neither does.
  */
 export function resolveBillingProvider(input: {
-  stripeEntitled: boolean;
-  appleEntitled: boolean;
+  stripeContract: boolean;
+  appleContract: boolean;
 }): 'stripe' | 'apple' | null {
-  if (input.stripeEntitled) return 'stripe';
-  if (input.appleEntitled) return 'apple';
+  if (input.stripeContract) return 'stripe';
+  if (input.appleContract) return 'apple';
   return null;
 }

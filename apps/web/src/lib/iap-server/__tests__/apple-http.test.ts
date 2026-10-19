@@ -67,15 +67,15 @@ describe('readJwsField', () => {
 
 describe('resolveBillingProvider', () => {
   it('names the store that sells the current plan', () => {
-    expect(resolveBillingProvider({ stripeEntitled: true, appleEntitled: false })).toBe('stripe');
-    expect(resolveBillingProvider({ stripeEntitled: false, appleEntitled: true })).toBe('apple');
+    expect(resolveBillingProvider({ stripeContract: true, appleContract: false })).toBe('stripe');
+    expect(resolveBillingProvider({ stripeContract: false, appleContract: true })).toBe('apple');
   });
 
   it('prefers Stripe when both do — the store the web can manage', () => {
-    expect(resolveBillingProvider({ stripeEntitled: true, appleEntitled: true })).toBe('stripe');
+    expect(resolveBillingProvider({ stripeContract: true, appleContract: true })).toBe('stripe');
   });
 
   it('is null when no store entitles a paid plan', () => {
-    expect(resolveBillingProvider({ stripeEntitled: false, appleEntitled: false })).toBeNull();
+    expect(resolveBillingProvider({ stripeContract: false, appleContract: false })).toBeNull();
   });
 });

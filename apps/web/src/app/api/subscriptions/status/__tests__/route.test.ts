@@ -155,10 +155,16 @@ describe('GET /api/subscriptions/status', () => {
       expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
     });
 
-    it('is not stripe for a past-due Stripe subscription', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
+    it('is stripe for a past-due Stripe subscription: it still collects and resumes, so iOS must not sell a second plan', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
       mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'past_due' })]);
-      expect((await (await GET(request())).json()).billingProvider).toBeNull();
+      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
+    });
+
+    it('is apple while Apple retries a failed renewal, though the plan no longer entitles', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free' })]);
+      mockHasRenewableAppleSubscription.mockResolvedValue(true);
+      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
     });
 
     it('is apple for an entitled App Store subscription, and reports it', async () => {
