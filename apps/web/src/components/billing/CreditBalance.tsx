@@ -21,7 +21,7 @@ const LOW_BALANCE_THRESHOLD_PCT = 15;
 
 export function CreditBalance() {
   const router = useRouter();
-  const { showBilling } = useBillingVisibility();
+  const { showPurchases } = useBillingVisibility();
   const { balance, isLoading, isError } = useCreditBalance();
 
   if (isLoading) {
@@ -47,7 +47,7 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt, subscriptionTier } = balance;
   const isFree = subscriptionTier === 'free';
-  const copy = creditBalanceCopy({ isFree, showBilling });
+  const copy = creditBalanceCopy({ isFree, canPurchase: showPurchases });
   const inDebt = spendable < 0;
   // Net monthly portion: gross bucket minus any outstanding debt (topup credits are separate).
   // Using monthly.remaining would overstate the balance when a lapsed period carries debt
@@ -132,7 +132,7 @@ export function CreditBalance() {
 
       <UpgradeTierButton isFree={isFree} />
 
-      {showBilling && (
+      {showPurchases && (
         <div className="hidden sm:flex">
           <BuyCreditsButton variant={isLow ? 'default' : 'ghost'} size="sm" />
         </div>

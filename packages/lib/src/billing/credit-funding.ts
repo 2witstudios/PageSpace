@@ -236,6 +236,112 @@ function invoiceHasSubscriptionParent(obj: FundingEventObject): boolean {
   return false;
 }
 
+/** The transaction handle every funding write runs inside. */
+type FundingTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export interface MonthlyGrantInput {
+  userId: string;
+  /** Exactly-once key on credit_ledger.stripeRef (an invoice id, or `apple:<transactionId>`). */
+  fundingRef: string;
+  allowanceCents: number;
+  /** The price the grant was sized from, recorded for audit (MON-2). */
+  paidCents: number;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+}
+
+/**
+ * Add a monthly grant to the payer's personal root (rollover) inside `tx`, keyed on
+ * `fundingRef` so a redelivery funds exactly once, and roll the billing window forward.
+ * The store-agnostic core of a subscription renewal: invoice.paid and an App Store
+ * renewal both fund through it. Returns whether the grant was newly applied.
+ */
+export async function fundMonthlyGrant(tx: FundingTx, input: MonthlyGrantInput): Promise<{ applied: boolean; carriedCents: number }> {
+  const { userId, fundingRef, allowanceCents, paidCents } = input;
+  const start = input.periodStart;
+  const end = input.periodEnd;
+  // The payer's personal root wallet (WAL-5), created bare if this is their first
+  // funding. It must exist before the FOR UPDATE below: that lock only locks an
+  // existing row, and if two distinct invoices raced for a brand-new user both would
+  // read "no row" -> carriedCents = 0 -> each would write the allowance, the second
+  // overwriting the first and losing a grant. With the row guaranteed, the lock
+  // serialises concurrent refills correctly.
+  const walletId = await ensurePersonalRootWalletId(tx, userId);
+  const inserted = await tx
+    .insert(creditLedger)
+    .values({
+      userId,
+      walletId,
+      entryType: 'monthly_grant',
+      bucket: 'monthly',
+      amountCents: allowanceCents,
+      // What was actually paid (or, for the App Store, the web-equivalent price) — the
+      // grant above is derived from it, so the ratio is auditable row by row (MON-2).
+      paidCents,
+      stripeRef: fundingRef,
+      // Settled on insert. consumeStatus defaults to 'pending', but the backfill
+      // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
+      // SUBTRACTS abs(amountCents) from the balance (it's built for unsettled usage
+      // charges). A pending funding row — positive amountCents — would be clawed
+      // back after the grace period, reversing the credit we just granted. Funding
+      // applies its balance change in this same transaction, so it is already settled.
+      consumeStatus: 'applied',
+    })
+    .onConflictDoNothing(STRIPE_REF_ARBITER)
+    .returning({ id: creditLedger.id });
+
+  // Redelivered invoice.paid (or one already refilled): the grant row exists, so
+  // the balance was already updated for this period. Do not refill again.
+  if (inserted.length === 0) return { applied: false, carriedCents: 0 };
+
+  // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
+  // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
+  // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
+  // triggering two consecutive renewals) would both pass the insert check and could
+  // race here: without the lock both reads see the same carried balance and each
+  // writes carried + allowance, the second overwriting the first and losing a grant.
+  // The row lock serialises them so both increments apply.
+  const [currentRow] = await tx
+    .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents, monthlyPeriodStart: wallets.monthlyPeriodStart })
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
+    .for('update')
+    .limit(1);
+  const carriedCents = currentRow?.monthlyRemainingCents ?? 0;
+  const refill = computeMonthlyRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
+  // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
+  const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId, walletId, clearedCents: forgivenAtRefillCents(allowanceCents, carriedCents, currentRow?.debtCents ?? 0) });
+  if (forgiven) await tx.insert(creditLedger).values(forgiven);
+
+  // A late invoice still funds once, but cannot rewind the root clock its drive allocations use.
+  const currentStart = currentRow?.monthlyPeriodStart ?? null;
+  const periodMovesForward = start !== null && end !== null && (currentStart === null || start > currentStart);
+  const setsAllowance = currentStart === null || (start !== null && start >= currentStart);
+
+  await tx
+    .insert(wallets)
+    .values({
+      userId,
+      monthlyRemainingCents: refill.monthlyRemainingCents,
+      monthlyAllowanceCents: refill.monthlyAllowanceCents,
+      // Renewal nets outstanding debt against the carried balance before adding the
+      // allowance (refill.debtCents === 0 — debt absorbed, not forwarded).
+      debtCents: refill.debtCents,
+      monthlyPeriodStart: start,
+      monthlyPeriodEnd: end,
+    })
+    .onConflictDoUpdate({
+      ...PERSONAL_ROOT_WALLET_UPSERT_TARGET,
+      set: {
+        monthlyRemainingCents: refill.monthlyRemainingCents,
+        ...(setsAllowance ? { monthlyAllowanceCents: refill.monthlyAllowanceCents } : {}),
+        debtCents: refill.debtCents,
+        ...(periodMovesForward ? { monthlyPeriodStart: start, monthlyPeriodEnd: end } : {}),
+      },
+    });
+  return { applied: true, carriedCents };
+}
+
 /**
  * invoice.paid — add the invoice-sized grant to the current monthly balance (rollover)
  * and roll the billing window forward, recording a monthly_grant ledger row keyed
@@ -293,87 +399,9 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   }
   const { start, end } = invoicePeriod(obj);
   let carriedCents = 0;
-
   await db.transaction(async (tx) => {
-    // The payer's personal root wallet (WAL-5), created bare if this is their first
-    // funding. It must exist before the FOR UPDATE below: that lock only locks an
-    // existing row, and if two distinct invoices raced for a brand-new user both would
-    // read "no row" -> carriedCents = 0 -> each would write the allowance, the second
-    // overwriting the first and losing a grant. With the row guaranteed, the lock
-    // serialises concurrent refills correctly.
-    const walletId = await ensurePersonalRootWalletId(tx, user.id);
-    const inserted = await tx
-      .insert(creditLedger)
-      .values({
-        userId: user.id,
-        walletId,
-        entryType: 'monthly_grant',
-        bucket: 'monthly',
-        amountCents: allowanceCents,
-        // What the invoice actually paid — the grant above is derived from it, so the
-        // ratio is auditable row by row (MON-2).
-        paidCents: grant.paidCents,
-        stripeRef,
-        // Settled on insert. consumeStatus defaults to 'pending', but the backfill
-        // cron sweeps EVERY pending ledger row through settlePendingLedgerRow, which
-        // SUBTRACTS abs(amountCents) from the balance (it's built for unsettled usage
-        // charges). A pending funding row — positive amountCents — would be clawed
-        // back after the grace period, reversing the credit we just granted. Funding
-        // applies its balance change in this same transaction, so it is already settled.
-        consumeStatus: 'applied',
-      })
-      .onConflictDoNothing(STRIPE_REF_ARBITER)
-      .returning({ id: creditLedger.id });
-
-    // Redelivered invoice.paid (or one already refilled): the grant row exists, so
-    // the balance was already updated for this period. Do not refill again.
-    if (inserted.length === 0) return;
-
-    // Read the current balance INSIDE the same transaction, locked FOR UPDATE, so the
-    // rollover addition is atomic. The ON CONFLICT guard serialises redelivery of the
-    // SAME invoice, but two DISTINCT invoices for the same user (e.g. rapid plan change
-    // triggering two consecutive renewals) would both pass the insert check and could
-    // race here: without the lock both reads see the same carried balance and each
-    // writes carried + allowance, the second overwriting the first and losing a grant.
-    // The row lock serialises them so both increments apply.
-    const [currentRow] = await tx
-      .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, debtCents: wallets.debtCents, monthlyPeriodStart: wallets.monthlyPeriodStart })
-      .from(wallets)
-      .where(personalRootWalletOf(user.id))
-      .for('update')
-      .limit(1);
-    carriedCents = currentRow?.monthlyRemainingCents ?? 0;
-    const refill = computeMonthlyRefill(allowanceCents, carriedCents, currentRow?.debtCents ?? 0);
-    // WAL-5: debt the clamp forgives is a balance change, so it is a row in this transaction.
-    const forgiven = debtClearedRow({ entryType: DEBT_FORGIVEN_ENTRY, userId: user.id, walletId, clearedCents: forgivenAtRefillCents(allowanceCents, carriedCents, currentRow?.debtCents ?? 0) });
-    if (forgiven) await tx.insert(creditLedger).values(forgiven);
-
-    // A late invoice still funds once, but cannot rewind the root clock its drive allocations use.
-    const currentStart = currentRow?.monthlyPeriodStart ?? null;
-    const periodMovesForward = start !== null && end !== null && (currentStart === null || start > currentStart);
-    const setsAllowance = currentStart === null || (start !== null && start >= currentStart);
-
-    await tx
-      .insert(wallets)
-      .values({
-        userId: user.id,
-        monthlyRemainingCents: refill.monthlyRemainingCents,
-        monthlyAllowanceCents: refill.monthlyAllowanceCents,
-        // Renewal nets outstanding debt against the carried balance before adding the
-        // allowance (refill.debtCents === 0 — debt absorbed, not forwarded).
-        debtCents: refill.debtCents,
-        monthlyPeriodStart: start,
-        monthlyPeriodEnd: end,
-      })
-      .onConflictDoUpdate({
-        ...PERSONAL_ROOT_WALLET_UPSERT_TARGET,
-        set: {
-          monthlyRemainingCents: refill.monthlyRemainingCents,
-          ...(setsAllowance ? { monthlyAllowanceCents: refill.monthlyAllowanceCents } : {}),
-          debtCents: refill.debtCents,
-          ...(periodMovesForward ? { monthlyPeriodStart: start, monthlyPeriodEnd: end } : {}),
-        },
-      });
+    const funded = await fundMonthlyGrant(tx, { userId: user.id, fundingRef: stripeRef, allowanceCents, paidCents: grant.paidCents, periodStart: start, periodEnd: end });
+    carriedCents = funded.carriedCents;
   });
 
   loggers.api.info('credit funding: monthly refill applied', {
@@ -386,6 +414,69 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
     carried: carriedCents,
     stripeRef,
   });
+}
+
+export interface TopupInput {
+  userId: string;
+  /** Exactly-once key on credit_ledger.stripeRef (a checkout session id, or `apple:<transactionId>`). */
+  fundingRef: string;
+  topupCents: number;
+}
+
+/**
+ * Apply a purchased top-up to the payer's personal root inside `tx`: pay down any
+ * outstanding debt FIRST, then credit the remainder to the never-expiring top-up
+ * bucket, keyed on `fundingRef` so a redelivery credits exactly once. Shared by Stripe
+ * credit-pack checkouts and App Store consumables. Returns whether it was newly applied.
+ */
+export async function fundTopup(tx: FundingTx, input: TopupInput): Promise<{ applied: boolean }> {
+  const { userId, fundingRef, topupCents } = input;
+  // The payer's personal root wallet (WAL-5), created bare if this is their first
+  // purchase. It must exist FIRST, so the FOR UPDATE below always locks a real row.
+  // Without it, two concurrent first-time purchases (distinct session ids — their
+  // ledger inserts don't serialize each other) would both read 0 from a non-existent
+  // row, both compute applyPaymentToDebt(.., pack), and the second write would
+  // overwrite the first: a lost top-up on a money path. The lock makes the
+  // read-modify-write atomic so both increments apply.
+  const walletId = await ensurePersonalRootWalletId(tx, userId);
+  const inserted = await tx
+    .insert(creditLedger)
+    .values({
+      userId,
+      walletId,
+      entryType: 'topup_purchase',
+      bucket: 'topup',
+      amountCents: topupCents,
+      stripeRef: fundingRef,
+      // Settled on insert — see fundMonthlyGrant: a 'pending' funding row would be
+      // clawed back by the backfill cron's pending-usage sweep.
+      consumeStatus: 'applied',
+    })
+    .onConflictDoNothing(STRIPE_REF_ARBITER)
+    .returning({ id: creditLedger.id });
+
+  // Redelivered purchase: the purchase row exists, so the top-up was already
+  // credited. Do not add it again.
+  if (inserted.length === 0) return { applied: false };
+
+  const rows = await tx
+    .select({
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+    })
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
+    .for('update');
+  // Pay down any outstanding overage FIRST, then credit the remainder to the
+  // never-expiring top-up bucket. This is the within-period recovery: a user in the
+  // red who buys credits clears their debt before any surplus becomes spendable.
+  const settled = applyPaymentToDebt(rows[0].debtCents, rows[0].topupRemainingCents, topupCents);
+
+  await tx
+    .update(wallets)
+    .set({ topupRemainingCents: settled.topupCents, debtCents: settled.debtCents })
+    .where(personalRootWalletOf(userId));
+  return { applied: true };
 }
 
 /**
@@ -414,51 +505,7 @@ async function applyTopupFunding(event: FundingEvent, packCents: number): Promis
   }
 
   await db.transaction(async (tx) => {
-    // The payer's personal root wallet (WAL-5), created bare if this is their first
-    // purchase. It must exist FIRST, so the FOR UPDATE below always locks a real row.
-    // Without it, two concurrent first-time purchases (distinct session ids — their
-    // ledger inserts don't serialize each other) would both read 0 from a non-existent
-    // row, both compute applyPaymentToDebt(.., pack), and the second write would
-    // overwrite the first: a lost top-up on a money path. The lock makes the
-    // read-modify-write atomic so both increments apply.
-    const walletId = await ensurePersonalRootWalletId(tx, user.id);
-    const inserted = await tx
-      .insert(creditLedger)
-      .values({
-        userId: user.id,
-        walletId,
-        entryType: 'topup_purchase',
-        bucket: 'topup',
-        amountCents: packCents,
-        stripeRef,
-        // Settled on insert — see applyMonthlyRefill: a 'pending' funding row would be
-        // clawed back by the backfill cron's pending-usage sweep.
-        consumeStatus: 'applied',
-      })
-      .onConflictDoNothing(STRIPE_REF_ARBITER)
-      .returning({ id: creditLedger.id });
-
-    // Redelivered checkout: the purchase row exists, so the top-up was already
-    // credited. Do not add it again.
-    if (inserted.length === 0) return;
-
-    const rows = await tx
-      .select({
-        topupRemainingCents: wallets.topupRemainingCents,
-        debtCents: wallets.debtCents,
-      })
-      .from(wallets)
-      .where(personalRootWalletOf(user.id))
-      .for('update');
-    // Pay down any outstanding overage FIRST, then credit the remainder to the
-    // never-expiring top-up bucket. This is the within-period recovery: a user in the
-    // red who buys credits clears their debt before any surplus becomes spendable.
-    const settled = applyPaymentToDebt(rows[0].debtCents, rows[0].topupRemainingCents, packCents);
-
-    await tx
-      .update(wallets)
-      .set({ topupRemainingCents: settled.topupCents, debtCents: settled.debtCents })
-      .where(personalRootWalletOf(user.id));
+    await fundTopup(tx, { userId: user.id, fundingRef: stripeRef, topupCents: packCents });
   });
 
   loggers.api.info('credit funding: top-up applied', {

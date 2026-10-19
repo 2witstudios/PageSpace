@@ -14,10 +14,11 @@ import { creditBalanceCopy, formatCreditCount } from '@/lib/subscription/credits
  * Settings card showing the user's prepaid AI-credit balance on a 0–100 scale,
  * with a progress bar for monthly consumption and a "Buy credits" action.
  * Live-updates via `useCreditBalance`. Renders nothing when billing is disabled;
- * hides the buy action on iOS (App Store policy).
+ * buys through In-App Purchase on the iOS app with StoreKit, and hides the buy
+ * action where nothing may be sold (older iOS binaries, Guideline 3.1.1).
  */
 export function CreditBalanceCard() {
-  const { showBilling } = useBillingVisibility();
+  const { showPurchases } = useBillingVisibility();
   const { balance, isLoading, isError } = useCreditBalance();
 
   if (!isLoading && (!balance || !balance.billingEnabled)) {
@@ -26,7 +27,7 @@ export function CreditBalanceCard() {
 
   const renewDate = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd) : null;
   const isFree = balance?.subscriptionTier === 'free';
-  const copy = creditBalanceCopy({ isFree, showBilling });
+  const copy = creditBalanceCopy({ isFree, canPurchase: showPurchases });
 
   return (
     <Card>
@@ -100,7 +101,7 @@ export function CreditBalanceCard() {
             </div>
             <div className="flex items-center gap-2">
               <UpgradeTierButton isFree={isFree} className="flex" />
-              {showBilling && <BuyCreditsButton variant="default" size="default" />}
+              {showPurchases && <BuyCreditsButton variant="default" size="default" />}
             </div>
           </div>
         ) : null}

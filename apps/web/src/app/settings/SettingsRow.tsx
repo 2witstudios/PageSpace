@@ -11,6 +11,8 @@ export interface SettingsItem {
   available: boolean;
   desktopOnly?: boolean;
   mobileHidden?: boolean;
+  /** Shown only on the Apple billing channel (the iOS app selling through In-App Purchase). */
+  appleChannelOnly?: boolean;
   /** Hidden inside the native (Capacitor) apps. */
   nativeHidden?: boolean;
   /** A page served by the marketing site (opened outside the native web view). */

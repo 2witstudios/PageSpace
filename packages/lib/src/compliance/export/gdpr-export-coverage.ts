@@ -297,6 +297,9 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'siem_delivery_receipts',
     'storage_events',
     'stripe_events',
+    // App Store Server Notification idempotency claims — the counterpart of `stripe_events`:
+    // a notification id, its type and when it was processed, naming no person.
+    'app_store_notifications',
     'pending_uploads',
     'integration_providers',
     'incidents',
@@ -370,6 +373,15 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'integration_audit_log',
     'oauth_clients',
     'subscriptions',
+    // The App Store counterparts of `subscriptions` (0379): the mirror of an auto-renewable
+    // subscription Apple sold, each signed transaction Apple reported (with Apple's price, for
+    // our books), and the opaque per-user token StoreKit echoes back. The same answer as
+    // `subscriptions`: billing records whose authoritative copy — the purchase history — is
+    // the subject's to obtain from Apple (Apple ID › Purchase History). The plan they confer
+    // is exported as the user's tier, and the credit they bought as the `wallet` category.
+    'app_store_subscriptions',
+    'app_store_transactions',
+    'app_store_accounts',
     // An ORG's Business subscription (Spec SEAT-1): the org's Stripe linkage, keyed on
     // the org and naming no person. The same answer as `subscriptions` — a billing
     // record whose Stripe-side copy is the org's to obtain from Stripe.

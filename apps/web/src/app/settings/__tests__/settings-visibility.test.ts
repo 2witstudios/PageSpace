@@ -16,6 +16,7 @@ const items = [
   item('privacy', { nativeHidden: true }),
   item('billing', { icon: CreditCard, mobileHidden: true }),
   item('mcp', { icon: Plug2, desktopOnly: true }),
+  item('plan', { icon: CreditCard, appleChannelOnly: true }),
   item('account'),
 ];
 
@@ -36,5 +37,17 @@ describe('filterSettingsItems', () => {
 
   it('given platform detection has not finished, should not show the Billing entry for a frame', () => {
     expect(titles(filterSettingsItems(items, { isDesktop: true, showBilling: false, isNative: false }))).not.toContain('billing');
+  });
+
+  it('given the iOS app selling through In-App Purchase, should show the Plan entry but not Stripe Billing', () => {
+    const shown = titles(filterSettingsItems(items, { isDesktop: false, showBilling: false, isNative: true, billingChannel: 'apple' }));
+    expect(shown).toContain('plan');
+    expect(shown).not.toContain('billing');
+  });
+
+  it('given any other channel, should hide the Apple-only Plan entry', () => {
+    for (const billingChannel of ['stripe', 'none'] as const) {
+      expect(titles(filterSettingsItems(items, { isDesktop: true, showBilling: true, isNative: false, billingChannel }))).not.toContain('plan');
+    }
   });
 });

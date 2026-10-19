@@ -13,6 +13,7 @@ export * from './schema/monitoring';
 export * from './schema/versioning';
 export * from './schema/social';
 export * from './schema/subscriptions';
+export * from './schema/app-store';
 export * from './schema/contact';
 export * from './schema/feedback';
 export * from './schema/storage';
@@ -89,6 +90,7 @@ import * as monitoring from './schema/monitoring';
 import * as versioning from './schema/versioning';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
+import * as appStore from './schema/app-store';
 import * as contact from './schema/contact';
 import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
@@ -165,6 +167,7 @@ export const schema = {
   ...versioning,
   ...social,
   ...subscriptions,
+  ...appStore,
   ...contact,
   ...feedback,
   ...storage,

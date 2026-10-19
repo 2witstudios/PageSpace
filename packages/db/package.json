@@ -239,6 +239,10 @@
       "types": "./dist/schema/storage.d.ts",
       "default": "./dist/schema/storage.js"
     },
+    "./schema/app-store": {
+      "types": "./dist/schema/app-store.d.ts",
+      "default": "./dist/schema/app-store.js"
+    },
     "./schema/subscriptions": {
       "types": "./dist/schema/subscriptions.d.ts",
       "default": "./dist/schema/subscriptions.js"

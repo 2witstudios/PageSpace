@@ -44,6 +44,8 @@ import { computeMonthlyRefill, forgivenAtRefillCents } from './credit-core';
 import { debtClearedRow, ALLOCATION_RESET_ENTRY, DEBT_FORGIVEN_ENTRY, LEG_REFUND_ENTRY } from './wallet-ledger-core';
 import { includedDrawnCents } from './wallet-legs';
 import { RENEWAL_CAPABLE_STATUSES, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
+import { appStoreSubscriptions } from '@pagespace/db/schema/app-store';
+import { APPLE_BILLING_RETRY_WINDOW_MS, APPLE_RENEWAL_CAPABLE_STATUSES, hasRenewableAppleSubscription } from './apple/apple-entitlement';
 import {
   orgInvoiceFundingInput,
   orgInvoiceSubscriptionId,
@@ -114,6 +116,20 @@ export interface OrgPoolRefillOptions {
   seatPriceId?: string;
   /** The storage add-on price: its lines are recognized (not logged as strangers) and never refill. */
   storagePriceId?: string;
+}
+
+/**
+ * Whether the user has a personal Stripe subscription that can still deliver an invoice
+ * (RENEWAL_CAPABLE_STATUSES, `unpaid` included: its invoices stay collectible). Such a
+ * contract renews without a new purchase, so the App Store must not sell a second plan.
+ */
+export async function hasRenewableStripeSubscription(executor: Pick<typeof db, 'select'>, userId: string): Promise<boolean> {
+  const [subscribed] = await executor
+    .select({ id: subscriptions.id })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
+    .limit(1);
+  return subscribed !== undefined;
 }
 
 /**
@@ -413,7 +429,11 @@ export async function rollDuePersonalRoots(opts: { now: Date; batchSize?: number
   // the control plane (isBillingEnabled is the billing guard; CLAUDE.md). The gate's lazy roll never
   // granted there, so the sweep writes no grant there either.
   if (!isBillingEnabled()) return result;
-  const renewable = sql`EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscriptions.userId} = ${wallets.userId} AND ${inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)})`;
+  // An App Store subscription Apple may still renew is a renewal source too: its renewal
+  // grants (apple-funding), so the sweep must not add a list-price allowance on top.
+  const appleRetryCutoff = new Date(opts.now.getTime() - APPLE_BILLING_RETRY_WINDOW_MS);
+  const renewable = sql`(EXISTS (SELECT 1 FROM ${subscriptions} WHERE ${subscriptions.userId} = ${wallets.userId} AND ${inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)})
+    OR EXISTS (SELECT 1 FROM ${appStoreSubscriptions} WHERE ${appStoreSubscriptions.userId} = ${wallets.userId} AND ${inArray(appStoreSubscriptions.status, [...APPLE_RENEWAL_CAPABLE_STATUSES])} AND ${appStoreSubscriptions.expiresAt} > ${appleRetryCutoff}))`;
   let cursor = '';
 
   for (;;) {
@@ -465,15 +485,10 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .for('update');
     if (!locked) return false;
     const [owner] = await tx.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId));
-    const [subscribed] = await tx
-      .select({ id: subscriptions.id })
-      .from(subscriptions)
-      .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
-      .limit(1);
     const tier = owner?.tier ?? '';
     const plan = planPersonalRootRoll({
       tier,
-      hasRenewalCapableSubscription: subscribed !== undefined,
+      hasRenewalCapableSubscription: (await hasRenewableStripeSubscription(tx, userId)) || (await hasRenewableAppleSubscription(tx, userId, now)),
       periodStartMs: locked.monthlyPeriodStart?.getTime() ?? null,
       periodEndMs: locked.monthlyPeriodEnd?.getTime() ?? null,
       nowMs: now.getTime(),
