@@ -58,6 +58,10 @@ const driveOption = (
 
 const imagoOf = (builtins: readonly BuiltinAgentPointer[] | undefined) => builtins?.find((agent) => agent.key === 'imago');
 
+/** Imago's own page id, once its pointers have loaded and it is provisioned; null otherwise. */
+export const imagoPageIdOf = (builtins: readonly BuiltinAgentPointer[] | undefined): string | null =>
+  imagoOf(builtins)?.pageId ?? null;
+
 /**
  * The header's groups and choice. An agent chosen in another drive stays
  * offered after a move, under "Chosen", so the header still names it.

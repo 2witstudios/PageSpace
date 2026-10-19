@@ -15,6 +15,7 @@ import useSWRInfinite from 'swr/infinite';
 import { useApiClient } from '@/api/swr-provider';
 import { getUiState, useUiState } from '@/ui/store/store';
 import { isStreaming } from '../chat-plugin';
+import { imagoPageIdOf } from '../chat-agents/chat-agents';
 import type { AgentConversation, ChatMessage, ConversationsPage, MessagesPage } from '../chat-model/chat';
 import { fetchBuiltinAgents, fetchConversationMessages, fetchConversationsPage, fetchDriveAgents } from '../chat-api/chat-api';
 
@@ -24,6 +25,12 @@ export const useImagoAgents = () => {
   const { data, error, isLoading } = useSWR(['imago:builtin-agents'] as const, () => fetchBuiltinAgents(client));
   return { agents: data, error: error as unknown, isLoading };
 };
+
+/**
+ * Imago's page id, null until it loads. Wherever Imago shows up as a page (the tree, tabs,
+ * recents, search) it is drawn as its metal orb rather than as an agent page.
+ */
+export const useImagoPageId = (): string | null => imagoPageIdOf(useImagoAgents().agents);
 
 /** The agents of a drive the viewer can use, as the server lists them; nothing without a drive. */
 export const useDriveAgents = (driveId: string | null) => {
