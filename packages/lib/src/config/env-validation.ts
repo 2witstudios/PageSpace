@@ -142,6 +142,14 @@ export const serverEnvSchema = z
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Optional App Store In-App Purchase (billing/apple/apple-verify). Production
+    // purchases verify only once APPLE_IAP_APP_APPLE_ID is set.
+    APPLE_IAP_BUNDLE_ID: z.string().min(1).optional(),
+    // Empty is allowed: .env.example ships it blank until the app is in App Store Connect.
+    APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\d*$/).optional(),
+    APPLE_IAP_ALLOW_SANDBOX: z.string().optional(),
+    APPLE_IAP_ONLINE_CHECKS: z.string().optional(),
+
     // Optional real-time / cron / cookie
     REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),
     CRON_SECRET: z.string().min(1).optional(),

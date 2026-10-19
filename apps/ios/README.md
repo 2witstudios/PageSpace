@@ -335,7 +335,7 @@ Paste into the Resolution Center reply (and keep the gist in the reviewer notes)
 > Thank you for the review. We have updated the app so that individual plans are now sold using
 > In-App Purchase. PageSpace Pro (an auto-renewable monthly subscription) and AI credit packs
 > (consumables) are available in the app via StoreKit, with Restore Purchases and Manage
-> Subscription available on the billing screen, and the app no longer links to or mentions any
+> Subscription available on the plan screen, and the app no longer links to or mentions any
 > external purchase method.
 >
 > Organization and enterprise plans are sold directly to businesses and managed by organization
@@ -343,8 +343,8 @@ Paste into the Resolution Center reply (and keep the gist in the reviewer notes)
 > Members of such organizations see that their plan is managed by their organization; the app
 > offers no button, link, or call to action to purchase it.
 >
-> To test: sign in with the demo account below, open Settings → Billing, and purchase PageSpace Pro
-> or a credit pack with a Sandbox account.
+> To test: tap "Continue with Apple" (no demo account is needed), open Settings → Plan to subscribe
+> to PageSpace Pro, or Settings → Usage to buy a credit pack, using a Sandbox account.
 
 ## The Facebook SDK that ships but never runs
 
