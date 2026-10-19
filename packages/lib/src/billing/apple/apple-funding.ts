@@ -342,11 +342,6 @@ async function upsertSubscription(tx: Tx, input: {
     }
     return;
   }
-  // lastSignedAt orders payloads WITHIN the current period: a newer period starts its own
-  // clock at its payload's signing time (a refund of the previous period signed later must
-  // not reject this period's own updates); within a period it only moves forward.
-  const startsNewPeriod = facts.purchaseDateMs > input.existing.latestPurchaseMs;
-  const advancesClock = startsNewPeriod || !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
   const next = nextSubscriptionState(input.existing, {
     status: incomingStatus,
     expiresAtMs: incomingExpiresMs,
@@ -363,7 +358,11 @@ async function upsertSubscription(tx: Tx, input: {
       expiresAt: new Date(next.expiresAtMs),
     } : {}),
     ...renewalChange,
-    ...(advancesClock ? { lastSignedAt: signedAt } : {}),
+    // lastSignedAt orders payloads WITHIN the current period. A payload that applies either
+    // starts a newer period — whose clock starts at its own signing time, so a later-signed
+    // refund of the previous period cannot reject this period's updates — or is the newest
+    // for the current one; either way it becomes the clock.
+    lastSignedAt: signedAt,
     updatedAt: now,
   }).where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
 }
