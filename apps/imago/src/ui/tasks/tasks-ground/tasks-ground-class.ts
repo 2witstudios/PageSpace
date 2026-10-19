@@ -2,7 +2,7 @@ import { cn } from '../../cn';
 import type { Priority, StatusGroup } from '../task-model/task';
 import type { DueTone } from '../task-tree/task-tree';
 
-export const groundClass = 'flex max-h-1/2 min-h-0 flex-none flex-col overflow-y-auto px-8 pt-8 pb-4';
+export const groundClass = 'flex h-full min-h-0 flex-col overflow-y-auto px-8 pt-8 pb-4';
 
 export const groundInnerClass = 'mx-auto w-full max-w-imago-ground';
 

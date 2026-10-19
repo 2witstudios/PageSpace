@@ -52,6 +52,27 @@ describe('columnsFor() — the C-Files-Doc renderVals machine (IMC-1.3)', () => 
     });
   });
 
+  test('the Tasks index: its list fills the middle, and Imago docks beside it', () => {
+    const tasks = stageFor('/drive1/tasks');
+    const columns = columnsFor(tasks, ui());
+    assert({
+      given: 'the Tasks index of a drive with nothing hidden',
+      should: 'open the middle column for the list and dock Imago beside it, with no Close Imago',
+      actual: [columns.page, columns.imago, columns.collapseImago, columns.closeImago, columns.closePage],
+      expected: [true, 'docked', true, false, false],
+    });
+  });
+
+  test('the Tasks index: Imago collapses to the Ask pill in its head', () => {
+    const columns = columnsFor(stageFor('/drive1/tasks'), ui({ imagoCollapsed: true }));
+    assert({
+      given: 'the Tasks index with Imago collapsed',
+      should: 'fold Imago to the Ask pill in the middle head',
+      actual: [columns.imago, columns.askPill],
+      expected: ['collapsed', true],
+    });
+  });
+
   test('page closed', () => {
     const columns = columnsFor(index, ui({ imagoCollapsed: true }));
     assert({

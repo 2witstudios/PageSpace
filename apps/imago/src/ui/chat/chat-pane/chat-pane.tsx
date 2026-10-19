@@ -26,7 +26,6 @@ import { ChipsRow } from '../chips-row/chips-row';
 import { SideChatEmpty } from '../side-chat-empty/side-chat-empty';
 import { ImagoHistory } from '../imago-history/imago-history';
 import { DmGround } from '@/ui/messages/dm-index/dm-index';
-import { TasksGround } from '@/ui/tasks/tasks-ground/tasks-ground';
 import { groundFor } from './ground';
 import { usePathname } from 'next/navigation';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
@@ -124,7 +123,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     title: retainedSelection.agentTitle ?? (retainedSelection.agentId === null ? 'Imago' : 'Opening agent…'),
   } : chosenAgent;
   // The Messages ground: on /dm, the people you can message (IMC-4.5).
-  // The Tasks ground: the viewer's tasks on a drive's Tasks index (IMC-5.1).
   const ground = groundFor(stage);
   // A side chat with an agent beside a page, before its first message: the invitation and chips (IMC-3.11).
   const sideChatEmpty = chosenAgent !== null && stage.object?.kind === 'page' && conversationId === null && !resolving;
@@ -165,11 +163,6 @@ export function ChatPane({ stage, driveName, homeDriveId, leading = null, traili
     content: ground === 'dm' ? (
       <div className="flex h-full min-h-0 flex-col">
         <DmGround />
-        <div className="min-h-0 flex-1">{thread}</div>
-      </div>
-    ) : ground === 'tasks' && stage.driveId !== null ? (
-      <div className="flex h-full min-h-0 flex-col">
-        <TasksGround driveId={stage.driveId} />
         <div className="min-h-0 flex-1">{thread}</div>
       </div>
     ) : thread,
