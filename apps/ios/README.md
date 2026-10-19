@@ -253,6 +253,8 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
 
 ## In-App Purchases
 
+> fastlane's `precheck_include_in_app_purchases` stays `false`: precheck cannot inspect in-app purchases when authenticated with an App Store Connect API key (it needs an Apple ID session), and the release lane uses the API key. IAP metadata (names, descriptions, review screenshots) is reviewed in App Store Connect instead.
+
 Individual plans and credit packs are sold through Apple In-App Purchase (StoreKit 2). The native
 side is `ios/App/App/Plugins/PageSpaceStorePlugin.swift` (jsName `PageSpaceStore`, registered in
 `MyViewController.swift`); the web layer drives the flow and the server verifies every signed

@@ -56,9 +56,6 @@ platform :ios do
       automatic_release: false,
       force: true,                       # skip the interactive HTML preview
       skip_binary_upload: true,          # binary already uploaded by `beta`
-      # Must stay false: precheck cannot inspect in-app purchases when authenticated with an
-      # App Store Connect API key (it needs an Apple ID session), and this lane uses the API key.
-      # IAP metadata (names, descriptions, review screenshots) is reviewed in App Store Connect.
       precheck_include_in_app_purchases: false,
       submission_information: {
         add_id_info_uses_idfa: false,
