@@ -55,6 +55,12 @@ export const appStoreSubscriptions = pgTable('app_store_subscriptions', {
   /** From the signed renewal info: false once the user turned auto-renew off. */
   autoRenew: boolean('autoRenew').default(true).notNull(),
   /**
+   * Apple's signedDate of the payload `autoRenew` came from. Renewal preferences describe
+   * the whole subscription, so they are ordered on their own clock: a payload about an
+   * older period never moves the period but may still carry the newest preference.
+   */
+  autoRenewSignedAt: timestamp('autoRenewSignedAt', { mode: 'date', withTimezone: true }),
+  /**
    * Apple's signedDate of the newest payload applied to this row. A payload signed
    * earlier (a replayed device post, a delayed notification retry) changes nothing:
    * Apple's own ordering, not arrival order, decides the state.

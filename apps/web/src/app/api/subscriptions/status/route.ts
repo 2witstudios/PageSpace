@@ -8,7 +8,8 @@ import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscr
 import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { appleEntitledTier, hasRenewableAppleSubscription, latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
+import { appleEntitledTier, hasRenewableAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
+import { hasRenewableStripeSubscription } from '@pagespace/lib/billing/wallet-funding-shell';
 import { resolveBillingProvider } from '@/lib/iap-server/apple-http';
 
 /**
@@ -60,7 +61,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const appStore = await latestAppleSubscription(db, user.id);
     // Whether Apple will charge this account again (auto-renew on, renewal-capable status) —
     // whichever store sells the current plan. Account deletion warns on it: deleting the
     // account never cancels an App Store subscription.
@@ -71,9 +71,10 @@ export async function GET(request: NextRequest) {
     // entitlement comes from every App Store row, not just the latest-expiring one.
     const appleTier = await appleEntitledTier(db, user.id, new Date());
     const billingProvider = resolveBillingProvider({
-      // Any live personal Stripe row is a contract Stripe charges, whatever its price maps to
-      // (a retired or grandfathered price maps to free but still bills).
-      stripeContract: subscription !== null,
+      // Any renewal-capable personal Stripe row is a contract Stripe can still charge, whatever
+      // its price maps to (a retired or grandfathered price maps to free but still bills) —
+      // including `unpaid`, which the display lookup above leaves out.
+      stripeContract: await hasRenewableStripeSubscription(db, user.id),
       appleContract: appleTier !== 'free' || appStoreRenews,
     });
 
@@ -99,13 +100,6 @@ export async function GET(request: NextRequest) {
       // controls only when this is not the store they can manage it in.
       billingProvider,
       appStoreRenews,
-      appStore: appStore ? {
-        status: appStore.status,
-        productId: appStore.productId,
-        expiresAt: appStore.expiresAt,
-        autoRenew: appStore.autoRenew,
-        environment: appStore.environment,
-      } : null,
       storage: {
         used: user.storageUsedBytes || 0,
         quota: storageConfig.quotaBytes,

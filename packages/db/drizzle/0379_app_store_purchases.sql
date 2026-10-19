@@ -25,6 +25,7 @@ CREATE TABLE "app_store_subscriptions" (
 	"currentPeriodStart" timestamp with time zone NOT NULL,
 	"expiresAt" timestamp with time zone NOT NULL,
 	"autoRenew" boolean DEFAULT true NOT NULL,
+	"autoRenewSignedAt" timestamp with time zone,
 	"lastSignedAt" timestamp with time zone,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,

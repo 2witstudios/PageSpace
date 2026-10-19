@@ -81,27 +81,3 @@ export async function hasRenewableAppleSubscription(executor: Executor, userId: 
 
 /** Apple retries a failed renewal for up to 60 days. */
 export const APPLE_BILLING_RETRY_WINDOW_MS = 60 * 86_400_000;
-
-export interface AppStoreSubscriptionView {
-  status: string;
-  productId: string;
-  expiresAt: Date;
-  autoRenew: boolean;
-  environment: string;
-}
-
-/** The user's most recent App Store subscription, for the status route. */
-export async function latestAppleSubscription(executor: Executor, userId: string): Promise<AppStoreSubscriptionView | null> {
-  const rows = await executor
-    .select({
-      status: appStoreSubscriptions.status,
-      productId: appStoreSubscriptions.productId,
-      expiresAt: appStoreSubscriptions.expiresAt,
-      autoRenew: appStoreSubscriptions.autoRenew,
-      environment: appStoreSubscriptions.environment,
-    })
-    .from(appStoreSubscriptions)
-    .where(eq(appStoreSubscriptions.userId, userId));
-  if (rows.length === 0) return null;
-  return rows.reduce((latest, row) => (row.expiresAt > latest.expiresAt ? row : latest));
-}

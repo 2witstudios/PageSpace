@@ -48,11 +48,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 // The App Store mirror read (lib billing/apple): none unless a test sets one.
-const mockLatestAppleSubscription = vi.hoisted(() => vi.fn());
+const mockHasRenewableStripeSubscription = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({ hasRenewableStripeSubscription: mockHasRenewableStripeSubscription }));
 const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn());
 const mockAppleEntitledTier = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
-  latestAppleSubscription: mockLatestAppleSubscription,
   appleEntitledTier: mockAppleEntitledTier,
   hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
 }));
@@ -96,7 +96,6 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
-  stripePriceId: string;
 }> = {}) => ({
   id: overrides.id ?? 'sub_123',
   userId: overrides.userId ?? 'user_123',
@@ -104,7 +103,7 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: overrides.currentPeriodStart ?? new Date('2024-01-01'),
   currentPeriodEnd: overrides.currentPeriodEnd ?? new Date('2024-02-01'),
   cancelAtPeriodEnd: overrides.cancelAtPeriodEnd ?? false,
-  stripePriceId: overrides.stripePriceId ?? 'price_pro',
+  stripePriceId: 'price_pro',
 });
 
 describe('GET /api/subscriptions/status', () => {
@@ -129,8 +128,8 @@ describe('GET /api/subscriptions/status', () => {
       orderBy: mockSelectOrderBy,
     }));
     mockSelectLimit.mockResolvedValue([]);
-    mockLatestAppleSubscription.mockReset();
-    mockLatestAppleSubscription.mockResolvedValue(null);
+    mockHasRenewableStripeSubscription.mockReset();
+    mockHasRenewableStripeSubscription.mockResolvedValue(false);
     mockHasRenewableAppleSubscription.mockReset();
     mockHasRenewableAppleSubscription.mockResolvedValue(false);
     mockAppleEntitledTier.mockReset();
@@ -144,25 +143,17 @@ describe('GET /api/subscriptions/status', () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser()]);
       const body = await (await GET(request())).json();
       expect(body.billingProvider).toBeNull();
-      expect(body.appStore).toBeNull();
+      expect(body).not.toHaveProperty('appStore');
     });
 
-    it('is stripe for an active Stripe Pro subscription', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
-      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
-    });
-
-    it('is stripe for a past-due Stripe subscription: it still collects and resumes, so iOS must not sell a second plan', async () => {
+    it('is stripe while a personal Stripe subscription can still renew (any renewal-capable status, any price)', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'past_due' })]);
-      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
-    });
-
-    it('is stripe for a live Stripe subscription on a price it no longer maps (retired, grandfathered): Stripe still charges it', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active', stripePriceId: 'price_retired' })]);
-      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
+      // e.g. an `unpaid` subscription: the display lookup leaves it out, but its invoices stay collectible.
+      mockHasRenewableStripeSubscription.mockResolvedValue(true);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBe('stripe');
+      expect(body.subscription).toBeNull();
+      expect(mockHasRenewableStripeSubscription).toHaveBeenCalledWith(expect.anything(), 'user_123');
     });
 
     it('is apple while Apple retries a failed renewal, though the plan no longer entitles', async () => {
@@ -171,20 +162,17 @@ describe('GET /api/subscriptions/status', () => {
       expect((await (await GET(request())).json()).billingProvider).toBe('apple');
     });
 
-    it('is apple for an entitled App Store subscription, and reports it', async () => {
-      const expiresAt = new Date(Date.now() + 86_400_000);
+    it('is apple for an entitled App Store subscription, read across every App Store row', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
-      mockLatestAppleSubscription.mockResolvedValue({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt, autoRenew: true, environment: 'Production' });
       mockAppleEntitledTier.mockResolvedValue('pro');
-      const body = await (await GET(request())).json();
-      expect(body.billingProvider).toBe('apple');
+      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
       expect(mockAppleEntitledTier).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date));
-      expect(body.appStore).toEqual({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: expiresAt.toISOString(), autoRenew: true, environment: 'Production' });
     });
 
-    it('reports an App Store subscription Apple will still charge, even when Stripe sells the current plan', async () => {
+    it('reports an App Store subscription Apple will still charge, even when Stripe holds the plan', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
       mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
+      mockHasRenewableStripeSubscription.mockResolvedValue(true);
       mockHasRenewableAppleSubscription.mockResolvedValue(true);
       const body = await (await GET(request())).json();
       expect(body.billingProvider).toBe('stripe');
@@ -192,19 +180,9 @@ describe('GET /api/subscriptions/status', () => {
       expect(mockHasRenewableAppleSubscription).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date), { autoRenewing: true });
     });
 
-    it('is not apple once the App Store period has ended', async () => {
+    it('is null once neither store has a live contract (an ended App Store period, no Stripe plan)', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser()]);
-      mockLatestAppleSubscription.mockResolvedValue({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: new Date(Date.now() - 1000), autoRenew: false, environment: 'Production' });
-      const body = await (await GET(request())).json();
-      expect(body.billingProvider).toBeNull();
-      expect(body.appStore).toMatchObject({ status: 'active', autoRenew: false });
-    });
-
-    it('is apple when another App Store row entitles, even if the latest-expiring row does not', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
-      mockLatestAppleSubscription.mockResolvedValue({ status: 'revoked', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: new Date(Date.now() + 86_400_000), autoRenew: false, environment: 'Production' });
-      mockAppleEntitledTier.mockResolvedValue('pro');
-      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
+      expect((await (await GET(request())).json()).billingProvider).toBeNull();
     });
   });
 

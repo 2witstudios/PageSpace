@@ -18,6 +18,7 @@ import { applyAppleNotification, applyAppleTransaction, type AppleApplyConfig } 
 import { getOrCreateAccountToken } from '../apple-account';
 import { hasRenewableAppleSubscription } from '../apple-entitlement';
 import { walletDriftAlerts } from '../../wallet-reconcile';
+import { hasRenewableStripeSubscription } from '../../wallet-funding-shell';
 import type { DecodedTransactionLike } from '../apple-core';
 import type { VerifiedNotification } from '../apple-verify';
 import type { SubscriptionTier } from '../../subscription-tiers';
@@ -298,6 +299,28 @@ describe('App Store subscription state follows Apple, not arrival order', () => 
     expect(sub.lastSignedAt?.getTime()).toBe(now + 100);
   });
 
+  it('renewal preferences follow signing order even when older-period payloads arrive out of order', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const now = Date.now();
+    const periodN = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY, signedDate: now - 31 * DAY });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: periodN, priceTier, config });
+    const renewal = subscriptionTxn(u.token, { originalTransactionId: original, purchaseDate: now - DAY, expiresDate: now + 29 * DAY, signedDate: now });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'DID_RENEW', subtype: null, status: 1, transaction: renewal, renewal: { autoRenew: true, gracePeriodExpiresMs: null } },
+      priceTier, config,
+    });
+    // Two later payloads about the OLDER period, delivered newest first.
+    const aboutN = (signedDate: number, autoRenew: boolean): VerifiedNotification => ({
+      notificationUUID: createId(), type: 'DID_CHANGE_RENEWAL_STATUS', subtype: null, status: 1, transaction: { ...periodN, signedDate }, renewal: { autoRenew, gracePeriodExpiresMs: null },
+    });
+    await applyAppleNotification({ notification: aboutN(now + 20, true), priceTier, config });
+    await applyAppleNotification({ notification: aboutN(now + 10, false), priceTier, config });
+    const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    expect(sub).toMatchObject({ autoRenew: true, latestTransactionId: renewal.transactionId });
+  });
+
   it('Restore Purchases during a billing grace period keeps Pro (the device cannot see the grace)', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
@@ -380,6 +403,22 @@ describe('Sandbox money', () => {
     expect(row.fundedAt?.getTime()).toBe(later.getTime());
     // ...and that funding counts: the next one in the same window is capped.
     await applyAppleTransaction({ source: 'device', userId: u.id, decoded: packTxn(u.token, 100), priceTier, config: capped, now: later });
+    expect((await root(u.id)).topupRemainingCents).toBe(2000);
+  });
+
+  it('a backlog of capped purchases replayed as stale receipts in the next window funds only up to the cap', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const capped = { ...config, sandboxMaxFundings: 1 };
+    const signed = Date.now();
+    const packs = Array.from({ length: 5 }, () => packTxn(u.token, 100, { signedDate: signed }));
+    for (const pack of packs) await applyAppleTransaction({ source: 'device', userId: u.id, decoded: pack, priceTier, config: capped });
+    expect((await root(u.id)).topupRemainingCents).toBe(1000);
+
+    const later = new Date(Date.now() + 31 * DAY);
+    for (const pack of packs) {
+      await applyAppleTransaction({ source: 'device', userId: u.id, decoded: { ...pack, signedDate: signed - 10 }, priceTier, config: capped, now: later });
+    }
     expect((await root(u.id)).topupRemainingCents).toBe(2000);
   });
 
@@ -632,6 +671,16 @@ describe('one plan whichever store sold it', () => {
       currentPeriodEnd: new Date(Date.now() + 29 * DAY),
     });
   }
+
+  it('an unpaid Stripe subscription still counts as a contract that can renew; a canceled one does not', async () => {
+    if (!dbAvailable) return;
+    const unpaid = await newUser();
+    const canceled = await newUser();
+    await stripePro(unpaid.id, 'unpaid');
+    await stripePro(canceled.id, 'canceled');
+    expect(await hasRenewableStripeSubscription(db, unpaid.id)).toBe(true);
+    expect(await hasRenewableStripeSubscription(db, canceled.id)).toBe(false);
+  });
 
   it('an expired App Store plan does not demote an active Stripe Pro', async () => {
     if (!dbAvailable) return;

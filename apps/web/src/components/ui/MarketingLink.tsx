@@ -5,13 +5,14 @@ import { isCapacitorApp } from '@/lib/capacitor-bridge';
 import { openExternalUrl } from '@/lib/navigation/app-navigation';
 
 interface MarketingLinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
-  /** A same-host path served by the marketing site, e.g. `/terms`. */
+  /** A same-host path served by the marketing site, e.g. `/terms`, or an absolute URL (Apple's EULA). */
   href: string;
   children: ReactNode;
 }
 
 /**
- * Link to a page the marketing site serves on our own host (Terms, Privacy, …).
+ * Link to a page the marketing site serves on our own host (Terms, Privacy, …), or to an
+ * absolute URL such as Apple's standard EULA.
  *
  * `AppLink` treats same-host paths as internal, which in the native app loads the
  * whole marketing site — Pricing nav included — inside the web view. Here the

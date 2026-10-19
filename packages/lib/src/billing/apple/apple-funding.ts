@@ -18,7 +18,7 @@
  * Payloads are ordered by Apple's signedDate: one signed before the newest already
  * applied (a replayed pre-refund receipt, a delayed notification retry) changes nothing,
  * except that a subscription payload for a NEWER period always moves the period forward
- * (subscriptionPayloadOrder). Only a verified REFUND_REVERSED notification undoes a refund,
+ * (subscriptionPayloadApplies). Only a verified REFUND_REVERSED notification undoes a refund,
  * and it restores exactly what was granted.
  * The user row is locked FOR UPDATE first — the same order the Stripe webhook and the
  * tier reconciler take — and the tier is re-derived across BOTH stores before it is
@@ -52,7 +52,7 @@ import {
   planAppleTransaction,
   reconcileRevocation,
   sandboxFundingAllowed,
-  subscriptionPayloadOrder,
+  subscriptionPayloadApplies,
   toTransactionFacts,
   type SubscriptionStateOnFile,
   type AppleTransactionFacts,
@@ -299,7 +299,7 @@ export const SANDBOX_FUNDING_WINDOW_MS = 30 * 86_400_000;
 async function upsertSubscription(tx: Tx, input: {
   userId: string;
   facts: AppleTransactionFacts;
-  existing: SubscriptionStateOnFile & { lastSignedMs: number | null } | null;
+  existing: SubscriptionStateOnFile & { lastSignedMs: number | null; autoRenewSignedMs: number | null } | null;
   fromNotification: boolean;
   notificationStatus: number | null;
   renewal: VerifiedRenewalInfo | null;
@@ -321,6 +321,7 @@ async function upsertSubscription(tx: Tx, input: {
       currentPeriodStart: new Date(facts.purchaseDateMs),
       expiresAt: new Date(incomingExpiresMs),
       autoRenew: input.renewal?.autoRenew ?? true,
+      autoRenewSignedAt: input.renewal ? signedAt : null,
       lastSignedAt: signedAt,
     }).onConflictDoNothing({ target: appStoreSubscriptions.originalTransactionId }).returning({ userId: appStoreSubscriptions.userId });
     // Claims are serialized per subscription (applyAppleTransaction), so a lost insert means
@@ -328,16 +329,20 @@ async function upsertSubscription(tx: Tx, input: {
     if (claimed.length === 0) throw new Error(`App Store subscription ${facts.originalTransactionId} was claimed concurrently`);
     return;
   }
-  const order = subscriptionPayloadOrder(input.existing, { purchaseMs: facts.purchaseDateMs, signedMs: facts.signedDateMs });
-  if (order === 'ignore') return;
-  const newestSigned = !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
-  if (order === 'renewal_only') {
-    if (input.renewal) {
-      await tx.update(appStoreSubscriptions).set({ autoRenew: input.renewal.autoRenew, updatedAt: now })
+  // Renewal preferences describe the whole subscription, whichever period the payload is
+  // about, and are ordered on their own clock: only a preference signed after the one on
+  // file replaces it.
+  const renewalChange = input.renewal && !isStalePayload({ lastSignedMs: input.existing.autoRenewSignedMs, signedMs: facts.signedDateMs })
+    ? { autoRenew: input.renewal.autoRenew, autoRenewSignedAt: signedAt }
+    : {};
+  if (!subscriptionPayloadApplies(input.existing, { purchaseMs: facts.purchaseDateMs, signedMs: facts.signedDateMs })) {
+    if ('autoRenew' in renewalChange) {
+      await tx.update(appStoreSubscriptions).set({ ...renewalChange, updatedAt: now })
         .where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
     }
     return;
   }
+  const newestSigned = !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
   const next = nextSubscriptionState(input.existing, {
     status: incomingStatus,
     expiresAtMs: incomingExpiresMs,
@@ -353,11 +358,9 @@ async function upsertSubscription(tx: Tx, input: {
       currentPeriodStart: new Date(facts.purchaseDateMs),
       expiresAt: new Date(next.expiresAtMs),
     } : {}),
-    // Renewal preferences describe the subscription, whichever period the payload is about,
-    // but only the newest-signed payload's count: a delayed renewal for a newer period moves
-    // the period forward without rolling back preferences signed after it, and the signing
-    // clock on file never moves backwards.
-    ...(input.renewal && newestSigned ? { autoRenew: input.renewal.autoRenew } : {}),
+    ...renewalChange,
+    // A delayed renewal for a newer period moves the period forward, but the signing clock on
+    // file never moves backwards.
     ...(newestSigned ? { lastSignedAt: signedAt } : {}),
     updatedAt: now,
   }).where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
@@ -388,6 +391,7 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
         expiresAt: appStoreSubscriptions.expiresAt,
         currentPeriodStart: appStoreSubscriptions.currentPeriodStart,
         lastSignedAt: appStoreSubscriptions.lastSignedAt,
+        autoRenewSignedAt: appStoreSubscriptions.autoRenewSignedAt,
       })
       .from(appStoreSubscriptions)
       .where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId))
@@ -429,6 +433,7 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
           expiresAtMs: owned.expiresAt.getTime(),
           latestPurchaseMs: owned.currentPeriodStart.getTime(),
           lastSignedMs: owned.lastSignedAt?.getTime() ?? null,
+          autoRenewSignedMs: owned.autoRenewSignedAt?.getTime() ?? null,
         } : null,
         fromNotification,
         notificationStatus: input.notificationStatus ?? null,

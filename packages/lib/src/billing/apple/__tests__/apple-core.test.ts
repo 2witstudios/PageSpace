@@ -12,7 +12,7 @@ import {
   reconcileRevocation,
   sandboxFundingAllowed,
   isStalePayload,
-  subscriptionPayloadOrder,
+  subscriptionPayloadApplies,
   toTransactionFacts,
   type AppleTransactionFacts,
   type PlanContext,
@@ -331,27 +331,27 @@ describe('isStalePayload', () => {
   });
 });
 
-describe('subscriptionPayloadOrder', () => {
+describe('subscriptionPayloadApplies', () => {
   const onFile = { latestPurchaseMs: 1_000, lastSignedMs: 5_000 };
 
   it('applies a newer period however early Apple signed it (a delayed renewal after a later-signed refund)', () => {
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 2_000, signedMs: 4_000 })).toBe('apply');
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 2_000, signedMs: null })).toBe('apply');
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 2_000, signedMs: 4_000 })).toBe(true);
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 2_000, signedMs: null })).toBe(true);
   });
 
   it('orders payloads for the same period by signing date', () => {
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 6_000 })).toBe('apply');
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 5_000 })).toBe('apply');
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 4_000 })).toBe('ignore');
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 1_000, signedMs: 6_000 })).toBe(true);
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 1_000, signedMs: 5_000 })).toBe(true);
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 1_000, signedMs: 4_000 })).toBe(false);
   });
 
-  it('never moves the period back for an older one; only its newer-signed renewal preferences count', () => {
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 500, signedMs: 6_000 })).toBe('renewal_only');
-    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 500, signedMs: 4_000 })).toBe('ignore');
+  it('never moves the subscription back to an older period, however late it was signed', () => {
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 500, signedMs: 6_000 })).toBe(false);
+    expect(subscriptionPayloadApplies(onFile, { purchaseMs: 500, signedMs: 4_000 })).toBe(false);
   });
 
   it('takes anything when nothing was signed before', () => {
-    expect(subscriptionPayloadOrder({ latestPurchaseMs: 1_000, lastSignedMs: null }, { purchaseMs: 1_000, signedMs: null })).toBe('apply');
+    expect(subscriptionPayloadApplies({ latestPurchaseMs: 1_000, lastSignedMs: null }, { purchaseMs: 1_000, signedMs: null })).toBe(true);
   });
 });
 

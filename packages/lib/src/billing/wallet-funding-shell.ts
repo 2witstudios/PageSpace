@@ -119,6 +119,20 @@ export interface OrgPoolRefillOptions {
 }
 
 /**
+ * Whether the user has a personal Stripe subscription that can still deliver an invoice
+ * (RENEWAL_CAPABLE_STATUSES, `unpaid` included: its invoices stay collectible). Such a
+ * contract renews without a new purchase, so the App Store must not sell a second plan.
+ */
+export async function hasRenewableStripeSubscription(executor: Pick<typeof db, 'select'>, userId: string): Promise<boolean> {
+  const [subscribed] = await executor
+    .select({ id: subscriptions.id })
+    .from(subscriptions)
+    .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
+    .limit(1);
+  return subscribed !== undefined;
+}
+
+/**
  * invoice.paid for an ORG customer: refill that org's pool with (base + extra-seat
  * items) paid × ratio (MON-3), once per invoice, and roll the pool's period to the
  * invoice's service period — the date the org's allocations then reset on (D-OW-12).
@@ -471,15 +485,10 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .for('update');
     if (!locked) return false;
     const [owner] = await tx.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId));
-    const [subscribed] = await tx
-      .select({ id: subscriptions.id })
-      .from(subscriptions)
-      .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, RENEWAL_CAPABLE_STATUSES)))
-      .limit(1);
     const tier = owner?.tier ?? '';
     const plan = planPersonalRootRoll({
       tier,
-      hasRenewalCapableSubscription: subscribed !== undefined || (await hasRenewableAppleSubscription(tx, userId, now)),
+      hasRenewalCapableSubscription: (await hasRenewableStripeSubscription(tx, userId)) || (await hasRenewableAppleSubscription(tx, userId, now)),
       periodStartMs: locked.monthlyPeriodStart?.getTime() ?? null,
       periodEndMs: locked.monthlyPeriodEnd?.getTime() ?? null,
       nowMs: now.getTime(),
