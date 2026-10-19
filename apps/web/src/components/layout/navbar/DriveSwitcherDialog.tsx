@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
@@ -19,6 +19,7 @@ import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { useFavoritesSync } from "@/hooks/useFavorites";
 import { focusDriveId, useFocus } from "@/lib/dashboard/focus";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
+import { detectCoarsePointer } from "@/lib/pointer-capability";
 import { cn } from "@/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
@@ -49,6 +50,13 @@ export default function DriveSwitcherDialog({ open, onOpenChange }: DriveSwitche
       <CommandDialog
         open={open}
         onOpenChange={onOpenChange}
+        onOpenAutoFocus={(event) => {
+          // Focus the dialog on touch so opening the picker does not summon the keyboard.
+          if (detectCoarsePointer()) {
+            event.preventDefault();
+            if (event.target instanceof HTMLElement) event.target.focus();
+          }
+        }}
         title="Switch drive"
         description="Search your drives and open one"
         // Phone: top-anchored 12px below the safe area instead of centred, so
@@ -89,6 +97,7 @@ interface DrivePickerBodyProps {
 
 function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   // This dialog opens from every section's subtitle, including on a phone
   // where nothing else that syncs favourites or loads drives is mounted.
   useFavoritesSync();
@@ -190,7 +199,7 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
 
   return (
       <div className="flex min-h-0 flex-1 flex-col" onKeyDownCapture={handleKeyDownCapture}>
-      <CommandInput placeholder="Search drives…" value={query} onValueChange={setQuery} />
+      <CommandInput ref={searchRef} placeholder="Search drives…" value={query} onValueChange={setQuery} />
 
       {/*
         Fixed chrome under the input, outside the list on purpose: cmdk's
@@ -208,7 +217,11 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
         </button>
       </div>
 
-      <CommandList className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none">
+      <CommandList
+        className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none"
+        // Let a swipe return to browsing without closing the picker or clearing the query.
+        onTouchStart={() => searchRef.current?.blur()}
+      >
         {/* All drives is a focus like any drive: a row, first, and picking it keeps the section you are in. */}
         {!isSearching && allDrivesRow}
 
