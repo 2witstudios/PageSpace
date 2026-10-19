@@ -47,7 +47,7 @@ CREATE TABLE "app_store_transactions" (
 	"storefront" text,
 	"revokedAt" timestamp with time zone,
 	"lastSignedAt" timestamp with time zone,
-	"funded" boolean DEFAULT false NOT NULL,
+	"fundedAt" timestamp with time zone,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "app_store_transactions_kind_valid" CHECK ("app_store_transactions"."productKind" IN ('subscription', 'consumable'))
 );

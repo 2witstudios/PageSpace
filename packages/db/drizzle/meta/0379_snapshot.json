@@ -1,5 +1,5 @@
 {
-  "id": "f7e17990-44fc-45d8-97a9-20cfeda736a8",
+  "id": "22aa9dff-554d-40d2-87fb-0e03b52e2036",
   "prevId": "08155ad3-1a49-45ed-9332-c12c8d28ef7e",
   "version": "7",
   "dialect": "postgresql",
@@ -10725,12 +10725,11 @@
           "primaryKey": false,
           "notNull": false
         },
-        "funded": {
-          "name": "funded",
-          "type": "boolean",
+        "fundedAt": {
+          "name": "fundedAt",
+          "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": true,
-          "default": false
+          "notNull": false
         },
         "createdAt": {
           "name": "createdAt",

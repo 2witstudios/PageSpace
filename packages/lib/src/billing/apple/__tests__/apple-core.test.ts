@@ -12,6 +12,7 @@ import {
   reconcileRevocation,
   sandboxFundingAllowed,
   isStalePayload,
+  subscriptionPayloadOrder,
   toTransactionFacts,
   type AppleTransactionFacts,
   type PlanContext,
@@ -327,6 +328,30 @@ describe('isStalePayload', () => {
   it('treats an unsigned-date payload as older than anything recorded', () => {
     expect(isStalePayload({ lastSignedMs: NOW, signedMs: null })).toBe(true);
     expect(isStalePayload({ lastSignedMs: null, signedMs: null })).toBe(false);
+  });
+});
+
+describe('subscriptionPayloadOrder', () => {
+  const onFile = { latestPurchaseMs: 1_000, lastSignedMs: 5_000 };
+
+  it('applies a newer period however early Apple signed it (a delayed renewal after a later-signed refund)', () => {
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 2_000, signedMs: 4_000 })).toBe('apply');
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 2_000, signedMs: null })).toBe('apply');
+  });
+
+  it('orders payloads for the same period by signing date', () => {
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 6_000 })).toBe('apply');
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 5_000 })).toBe('apply');
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 1_000, signedMs: 4_000 })).toBe('ignore');
+  });
+
+  it('never moves the period back for an older one; only its newer-signed renewal preferences count', () => {
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 500, signedMs: 6_000 })).toBe('renewal_only');
+    expect(subscriptionPayloadOrder(onFile, { purchaseMs: 500, signedMs: 4_000 })).toBe('ignore');
+  });
+
+  it('takes anything when nothing was signed before', () => {
+    expect(subscriptionPayloadOrder({ latestPurchaseMs: 1_000, lastSignedMs: null }, { purchaseMs: 1_000, signedMs: null })).toBe('apply');
   });
 });
 

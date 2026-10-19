@@ -93,8 +93,8 @@ export const appStoreTransactions = pgTable('app_store_transactions', {
   revokedAt: timestamp('revokedAt', { mode: 'date', withTimezone: true }),
   /** Apple's signedDate of the newest payload applied (see app_store_subscriptions.lastSignedAt). */
   lastSignedAt: timestamp('lastSignedAt', { mode: 'date', withTimezone: true }),
-  /** Whether this transaction funded credit — counts toward the Sandbox funding cap. */
-  funded: boolean('funded').default(false).notNull(),
+  /** When this transaction first funded credit (null: never) — the Sandbox funding cap counts it. */
+  fundedAt: timestamp('fundedAt', { mode: 'date', withTimezone: true }),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('app_store_transactions_user_idx').on(table.userId),

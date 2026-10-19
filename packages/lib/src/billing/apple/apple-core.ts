@@ -312,6 +312,23 @@ export function isStalePayload(input: { lastSignedMs: number | null; signedMs: n
   return input.signedMs === null || input.signedMs < input.lastSignedMs;
 }
 
+/**
+ * How a subscription payload relates to the subscription on file. Periods come first: a
+ * payload for a newer period (a delayed DID_RENEW) applies whenever Apple signed it, so a
+ * later-signed refund of the previous period cannot hide it. A payload for an older period
+ * never moves the period on file; when it is the newest signed, its renewal preferences
+ * still count. Within one period, Apple's signing order decides ({@link isStalePayload}).
+ */
+export function subscriptionPayloadOrder(
+  onFile: { latestPurchaseMs: number; lastSignedMs: number | null },
+  incoming: { purchaseMs: number; signedMs: number | null },
+): 'apply' | 'renewal_only' | 'ignore' {
+  if (incoming.purchaseMs > onFile.latestPurchaseMs) return 'apply';
+  const stale = isStalePayload({ lastSignedMs: onFile.lastSignedMs, signedMs: incoming.signedMs });
+  if (stale) return 'ignore';
+  return incoming.purchaseMs < onFile.latestPurchaseMs ? 'renewal_only' : 'apply';
+}
+
 export interface SubscriptionStateOnFile {
   status: AppStoreSubscriptionStatus;
   expiresAtMs: number;
