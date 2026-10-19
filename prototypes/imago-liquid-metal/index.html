@@ -25,13 +25,14 @@
   --shadow: 0 1px 2px rgba(20, 32, 26, 0.08), 0 12px 40px rgba(20, 32, 26, 0.08);
 
   /* The studio: what the mirror shows where it faces the viewer. */
-  --metal-room: oklch(0.5 0.008 250);
-  --metal-sky: oklch(0.96 0.008 240);
+  --metal-room: oklch(0.3 0.008 250);
+  --metal-sky: oklch(1 0.004 240);
   --metal-warm: oklch(0.62 0.075 55);
   --metal-flag: oklch(0.14 0.005 240);
   --metal-rim: oklch(0.22 0.01 230);
   --metal-key: oklch(1 0 0);
   --metal-key-gain: 2.2;
+  --metal-reflect: 0.86;
   --metal-page-gain: 1;
   --metal-shadow: 0.2;
 
@@ -64,6 +65,7 @@
     --metal-rim: oklch(0.78 0.006 240);
     --metal-key: oklch(0.98 0.003 230);
     --metal-key-gain: 2.2;
+    --metal-reflect: 0.6;
     --metal-page-gain: 1.15;
     --metal-shadow: 0.0;
     color-scheme: dark;
@@ -92,6 +94,7 @@
   --metal-rim: oklch(0.78 0.006 240);
   --metal-key: oklch(0.98 0.003 230);
   --metal-key-gain: 2.2;
+  --metal-reflect: 0.6;
   --metal-page-gain: 1.15;
   --metal-shadow: 0.0;
   color-scheme: dark;
@@ -394,7 +397,7 @@ uniform float uScale;    // CSS px per world unit (view spans -1..1)
 uniform sampler2D uWorld;
 uniform vec4 uBalls[6];
 uniform int uCount;
-uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain, uWobble, uPageGain;
+uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain, uWobble, uPageGain, uReflect;
 uniform vec3 uKeyDir, uRoom, uSky, uFlag, uRim, uKey, uFloor, uWarm;
 
 float smin(float a, float b, float k){ float h = max(k-abs(a-b),0.)/k; return min(a,b) - h*h*k*.25; }
@@ -514,7 +517,8 @@ vec4 shade(vec3 P){
   // Polished steel, not a silver mirror: about 60% reflectance head-on, rising toward white at the
   // edges (Schlick). The darker body and bright rim are what read as solid metal.
   float cosT = clamp(n.z, 0., 1.);
-  vec3 F0 = vec3(.6, .6, .62);
+  // Reflectance is a theme token: on a white page the metal needs more of it to read as silver.
+  vec3 F0 = vec3(1., 1., 1.03) * uReflect;
   vec3 F = F0 + (1.-F0)*pow(1.-cosT, 5.);
   float ao = clamp(sdf(P+n*.09)/.09, 0., 1.);
   vec3 col = env*F*mix(.55, 1., ao);
@@ -568,7 +572,7 @@ function initGL() {
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uWobble','uPageGain','uKeyDir','uRoom','uSky','uFlag','uWarm','uRim','uKey','uFloor'])
+  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uWobble','uPageGain','uReflect','uKeyDir','uRoom','uSky','uFlag','uWarm','uRim','uKey','uFloor'])
     uni[n] = gl.getUniformLocation(prog, n);
   worldTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, worldTex);
@@ -593,7 +597,7 @@ function readStudio() {
   studio = {
     room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')), warm: linRGB(token('--metal-warm')), rim: linRGB(token('--metal-rim')),
     key: linRGB(token('--metal-key')), floor: linRGB(token('--bg')),
-    keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'), pageGain: tokenNumber('--metal-page-gain') || 1,
+    keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'), pageGain: tokenNumber('--metal-page-gain') || 1, reflect: tokenNumber('--metal-reflect') || .6,
   };
   markWorld();
 }
@@ -712,6 +716,7 @@ function render(v) {
   gl.uniform1f(uni.uK, s.k.x);
   gl.uniform1f(uni.uWobble, s.wobble.x * (v.kind === 'glyph' ? .5 : 1));
   gl.uniform1f(uni.uPageGain, studio.pageGain);
+  gl.uniform1f(uni.uReflect, studio.reflect);
   gl.uniform1f(uni.uChurn, s.churn.x * v.cfg.churnScale);
   gl.uniform1f(uni.uPulse, v.kind === 'glyph' ? 0 : v.pulse);
   gl.uniform1f(uni.uRough, Math.max(0, s.rough.x));

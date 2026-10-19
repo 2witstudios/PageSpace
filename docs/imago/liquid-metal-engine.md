@@ -93,7 +93,7 @@ The face reflects a studio defined as tokens beside the existing ones, so the th
 - **Folds:** the folds bend the bands, and each colour channel is a little out of phase, which leaves thin colour fringes where bands meet.
 - **Copper:** a copper glow sits in the dip after each bright band.
 - **Lights:** the pointer-following key and one tall strip light remain, so light still moves across it.
-- **Material:** polished steel (`F0 ≈ 0.6`, rising to white at the edges by Fresnel) with a slight satin finish, so it has a metal body instead of reading as clear.
+- **Material:** polished metal with a slight satin finish, its reflectance a theme token (`--metal-reflect`), rising to white at the edges by Fresnel. Dark mode uses 0.6, a steel body that does not read as clear. Light mode uses 0.86 with deeper darks (`--metal-room` 0.3), because at 0.6 the bright bands came out mid-gray and the orb looked faded against a white page instead of silver.
 - **The page:** it only tints the outer edge, at 30%.
 
 The horizon studio below is what that revision replaced. It is kept here for the record:
