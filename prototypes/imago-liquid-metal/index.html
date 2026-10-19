@@ -25,12 +25,13 @@
   --shadow: 0 1px 2px rgba(20, 32, 26, 0.08), 0 12px 40px rgba(20, 32, 26, 0.08);
 
   /* The studio: what the mirror shows where it faces the viewer. */
-  --metal-room: oklch(0.86 0.006 230);
-  --metal-sky: oklch(0.985 0.002 230);
-  --metal-flag: oklch(0.22 0.01 230);
+  --metal-room: oklch(0.5 0.008 250);
+  --metal-sky: oklch(0.96 0.008 240);
+  --metal-warm: oklch(0.62 0.075 55);
+  --metal-flag: oklch(0.14 0.005 240);
   --metal-rim: oklch(0.22 0.01 230);
   --metal-key: oklch(1 0 0);
-  --metal-key-gain: 1.5;
+  --metal-key-gain: 2.2;
   --metal-page-gain: 1;
   --metal-shadow: 0.2;
 
@@ -56,13 +57,14 @@
     --accent-ink: oklch(0.17 0 0);
     --warn: #fbbf24;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --metal-room: oklch(0.3 0.003 230);
-    --metal-sky: oklch(0.62 0.005 230);
-    --metal-flag: oklch(0.14 0 0);
-    --metal-rim: oklch(0.9 0.003 230);
+    --metal-room: oklch(0.38 0.006 250);
+    --metal-sky: oklch(0.74 0.012 240);
+    --metal-warm: oklch(0.52 0.075 55);
+    --metal-flag: oklch(0.07 0 0);
+    --metal-rim: oklch(0.78 0.006 240);
     --metal-key: oklch(0.98 0.003 230);
-    --metal-key-gain: 1.6;
-    --metal-page-gain: 1.7;
+    --metal-key-gain: 2.2;
+    --metal-page-gain: 1.15;
     --metal-shadow: 0.0;
     color-scheme: dark;
   }
@@ -83,13 +85,14 @@
   --accent-ink: oklch(0.17 0 0);
   --warn: #fbbf24;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --metal-room: oklch(0.3 0.003 230);
-  --metal-sky: oklch(0.62 0.005 230);
-  --metal-flag: oklch(0.14 0 0);
-  --metal-rim: oklch(0.9 0.003 230);
+  --metal-room: oklch(0.38 0.006 250);
+  --metal-sky: oklch(0.74 0.012 240);
+  --metal-warm: oklch(0.52 0.075 55);
+  --metal-flag: oklch(0.07 0 0);
+  --metal-rim: oklch(0.78 0.006 240);
   --metal-key: oklch(0.98 0.003 230);
-  --metal-key-gain: 1.6;
-  --metal-page-gain: 1.7;
+  --metal-key-gain: 2.2;
+  --metal-page-gain: 1.15;
   --metal-shadow: 0.0;
   color-scheme: dark;
 }
@@ -392,7 +395,7 @@ uniform sampler2D uWorld;
 uniform vec4 uBalls[6];
 uniform int uCount;
 uniform float uK, uChurn, uPulse, uRough, uDim, uSquash, uTime, uZones, uShadow, uKeyGain, uWobble, uPageGain;
-uniform vec3 uKeyDir, uRoom, uSky, uFlag, uRim, uKey, uFloor;
+uniform vec3 uKeyDir, uRoom, uSky, uFlag, uRim, uKey, uFloor, uWarm;
 
 float smin(float a, float b, float k){ float h = max(k-abs(a-b),0.)/k; return min(a,b) - h*h*k*.25; }
 float sdf(vec3 p){
@@ -412,7 +415,12 @@ float sdf(vec3 p){
   float d = r - uBalls[0].w - uWobble*modes;
   // Bulges: droplets inside the orb that push its surface out as they travel.
   for(int i=1;i<6;i++){ if(i>=uCount) break; d = smin(d, length(p-uBalls[i].xyz)-uBalls[i].w, uK); }
-  d += uChurn*.035*sin(p.x*9.+t*1.7)*sin(p.y*8.-t*1.3)*sin(p.z*7.+t*.9);
+  // Folds: fine creases from domain-warped waves. They barely move the silhouette but bend the
+  // reflections hard, which is most of what reads as liquid metal rather than a polished ball.
+  vec3 w = q*3.1 + vec3(t*.23, -t*.19, t*.15);
+  w += .42*sin(w.yzx*1.7 + vec3(t*.31, t*.27, -t*.22));
+  w += .21*sin(w.zxy*3.3 - t*.4);
+  d -= (.021 + uChurn*.2) * sin(w.x*2.1)*sin(w.y*1.9 + 1.)*sin(w.z*2.3 + 2.);
   float rp = length(p.xy-uBalls[0].xy);
   d += uPulse*.03*sin(rp*16.-t*10.)*exp(-rp*2.);
   return d*min(1.,uSquash);
@@ -423,16 +431,40 @@ vec3 nrm(vec3 p){
 }
 vec3 lin(vec3 c){ return pow(c, vec3(2.2)); }
 
-// The viewer's hemisphere: a designed studio, since a screen cannot see who is in front of it.
+// The viewer's hemisphere: a chrome studio, since a screen cannot see who is in front of it.
+// A sharp horizon crosses the face (bright sky over dark, warm ground), with softbox strips and
+// a key light that follows the pointer. High contrast with few midtones is what makes it chrome.
+float box(vec3 R, vec3 dir, vec2 size, float soft){
+  vec3 kd = normalize(dir);
+  float f = dot(R, kd);
+  if(f <= 0.) return 0.;
+  vec3 kx = normalize(cross(vec3(0.,1.,0.), kd));
+  vec3 ky = cross(kd, kx);
+  vec2 kp = vec2(dot(R,kx), dot(R,ky))/f;
+  vec2 e = abs(kp) - size;
+  float sd = length(max(e, 0.)) + min(max(e.x, e.y), 0.);
+  return 1. - smoothstep(-soft, soft, sd);
+}
 vec3 studio(vec3 R, float rough){
-  vec3 c = mix(uRoom, uSky, smoothstep(-.3, .9, R.y*.8 + R.z*.4));
-  float w = .03 + rough*.35;
-  c += uKey * uKeyGain * smoothstep(.955-w, .985, dot(R, normalize(uKeyDir)));
-  vec3 fd = normalize(vec3(-uKeyDir.x*.9, -.35, .55));
-  c += uKey * .45 * uKeyGain * smoothstep(.93-w, .975, dot(R, fd));
-  // The flag: a black card along the horizon, so chrome keeps an edge on a white page.
-  float flag = 1. - smoothstep(.08, .46, R.z);
-  return mix(c, uFlag, flag*.92);
+  // Elevation, bowed so the horizon arcs across the face as it does in a chrome ball.
+  float el = R.y + .38*(1. - R.z) - .1;
+  float soft = .006 + rough*.25;
+  // Sky: cool, brightest high up, with the faint banding a lit room leaves on chrome.
+  vec3 sky = mix(uSky*.5, uSky, smoothstep(.0, .85, el)) * (.88 + .12*sin(el*22.));
+  // Ground: dark, with a copper glow just under the horizon (what fills the folds' recesses).
+  // The ground has structure (a floor's seams and pools of light), so the lower half never goes flat.
+  float seams = sin(R.x*13. + el*4.)*sin(el*21.);
+  vec3 ground = uRoom * (.7 + .3*seams) * (1. + .5*exp(-abs(R.x + .3)*4.)*smoothstep(-.6, -.1, el));
+  ground = mix(ground, uWarm, exp(-abs(el)*16.)*.7) * mix(1., .4, smoothstep(0., -.7, el));
+  vec3 c = mix(ground, sky, smoothstep(-soft, soft, el));
+  c += uKey * .35 * exp(-abs(el - .025)*90.);
+  // Light sources: the key follows the pointer; two tall strips stand at the sides.
+  c += uKey * uKeyGain * box(R, uKeyDir, vec2(.2, .14), soft*1.5);
+  c += uKey * uKeyGain*.7 * box(R, vec3(-.75, .35, .55), vec2(.05, .5), soft*1.5);
+  c += uKey * uKeyGain*.45 * box(R, vec3(.8, .15, .6), vec2(.035, .45), soft*1.5);
+  // The flag: a dark card low at the horizon, so the silhouette keeps an edge on any page.
+  float flag = 1. - smoothstep(.06, .3, R.z);
+  return mix(c, uFlag, flag*.75);
 }
 // The page plane: reflect into z=0 and read the proxy world there.
 vec3 world(vec3 P, vec3 R, float rough){
@@ -440,7 +472,7 @@ vec3 world(vec3 P, vec3 R, float rough){
   vec2 q = P.xy + R.xy*t;
   vec2 css = uRect.xy + uRect.zw*.5 + vec2(q.x, -q.y)*uScale;
   vec2 uv = css/uViewport;
-  float lod = log2(1. + t*2.5) + rough*5. + 1.;
+  float lod = log2(1. + t*1.6)*.8 + rough*5.;
   vec3 c = lin(textureLod(uWorld, clamp(uv, vec2(.001), vec2(.999)), lod).rgb);
   float outside = max(max(-uv.x, uv.x-1.), max(-uv.y, uv.y-1.));
   c = mix(c, uFloor, smoothstep(0., .08, outside));
@@ -450,7 +482,7 @@ vec3 world(vec3 P, vec3 R, float rough){
   c *= mix(.18, 1., occl) * uPageGain;
   // The page is finite: grazing rays run past it into the studio's rim light, which draws the
   // silhouette. Dark on a light page, a bright strip on a dark one.
-  return mix(c, uRim, smoothstep(1.5, 3.0, t)*.95);
+  return mix(c, uRim, smoothstep(2.2, 4., t)*.9);
 }
 
 vec4 shade(vec3 P){
@@ -458,8 +490,16 @@ vec4 shade(vec3 P){
   vec3 V = vec3(0.,0.,-1.);
   vec3 R = reflect(V, n);
   float rough = uRough;
-  float wPlane = 1. - smoothstep(-.07, .05, R.z);
+  // The page shows only at the outer edge, compressed; inside it the dark flag holds the form.
+  float wPlane = 1. - smoothstep(-.55, -.3, R.z);
   vec3 env = mix(studio(R, rough), world(P, R, rough), wPlane);
+  // Dispersion: a slight spread of red and blue toward the edges, the fringe chrome photographs carry.
+  float disp = .07*(1. - clamp(n.z, 0., 1.));
+  vec3 Rr = reflect(V, normalize(n + vec3(n.xy, 0.)*disp));
+  vec3 Rb = reflect(V, normalize(n - vec3(n.xy, 0.)*disp));
+  float wr = 1. - smoothstep(-.55, -.3, Rr.z), wb = 1. - smoothstep(-.55, -.3, Rb.z);
+  env.r = mix(studio(Rr, rough), world(P, Rr, rough), wr).r;
+  env.b = mix(studio(Rb, rough), world(P, Rb, rough), wb).b;
   if(uZones > .5){
     float flag = (1.-smoothstep(.08,.46,R.z))*(1.-wPlane);
     env = mix(mix(vec3(.82,.8,.72), vec3(.05,.07,.1), flag), vec3(.12,.36,.85), wPlane);
@@ -478,12 +518,12 @@ void main(){
   vec2 p = (vUv*2.-1.);
   vec3 ro = vec3(p, 1.6);
   float t = 0., minD = 1e5; vec3 pMin = ro; bool hit = false;
-  for(int i=0;i<72;i++){
+  for(int i=0;i<110;i++){
     vec3 q = ro + vec3(0.,0.,-1.)*t;
     float d = sdf(q);
     if(d < minD){ minD = d; pMin = q; }
     if(d < .0008){ hit = true; break; }
-    t += d*.9;
+    t += d*.75;
     if(t > 1.6) break;
   }
   float pxw = 2.6/uRes.x;
@@ -495,7 +535,9 @@ void main(){
   }
   // Contact shadow on the page: light mode only, as the house elevation goes flat in dark.
   float sh = uShadow * (1.-smoothstep(-.02, .3, sdf(vec3(p+vec2(0.,.05), .02))));
-  vec3 c = pow(clamp(col.rgb/(1.+col.rgb*.12), 0., 1.), vec3(1./2.2));
+  // Filmic curve: deep blacks and rolled-off highlights, so the metal keeps its contrast.
+  vec3 x = col.rgb;
+  vec3 c = pow(clamp((x*(2.51*x + .03))/(x*(2.43*x + .59) + .14), 0., 1.), vec3(1./2.2));
   float a = col.a + sh*(1.-col.a);
   o = vec4(c*col.a, a);
 }`;
@@ -518,7 +560,7 @@ function initGL() {
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
   const loc = gl.getAttribLocation(prog, 'aPos'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uWobble','uPageGain','uKeyDir','uRoom','uSky','uFlag','uRim','uKey','uFloor'])
+  for (const n of ['uRes','uRect','uViewport','uScale','uWorld','uBalls','uCount','uK','uChurn','uPulse','uRough','uDim','uSquash','uTime','uZones','uShadow','uKeyGain','uWobble','uPageGain','uKeyDir','uRoom','uSky','uFlag','uWarm','uRim','uKey','uFloor'])
     uni[n] = gl.getUniformLocation(prog, n);
   worldTex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, worldTex);
@@ -541,7 +583,7 @@ let studio = {};
 const linRGB = (c) => c.slice(0, 3).map((v) => Math.pow(v, 2.2));
 function readStudio() {
   studio = {
-    room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')), rim: linRGB(token('--metal-rim')),
+    room: linRGB(token('--metal-room')), sky: linRGB(token('--metal-sky')), flag: linRGB(token('--metal-flag')), warm: linRGB(token('--metal-warm')), rim: linRGB(token('--metal-rim')),
     key: linRGB(token('--metal-key')), floor: linRGB(token('--bg')),
     keyGain: tokenNumber('--metal-key-gain'), shadow: tokenNumber('--metal-shadow'), pageGain: tokenNumber('--metal-page-gain') || 1,
   };
@@ -673,7 +715,7 @@ function render(v) {
   gl.uniform1f(uni.uKeyGain, studio.keyGain);
   gl.uniform3f(uni.uKeyDir, key.x, key.y, .8);
   gl.uniform3fv(uni.uRoom, studio.room); gl.uniform3fv(uni.uSky, studio.sky);
-  gl.uniform3fv(uni.uFlag, studio.flag); gl.uniform3fv(uni.uRim, studio.rim); gl.uniform3fv(uni.uKey, studio.key); gl.uniform3fv(uni.uFloor, studio.floor);
+  gl.uniform3fv(uni.uFlag, studio.flag); gl.uniform3fv(uni.uWarm, studio.warm); gl.uniform3fv(uni.uRim, studio.rim); gl.uniform3fv(uni.uKey, studio.key); gl.uniform3fv(uni.uFloor, studio.floor);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   v.ctx.clearRect(0, 0, W, H);
   v.ctx.drawImage(glCanvas, 0, glCanvas.height - H, W, H, 0, 0, W, H);

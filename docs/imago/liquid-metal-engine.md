@@ -40,9 +40,9 @@ Imago is viewed orthographically from above, as a chrome ball resting on the pag
 
 | Zone | Where | `R` | What it reflects |
 |---|---|---|---|
-| **Face** | centre, `n.z > ~0.8` | points at the viewer (`R.z ≫ 0`) | **The studio:** a designed light environment standing in for the viewer's room |
-| **Flag** | a ring, `R.z ∈ ~[0.08, 0.46]` | near the horizon | **A flag:** the black card product photographers set at the horizon to give chrome an edge |
-| **Rim** | outer band, `n.z < 0.707` | back toward the page (`R.z < 0`) | **The page:** the ray is intersected with the page plane `z=0` at `q = P.xy + R.xy · (P.z / −R.z)` and samples the interface there |
+| **Face** | centre | points at the viewer (`R.z > 0`) | **The studio:** a chrome studio standing in for the viewer's room (D3): bright sky over dark ground, split by a sharp horizon that arcs across the face |
+| **Flag** | a ring, `R.z ∈ ~[−0.3, 0.3]` | near grazing | **A flag:** the black card product photographers set at the horizon to give chrome an edge |
+| **Rim** | outer edge, `R.z < ~−0.3` | back toward the page | **The page:** the ray is intersected with the page plane `z=0` at `q = P.xy + R.xy · (P.z / −R.z)` and samples the interface there |
 
 The rim does for Imago what lensing does for Liquid Glass. The interface around the blob slides across its edge, compressed toward the silhouette. Panes, the blue accent, the send button and the text lines of the open page all show up in it. It is a convex mirror, so things on the left appear on the left rim.
 
@@ -51,7 +51,15 @@ Two corrections keep this readable:
 - **Contact occlusion.** The page directly under the blob lies in the blob's own shadow, so page samples near contact are darkened by `smoothstep(sdf(q))` (down to 18%). This gives the dark contact ring real chrome has, and it is what keeps the blob visible on a page of one flat colour.
 - **A finite page.** Grazing rays travel far (`t → ∞`). Past about 1.5–3 orb units the page fades into the studio's **rim light**, which draws the silhouette: a dark edge on a light page, a bright strip on a dark one. Without it the edge dissolves.
 
-Material: polished silver, Schlick Fresnel with `F0 ≈ (0.96, 0.955, 0.94)`, plus cheap SDF ambient occlusion where droplets meet. Roughness ("polish") blurs both the studio (wider softboxes) and the page (higher mip level).
+The page is confined to the outer edge (from `R.z ≈ −0.3` out) rather than the whole `R.z < 0` band. Physically the band starts at `n.z < 0.707`, but on a page of one flat colour that band (about 29% of the radius) reads as a translucent glass shell around a dark ball. Kept to the edge, the page shows as a compressed sliver of the interface, and the flag holds the form inside it.
+
+**Material and finish.** These are what make it read as liquid chrome rather than a polished pearl:
+
+- **Polished silver:** Schlick Fresnel with `F0 ≈ (0.96, 0.955, 0.94)`, plus cheap SDF ambient occlusion where bulges meet.
+- **Folds (D5):** fine creases that bend the reflections hard.
+- **Dispersion:** the environment is sampled three times, with the normal spread outward for red and inward for blue in proportion to `1 − n.z`. That gives the thin colour fringe chrome photographs carry at the edges, the effect Paper's LiquidMetal exposes as `shiftRed`/`shiftBlue`.
+- **Filmic tone curve (ACES fit):** keeps the blacks deep and rolls off the highlights. Chrome is mostly near-black next to near-white, with few midtones.
+- **Sharp reflections:** mirror reflections are not blurred by default. Roughness ("polish") is reserved for the error mood's tarnish. It widens the light edges and raises the page's mip level.
 
 ### D2. The world: a proxy painted from layout and tokens, not a screenshot
 
@@ -70,19 +78,26 @@ At blob scale the reflected surround is compressed 10–50× and blurred by the 
 The face reflects a studio defined as tokens beside the existing ones, so the theme switch restyles Imago with no code path of its own:
 
 ```css
---metal-room:      light-dark(oklch(0.86 0.006 230), oklch(0.3 0.003 230));   /* walls */
---metal-sky:       light-dark(oklch(0.985 0.002 230), oklch(0.62 0.005 230)); /* overhead */
---metal-flag:      light-dark(oklch(0.22 0.01 230), oklch(0.14 0 0));         /* horizon card */
---metal-rim:       light-dark(oklch(0.22 0.01 230), oklch(0.9 0.003 230));    /* silhouette light */
---metal-key:       light-dark(oklch(1 0 0), oklch(0.98 0.003 230));           /* softbox */
-/* numbers, per theme: key gain 1.5 / 1.6; page gain 1 / 1.7; contact shadow .2 / 0 */
+--metal-sky:   light-dark(oklch(0.96 0.008 240), oklch(0.74 0.012 240)); /* cool sky above the horizon */
+--metal-room:  light-dark(oklch(0.5 0.008 250), oklch(0.38 0.006 250));  /* gunmetal ground below it */
+--metal-warm:  light-dark(oklch(0.62 0.075 55), oklch(0.52 0.075 55));   /* copper glow just under the horizon */
+--metal-flag:  light-dark(oklch(0.14 0.005 240), oklch(0.07 0 0));       /* black card at grazing */
+--metal-rim:   light-dark(oklch(0.22 0.01 230), oklch(0.78 0.006 240));  /* silhouette light */
+--metal-key:   light-dark(oklch(1 0 0), oklch(0.98 0.003 230));          /* softboxes */
+/* numbers, per theme: key gain 2.2 / 2.2; page gain 1 / 1.15; contact shadow .2 / 0 */
 ```
+
+The studio is laid out the way a chrome product shot is lit:
+
+- **Horizon:** a sharp horizon arcs across the face (elevation `R.y + 0.38·(1 − R.z) − 0.1`). Above it is a cool sky with faint banding; below it is gunmetal ground with seams and a pool of light. A thin bright glint runs along the horizon line.
+- **Copper:** a narrow copper glow sits just under the horizon. It is what fills the folds' recesses, as in the reference images, without browning the whole lower half.
+- **Lights:** three hard-edged softboxes. The key follows the pointer, and two tall strips stand at the sides. Their curved glints across the face are the strongest chrome cue.
 
 What makes both themes work:
 
 - **The rim light is the opposite of the page.** On a light page a dark edge outlines the orb. On a dark page a crisp bright strip does, as in dark product photography of chrome.
 - **The flag stays dark in both themes**, so the face and the rim always have a dark band between them. That band is what reads as a curved, polished surface.
-- **Dark mode lifts the room and the page reflection** (page gain 1.7). This is not physical, but dark pages carry so little tone that an honest reflection is black on black. The prototype went through three versions:
+- **Dark mode lifts the page reflection** (page gain 1.15). This is not physical, but dark pages carry so little tone that an honest reflection is black on black. The prototype went through three versions:
   1. A black ball with no edge.
   2. A light flag, which gave a flat, blurry gray band.
   3. The split above: a dark flag plus a bright rim light.
@@ -104,7 +119,9 @@ The first prototype orbited separate droplets around a core. In idle they read a
 - **Orb:** a sphere (radius ≈ 0.54 of the view's half-width), ray-marched in a single fragment shader (72 steps max, orthographic).
 - **Surface modes:** smooth low-order polynomial modes on the unit direction from the centre: a quadrupole (`x²−y²`, `2xy`), an octupole (`x³−3xy²`, `3x²y−y³`), and a `z·x`/`z·y` term, each rotating slowly. Together they make the surface swell and settle like a drop of mercury. They are polynomials because an angle-based (`atan`) mode pinches at the pole facing the viewer, which showed up as a visible "+" in the face.
 - **Bulges:** 1–3 droplets *inside* the orb, each on a tilted great circle at `core − r + swell`, so they push the surface out by `swell` (0–0.06) as they travel. They are joined with polynomial smooth-min (`k` ≈ 0.22–0.26) and kept off the hidden underside. They never leave the orb.
-- **Churn and pulse:** churn is a faint high-frequency trig field. A pulse is a decaying radial ripple across the face.
+- **Folds:** fine creases from domain-warped waves. The position is warped twice by sine fields that drift at different rates, then a product of sines is subtracted from the distance (amplitude `0.021 + churn·0.2`). They barely change the silhouette but bend every reflection, and that bending is most of what reads as liquid. The mood's churn deepens them: thinking churns hardest.
+- **Pulse:** a decaying radial ripple across the face, sent by each streamed token and by touch.
+- **Ray march:** the folds need finer marching, at 110 steps and a step factor of 0.75. The cost on real devices has not been profiled yet.
 - **Motion:** every parameter chases its mood target on an **underdamped spring** (stiffness 90, damping 11, ζ ≈ 0.58). That overshoot is the gel feel. Orbits advance by integrating phase (`phase += speed·dt`), so a change of speed never makes the droplets jump.
 - **Gaze:** the orb barely moves. It leans by swinging its first bulge toward what it attends to (the pointer within about 420px, the composer while listening) and swelling it, so attention reads as the surface reaching out.
 - **Touch:** pressing the hero squashes it (spring velocity impulse) and sends a pulse, like Liquid Glass's flex on touch.
@@ -207,6 +224,13 @@ It works in every engine, costs about 1–2ms per repaint, is theme-correct by c
 - **The washout is real, and occlusion plus a finite page fix it.** The first pass was a pale blob on the pale chat column. Contact occlusion and fading the far page into the flag gave it a chrome silhouette with no colour of its own.
 - **Dark mode needs its own studio.** The dark-mode blob went from a black hole, to a flat gray band, to a dark chrome body with a crisp bright rim (D3).
 - **Separate droplets read as a starfish.** One orb with surface modes and internal bulges reads as liquid metal and keeps the sphere (D5).
+- **A soft studio reads as pearl, not metal.** The first studio (a soft gradient with round softboxes, blurred by mips) gave a pale, low-contrast orb. Liquid metal needs:
+  - a hard horizon, hard-edged lights and sharp reflections;
+  - fine folds that bend all of them;
+  - deep blacks from a filmic curve;
+  - a trace of dispersion at the edges.
+
+  With those (D1, D3), the orb matches the reference look: chrome, warped horizon, strip glints and copper in the recesses.
 - **One shared context with blits per view** renders three simultaneous views (hero, avatar, inline glyph) without errors, even in headless Chromium on SwiftShader (software GL). It has not yet been profiled on real devices.
 
 ## 10. Open questions for the owner
