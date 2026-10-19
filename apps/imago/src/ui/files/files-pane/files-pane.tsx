@@ -1,5 +1,6 @@
 'use client';
 
+import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ListPane } from '../../frame/list-pane/list-pane';
 import type { ListPane as ListPaneVariant } from '../../frame/stage/stage';
@@ -45,6 +46,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
   }, [fetchDrives]);
   const favorites = useFavorites(driveId);
   const recents = useRecents(driveId, 3);
+  const imagoPageId = useImagoPageId();
   const now = new Date();
   const canCreate = drives.find((drive) => drive.id === driveId)?.canCreatePages === true;
   const actions = renderNewPageButton({ create: (anchor) => useUIStore.getState().openQuickCreate(null, anchor), disabled: !canCreate });
@@ -63,7 +65,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
       {favorites.length === 0 ? null : (
         <PaneGroup label="Favorites">
           {favorites.map((page) => (
-            <PaneRow key={page.id} href={drivePageHref(driveId, page.id)} title={page.title} type={page.type} current={page.id === selectedPageId} roomy={phone} />
+            <PaneRow key={page.id} href={drivePageHref(driveId, page.id)} title={page.title} type={page.type} current={page.id === selectedPageId} imago={page.id === imagoPageId} roomy={phone} />
           ))}
         </PaneGroup>
       )}
@@ -76,6 +78,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
               title={page.title}
               type={page.type}
               current={false}
+              imago={page.id === imagoPageId}
               meta={ageLabel(page.viewedAt, now)}
               roomy={phone}
             />

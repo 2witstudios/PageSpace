@@ -148,6 +148,9 @@
   --spacing-filter: 32px;
   --spacing-agent-tile: 22px;
   --spacing-agent-row-tile: 30px;
+  /* Imago's orb: the empty chat's hero, and the glyph it takes in lists and buttons. */
+  --spacing-orb-hero: 120px;
+  --spacing-orb-glyph: 16px;
   --spacing-agent-picker: 340px;
   --spacing-context-chip: 22px;
   --spacing-spend-strip: 28px;

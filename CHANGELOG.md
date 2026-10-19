@@ -6,6 +6,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ## [Unreleased]
 
 - The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
+- Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
+
+- Imago's Tasks now open in the middle of the screen, like a page, with Imago beside it on the right instead of taking over the whole screen. Collapse Imago to fold it to the Ask pill, as with a page.
+
+- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
+- Imago's Tasks and Messages sidebars have a proper header now. New list and New message sit in the header as + buttons beside Close sidebar, like New page in Files, and the "Create page" button is gone from both sidebars, which frees the space it took.
+- Imago's Files view no longer shows the "N pages in <drive> · Browse files" line above the chat. The Browse files link is still available from the Files section itself.
+- The drive picker in Imago opens centered and full-size, as it does in the classic interface, instead of as a narrow panel pinned beside the sidebar.
 
 - Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
 

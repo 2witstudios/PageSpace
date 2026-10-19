@@ -3,13 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
-import { spineDividerClass, spineTileClass } from '../rail-button/rail-button-class';
-import { railItems, secondaryItems, settingsItem } from './rail-items';
+import { spineDividerClass, spineScrollClass, spineTileClass } from '../rail-button/rail-button-class';
+import { moreItems, railItems, secondaryItems, settingsItem } from './rail-items';
 import { renderRail, type RailRenderProps } from './rail.render';
 
 const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
   items: railItems('drive-1'),
   tools: secondaryItems('drive-1'),
+  more: moreItems('drive-1'),
   settings: settingsItem('drive-1'),
   activeId: 'files',
   activeAt: 'page',
@@ -28,15 +29,15 @@ const markup = (overrides: Partial<RailRenderProps> = {}): string =>
 const names = (html: string): string[] =>
   [...html.matchAll(/<(?:a|button|summary)\b[^>]*?aria-label="([^"]+)"/g)].map((match) => match[1] ?? '');
 
-const tools = ['Calendar', 'Agents', 'Workflows', 'Activity', 'Members', 'Trash'];
+const tools = ['Calendar', 'Agents'];
 
 describe('renderRail()', () => {
   test('the destinations, in order', () => {
     assert({
       given: 'the spine for a drive',
-      should: 'list Search, Chat, Files, Messages (with its count), Tasks, the six drive tools, the bell and Drive settings',
+      should: 'list Search, Chat, Files, Messages (with its count), Tasks, Calendar and Agents, More, the bell and Drive settings',
       actual: names(markup()),
-      expected: ['Search', 'Chat', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'Notifications', 'Drive settings'],
+      expected: ['Search', 'Chat', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'More', 'Notifications', 'Drive settings'],
     });
   });
 
@@ -49,7 +50,7 @@ describe('renderRail()', () => {
       should: 'draw the four sections as 48px tiles and Search, the tools and Drive settings as small ones',
       actual: [
         ['Chat', 'Files', 'Tasks'].map(classOf),
-        ['Calendar', 'Trash', 'Drive settings'].map(classOf),
+        ['Calendar', 'Agents', 'Drive settings'].map(classOf),
         classOf('Search'),
       ],
       expected: [
@@ -88,25 +89,31 @@ describe('renderRail()', () => {
       given: 'the tools under the divider',
       should: 'link each into the drive through the Imago router',
       actual: hrefs,
-      expected: [
-        '/drive-1/calendar',
-        '/drive-1/agents',
-        '/drive-1/workflows',
-        '/drive-1/activity',
-        '/drive-1/members',
-        '/drive-1/trash',
+      expected: ['/drive-1/calendar', '/drive-1/agents'],
+    });
+  });
+
+  test('the More menu links the housekeeping tools', () => {
+    const html = markup();
+    assert({
+      given: 'the More menu at the foot',
+      should: 'link Workflows, Activity, Members and Trash into the drive, above the bell',
+      actual: [
+        ['/drive-1/workflows', '/drive-1/activity', '/drive-1/members', '/drive-1/trash'].map((href) => html.includes(`href="${href}"`)),
+        html.indexOf('aria-label="More"') < html.indexOf('aria-label="Notifications"'),
       ],
+      expected: [[true, true, true, true], true],
     });
   });
 
   test('an active drive tool', () => {
     const html = markup({ activeId: 'members' });
     assert({
-      given: 'Members open',
-      should: 'mark only Members current and fill its small tile',
+      given: 'Members open, behind More',
+      should: 'mark only Members current inside More and light the More tile',
       actual: [
         html.match(/aria-current="[^"]+"/g),
-        new RegExp(`class="${spineTileClass('small', true)}" aria-label="Members" aria-current="page"`).test(html),
+        new RegExp(`class="${spineTileClass('small', true)} summary-plain" aria-label="More"`).test(html),
       ],
       expected: [['aria-current="page"'], true],
     });
@@ -131,10 +138,10 @@ describe('renderRail()', () => {
     const html = markup({ bell: <button type="button" aria-label="Notifications, 3 unread">Bell</button> });
     assert({
       given: 'the container’s bell',
-      should: 'render it at the foot, after the drive tools and before Drive settings',
+      should: 'render it at the foot, after the More entry and before Drive settings',
       actual: [
         html.includes('aria-label="Notifications, 3 unread">Bell</button>'),
-        html.indexOf('aria-label="Trash"') < html.indexOf('aria-label="Notifications, 3 unread"'),
+        html.indexOf('aria-label="More"') < html.indexOf('aria-label="Notifications, 3 unread"'),
         html.indexOf('aria-label="Notifications, 3 unread"') < html.indexOf('aria-label="Drive settings"'),
       ],
       expected: [true, true, true],
@@ -170,7 +177,7 @@ describe('renderRail()', () => {
   });
 
   test('no drive', () => {
-    const html = markup({ items: railItems(null), tools: secondaryItems(null), settings: settingsItem(null), activeId: null });
+    const html = markup({ items: railItems(null), tools: secondaryItems(null), more: moreItems(null), settings: settingsItem(null), activeId: null });
     assert({
       given: 'no drive to link to',
       should: 'render every drive destination as a disabled button, leaving Search and the bell working',
@@ -179,7 +186,7 @@ describe('renderRail()', () => {
         (html.match(/disabled=""/g) ?? []).length,
         /<button[^>]*aria-label="Search">/.test(html),
       ],
-      expected: [[], 11, true],
+      expected: [[], 7, true],
     });
   });
 
@@ -194,9 +201,21 @@ describe('renderRail()', () => {
 
     assert({
       given: 'no drive switcher',
-      should: 'render no wrapper for it',
-      actual: markup({ brand: null }).startsWith('<div'),
-      expected: false,
+      should: 'open the scroll region on Search, with no wrapper for it',
+      actual: markup({ brand: null }).startsWith(`<div class="${spineScrollClass}"><button`),
+      expected: true,
+    });
+  });
+});
+
+describe('renderRail() drive tool badges', () => {
+  test('a drive tool shows its own unread count', () => {
+    const html = markup({ unread: { messages: 4, calendar: 2 } });
+    assert({
+      given: 'two pending calendar invites',
+      should: 'label Calendar with its unread count and leave the other tools unbadged',
+      actual: [names(html).includes('Calendar, 2 unread'), names(html).includes('Agents')],
+      expected: [true, true],
     });
   });
 });

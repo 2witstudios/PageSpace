@@ -1,6 +1,7 @@
 import Link from 'next/link';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
+import { renderPageIcon } from '../../metal/page-icon';
 import type { ReactNode } from 'react';
-import { renderIcon } from '../../components/icon/icon.render';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
 import type { PageTypeValue } from '@pagespace/lib/utils/enums';
 import {
@@ -22,6 +23,8 @@ export type EmptyRecent = {
   readonly type: PageTypeValue;
   readonly href: string;
   readonly age: string;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: boolean;
 };
 
 export type EmptyMiddleRenderProps = {
@@ -54,7 +57,7 @@ export function renderEmptyMiddle({ leading, recents, onAskImago }: EmptyMiddleR
               {recents.map((recent) => (
                 <Link key={recent.id} href={recent.href} prefetch={true} className={emptyRowClass}>
                   <span className={pageTypeIcons[recent.type].hue} aria-hidden="true">
-                    {renderIcon({ name: pageTypeIcons[recent.type].icon, size: 15 })}
+                    {renderPageIcon({ icon: pageTypeIcons[recent.type].icon, size: 15, imago: recent.imago })}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-left">
                     {recent.type === 'CHANNEL' ? `#${recent.title}` : recent.title}
@@ -65,7 +68,7 @@ export function renderEmptyMiddle({ leading, recents, onAskImago }: EmptyMiddleR
             </div>
           )}
           <button type="button" className={askImagoClass} onClick={onAskImago}>
-            {renderIcon({ name: 'sparkle', size: 12 })}
+            <ImagoOrb size="glyph" live />
             Ask Imago
           </button>
         </div>

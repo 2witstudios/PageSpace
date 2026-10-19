@@ -86,10 +86,24 @@ describe('Rail', () => {
     const badge = control(container, 'Messages, 7 unread').querySelector('[aria-hidden="true"].bg-notice');
 
     assert({
-      given: 'two unread DMs and five unread channel messages',
-      should: 'load the badges once through the imago client and show 7 on Messages in the amber badge',
+      given: 'two unread DMs and five unread channel messages, with three pending calendar invites',
+      should: 'load the badges once through the imago client, show 7 on Messages and 3 on Calendar in the amber badge',
       actual: [to(requests, BADGES), badge?.textContent, container.querySelectorAll('.bg-notice').length],
-      expected: [[BADGES], '7', 1],
+      expected: [[BADGES], '7', 4],
+    });
+  });
+
+  test('the Files and Tasks counts from /api/sidebar/badges', async () => {
+    const { container } = railAt('/drive-1', { dms: 0, channels: 0, files: 9, tasks: 1, calendar: 0 });
+    await settle(() => {
+      control(container, 'Files, 9 unread');
+    });
+
+    assert({
+      given: 'nine file mentions and one assigned task',
+      should: 'show 9 on Files and 1 on Tasks',
+      actual: [control(container, 'Files, 9 unread').textContent?.includes('9'), control(container, 'Tasks, 1 unread') !== null],
+      expected: [true, true],
     });
   });
 
@@ -145,7 +159,7 @@ describe('Rail', () => {
 
   test('links to the current drive', () => {
     const { container } = railAt('/drive-1/tasks/list-1');
-    const hrefs = ['Chat', 'Files', 'Messages', 'Tasks', 'Calendar', 'Members', 'Drive settings'].map((name) =>
+    const hrefs = ['Chat', 'Files', 'Messages', 'Tasks', 'Calendar', 'Drive settings'].map((name) =>
       control(container, name).getAttribute('href'),
     );
 
@@ -160,7 +174,6 @@ describe('Rail', () => {
           '/drive-1/messages',
           '/drive-1/tasks',
           '/drive-1/calendar',
-          '/drive-1/members',
           '/drive-1/settings',
         ],
         'true',
@@ -247,8 +260,8 @@ describe('Rail', () => {
 
     assert({
       given: 'the drive’s Members open',
-      should: 'mark Members, under the divider, as the only current page',
-      actual: [control(container, 'Members').getAttribute('aria-current'), container.querySelectorAll('[aria-current]').length],
+      should: 'mark Members, inside the More menu, as the only current page',
+      actual: [container.querySelector('a[href="/drive-1/members"]')?.getAttribute('aria-current'), container.querySelectorAll('[aria-current]').length],
       expected: ['page', 1],
     });
   });

@@ -9,9 +9,11 @@ import { ChatHistory } from '../../chat/chat-history/chat-history';
 import { ChatPane } from '../../chat/chat-pane/chat-pane';
 import { FilesPane } from '../../files/files-pane/files-pane';
 import { MessagesPane } from '../../messages/messages-pane/messages-pane';
+import { renderNewMessageLink } from '../../messages/messages-pane/messages-pane.render';
 import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
-import { TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { NewTaskListAction, TasksPane } from '../../tasks/tasks-pane/tasks-pane';
+import { TasksGround } from '../../tasks/tasks-ground/tasks-ground';
 import { ToolPane } from '../tool-pane/tool-pane';
 import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
@@ -42,6 +44,7 @@ import { railDrive } from '../rail/rail-items';
 import {
   imagoStartsCollapsedAt,
   isHideableSection,
+  isTasksIndex,
   type HideableSection,
   isListSection,
   paneLayout,
@@ -127,6 +130,13 @@ const rowsFor = (stage: Stage): ReactNode => {
   return null;
 };
 
+/** A section's head control, ahead of Close sidebar: a new list in Tasks, a new message in Messages. */
+const headActionsFor = (stage: Stage): ReactNode => {
+  if (stage.section === 'messages') return renderNewMessageLink();
+  if (stage.section === 'tasks' && stage.driveId !== null) return <NewTaskListAction driveId={stage.driveId} />;
+  return null;
+};
+
 /**
  * The left pane: the chat's history, a section's list or tree, or the settings and account
  * navs. Files draws its own pane, since its head carries New page beside Close sidebar.
@@ -166,7 +176,7 @@ const listFor = (stage: Stage, layout: PaneLayout, phoneDrive?: { readonly name:
     );
   }
   return (
-    <ListPane section={stage.section} variant={layout.list} title={titles[stage.section]}>
+    <ListPane section={stage.section} variant={layout.list} title={titles[stage.section]} actions={headActionsFor(stage)}>
       {rowsFor(stage)}
     </ListPane>
   );
@@ -232,7 +242,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const pageTrailing = (
     <span className="flex flex-none items-center gap-1">
       {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
-      <ClosePage href={sectionPath(stage)} />
+      {columns.closePage ? <ClosePage href={sectionPath(stage)} /> : null}
     </span>
   );
   const objectColumn = (
@@ -245,7 +255,12 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : children}
+        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : (
+          <>
+            {isTasksIndex(stage) && stage.driveId !== null ? <TasksGround driveId={stage.driveId} /> : null}
+            {children}
+          </>
+        )}
       </div>
     </section>
   );

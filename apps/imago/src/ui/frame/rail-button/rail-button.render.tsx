@@ -3,6 +3,7 @@ import type { MouseEvent, ReactNode } from 'react';
 import type { IconName } from '../../components/icon/icon-names';
 import type { RailPlace } from '../rail/rail-items';
 import { renderIcon } from '../../components/icon/icon.render';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import {
   railTooltipClass,
   spineCountClass,
@@ -13,6 +14,8 @@ import {
 
 export type RailButtonRenderProps = {
   readonly icon: IconName;
+  /** Imago's own destination: its orb in place of the icon. */
+  readonly imago?: boolean | undefined;
   readonly label: string;
   /** basePath-relative; null when there is no drive to link into. */
   readonly href: string | null;
@@ -51,13 +54,13 @@ const ariaCurrent: Readonly<Record<RailPlace, 'page' | 'true'>> = { page: 'page'
  * count. Every link prefetches its full route, so a section opens from the cache.
  */
 export function renderRailButton(props: RailButtonRenderProps): ReactNode {
-  const { icon, label, href, current, unread, onReopen, size = 'small' } = props;
+  const { icon, imago = false, label, href, current, unread, onReopen, size = 'small' } = props;
   const active = current !== null;
   const name = unread > 0 ? `${label}, ${unread} unread` : label;
   const inner = (
     <>
       {active ? <span className={spineMarkerClass(size)} aria-hidden="true" /> : null}
-      {renderIcon({ name: icon, size: size === 'primary' ? 20 : 18 })}
+      {imago ? <ImagoOrb size="tile" /> : renderIcon({ name: icon, size: size === 'primary' ? 20 : 18 })}
       {renderSpineCount(unread)}
       {renderRailTooltip(label)}
     </>

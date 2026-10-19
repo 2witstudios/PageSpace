@@ -46,7 +46,3 @@ export const taskViewCountClass = (warn: boolean): string =>
 export const tasksPaneLabelClass = 'px-2 pb-1 pt-1 text-2xs font-medium uppercase tracking-wide text-ink-faint';
 
 export const tasksPaneMessageClass = 'px-2 text-sm text-ink-muted';
-
-/** The pane's New list button: the primary fill the Button primitive uses. */
-export const newListClass =
-  'flex h-8 w-full items-center justify-center gap-1 rounded-lg bg-accent px-3 text-sm font-medium text-accent-ink transition-colors duration-120 ease-standard hover:bg-accent-strong';

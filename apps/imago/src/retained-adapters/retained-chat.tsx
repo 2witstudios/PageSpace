@@ -14,6 +14,10 @@ import { usePermissions } from '@/retained/hooks/usePermissions';
 import SessionChat from '@/retained/components/agents/chat/SessionChat';
 import type { AgentInfo } from '@/retained/types/agent';
 import { RetainedSurface } from './retained-provider';
+import { useImagoPageId } from '@/ui/chat/use-chat-data/use-chat-data';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
+import { ImagoThread } from '@/ui/metal/imago-thread';
+import { useImagoPhase } from './imago-phase';
 import { useApiClient } from '@/api/swr-provider';
 import { createConversation } from '@/ui/chat/chat-api/chat-api';
 import { dispatch, transactions } from '@/ui/store/transactions';
@@ -26,15 +30,16 @@ import { useDriveSpend } from '@/retained/hooks/useConversationSpend';
 import { OnboardingGate } from '@/retained/components/onboarding/OnboardingGate';
 
 /** Classic's Home line and suggestions for a new, empty conversation; picking one fills the composer. */
-function HomeWelcome() {
+function HomeWelcome({ imago }: { imago: boolean }) {
   const { line } = useHomeSignals();
   return <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-auto px-4">
+    {imago && <ImagoOrb size="hero" live label="Imago" />}
     <HomeLine line={line} />
     <HomeSuggestions suggestions={line.suggestions} onSelect={text => dispatch(transactions.setChatDraft, text)} />
   </div>;
 }
 
-export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated }: {
+type RetainedChatProps = {
   agentId: string | null; name: string; conversationId: string | null; resolving: boolean;
   /** Imago's chat home (section 'chat'): a new, empty conversation greets the user with the Home line. */
   home?: boolean;
@@ -50,7 +55,26 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
    * move the Imago column.
    */
   isolated?: boolean;
-}) {
+};
+
+/**
+ * One chat host for Imago and any agent page. In Imago's own chat its orb stands in for the
+ * spinner, and the chat is marked so the orb listens while the viewer types to it.
+ */
+export function RetainedChat(props: RetainedChatProps) {
+  // The agent and conversation actually shown: a shared selection overrides the props, as in the host.
+  const sharedSelection = useRetainedChatSelection(state => state.selection);
+  const selection = props.isolated ? null : sharedSelection;
+  const shownAgentId = selection ? selection.agentId : props.agentId;
+  const imagoPageId = useImagoPageId();
+  const imago = imagoPageId !== null && shownAgentId === imagoPageId;
+  useImagoPhase(imago ? (selection?.conversationId ?? props.conversationId) : null);
+  return <ImagoThread value={imago}>
+    <div className="contents" {...(imago ? { 'data-imago-chat': '' } : {})}><RetainedChatHost {...props} imago={imago} /></div>
+  </ImagoThread>;
+}
+
+function RetainedChatHost({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated, imago }: RetainedChatProps & { imago: boolean }) {
   const sharedSelection = useRetainedChatSelection(state => state.selection);
   const selection = isolated ? null : sharedSelection;
   const selectedAgentId = selection ? selection.agentId : agentId;
@@ -129,7 +153,7 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
   if (!page || (resolving && !selection && !shownId)) return renderLoadingState('Opening chat…');
   if (!shownId) return <RetainedSurface className="bg-tint"><div className="@container flex h-full min-w-0 min-h-0 flex-col">
     <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">{home
-      ? <HomeWelcome />
+      ? <HomeWelcome imago={imago} />
       : <ChatMessagesArea messages={[]} isLoading={false} isStreaming={false} />}</div>
     {home && <OnboardingGate />}
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}

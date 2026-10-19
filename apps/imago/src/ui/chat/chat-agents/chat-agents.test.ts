@@ -1,7 +1,7 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { pointers } from '../chat-model/fixtures';
-import { agentFor, agentMenu } from './chat-agents';
+import { agentFor, agentMenu, imagoPageIdOf } from './chat-agents';
 
 const builtins = pointers().agents;
 const driveAgents = [
@@ -21,7 +21,7 @@ describe('agentMenu()', () => {
           {
             label: 'Imago',
             options: [
-              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model' },
+              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model', imago: true },
             ],
           },
           {
@@ -56,7 +56,7 @@ describe('agentMenu()', () => {
       expected: [
         {
           label: 'Imago',
-          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model' }],
+          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model', imago: true }],
         },
       ],
     });
@@ -128,6 +128,26 @@ describe('the v3 picker rows (IMC-2.1)', () => {
         ['Imago', [['Imago', 'Global · your chosen model']]],
         ['Agents in Studio', [['Launch Agent', 'claude-sonnet-5-5 · Launch'], ['Inbox Triage', 'claude-haiku-5-5 · Studio']]],
       ],
+    });
+  });
+});
+
+describe('imagoPageIdOf()', () => {
+  test('a provisioned Imago', () => {
+    assert({
+      given: "the viewer's Imago pointers",
+      should: "name Imago's page",
+      actual: imagoPageIdOf(builtins),
+      expected: 'p-imago',
+    });
+  });
+
+  test('before it loads or is provisioned', () => {
+    assert({
+      given: 'no pointers yet, and an Imago with no page',
+      should: 'name no page',
+      actual: [imagoPageIdOf(undefined), imagoPageIdOf([{ key: 'imago', pageId: null, title: 'Imago' }])],
+      expected: [null, null],
     });
   });
 });

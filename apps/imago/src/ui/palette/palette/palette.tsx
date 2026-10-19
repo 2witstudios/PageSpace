@@ -1,5 +1,6 @@
 'use client';
 
+import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useId, useRef } from 'react';
 import { useApiClient } from '@/api/swr-provider';
@@ -36,10 +37,11 @@ const selectQuery = (state: UiState) => state.resources.paletteQuery;
 const selectAllDrives = (state: UiState) => state.resources.paletteAllDrives;
 const selectActive = (state: UiState) => state.resources.paletteActive;
 
-const rowFor = (result: PaletteResult, names: ReadonlyMap<string, string> | null): PaletteRow => ({
+const rowFor = (result: PaletteResult, names: ReadonlyMap<string, string> | null, imagoPageId: string | null): PaletteRow => ({
   id: result.id,
   title: result.title,
   icon: fileIcon(result.pageType),
+  ...(result.id === imagoPageId ? { imago: true as const } : {}),
   driveName: names === null ? null : (names.get(result.driveId) ?? null),
 });
 
@@ -66,7 +68,8 @@ export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandP
   const path = open ? searchPath({ query, driveId, allDrives }) : null;
   const search = usePaletteSearch(path, delayMs === undefined ? { client } : { client, delayMs });
   const names = allDrives ? new Map((drives ?? []).map((drive) => [drive.id, drive.name])) : null;
-  const rows = search.results.map((result) => rowFor(result, names));
+  const imagoPageId = useImagoPageId();
+  const rows = search.results.map((result) => rowFor(result, names, imagoPageId));
   const scope = allDrives ? 'all workspaces' : (drives?.find((drive) => drive.id === driveId)?.name ?? 'this drive');
 
   const close = useCallback(() => {

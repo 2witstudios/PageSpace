@@ -34,6 +34,13 @@ export const spineCountClass =
 /** The spine's lists: tiles stacked 4px apart, centred on the spine. */
 export const spineListClass = 'm-0 flex list-none flex-col items-center gap-rail-gap p-0';
 
+/**
+ * The spine's top and middle: it takes the height the foot leaves and scrolls on a short window.
+ * Only this region scrolls; the foot and its More menu sit outside it, so nothing that opens
+ * sideways is clipped by an overflow box.
+ */
+export const spineScrollClass = 'flex min-h-0 w-full flex-1 flex-col items-center overflow-y-auto';
+
 /** The 28px rule between the sections and the tools. */
 export const spineDividerClass = 'my-2 h-px w-spine-divider flex-none bg-spine-active';
 

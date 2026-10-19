@@ -2,6 +2,7 @@ import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Search } from 'lucide-react';
 import { renderCheckbox } from '../../components/checkbox/checkbox.render';
 import { Icon } from '../../components/icon/icon';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import type { IconName } from '../../components/icon/icon-names';
 import type { PaletteUser } from '../palette-search/palette-search';
 import type { PaletteSearch } from '../use-palette-search/use-palette-search';
@@ -27,6 +28,8 @@ export type PaletteRow = {
   readonly id: string;
   readonly title: string;
   readonly icon: IconName;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: true;
   /** The drive's name, shown while searching every drive; null otherwise or when it is not listed. */
   readonly driveName: string | null;
 };
@@ -142,7 +145,7 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
             spellCheck={false}
             value={query}
             placeholder={`Search ${scope}…`}
-            className={paletteInputClass}
+            className={paletteInputClass(highlighted >= 0)}
             onChange={(event) => typeQuery(event.currentTarget.value)}
           />
           <span className={paletteScopeClass}>
@@ -158,7 +161,7 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
               </div>
               {rows.map((row, index) => (
                 <div key={row.id} {...optionProps(index)}>
-                  <Icon name={row.icon} />
+                  {row.imago ? <ImagoOrb size="glyph" /> : <Icon name={row.icon} />}
                   <span className={paletteTitleClass}>{row.title}</span>
                   {row.driveName === null ? null : <span className={paletteDriveClass}>{row.driveName}</span>}
                   {index === highlighted ? <kbd className={paletteKbdClass}>↵</kbd> : null}

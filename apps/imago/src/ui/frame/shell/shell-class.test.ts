@@ -47,12 +47,20 @@ describe('shell slot widths', () => {
     assert({
       given: 'a section’s list',
       should: 'open the wide list and give Imago the rest',
-      actual: [widths('/drive-1/files'), widths('/drive-1/tasks'), widths('/dm')],
+      actual: [widths('/drive-1/files'), widths('/dm')],
       expected: [
         ['w-list-pane', 'w-0', 'grow', 'w-0'],
         ['w-list-pane', 'w-0', 'grow', 'w-0'],
-        ['w-list-pane', 'w-0', 'grow', 'w-0'],
       ],
+    });
+  });
+
+  test('the Tasks index', () => {
+    assert({
+      given: 'a drive’s Tasks index, the list open and no object',
+      should: 'put the tasks in the middle column and dock Imago beside it',
+      actual: widths('/drive-1/tasks'),
+      expected: ['w-list-pane', 'grow', 'w-chat-pane', 'w-0'],
     });
   });
 

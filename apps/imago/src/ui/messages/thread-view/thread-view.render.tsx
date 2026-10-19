@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
+import { AuthorAvatar } from '../../metal/author-avatar';
 import { renderButton } from '../../components/button/button.render';
 import { renderIcon } from '../../components/icon/icon.render';
 import { formatTime } from '../../time/time';
@@ -125,7 +126,7 @@ const reactions = (list: readonly PostReaction[]): ReactNode =>
 
 const gutter = (post: Post, lead: boolean): ReactNode =>
   lead ? (
-    renderAvatar({ name: post.authorName, src: post.authorImage ?? undefined, size: 'sm', agent: post.agent })
+    post.agent ? <AuthorAvatar post={post} /> : renderAvatar({ name: post.authorName, src: post.authorImage ?? undefined, size: 'sm' })
   ) : (
     <time dateTime={post.at} className={postFollowTimeClass}>
       {formatTime(post.at).replace(/ [AP]M$/, '')}

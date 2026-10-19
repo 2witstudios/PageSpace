@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { Fragment, type DragEvent, type ReactNode } from 'react';
 import { renderButton } from '../../components/button/button.render';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
@@ -58,6 +59,8 @@ export type BrowserRow = {
   readonly pending: boolean;
   readonly menuLabel: string;
   readonly menuOpen: boolean;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: true;
   /** Opens the row's menu at the hover button's corner. */
   readonly onOpenMenu: (x: number, y: number) => void;
   /** Opens the row's menu at the pointer (right-click). */
@@ -123,8 +126,9 @@ const COLUMNS: readonly { readonly key: SortKey; readonly label: string; readonl
 
 const iconOf = (pageType: PageTypeValue): { readonly icon: IconName; readonly hue: string } => pageTypeIcons[pageType];
 
-const pageIcon = (pageType: PageTypeValue, size: number): ReactNode => {
-  const { icon, hue } = iconOf(pageType);
+const pageIcon = (row: BrowserRow, size: number): ReactNode => {
+  if (row.imago) return <ImagoOrb size={size > 30 ? 'row' : 'glyph'} />;
+  const { icon, hue } = iconOf(row.pageType);
   return <Icon name={icon} size={size} className={`${hue} shrink-0`} />;
 };
 
@@ -161,7 +165,7 @@ const menuEntry = (entry: MenuEntry): ReactNode => {
 
 const nameOf = (row: BrowserRow): ReactNode => (
   <>
-    {pageIcon(row.pageType, 20)}
+    {pageIcon(row, 20)}
     <span data-name="" className="min-w-0 truncate">
       {row.title}
     </span>
@@ -180,7 +184,7 @@ const listRow = (row: BrowserRow): ReactNode => (
       row.onContextMenu(event.clientX, event.clientY);
     }}
   >
-    <td className="h-10 w-10 pl-2">{pageIcon(row.pageType, 20)}</td>
+    <td className="h-10 w-10 pl-2">{pageIcon(row, 20)}</td>
     <td className={nameCellClass}>
       {row.pending ? (
         <span className={nameLinkClass}>{nameOf(row)}</span>
@@ -231,7 +235,7 @@ const tile = (row: BrowserRow): ReactNode => (
       row.onContextMenu(event.clientX, event.clientY);
     }}
   >
-    {pageIcon(row.pageType, 48)}
+    {pageIcon(row, 48)}
     <span className={tileTitleClass}>{row.title}</span>
   </Link>
 );
