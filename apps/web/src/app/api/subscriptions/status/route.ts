@@ -9,7 +9,6 @@ import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pages
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appleEntitledTier, hasRenewableAppleSubscription, latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
-import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { resolveBillingProvider } from '@/lib/iap-server/apple-http';
 
 /**
@@ -72,7 +71,9 @@ export async function GET(request: NextRequest) {
     // entitlement comes from every App Store row, not just the latest-expiring one.
     const appleTier = await appleEntitledTier(db, user.id, new Date());
     const billingProvider = resolveBillingProvider({
-      stripeContract: subscription !== null && getPersonalTierFromPrice(subscription.stripePriceId) !== 'free',
+      // Any live personal Stripe row is a contract Stripe charges, whatever its price maps to
+      // (a retired or grandfathered price maps to free but still bills).
+      stripeContract: subscription !== null,
       appleContract: appleTier !== 'free' || appStoreRenews,
     });
 

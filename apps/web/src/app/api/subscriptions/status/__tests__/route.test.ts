@@ -56,9 +56,6 @@ vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
   appleEntitledTier: mockAppleEntitledTier,
   hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
 }));
-vi.mock('@/lib/stripe/price-config', () => ({
-  getPersonalTierFromPrice: (priceId: string) => (priceId === 'price_pro' ? 'pro' : 'free'),
-}));
 
 // Import after mocks
 import { GET } from '../route';
@@ -99,6 +96,7 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
+  stripePriceId: string;
 }> = {}) => ({
   id: overrides.id ?? 'sub_123',
   userId: overrides.userId ?? 'user_123',
@@ -106,7 +104,7 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: overrides.currentPeriodStart ?? new Date('2024-01-01'),
   currentPeriodEnd: overrides.currentPeriodEnd ?? new Date('2024-02-01'),
   cancelAtPeriodEnd: overrides.cancelAtPeriodEnd ?? false,
-  stripePriceId: 'price_pro',
+  stripePriceId: overrides.stripePriceId ?? 'price_pro',
 });
 
 describe('GET /api/subscriptions/status', () => {
@@ -158,6 +156,12 @@ describe('GET /api/subscriptions/status', () => {
     it('is stripe for a past-due Stripe subscription: it still collects and resumes, so iOS must not sell a second plan', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
       mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'past_due' })]);
+      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
+    });
+
+    it('is stripe for a live Stripe subscription on a price it no longer maps (retired, grandfathered): Stripe still charges it', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
+      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active', stripePriceId: 'price_retired' })]);
       expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
     });
 
