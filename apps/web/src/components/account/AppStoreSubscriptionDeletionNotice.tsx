@@ -18,18 +18,22 @@ async function fetchStatus(url: string): Promise<{ billingProvider?: BillingProv
 export const APP_STORE_DELETION_NOTICE =
   'Deleting your account does not cancel your App Store subscription. Cancel it in your App Store subscriptions first to stop being charged.';
 
+/** Where to cancel when this client cannot open Apple's sheet (a browser, an older app). */
+export const APP_STORE_CANCEL_ELSEWHERE = 'On your iPhone or iPad: Settings › Apple ID › Subscriptions.';
+
 /**
- * On the iOS app (Apple channel), for an App Store subscriber: account
- * deletion cannot cancel an Apple-billed subscription, so say so and offer
- * Apple's Manage Subscriptions sheet. Renders nothing anywhere else.
+ * For an App Store subscriber, on every client: account deletion cannot cancel an
+ * Apple-billed subscription, so say so wherever the account can be deleted. The iOS app
+ * with StoreKit also offers Apple's Manage Subscriptions sheet; elsewhere the notice says
+ * where to cancel. Renders nothing for anyone else.
  */
 export function AppStoreSubscriptionDeletionNotice() {
-  const { channel } = useBillingVisibility();
+  const { channel, isReady } = useBillingVisibility();
   const isApple = channel === 'apple';
-  const { data } = useSWR(isApple ? '/api/subscriptions/status' : null, fetchStatus, { revalidateOnFocus: false });
+  const { data } = useSWR(isReady ? '/api/subscriptions/status' : null, fetchStatus, { revalidateOnFocus: false });
   const [opening, setOpening] = useState(false);
 
-  if (!isApple || data?.billingProvider !== 'apple') return null;
+  if (data?.billingProvider !== 'apple') return null;
 
   const manage = async () => {
     setOpening(true);
@@ -48,10 +52,14 @@ export function AppStoreSubscriptionDeletionNotice() {
       <Info className="h-4 w-4" />
       <AlertDescription className="space-y-3">
         <p>{APP_STORE_DELETION_NOTICE}</p>
-        <Button variant="outline" size="sm" onClick={manage} disabled={opening}>
-          {opening ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-          Manage Subscription
-        </Button>
+        {isApple ? (
+          <Button variant="outline" size="sm" onClick={manage} disabled={opening}>
+            {opening ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+            Manage Subscription
+          </Button>
+        ) : (
+          <p className="text-sm text-muted-foreground">{APP_STORE_CANCEL_ELSEWHERE}</p>
+        )}
       </AlertDescription>
     </Alert>
   );

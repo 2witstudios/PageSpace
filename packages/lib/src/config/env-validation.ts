@@ -144,12 +144,13 @@ export const serverEnvSchema = z
 
     // Optional App Store In-App Purchase (billing/apple/apple-verify). Production
     // purchases verify only once APPLE_IAP_APP_APPLE_ID is set.
-    APPLE_IAP_BUNDLE_ID: z.string().min(1).optional(),
-    // Empty is allowed: .env.example ships it blank until the app is in App Store Connect.
-    APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\d*$/).optional(),
+    // Blank values are allowed and read as unset, exactly as appleVerifierConfigFromEnv reads
+    // them (a declared-but-blank optional must never fail boot validation).
+    APPLE_IAP_BUNDLE_ID: z.string().optional(),
+    APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\s*\d*\s*$/).optional(),
     APPLE_IAP_ALLOW_SANDBOX: z.string().optional(),
     APPLE_IAP_ONLINE_CHECKS: z.string().optional(),
-    APPLE_IAP_SANDBOX_MAX_FUNDINGS: z.string().regex(/^\d*$/).optional(),
+    APPLE_IAP_SANDBOX_MAX_FUNDINGS: z.string().regex(/^\s*\d*\s*$/).optional(),
     APPLE_IAP_SANDBOX_FUNDED_USER_IDS: z.string().optional(),
 
     // Optional real-time / cron / cookie

@@ -1,14 +1,26 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { SWRConfig } from "swr"
+
+const mocks = vi.hoisted(() => ({ billingProvider: null as string | null }))
+vi.mock("@/retained/lib/auth/auth-fetch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/retained/lib/auth/auth-fetch")>()),
+  fetchWithAuth: vi.fn(async () => ({ ok: true, json: async () => ({ billingProvider: mocks.billingProvider }) })),
+}))
+
 import { ApiRequestError } from "@/retained/lib/auth/auth-fetch"
 import { DeleteAccountDialog, ownedOrganizationsFrom } from "./DeleteAccountDialog"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  mocks.billingProvider = null
+})
 
 const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccountDialog>> = {}) => {
   const onConfirm = vi.fn()
   render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
     <DeleteAccountDialog
       isOpen
       onClose={vi.fn()}
@@ -18,6 +30,7 @@ const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccou
       soloDrivesCount={0}
       {...overrides}
     />
+    </SWRConfig>
   )
   return { onConfirm }
 }
@@ -41,6 +54,20 @@ describe("ownedOrganizationsFrom", () => {
 })
 
 describe("DeleteAccountDialog", () => {
+  it("tells an App Store subscriber that deleting the account does not cancel the subscription, and where to cancel it", async () => {
+    mocks.billingProvider = "apple"
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+    expect(screen.getByText(/Settings › Apple ID › Subscriptions/)).toBeTruthy()
+  })
+
+  it("shows no App Store notice to anyone else", async () => {
+    mocks.billingProvider = "stripe"
+    renderDialog()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByTestId("app-store-deletion-notice")).toBeNull()
+  })
+
   it("keeps Delete Account Permanently disabled until the email is typed", () => {
     const { onConfirm } = renderDialog()
     expect(deleteButton().disabled).toBe(true)

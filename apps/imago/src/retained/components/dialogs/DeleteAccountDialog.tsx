@@ -1,4 +1,5 @@
 import { useState } from "react";
+import useSWR from "swr";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +15,22 @@ import { Label } from "@/retained/components/ui/label";
 import { Alert, AlertDescription } from "@/retained/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 import { SignInWithAppleDeletionNotice, type AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
-import { ApiRequestError } from "@/retained/lib/auth/auth-fetch";
+import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
+
+/** Who sells the viewer's plan (GET /api/subscriptions/status `billingProvider`). */
+async function fetchBillingProvider(url: string): Promise<string | null> {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) return null;
+  const body: { billingProvider?: string | null } = await response.json();
+  return body.billingProvider ?? null;
+}
+
+/**
+ * Account deletion cannot cancel a subscription Apple bills, so an App Store subscriber is
+ * told where to cancel it before deleting (Imago has no StoreKit sheet to open).
+ */
+export const APP_STORE_DELETION_NOTICE =
+  "Deleting your account does not cancel your App Store subscription. Cancel it first on your iPhone or iPad: Settings › Apple ID › Subscriptions.";
 
 /**
  * The organizations a DELETE /api/account refusal names as still owned by the viewer. Only the
@@ -51,6 +67,7 @@ export function DeleteAccountDialog({
   ownedOrganizations,
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
+  const { data: billingProvider } = useSWR(isOpen ? "/api/subscriptions/status" : null, fetchBillingProvider, { revalidateOnFocus: false });
 
   const isEmailMatch = emailConfirmation.trim().toLowerCase() === userEmail.toLowerCase();
   const isRefused = ownedOrganizations !== undefined && ownedOrganizations.length > 0;
@@ -106,6 +123,13 @@ export function DeleteAccountDialog({
                   ))}
                 </ul>
               </AlertDescription>
+            </Alert>
+          )}
+
+          {billingProvider === "apple" && (
+            <Alert role="status" data-testid="app-store-deletion-notice">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{APP_STORE_DELETION_NOTICE}</AlertDescription>
             </Alert>
           )}
 

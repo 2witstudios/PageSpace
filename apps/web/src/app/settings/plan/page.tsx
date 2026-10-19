@@ -413,11 +413,13 @@ export default function PlanPage() {
       )}
 
       {/* iOS with StoreKit: In-App Purchase only — never Stripe checkout or a web price. */}
-      {isAppleChannel && (
+      {/* Only once the status is known: an unknown status must never offer Subscribe to
+          someone who may already pay on the web (that would bill one plan twice). */}
+      {isAppleChannel && subscriptionData && (
         <ApplePlanPanel
           plan={proPlan}
-          subscriptionTier={subscriptionData?.subscriptionTier || 'free'}
-          billingProvider={subscriptionData?.billingProvider}
+          subscriptionTier={subscriptionData.subscriptionTier}
+          billingProvider={subscriptionData.billingProvider}
           onChanged={fetchSubscriptionData}
         />
       )}

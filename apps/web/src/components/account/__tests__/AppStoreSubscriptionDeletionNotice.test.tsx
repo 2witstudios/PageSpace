@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   manage: vi.fn(),
 }));
 
-vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ channel: mocks.channel }) }));
+vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ channel: mocks.channel, isReady: true }) }));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: mocks.fetchWithAuth }));
 vi.mock('@/lib/iap/apple-store', () => ({ manageAppleSubscriptions: mocks.manage }));
 
@@ -49,12 +49,19 @@ describe('AppStoreSubscriptionDeletionNotice', () => {
     expect(screen.queryByTestId('app-store-deletion-notice')).not.toBeInTheDocument();
   });
 
-  it('renders nothing and fetches nothing off the Apple channel', async () => {
+  it('in a browser, still warns an App Store subscriber and says where to cancel (no Apple sheet there)', async () => {
     mocks.channel = 'stripe';
     status('apple');
     renderFresh();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(mocks.fetchWithAuth).not.toHaveBeenCalled();
-    expect(screen.queryByTestId('app-store-deletion-notice')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('app-store-deletion-notice')).toBeInTheDocument());
+    expect(screen.getByText(/Settings › Apple ID › Subscriptions/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Manage Subscription' })).not.toBeInTheDocument();
+  });
+
+  it('on an iOS binary without StoreKit, still warns', async () => {
+    mocks.channel = 'none';
+    status('apple');
+    renderFresh();
+    await waitFor(() => expect(screen.getByTestId('app-store-deletion-notice')).toBeInTheDocument());
   });
 });

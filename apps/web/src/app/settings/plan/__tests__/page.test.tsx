@@ -149,6 +149,16 @@ describe('PlanPage on the Apple channel (iOS with StoreKit)', () => {
     expect(screen.queryByText(/Upgrade to/)).not.toBeInTheDocument();
   });
 
+  it('offers no Subscribe while the subscription status is unknown (it may already be paid on the web)', async () => {
+    mocks.fetchWithAuth.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    render(<PlanPage />);
+
+    await waitFor(() => expect(mocks.fetchWithAuth).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('apple-plan-panel')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Subscribe' })).not.toBeInTheDocument();
+  });
+
   it('offers Manage Subscription to an App Store subscriber', async () => {
     mockStatusResponse({ subscriptionTier: 'pro', billingProvider: 'apple', appStore: { status: 'active' } });
     render(<PlanPage />);

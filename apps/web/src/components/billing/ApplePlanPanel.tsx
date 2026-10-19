@@ -62,6 +62,8 @@ export function ApplePlanPanel({ plan, subscriptionTier, billingProvider, onChan
       const result = await purchaseAppleProduct(pro.productId);
       setNotice(purchaseResultMessage(result));
       if (result.status === 'success') await onChanged();
+    } catch (err) {
+      setNotice({ tone: 'error', text: err instanceof Error && err.message ? err.message : 'The purchase could not start. Please try again.' });
     } finally {
       setBusy(null);
     }
