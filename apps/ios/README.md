@@ -230,9 +230,9 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
     (`PageSpaceStore` plugin). No Stripe checkout, no web link-out, no external payment URL, and
     no mention of web prices anywhere on iOS (anti-steering).
   - Storage add-ons and custom credit top-ups are hidden on iOS (web-only).
-  - Organization / enterprise / seat billing stays web-only under Guideline 3.1.3(c): iOS shows
-    "managed by your organization" with no button and no link. A personal plan bought on the web
-    shows "Your plan is managed on the web", with no button, link or URL.
+  - Organization / enterprise / seat billing is web-only; iOS shows "managed by your organization"
+    with no button. A personal plan bought on the web shows "Your plan is managed on the web", with
+    no button, link or URL.
   - Prices shown are StoreKit's localized `displayPrice`, never hardcoded USD.
   - The plan screen has **Restore Purchases** and **Manage Subscription** buttons.
   - The auto-renew disclosure is shown next to the subscribe button (price + period, charged to
@@ -241,6 +241,8 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
   - Terms of Use (EULA) and Privacy Policy links are on the purchase screen, and the EULA + Privacy
     Policy URLs are filled in on the App Store Connect app page.
   - The In-App Purchases are attached to the version being submitted (see "In-App Purchases").
+- [ ] App availability (Pricing and Availability) = **United States only**. The US storefront
+      permits the existing marketing `/terms` and `/privacy` links.
 - [ ] Reviewer notes emphasize native features — push, Sign in with Apple, native Google sign-in,
       keychain session persistence, app-icon badge, universal links — plus a working demo account
       with seeded content
@@ -327,6 +329,10 @@ credited — App Review also buys in Sandbox, against the production server.
   - `APPLE_IAP_ALLOW_SANDBOX=true` — while App Review and TestFlight need to buy. Sandbox
     purchases are free, so turn this off only if Sandbox accounts must never grant entitlements
     in production (App Review would then fail to purchase).
+  - `APPLE_IAP_SANDBOX_MAX_FUNDINGS=1000` — while in App Review. App Review buys every product in
+    Sandbox, and Sandbox subscription renewals (every 5 minutes) count toward the default cap of 3,
+    so a capped pack purchase would fund nothing (a Guideline 2.1 rejection). Lower it after
+    approval: Sandbox purchases are free, and TestFlight testers buy in Sandbox too.
 - [ ] EULA (Terms of Use) and Privacy Policy URLs set on the App Store page (required for
       auto-renewable subscriptions, Guideline 3.1.2).
 
@@ -334,18 +340,15 @@ credited — App Review also buys in Sandbox, against the production server.
 
 Paste into the Resolution Center reply (and keep the gist in the reviewer notes):
 
-> Thank you for the review. We have updated the app so that individual plans are now sold using
-> In-App Purchase. PageSpace Pro (an auto-renewable monthly subscription) and AI credit packs
-> (consumables) are available in the app via StoreKit, with Restore Purchases and Manage
-> Subscription available on the plan screen, and the app no longer links to or mentions any
-> external purchase method.
+> Thank you for the review. Individual plans are now sold with In-App Purchase. PageSpace Pro (an
+> auto-renewable monthly subscription) and AI credit packs (consumables) are available in the app
+> through StoreKit. Restore Purchases and Manage Subscription are on the plan screen. The app is
+> distributed on the United States storefront only.
 >
-> Organization and enterprise plans are sold directly to businesses and managed by organization
-> administrators outside the app, as permitted under Guideline 3.1.3(c) (Enterprise Services).
-> Members of such organizations see that their plan is managed by their organization; the app
-> offers no button, link, or call to action to purchase it.
+> Organization workspaces are billed to, and administered by, the organization. The app has no
+> purchase option for them.
 >
-> To test: tap "Continue with Apple" (no demo account is needed), open Settings → Plan to subscribe
+> To test: tap "Continue with Apple" (no demo account is needed). Open Settings → Plan to subscribe
 > to PageSpace Pro, or Settings → Usage to buy a credit pack, using a Sandbox account.
 
 ## The Facebook SDK that ships but never runs
