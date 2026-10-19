@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
 - Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
 
 - Imago's Tasks now open in the middle of the screen, like a page, with Imago beside it on the right instead of taking over the whole screen. Collapse Imago to fold it to the Ask pill, as with a page.

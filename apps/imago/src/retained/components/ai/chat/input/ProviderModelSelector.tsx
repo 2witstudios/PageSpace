@@ -9,7 +9,9 @@ import {
 } from '@/retained/components/ui/popover';
 import { ScrollArea } from '@/retained/components/ui/scroll-area';
 import { Badge } from '@/retained/components/ui/badge';
-import { ChevronDown, Check, Loader2 } from 'lucide-react';
+import { ChevronDown, Check, Loader2, Search } from 'lucide-react';
+import { Input } from '@/retained/components/ui/input';
+import { Tabs, TabsList, TabsTrigger } from '@/retained/components/ui/tabs';
 import { cn } from '@/retained/lib/utils';
 import { fetchWithAuth, patch } from '@/retained/lib/auth/auth-fetch';
 import { toast } from 'sonner';
@@ -67,6 +69,16 @@ function buildProviderGroups() {
   return groups.filter(g => g.providers.length > 0);
 }
 
+/** `openai/gpt-x-luna` → `Gpt X Luna`: a readable stand-in for an id the catalog does not name. */
+function readableModelId(modelId: string): string {
+  const name = modelId.slice(modelId.lastIndexOf('/') + 1);
+  return name
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 // Computed once at module load (deployment mode doesn't change at runtime)
 const PROVIDER_GROUPS = buildProviderGroups();
 
@@ -83,6 +95,11 @@ export interface ProviderModelSelectorProps {
   disabled?: boolean;
   /** The drive the chat runs in: its org's model allowlists decide what is offered (POL-8). */
   driveId?: string | null;
+  /**
+   * Sidebar toolbar: one icon button that opens a single popover holding both the provider and the
+   * model lists, so a thin composer never fits two labelled selectors (and their names) in a row.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -96,6 +113,7 @@ export function ProviderModelSelector({
   className,
   disabled = false,
   driveId = null,
+  compact = false,
 }: ProviderModelSelectorProps) {
   const [providerOpen, setProviderOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -108,6 +126,9 @@ export function ProviderModelSelector({
   const [ollamaModels, setOllamaModels] = useState<Record<string, string> | null>(null);
   const [lmstudioModels, setLmstudioModels] = useState<Record<string, string> | null>(null);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
+  // Compact popover: the provider tab being browsed (null = the chosen provider) and the search text.
+  const [compactTab, setCompactTab] = useState<string | null>(null);
+  const [compactQuery, setCompactQuery] = useState('');
 
   // Fetch Ollama models dynamically
   const fetchOllamaModels = useCallback(async () => {
@@ -232,7 +253,9 @@ export function ProviderModelSelector({
       return lmstudioModels[model];
     }
 
-    return getModelDisplayName(provider, model);
+    const catalogName = getModelDisplayName(provider, model);
+    // Not in the catalog (a retired or runtime-only id): read the id as words rather than show it raw.
+    return catalogName === model ? readableModelId(model) : catalogName;
   }, [provider, model, ollamaModels, lmstudioModels]);
 
   // Check whether the deployment has this provider configured.
@@ -346,6 +369,97 @@ export function ProviderModelSelector({
     [provider, model, onChange]
   );
 
+  // Cross-provider search reads every choosable model, so the local lists load as soon as the
+  // compact picker opens rather than only when their tab is browsed.
+  const compactOpen = providerOpen || modelOpen;
+  useEffect(() => {
+    if (!compactOpen) return;
+    if (isProviderAvailable('ollama')) void fetchOllamaModels();
+    if (isProviderAvailable('lmstudio')) void fetchLMStudioModels();
+  }, [compactOpen, isProviderAvailable, fetchOllamaModels, fetchLMStudioModels]);
+
+  // The two lists, shared by the inline pair and the compact popover.
+  const providerList = (
+    <div className="space-y-2">
+      {PROVIDER_GROUPS
+        .map((group) => ({
+          ...group,
+          providers: group.providers.filter((p) =>
+            isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
+          ),
+        }))
+        .filter((group) => group.providers.length > 0)
+        .map((group) => (
+          <div key={group.label}>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
+              {group.label}
+            </div>
+            <div className="space-y-0.5">
+              {group.providers.map((p) => {
+                const isSelected = provider === p.id;
+                return (
+                  <Button
+                    key={p.id}
+                    variant={isSelected ? 'secondary' : 'ghost'}
+                    size="sm"
+                    disabled={isSaving}
+                    onClick={() => handleProviderSelect(p.id)}
+                    className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                  >
+                    <span className="truncate min-w-0">{p.name}</span>
+                    {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+    </div>
+  );
+
+  const modelList = (
+    <div className="space-y-0.5">
+      {isLoadingModels ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Loading models...
+        </div>
+      ) : availableModels.length === 0 ? (
+        <div className="text-xs text-muted-foreground px-2 py-2">
+          {provider === 'ollama' || provider === 'lmstudio'
+            ? 'No models found. Start your local server.'
+            : 'No models available'}
+        </div>
+      ) : (
+        availableModels.map(([modelId, modelName]) => {
+          const isSelected = model === modelId;
+          const accessible = isModelAccessible(provider as string, modelId);
+          return (
+            <Button
+              key={modelId}
+              variant={isSelected ? 'secondary' : 'ghost'}
+              size="sm"
+              disabled={isSaving || !accessible}
+              onClick={() => handleModelSelect(modelId)}
+              className="w-full justify-between text-xs h-7 px-2 min-w-0"
+            >
+              <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
+                {modelName}
+              </span>
+              {isSelected ? (
+                <Check className="h-3 w-3 shrink-0 ml-1" />
+              ) : !accessible ? (
+                <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
+                  Paid
+                </Badge>
+              ) : null}
+            </Button>
+          );
+        })
+      )}
+    </div>
+  );
+
   if (isLoading) {
     return (
       <Button
@@ -356,6 +470,174 @@ export function ProviderModelSelector({
       >
         <Loader2 className="h-3 w-3 animate-spin" />
       </Button>
+    );
+  }
+
+  if (compact) {
+    // Emoji-picker shape: the trigger names only the model; the popover searches every model and
+    // browses one provider per tab. Picking a model sets its provider with it.
+    const choosableProviders = PROVIDER_GROUPS.flatMap((group) => group.providers).filter((p) =>
+      isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
+    );
+    const modelsOf = (providerId: string): [string, string][] => {
+      const entries = (): [string, string][] => {
+        if (providerId === 'ollama' && ollamaModels) return Object.entries(ollamaModels);
+        if (providerId === 'lmstudio' && lmstudioModels) return Object.entries(lmstudioModels);
+        const config = AI_PROVIDERS[providerId as keyof typeof AI_PROVIDERS];
+        return config ? Object.entries(config.models) : [];
+      };
+      return entries().filter(([modelId]) => isOrgAllowed(providerId, modelId));
+    };
+    const activeTab = compactTab ?? provider ?? choosableProviders[0]?.id ?? '';
+    const query = compactQuery.trim().toLowerCase();
+    const rows = query
+      ? choosableProviders.flatMap((p) =>
+          modelsOf(p.id)
+            .filter(([modelId, modelName]) => `${modelName} ${modelId}`.toLowerCase().includes(query))
+            .map(([modelId, modelName]) => ({ providerId: p.id, providerName: p.name, modelId, modelName }))
+        )
+      : modelsOf(activeTab).map(([modelId, modelName]) => ({
+          providerId: activeTab,
+          providerName: choosableProviders.find((p) => p.id === activeTab)?.name ?? activeTab,
+          modelId,
+          modelName,
+        }));
+
+    const resetCompactBrowse = () => {
+      setCompactQuery('');
+      setCompactTab(null);
+    };
+    const closeCompact = () => {
+      setProviderOpen(false);
+      setModelOpen(false);
+      resetCompactBrowse();
+    };
+    // A provider with no selectable model rows (Azure OpenAI's deployments) is chosen by its own row.
+    const chooseCompactProvider = async (providerId: string) => {
+      await handleProviderSelect(providerId);
+      resetCompactBrowse();
+    };
+    const selectCompactModel = async (providerId: string, modelId: string) => {
+      if (providerId === provider && modelId === model) {
+        closeCompact();
+        return;
+      }
+      setIsSaving(true);
+      try {
+        await patch('/api/ai/settings', { provider: providerId, model: modelId });
+        onChange?.(providerId, modelId);
+        closeCompact();
+      } catch (error) {
+        console.error('Failed to update model:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to update model');
+      } finally {
+        setIsSaving(false);
+      }
+    };
+    const browseProvider = (providerId: string) => {
+      setCompactTab(providerId);
+      if (providerId === 'ollama') void fetchOllamaModels();
+      if (providerId === 'lmstudio') void fetchLMStudioModels();
+    };
+
+    return (
+      <Popover
+        open={providerOpen || modelOpen}
+        onOpenChange={(open) => {
+          setProviderOpen(open);
+          setModelOpen(open);
+          if (!open) resetCompactBrowse();
+        }}
+      >
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disabled || isSaving}
+            aria-label={`Model: ${modelDisplayName}`}
+            title={`${providerDisplayName} · ${modelDisplayName}`}
+            className={cn('h-8 px-2 gap-1 min-w-0 max-w-full text-muted-foreground hover:text-foreground hover:bg-transparent dark:hover:bg-transparent', className)}
+          >
+            <span className="min-w-0 truncate text-xs">{modelDisplayName}</span>
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-72 p-0" align="end" sideOffset={8}>
+          <div className="p-2 border-b border-border/50">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={compactQuery}
+                onChange={(event) => setCompactQuery(event.target.value)}
+                placeholder="Search models..."
+                className="pl-8 h-8 text-sm"
+              />
+            </div>
+          </div>
+          {!query && (
+            <Tabs value={activeTab} onValueChange={browseProvider} className="w-full">
+              <TabsList className="w-full h-auto p-1 justify-start gap-0.5 overflow-x-auto bg-muted/30">
+                {choosableProviders.map((p) => (
+                  <TabsTrigger key={p.id} value={p.id} className="shrink-0 px-2 py-1 text-xs data-[state=active]:bg-background">
+                    {p.name}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
+          <ScrollArea className="h-64 p-2">
+            <div className="space-y-0.5">
+              {isLoadingModels ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Loading models...
+                </div>
+              ) : rows.length === 0 && !query && activeTab !== provider && choosableProviders.some((p) => p.id === activeTab) ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isSaving}
+                  onClick={() => void chooseCompactProvider(activeTab)}
+                  className="w-full justify-start text-xs h-7 px-2 min-w-0"
+                >
+                  Use {choosableProviders.find((p) => p.id === activeTab)?.name ?? activeTab}
+                </Button>
+              ) : rows.length === 0 ? (
+                <div className="text-xs text-muted-foreground px-2 py-2">
+                  {query ? `No models match “${compactQuery.trim()}”` : 'No models available'}
+                </div>
+              ) : (
+                rows.map(({ providerId, providerName, modelId, modelName }) => {
+                  const isSelected = providerId === provider && modelId === model;
+                  const accessible = isModelAccessible(providerId, modelId);
+                  return (
+                    <Button
+                      key={`${providerId}:${modelId}`}
+                      variant={isSelected ? 'secondary' : 'ghost'}
+                      size="sm"
+                      disabled={isSaving || !accessible}
+                      onClick={() => void selectCompactModel(providerId, modelId)}
+                      className="w-full justify-between text-xs h-7 px-2 min-w-0"
+                    >
+                      <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
+                        {modelName}
+                        {query && <span className="text-muted-foreground"> · {providerName}</span>}
+                      </span>
+                      {isSelected ? (
+                        <Check className="h-3 w-3 shrink-0 ml-1" />
+                      ) : !accessible ? (
+                        <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
+                          Paid
+                        </Badge>
+                      ) : null}
+                    </Button>
+                  );
+                })
+              )}
+            </div>
+          </ScrollArea>
+        </PopoverContent>
+      </Popover>
     );
   }
 
@@ -376,41 +658,7 @@ export function ProviderModelSelector({
         </PopoverTrigger>
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[280px] p-2">
-            <div className="space-y-2">
-              {PROVIDER_GROUPS
-                .map((group) => ({
-                  ...group,
-                  providers: group.providers.filter((p) =>
-                    isProviderAvailable(p.id) && (!ADMIN_ONLY_PROVIDERS.has(p.id) || isAdmin) && isOrgAllowed(p.id) && hasAccessibleModel(p.id)
-                  ),
-                }))
-                .filter((group) => group.providers.length > 0)
-                .map((group) => (
-                  <div key={group.label}>
-                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-1 px-2">
-                      {group.label}
-                    </div>
-                    <div className="space-y-0.5">
-                      {group.providers.map((p) => {
-                        const isSelected = provider === p.id;
-                        return (
-                          <Button
-                            key={p.id}
-                            variant={isSelected ? 'secondary' : 'ghost'}
-                            size="sm"
-                            disabled={isSaving}
-                            onClick={() => handleProviderSelect(p.id)}
-                            className="w-full justify-between text-xs h-7 px-2 min-w-0"
-                          >
-                            <span className="truncate min-w-0">{p.name}</span>
-                            {isSelected && <Check className="h-3 w-3 shrink-0 ml-1" />}
-                          </Button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-            </div>
+            {providerList}
           </ScrollArea>
         </PopoverContent>
       </Popover>
@@ -434,46 +682,7 @@ export function ProviderModelSelector({
         </PopoverTrigger>
         <PopoverContent className="w-52 p-0" align="end" sideOffset={8}>
           <ScrollArea className="h-[200px] p-2">
-            <div className="space-y-0.5">
-              {isLoadingModels ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-2">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Loading models...
-                </div>
-              ) : availableModels.length === 0 ? (
-                <div className="text-xs text-muted-foreground px-2 py-2">
-                  {provider === 'ollama' || provider === 'lmstudio'
-                    ? 'No models found. Start your local server.'
-                    : 'No models available'}
-                </div>
-              ) : (
-                availableModels.map(([modelId, modelName]) => {
-                  const isSelected = model === modelId;
-                  const accessible = isModelAccessible(provider as string, modelId);
-                  return (
-                    <Button
-                      key={modelId}
-                      variant={isSelected ? 'secondary' : 'ghost'}
-                      size="sm"
-                      disabled={isSaving || !accessible}
-                      onClick={() => handleModelSelect(modelId)}
-                      className="w-full justify-between text-xs h-7 px-2 min-w-0"
-                    >
-                      <span className={cn('truncate min-w-0', !accessible && 'text-muted-foreground')}>
-                        {modelName}
-                      </span>
-                      {isSelected ? (
-                        <Check className="h-3 w-3 shrink-0 ml-1" />
-                      ) : !accessible ? (
-                        <Badge variant="outline" className="text-[9px] h-4 px-1 ml-1 shrink-0">
-                          Paid
-                        </Badge>
-                      ) : null}
-                    </Button>
-                  );
-                })
-              )}
-            </div>
+            {modelList}
           </ScrollArea>
         </PopoverContent>
       </Popover>
