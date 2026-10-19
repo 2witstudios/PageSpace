@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import {
   V3_BUTTON_PRIMARY,
   V3_H1,
@@ -54,7 +54,7 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
           return;
         }
         router.push(
-          isImagoEnabled()
+          isV3AuthEnabled()
             ? `/imago/${data.driveId}/files/${data.pageId}`
             : `/dashboard/${data.driveId}/${data.pageId}`,
         );
@@ -68,7 +68,7 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
 
-  if (!authLoading && !isAuthenticated && isImagoEnabled()) {
+  if (!authLoading && !isAuthenticated && isV3AuthEnabled()) {
     return (
       <div>
         <h1 className={V3_H1}>You’re invited</h1>
@@ -124,7 +124,7 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
     );
   }
 
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <div className="space-y-4">
         <p className={V3_LEAD}>

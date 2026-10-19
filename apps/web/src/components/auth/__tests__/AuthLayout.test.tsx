@@ -13,14 +13,14 @@ describe('AuthLayout', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('given Imago is off, renders the classic AuthShell unchanged', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(<AuthLayout><p>card</p></AuthLayout>);
     expect(screen.getByTestId('classic-shell')).toBeInTheDocument();
     expect(screen.queryByTestId('auth-frame-spine')).not.toBeInTheDocument();
   });
 
   it('given Imago is off and a page that never had a shell, renders it bare as before', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(<AuthLayout classic="bare"><p>card</p></AuthLayout>);
     expect(screen.getByText('card')).toBeInTheDocument();
     expect(screen.queryByTestId('classic-shell')).not.toBeInTheDocument();
@@ -28,7 +28,7 @@ describe('AuthLayout', () => {
   });
 
   it('given Imago is on, renders the v3 frame with only the spark tile on the spine', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<AuthLayout><p>card</p></AuthLayout>);
     expect(screen.queryByTestId('classic-shell')).not.toBeInTheDocument();
     const spine = screen.getByTestId('auth-frame-spine');
@@ -40,13 +40,13 @@ describe('AuthLayout', () => {
   });
 
   it('given a signed-in viewer, shows the Signed in as avatar only in the v3 frame', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<AuthLayout signedInAs="Ada Lovelace">x</AuthLayout>);
     expect(screen.getByRole('img', { name: 'Signed in as Ada Lovelace' })).toHaveTextContent('A');
   });
 
   it('given any non-true flag value, stays classic', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', '1');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', '1');
     render(<AuthLayout>x</AuthLayout>);
     expect(screen.getByTestId('classic-shell')).toBeInTheDocument();
   });

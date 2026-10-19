@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { V3_HEADING } from './auth-v3-styles';
 
 interface ConsentScopeCardProps {
@@ -26,7 +26,7 @@ export function ConsentScopeCard({
   headingLevel = 1,
   children,
 }: ConsentScopeCardProps) {
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const Heading = headingLevel === 1 ? 'h1' : 'h2';
   const badge = firstParty ? (
     v3 ? (

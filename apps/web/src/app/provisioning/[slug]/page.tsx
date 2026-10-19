@@ -11,7 +11,7 @@ import {
   V3_MONO,
   V3_PRIMARY_BUTTON,
 } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 const TENANT_BASE_DOMAIN = process.env.NEXT_PUBLIC_TENANT_BASE_DOMAIN || 'pagespace.ai';
 const POLL_INTERVAL_MS = 3000;
@@ -36,7 +36,7 @@ export default function ProvisioningStatusPage({
 }) {
   const { slug } = use(params);
   const [lastStatus, setLastStatus] = useState<string>('provisioning');
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const host = `${slug}.${TENANT_BASE_DOMAIN}`;
 
   const { data, error } = useSWR<ProvisioningStatus>(

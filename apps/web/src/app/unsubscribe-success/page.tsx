@@ -12,12 +12,12 @@ import {
   V3_PRIMARY_BUTTON,
   V3_SECONDARY_BUTTON,
 } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { NOTIFICATION_TYPE_LABELS, getNotificationPreferencesHref } from '@/lib/notifications/unsubscribe-copy';
 
 function UnsubscribeContent() {
   const searchParams = useSearchParams();
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const notificationType = searchParams.get('type') || 'unknown';
   const label = NOTIFICATION_TYPE_LABELS[notificationType] || 'this notification type';
   const preferencesHref = getNotificationPreferencesHref();

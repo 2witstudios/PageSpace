@@ -15,7 +15,7 @@ afterEach(() => {
 
 describe('ConsentScopeCard', () => {
   it('given a first-party client, should show the title, the badge and one row per scope', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(<ConsentScopeCard {...props} />);
     expect(screen.getByRole('heading', { name: /PageSpace CLI is requesting access/ })).toBeInTheDocument();
     expect(screen.getByText('Built by PageSpace')).toBeInTheDocument();
@@ -28,7 +28,7 @@ describe('ConsentScopeCard', () => {
   });
 
   it('given Imago is on, should style the card with v3 classes and keep the children', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(
       <ConsentScopeCard {...props} headingLevel={2}>
         <button type="button">Allow</button>

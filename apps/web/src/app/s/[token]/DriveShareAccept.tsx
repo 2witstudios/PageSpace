@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import {
   V3_BUTTON_PRIMARY,
   V3_ACCENT,
@@ -61,7 +61,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
           if (!controller.signal.aborted) setError(data.message ?? 'Your request is waiting for approval.');
           return;
         }
-        router.push(isImagoEnabled() ? `/imago/${data.driveId}` : `/dashboard/${data.driveId}`);
+        router.push(isV3AuthEnabled() ? `/imago/${data.driveId}` : `/dashboard/${data.driveId}`);
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         if (!controller.signal.aborted) {
@@ -79,7 +79,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
   const joining = authLoading || (isAuthenticated && (csrfLoading || isPending) && !error);
   const driveName = info.driveName ?? 'workspace';
 
-  if (joining && isImagoEnabled()) {
+  if (joining && isV3AuthEnabled()) {
     return (
       <div className="space-y-4">
         <p className={V3_LEAD}>
@@ -92,7 +92,7 @@ export function DriveShareAccept({ token, info }: DriveShareAcceptProps) {
     );
   }
 
-  if (!isAuthenticated && isImagoEnabled()) {
+  if (!isAuthenticated && isV3AuthEnabled()) {
     return (
       <div>
         <h1 className={V3_H1}>

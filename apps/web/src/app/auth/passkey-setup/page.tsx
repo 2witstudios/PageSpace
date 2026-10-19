@@ -12,7 +12,7 @@ import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { isDesktopPlatform } from "@/lib/desktop-auth";
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from "@/lib/auth/url-utils";
 import { authHomePath } from "@/lib/imago/auth-home";
-import { isImagoEnabled } from "@/lib/imago/imago-enabled";
+import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 
 /**
  * First-run passkey enrollment. On-prem users arrive here right after their
@@ -106,7 +106,7 @@ function PasskeySetupForm() {
         </div>
         <h1
           className={
-            isImagoEnabled()
+            isV3AuthEnabled()
               ? "text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]"
               : "text-3xl font-bold tracking-tight text-gray-900 dark:text-white"
           }

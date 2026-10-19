@@ -33,7 +33,7 @@ const VERIFY = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+  vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
 });
 
 afterEach(() => {

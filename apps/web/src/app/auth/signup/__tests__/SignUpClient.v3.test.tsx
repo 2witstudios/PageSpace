@@ -49,7 +49,7 @@ describe('SignUpClient — v3 (Imago enabled)', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('given a direct visit, should show "Get on the same page." as the h1 and no invite banner', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<SignUpClient />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'Get on the same page.' })).toBeInTheDocument();
@@ -57,7 +57,7 @@ describe('SignUpClient — v3 (Imago enabled)', () => {
   });
 
   it('given a drive invite, should show the joining banner with the curly apostrophe', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<SignUpClient inviteToken="ps_invite_x" inviteContext={driveInvite} />);
 
     const banner = screen.getByText(/you’re joining/i).closest('p');

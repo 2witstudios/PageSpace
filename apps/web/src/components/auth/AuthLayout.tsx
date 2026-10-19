@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { AuthShell } from './AuthShell';
 import { AuthFrame } from './AuthFrame';
 
@@ -22,7 +22,7 @@ interface AuthLayoutProps {
  * Every auth page renders through this so re-skins land in one place.
  */
 export function AuthLayout({ children, signedInAs, classic = 'shell' }: AuthLayoutProps) {
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return <AuthFrame {...(signedInAs && { signedInAs })}>{children}</AuthFrame>;
   }
   return classic === 'bare' ? <>{children}</> : <AuthShell>{children}</AuthShell>;

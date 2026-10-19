@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Mail, ArrowLeft, Loader2, CheckCircle } from 'lucide-react';
 import { getMagicLinkPlatformFields } from '@/lib/auth/magic-link-platform-fields';
 import { useCapacitor } from '@/hooks/useCapacitor';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 type FormState = 'input' | 'sending' | 'sent' | 'error';
 
@@ -30,7 +30,7 @@ export function MagicLinkForm({ nextPath, inviteToken }: MagicLinkFormProps = {}
   // the server does not have.
   const { isIOS } = useCapacitor();
   // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const formRef = useRef<HTMLFormElement>(null);
   const [email, setEmail] = useState('');
   const [acceptedTos, setAcceptedTos] = useState(false);

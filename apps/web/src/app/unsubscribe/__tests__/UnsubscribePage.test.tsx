@@ -88,7 +88,7 @@ describe('UnsubscribePage', () => {
   });
 
   it('given Imago is on, should render the v3 copy and point preferences at /imago/account/notifications', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<UnsubscribePage />);
     expect(screen.getByRole('link', { name: 'Keep them, manage preferences' })).toHaveAttribute(
       'href',

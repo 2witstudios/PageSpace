@@ -13,7 +13,7 @@ import {
   V3_PRIMARY_BUTTON,
   V3_SECONDARY_BUTTON,
 } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { NOTIFICATION_TYPE_LABELS, getNotificationPreferencesHref } from '@/lib/notifications/unsubscribe-copy';
 
 const INVALID_LINK_MESSAGE = 'That unsubscribe link is no longer valid.';
@@ -32,7 +32,7 @@ type ConfirmStatus = 'confirm' | 'invalid';
 function UnsubscribeConfirm() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
 
   const token = searchParams.get('token') ?? '';
   const notificationType = searchParams.get('type') ?? 'unknown';

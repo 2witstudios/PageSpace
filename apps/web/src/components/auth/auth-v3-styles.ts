@@ -1,6 +1,6 @@
 /**
  * v3 utility strings for the signed-out and edge pages. Only applied inside the
- * Imago-enabled branch (see `isImagoEnabled`); the classic markup keeps its own classes.
+ * Imago-enabled branch (see `isV3AuthEnabled`); the classic markup keeps its own classes.
  */
 export const V3_HEADING =
   'm-0 text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]';
