@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     const result = await applyAppleNotification({
       notification,
       priceTier: getPersonalTierFromPrice,
-      config: { bundleId: config.bundleId, allowSandbox: config.allowSandbox },
+      config: { bundleId: config.bundleId, allowSandbox: config.allowSandbox, sandboxMaxFundings: config.sandboxMaxFundings, sandboxAllowlist: config.sandboxAllowlist },
     });
 
     // An unresolved buyer is retried (notificationReply answers 503): record why, but leave

@@ -54,6 +54,12 @@ export const appStoreSubscriptions = pgTable('app_store_subscriptions', {
   expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),
   /** From the signed renewal info: false once the user turned auto-renew off. */
   autoRenew: boolean('autoRenew').default(true).notNull(),
+  /**
+   * Apple's signedDate of the newest payload applied to this row. A payload signed
+   * earlier (a replayed device post, a delayed notification retry) changes nothing:
+   * Apple's own ordering, not arrival order, decides the state.
+   */
+  lastSignedAt: timestamp('lastSignedAt', { mode: 'date', withTimezone: true }),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({
@@ -85,6 +91,10 @@ export const appStoreTransactions = pgTable('app_store_transactions', {
   currency: text('currency'),
   storefront: text('storefront'),
   revokedAt: timestamp('revokedAt', { mode: 'date', withTimezone: true }),
+  /** Apple's signedDate of the newest payload applied (see app_store_subscriptions.lastSignedAt). */
+  lastSignedAt: timestamp('lastSignedAt', { mode: 'date', withTimezone: true }),
+  /** Whether this transaction funded credit — counts toward the Sandbox funding cap. */
+  funded: boolean('funded').default(false).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('app_store_transactions_user_idx').on(table.userId),

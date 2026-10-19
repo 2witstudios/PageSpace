@@ -35,6 +35,11 @@ export interface StoreKitProduct {
 export interface StoreKitTransaction {
   jws: string;
   transactionId: string;
+  /**
+   * StoreKit's own on-device check. Informational only: unverified transactions are posted
+   * too, and the server — which verifies every JWS — decides (400 → finished).
+   */
+  verifiedOnDevice?: boolean;
 }
 
 export type StoreKitPurchaseResult =

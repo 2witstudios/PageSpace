@@ -33,7 +33,7 @@ vi.mock('@pagespace/lib/billing/apple/apple-verify', async () => {
   return {
     AppleVerificationError,
     getAppleVerifier: () => ({
-      config: { bundleId: 'ai.pagespace.ios', allowSandbox: true },
+      config: { bundleId: 'ai.pagespace.ios', allowSandbox: true, sandboxMaxFundings: 3, sandboxAllowlist: [] },
       verifier: { verifyTransaction: mocks.verifyTransaction, verifyNotification: mocks.verifyNotification },
     }),
   };
@@ -96,9 +96,10 @@ describe('POST /api/iap/apple/transactions', () => {
     expect(await res.json()).toEqual({ result: 'applied', kind: 'consumable', subscriptionTier: 'free', balance: { topup: { remaining: 2500 } } });
     expect(mocks.verifyTransaction).toHaveBeenCalledWith(JWS);
     expect(mocks.applyAppleTransaction).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'device',
       userId: 'user_1',
       decoded: { transactionId: '2000000000000001' },
-      config: { bundleId: 'ai.pagespace.ios', allowSandbox: true },
+      config: { bundleId: 'ai.pagespace.ios', allowSandbox: true, sandboxMaxFundings: 3, sandboxAllowlist: [] },
     }));
     expect(mocks.emitCreditsUpdated).toHaveBeenCalledWith('user_1');
   });

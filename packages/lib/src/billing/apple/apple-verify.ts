@@ -30,6 +30,10 @@ export interface AppleVerifierConfig {
   /** OCSP revocation + current-date checks. Off only in tests with a synthetic chain. */
   enableOnlineChecks: boolean;
   rootCertificates: Buffer[];
+  /** Sandbox purchases that may fund credit per user per 30 days (apple-core sandboxFundingAllowed). */
+  sandboxMaxFundings: number;
+  /** User ids whose Sandbox purchases always fund — internal testers. */
+  sandboxAllowlist: string[];
 }
 
 function envFlag(value: string | undefined, fallback: boolean): boolean {
@@ -44,6 +48,9 @@ function envFlag(value: string | undefined, fallback: boolean): boolean {
  *   APPLE_IAP_ALLOW_SANDBOX  default true — App Review purchases in Sandbox against the
  *                            production build, so turning it off fails review
  *   APPLE_IAP_ONLINE_CHECKS  default true
+ *   APPLE_IAP_SANDBOX_MAX_FUNDINGS      default 3 — Sandbox purchases that fund credit per
+ *                            user per 30 days (App Review needs a few; TestFlight buys are free)
+ *   APPLE_IAP_SANDBOX_FUNDED_USER_IDS   comma-separated user ids exempt from that cap
  */
 export function appleVerifierConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AppleVerifierConfig {
   const rawAppId = env.APPLE_IAP_APP_APPLE_ID?.trim();
@@ -54,6 +61,8 @@ export function appleVerifierConfigFromEnv(env: NodeJS.ProcessEnv = process.env)
     allowSandbox: envFlag(env.APPLE_IAP_ALLOW_SANDBOX, true),
     enableOnlineChecks: envFlag(env.APPLE_IAP_ONLINE_CHECKS, true),
     rootCertificates: appleRootCertificates(),
+    sandboxMaxFundings: /^\d+$/.test(env.APPLE_IAP_SANDBOX_MAX_FUNDINGS?.trim() ?? '') ? Number(env.APPLE_IAP_SANDBOX_MAX_FUNDINGS!.trim()) : 3,
+    sandboxAllowlist: (env.APPLE_IAP_SANDBOX_FUNDED_USER_IDS ?? '').split(',').map((id) => id.trim()).filter(Boolean),
   };
 }
 

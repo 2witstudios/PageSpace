@@ -1,5 +1,5 @@
 {
-  "id": "6d61c499-6978-4df6-9702-c450026fa6fc",
+  "id": "f7e17990-44fc-45d8-97a9-20cfeda736a8",
   "prevId": "08155ad3-1a49-45ed-9332-c12c8d28ef7e",
   "version": "7",
   "dialect": "postgresql",
@@ -10567,6 +10567,12 @@
           "notNull": true,
           "default": true
         },
+        "lastSignedAt": {
+          "name": "lastSignedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -10712,6 +10718,19 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "lastSignedAt": {
+          "name": "lastSignedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "funded": {
+          "name": "funded",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "createdAt": {
           "name": "createdAt",

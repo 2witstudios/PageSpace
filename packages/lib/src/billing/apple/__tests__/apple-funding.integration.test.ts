@@ -24,7 +24,7 @@ import type { SubscriptionTier } from '../../subscription-tiers';
 let dbAvailable = false;
 const originalMode = process.env.DEPLOYMENT_MODE;
 const DAY = 86_400_000;
-const config: AppleApplyConfig = { bundleId: 'ai.pagespace.ios', allowSandbox: true };
+const config: AppleApplyConfig = { bundleId: 'ai.pagespace.ios', allowSandbox: true, sandboxMaxFundings: 100, sandboxAllowlist: [] };
 const priceTier = (priceId: string): SubscriptionTier => (priceId === 'price_test_pro' ? 'pro' : 'free');
 
 let userIds: string[] = [];
@@ -51,6 +51,7 @@ function subscriptionTxn(token: string | null, overrides: Partial<DecodedTransac
     currency: 'USD',
     storefront: 'USA',
     inAppOwnershipType: 'PURCHASED',
+    signedDate: now,
     ...(token ? { appAccountToken: token } : {}),
     ...overrides,
   };
@@ -69,6 +70,7 @@ function packTxn(token: string, credits: 100 | 250 | 500, overrides: Partial<Dec
     currency: 'USD',
     appAccountToken: token,
     inAppOwnershipType: 'PURCHASED',
+    signedDate: Date.now() - 1000,
     ...overrides,
   };
 }
@@ -126,14 +128,14 @@ describe('an App Store Pro subscription', () => {
     const original = nextTxnId();
     const txn = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original });
 
-    const first = await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    const first = await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect(first).toEqual({ result: 'applied', kind: 'subscription', subscriptionTier: 'pro' });
     expect(await tierOf(u.id)).toBe('pro');
     expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 900, monthlyAllowanceCents: 900 });
     const [grant] = await ledgerFor(u.id);
     expect(grant).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 1500, stripeRef: `apple:${original}`, consumeStatus: 'applied' });
 
-    const again = await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    const again = await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect(again).toEqual({ result: 'duplicate', kind: 'subscription', subscriptionTier: 'pro' });
     expect((await root(u.id)).monthlyRemainingCents).toBe(900);
     expect(await ledgerFor(u.id)).toHaveLength(1);
@@ -153,8 +155,8 @@ describe('an App Store Pro subscription', () => {
     const firstPeriod = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY });
     const renewal = subscriptionTxn(u.token, { originalTransactionId: original, purchaseDate: now - DAY, expiresDate: now + 29 * DAY });
 
-    await applyAppleTransaction({ userId: u.id, decoded: renewal, priceTier, config });
-    await applyAppleTransaction({ userId: u.id, decoded: firstPeriod, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: renewal, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: firstPeriod, priceTier, config });
 
     const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
     expect(sub.latestTransactionId).toBe(renewal.transactionId);
@@ -171,7 +173,7 @@ describe('an App Store Pro subscription', () => {
     const original = nextTxnId();
     const now = Date.now();
     const txn = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original });
-    await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
 
     const expired: VerifiedNotification = {
       notificationUUID: createId(), type: 'EXPIRED', subtype: 'VOLUNTARY', status: 2,
@@ -184,6 +186,7 @@ describe('an App Store Pro subscription', () => {
     const v = await newUser();
     const stale = nextTxnId();
     await applyAppleTransaction({
+      source: 'device',
       userId: v.id,
       decoded: subscriptionTxn(v.token, { originalTransactionId: stale, transactionId: stale, purchaseDate: now - 31 * DAY, expiresDate: now - DAY }),
       priceTier, config,
@@ -196,10 +199,10 @@ describe('an App Store Pro subscription', () => {
     const u = await newUser();
     const original = nextTxnId();
     const txn = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original });
-    await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     await db.update(wallets).set({ monthlyRemainingCents: 300, topupRemainingCents: 100 }).where(personalRootWalletOf(u.id));
 
-    const refunded = { ...txn, revocationDate: Date.now(), revocationReason: 0 };
+    const refunded = { ...txn, revocationDate: Date.now(), revocationReason: 0, signedDate: Date.now() + 1 };
     const result = await applyAppleNotification({
       notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: refunded, renewal: null },
       priceTier, config,
@@ -207,7 +210,7 @@ describe('an App Store Pro subscription', () => {
     expect(result).toMatchObject({ result: 'applied', kind: 'revoked', subscriptionTier: 'free' });
     expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 500 });
     const rows = (await ledgerFor(u.id)).filter((r) => r.entryType === 'adjustment');
-    expect(rows.map((r) => [r.amountCents, r.appliedCents, r.stripeRef]).sort()).toEqual([[-400, -400, `apple-refund:${original}`], [-500, null, null]].sort());
+    expect(rows.map((r) => [r.amountCents, r.appliedCents, r.stripeRef]).sort()).toEqual([[-400, -400, `apple-refund:${original}:${refunded.revocationDate}`], [-500, null, null]].sort());
 
     // Redelivered refund: nothing more.
     await applyAppleNotification({
@@ -218,6 +221,91 @@ describe('an App Store Pro subscription', () => {
   });
 });
 
+describe('App Store subscription state follows Apple, not arrival order', () => {
+  it('a refunded period cannot be restored to Pro by replaying its pre-refund receipt', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const txn = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
+    const t1 = Date.now() + 5;
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...txn, revocationDate: t1, signedDate: t1 }, renewal: null },
+      priceTier, config,
+    });
+    expect(await tierOf(u.id)).toBe('free');
+
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
+    expect(await tierOf(u.id)).toBe('free');
+    const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    expect(sub.status).toBe('revoked');
+    expect((await ledgerFor(u.id)).filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
+  it('Restore Purchases during a billing grace period keeps Pro (the device cannot see the grace)', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const now = Date.now();
+    const lapsed = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY, signedDate: now - 31 * DAY });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: lapsed, priceTier, config });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'DID_FAIL_TO_RENEW', subtype: 'GRACE_PERIOD', status: 4, transaction: { ...lapsed, signedDate: now - DAY }, renewal: { autoRenew: true, gracePeriodExpiresMs: now + 5 * DAY } },
+      priceTier, config,
+    });
+    expect(await tierOf(u.id)).toBe('pro');
+
+    // StoreKit's current entitlements still hold that transaction, re-signed now.
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: { ...lapsed, signedDate: now }, priceTier, config });
+    expect(await tierOf(u.id)).toBe('pro');
+    const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    expect(sub.status).toBe('grace_period');
+    expect(sub.expiresAt.getTime()).toBe(now + 5 * DAY);
+  });
+
+  it('a token-less subscription (an App Store offer code) is claimed by the first signed-in buyer, never by a notification', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const offer = subscriptionTxn(null, { originalTransactionId: original, transactionId: original });
+    expect(await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'OFFER_REDEEMED', subtype: null, status: 1, transaction: offer, renewal: null },
+      priceTier, config,
+    })).toEqual({ result: 'refused', reason: 'unknown_user' });
+
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: offer, priceTier, config })).toMatchObject({ result: 'applied', subscriptionTier: 'pro' });
+    const other = await newUser();
+    expect(await applyAppleTransaction({ source: 'device', userId: other.id, decoded: { ...offer, signedDate: Date.now() + 1 }, priceTier, config }))
+      .toEqual({ result: 'refused', reason: 'owned_by_another_user' });
+  });
+});
+
+describe('Sandbox money', () => {
+  it('funds only a few Sandbox purchases per user, while the purchase still records', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const capped = { ...config, sandboxMaxFundings: 2 };
+    for (let i = 0; i < 3; i += 1) {
+      await applyAppleTransaction({ source: 'device', userId: u.id, decoded: packTxn(u.token, 100), priceTier, config: capped });
+    }
+    expect((await root(u.id)).topupRemainingCents).toBe(2000);
+    expect(await db.select().from(appStoreTransactions).where(eq(appStoreTransactions.userId, u.id))).toHaveLength(3);
+  });
+
+  it('funds an allowlisted tester past the cap, and never caps real money', async () => {
+    if (!dbAvailable) return;
+    const tester = await newUser();
+    const buyer = await newUser();
+    for (let i = 0; i < 2; i += 1) {
+      await applyAppleTransaction({ source: 'device', userId: tester.id, decoded: packTxn(tester.token, 100), priceTier, config: { ...config, sandboxMaxFundings: 1, sandboxAllowlist: [tester.id] } });
+    }
+    expect((await root(tester.id)).topupRemainingCents).toBe(2000);
+    const prodConfig = { ...config, sandboxMaxFundings: 0 };
+    await applyAppleTransaction({ source: 'device', userId: buyer.id, decoded: packTxn(buyer.token, 100, { environment: 'Production' }), priceTier, config: prodConfig });
+    expect((await root(buyer.id)).topupRemainingCents).toBe(1000);
+  });
+});
+
 describe('App Store credit packs', () => {
   it('pays outstanding debt first, then credits the top-up bucket, exactly once', async () => {
     if (!dbAvailable) return;
@@ -225,38 +313,73 @@ describe('App Store credit packs', () => {
     await db.insert(wallets).values({ userId: u.id, debtCents: 300 });
     const txn = packTxn(u.token, 250);
 
-    expect(await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config })).toEqual({ result: 'applied', kind: 'consumable', subscriptionTier: 'free' });
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config })).toEqual({ result: 'applied', kind: 'consumable', subscriptionTier: 'free' });
     expect(await root(u.id)).toMatchObject({ topupRemainingCents: 2200, debtCents: 0 });
-    expect(await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config })).toMatchObject({ result: 'duplicate' });
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config })).toMatchObject({ result: 'duplicate' });
     expect((await root(u.id)).topupRemainingCents).toBe(2200);
     const [purchase] = (await ledgerFor(u.id)).filter((r) => r.entryType === 'topup_purchase');
     expect(purchase).toMatchObject({ amountCents: 2500, stripeRef: `apple:${txn.transactionId}` });
   });
 
-  it('a refund takes the pack back out of top-up first; a reversed refund puts it back once', async () => {
+  it('a refund takes the pack back out of top-up first; a reversed refund puts it back once; a second refund takes it again', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
     const txn = packTxn(u.token, 100);
-    await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect((await root(u.id)).topupRemainingCents).toBe(1000);
 
-    const refund: VerifiedNotification = { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...txn, revocationDate: Date.now() }, renewal: null };
+    const t0 = Date.now();
+    const refund: VerifiedNotification = { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...txn, revocationDate: t0, signedDate: t0 }, renewal: null };
     await applyAppleNotification({ notification: refund, priceTier, config });
     expect((await root(u.id)).topupRemainingCents).toBe(0);
 
-    const reversed: VerifiedNotification = { notificationUUID: createId(), type: 'REFUND_REVERSED', subtype: null, status: null, transaction: txn, renewal: null };
+    const reversed: VerifiedNotification = { notificationUUID: createId(), type: 'REFUND_REVERSED', subtype: null, status: null, transaction: { ...txn, signedDate: t0 + 10 }, renewal: null };
     await applyAppleNotification({ notification: reversed, priceTier, config });
     await applyAppleNotification({ notification: { ...reversed, notificationUUID: createId() }, priceTier, config });
     expect((await root(u.id)).topupRemainingCents).toBe(1000);
+
+    const again: VerifiedNotification = { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...txn, revocationDate: t0 + 20, signedDate: t0 + 20 }, renewal: null };
+    await applyAppleNotification({ notification: again, priceTier, config });
+    expect((await root(u.id)).topupRemainingCents).toBe(0);
     const refs = (await ledgerFor(u.id)).map((r) => r.stripeRef).filter(Boolean).sort();
-    expect(refs).toEqual([`apple-refund:${txn.transactionId}`, `apple-reinstate:${txn.transactionId}`, `apple:${txn.transactionId}`].sort());
+    expect(refs).toEqual([
+      `apple-refund:${txn.transactionId}:${t0}`,
+      `apple-refund:${txn.transactionId}:${t0 + 20}`,
+      `apple-reinstate:${txn.transactionId}:${t0}`,
+      `apple:${txn.transactionId}`,
+    ].sort());
+  });
+
+  it('a refunded pack cannot be re-credited by replaying its pre-refund receipt, or by any payload that is not a REFUND_REVERSED notification', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const txn = packTxn(u.token, 500);
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
+    const t0 = Date.now();
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...txn, revocationDate: t0, signedDate: t0 }, renewal: null },
+      priceTier, config,
+    });
+    expect((await root(u.id)).topupRemainingCents).toBe(0);
+
+    // The original receipt, replayed from the device.
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config })).toMatchObject({ result: 'duplicate' });
+    // A freshly signed unrevoked payload from the device, or a notification of another type.
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: { ...txn, signedDate: t0 + 50 }, priceTier, config });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'ONE_TIME_CHARGE', subtype: null, status: null, transaction: { ...txn, signedDate: t0 + 60 }, renewal: null },
+      priceTier, config,
+    });
+    expect((await root(u.id)).topupRemainingCents).toBe(0);
+    const [record] = await db.select().from(appStoreTransactions).where(eq(appStoreTransactions.transactionId, txn.transactionId!));
+    expect(record.revokedAt?.getTime()).toBe(t0);
   });
 
   it('a refund for a pack we never funded takes nothing', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
     const txn = { ...packTxn(u.token, 500), revocationDate: Date.now() };
-    await applyAppleTransaction({ userId: u.id, decoded: txn, priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect(await ledgerFor(u.id)).toHaveLength(0);
   });
 });
@@ -267,7 +390,7 @@ describe('who a transaction belongs to', () => {
     const buyer = await newUser();
     const replayer = await newUser();
     const txn = packTxn(buyer.token, 500);
-    expect(await applyAppleTransaction({ userId: replayer.id, decoded: txn, priceTier, config })).toEqual({ result: 'refused', reason: 'account_mismatch' });
+    expect(await applyAppleTransaction({ source: 'device', userId: replayer.id, decoded: txn, priceTier, config })).toEqual({ result: 'refused', reason: 'account_mismatch' });
     expect(await ledgerFor(replayer.id)).toHaveLength(0);
     expect(await db.select().from(appStoreTransactions).where(eq(appStoreTransactions.transactionId, txn.transactionId!))).toHaveLength(0);
   });
@@ -277,9 +400,9 @@ describe('who a transaction belongs to', () => {
     const owner = await newUser();
     const other = await newUser();
     const original = nextTxnId();
-    await applyAppleTransaction({ userId: owner.id, decoded: subscriptionTxn(owner.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: owner.id, decoded: subscriptionTxn(owner.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
     const renewalWithoutToken = subscriptionTxn(null, { originalTransactionId: original });
-    expect(await applyAppleTransaction({ userId: other.id, decoded: renewalWithoutToken, priceTier, config })).toEqual({ result: 'refused', reason: 'owned_by_another_user' });
+    expect(await applyAppleTransaction({ source: 'device', userId: other.id, decoded: renewalWithoutToken, priceTier, config })).toEqual({ result: 'refused', reason: 'owned_by_another_user' });
   });
 
   it('routes a notification by its account token, or by the subscription on file when it has none', async () => {
@@ -313,7 +436,7 @@ describe('who a transaction belongs to', () => {
   it('refuses Sandbox money when the deployment does not allow it', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
-    expect(await applyAppleTransaction({ userId: u.id, decoded: packTxn(u.token, 100), priceTier, config: { ...config, allowSandbox: false } }))
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: packTxn(u.token, 100), priceTier, config: { ...config, allowSandbox: false } }))
       .toEqual({ result: 'refused', reason: 'sandbox_refused' });
   });
 
@@ -321,7 +444,7 @@ describe('who a transaction belongs to', () => {
     if (!dbAvailable) return;
     const u = await newUser();
     process.env.DEPLOYMENT_MODE = 'onprem';
-    expect(await applyAppleTransaction({ userId: u.id, decoded: packTxn(u.token, 100), priceTier, config })).toEqual({ result: 'refused', reason: 'not_billing' });
+    expect(await applyAppleTransaction({ source: 'device', userId: u.id, decoded: packTxn(u.token, 100), priceTier, config })).toEqual({ result: 'refused', reason: 'not_billing' });
   });
 });
 
@@ -344,6 +467,7 @@ describe('one plan whichever store sold it', () => {
     const original = nextTxnId();
     const now = Date.now();
     await applyAppleTransaction({
+      source: 'device',
       userId: u.id,
       decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY }),
       priceTier, config,
@@ -356,7 +480,7 @@ describe('one plan whichever store sold it', () => {
     const u = await newUser();
     await stripePro(u.id, 'canceled');
     const original = nextTxnId();
-    await applyAppleTransaction({ userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
     expect(await tierOf(u.id)).toBe('pro');
     const ledger = await db.select().from(creditLedger).where(and(eq(creditLedger.userId, u.id), eq(creditLedger.entryType, 'monthly_grant')));
     expect(ledger).toHaveLength(1);
@@ -369,7 +493,7 @@ describe('the sweeps see App Store plans', () => {
     const { rollDuePersonalRoots } = await import('../../wallet-funding-shell');
     const u = await newUser();
     const original = nextTxnId();
-    await applyAppleTransaction({ userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
     // Its root period has ended (renewal not yet in), but Apple may still renew it.
     await db.update(wallets).set({ monthlyPeriodEnd: new Date(Date.now() - 1000) }).where(personalRootWalletOf(u.id));
     await rollDuePersonalRoots({ now: new Date() });
@@ -386,7 +510,7 @@ describe('the sweeps see App Store plans', () => {
     const { reconcileSubscriptionTiers } = await import('../../subscription-tier-reconcile');
     const u = await newUser();
     const original = nextTxnId();
-    await applyAppleTransaction({ userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
     await db.update(users).set({ subscriptionTier: 'free' }).where(eq(users.id, u.id));
 
     const restored = await reconcileSubscriptionTiers({ priceTier, userIds: [u.id] });

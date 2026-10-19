@@ -149,6 +149,8 @@ export const serverEnvSchema = z
     APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\d*$/).optional(),
     APPLE_IAP_ALLOW_SANDBOX: z.string().optional(),
     APPLE_IAP_ONLINE_CHECKS: z.string().optional(),
+    APPLE_IAP_SANDBOX_MAX_FUNDINGS: z.string().regex(/^\d*$/).optional(),
+    APPLE_IAP_SANDBOX_FUNDED_USER_IDS: z.string().optional(),
 
     // Optional real-time / cron / cookie
     REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),

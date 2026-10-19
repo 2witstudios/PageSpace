@@ -25,6 +25,7 @@ CREATE TABLE "app_store_subscriptions" (
 	"currentPeriodStart" timestamp with time zone NOT NULL,
 	"expiresAt" timestamp with time zone NOT NULL,
 	"autoRenew" boolean DEFAULT true NOT NULL,
+	"lastSignedAt" timestamp with time zone,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "app_store_subscriptions_originalTransactionId_unique" UNIQUE("originalTransactionId"),
@@ -45,6 +46,8 @@ CREATE TABLE "app_store_transactions" (
 	"currency" text,
 	"storefront" text,
 	"revokedAt" timestamp with time zone,
+	"lastSignedAt" timestamp with time zone,
+	"funded" boolean DEFAULT false NOT NULL,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "app_store_transactions_kind_valid" CHECK ("app_store_transactions"."productKind" IN ('subscription', 'consumable'))
 );

@@ -9,8 +9,11 @@ import UIKit
 /// `finish`. This plugin never finishes a transaction on its own — an unfinished transaction
 /// is redelivered by StoreKit, which is what makes a failed server call recoverable.
 ///
-/// Only `.verified` StoreKit results are ever surfaced to JS; `.unverified` ones are rejected
-/// (purchase) or skipped (lists, updates). The server re-verifies every JWS regardless.
+/// Every StoreKit result is surfaced to JS — `.unverified` ones too, flagged with
+/// `verifiedOnDevice: false`. The server is the authority: it verifies every JWS against
+/// Apple's root, applies a genuine one and answers 400 for one that will never verify, which
+/// the web layer finishes. Dropping unverified results here instead would leave them in
+/// `Transaction.unfinished` forever, and could drop a purchase the user was charged for.
 @objc(PageSpaceStorePlugin)
 public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "PageSpaceStorePlugin"
@@ -35,7 +38,7 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
         updatesTask = Task.detached(priority: .background) { [weak self] in
             for await result in Transaction.updates {
                 guard let self = self else { return }
-                guard let payload = await self.surface(result) else { continue }
+                let payload = await self.surface(result)
                 await MainActor.run {
                     self.notifyListeners(PageSpaceStorePlugin.transactionUpdatedEvent, data: payload, retainUntilConsumed: true)
                 }
@@ -84,11 +87,7 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
                 let result = try await product.purchase(options: [.appAccountToken(token)])
                 switch result {
                 case .success(let verification):
-                    guard let payload = await self.surface(verification) else {
-                        call.reject("Transaction failed verification")
-                        return
-                    }
-                    var response = payload
+                    var response = await self.surface(verification)
                     response["status"] = "success"
                     call.resolve(response)
                 case .userCancelled:
@@ -117,8 +116,8 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
             }
             // Not surfaced in this session (e.g. a previous launch): look it up in the queue.
             for await result in Transaction.unfinished {
-                guard case .verified(let transaction) = result,
-                      String(transaction.id) == transactionId else { continue }
+                let transaction = result.unsafePayloadValue
+                guard String(transaction.id) == transactionId else { continue }
                 await transaction.finish()
                 break
             }
@@ -167,20 +166,21 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
 
     // MARK: - Helpers
 
-    /// Caches a verified transaction for `finish` and returns its JS payload; nil if unverified.
-    private func surface(_ result: VerificationResult<Transaction>) async -> [String: Any]? {
-        guard case .verified(let transaction) = result else { return nil }
+    /// Caches a transaction for `finish` and returns its JS payload. The server verifies the
+    /// JWS; `verifiedOnDevice` only reports StoreKit's own check.
+    private func surface(_ result: VerificationResult<Transaction>) async -> [String: Any] {
+        let transaction = result.unsafePayloadValue
         let id = String(transaction.id)
         await pending.put(id, transaction)
-        return ["jws": result.jwsRepresentation, "transactionId": id]
+        var verifiedOnDevice = false
+        if case .verified = result { verifiedOnDevice = true }
+        return ["jws": result.jwsRepresentation, "transactionId": id, "verifiedOnDevice": verifiedOnDevice]
     }
 
     private func collect(_ sequence: Transaction.Transactions) async -> [[String: Any]] {
         var out: [[String: Any]] = []
         for await result in sequence {
-            if let payload = await surface(result) {
-                out.append(payload)
-            }
+            out.append(await surface(result))
         }
         return out
     }

@@ -37,10 +37,11 @@ export async function POST(request: NextRequest) {
     const { config, verifier } = getAppleVerifier();
     const decoded = await verifier.verifyTransaction(signedTransaction);
     const result = await applyAppleTransaction({
+      source: 'device',
       userId,
       decoded,
       priceTier: getPersonalTierFromPrice,
-      config: { bundleId: config.bundleId, allowSandbox: config.allowSandbox },
+      config: { bundleId: config.bundleId, allowSandbox: config.allowSandbox, sandboxMaxFundings: config.sandboxMaxFundings, sandboxAllowlist: config.sandboxAllowlist },
     });
 
     const reply = transactionReply(result);

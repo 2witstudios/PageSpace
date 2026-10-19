@@ -14,6 +14,8 @@ const config = (overrides: Partial<AppleVerifierConfig> = {}): AppleVerifierConf
   allowSandbox: true,
   enableOnlineChecks: false,
   rootCertificates: [TEST_ROOT_DER],
+  sandboxMaxFundings: 3,
+  sandboxAllowlist: [],
   ...overrides,
 });
 
@@ -58,6 +60,13 @@ describe('appleVerifierConfigFromEnv', () => {
   it('reads the numeric App Apple ID and ignores a non-numeric one', () => {
     expect(appleVerifierConfigFromEnv({ APPLE_IAP_APP_APPLE_ID: '6700000001' }).appAppleId).toBe(6_700_000_001);
     expect(appleVerifierConfigFromEnv({ APPLE_IAP_APP_APPLE_ID: 'abc' }).appAppleId).toBeUndefined();
+  });
+
+  it('caps Sandbox funding at 3 per user by default, with an operator allowlist', () => {
+    expect(appleVerifierConfigFromEnv({})).toMatchObject({ sandboxMaxFundings: 3, sandboxAllowlist: [] });
+    expect(appleVerifierConfigFromEnv({ APPLE_IAP_SANDBOX_MAX_FUNDINGS: '10', APPLE_IAP_SANDBOX_FUNDED_USER_IDS: ' u1, u2 ,' }))
+      .toMatchObject({ sandboxMaxFundings: 10, sandboxAllowlist: ['u1', 'u2'] });
+    expect(appleVerifierConfigFromEnv({ APPLE_IAP_SANDBOX_MAX_FUNDINGS: 'lots' }).sandboxMaxFundings).toBe(3);
   });
 
   it('lets an operator turn Sandbox funding off', () => {

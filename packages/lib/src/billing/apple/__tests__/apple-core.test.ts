@@ -8,7 +8,10 @@ import {
   deriveTierFromAppleSubscriptions,
   entitlementEndMs,
   planAppleTransaction,
+  nextSubscriptionState,
   reconcileRevocation,
+  sandboxFundingAllowed,
+  isStalePayload,
   toTransactionFacts,
   type AppleTransactionFacts,
   type PlanContext,
@@ -35,6 +38,7 @@ function facts(overrides: Partial<AppleTransactionFacts> = {}): AppleTransaction
     currency: 'USD',
     storefront: 'USA',
     familyShared: false,
+    signedDateMs: NOW,
     ...overrides,
   };
 }
@@ -44,6 +48,7 @@ const ctx = (overrides: Partial<PlanContext> = {}): PlanContext => ({
   allowSandbox: false,
   expectedAccountToken: TOKEN,
   ownershipEstablished: false,
+  claimable: false,
   ...overrides,
 });
 
@@ -61,6 +66,7 @@ describe('toTransactionFacts', () => {
     currency: 'USD',
     storefront: 'USA',
     inAppOwnershipType: 'PURCHASED',
+    signedDate: NOW,
   };
 
   it('normalizes a decoded StoreKit transaction into the facts the planner reads', () => {
@@ -78,6 +84,7 @@ describe('toTransactionFacts', () => {
       currency: 'USD',
       storefront: 'USA',
       familyShared: false,
+      signedDateMs: NOW,
     });
   });
 
@@ -132,6 +139,15 @@ describe('planAppleTransaction — refusals', () => {
   it('refuses a token-less transaction unless this user already owns the subscription', () => {
     expect(planAppleTransaction(facts({ appAccountToken: null }), ctx())).toEqual({ kind: 'refuse', reason: 'account_mismatch' });
     expect(planAppleTransaction(facts({ appAccountToken: null }), ctx({ ownershipEstablished: true })).kind).toBe('subscription_period');
+  });
+
+  it('lets the first signed-in buyer claim a token-less subscription nobody owns yet (an offer-code redemption)', () => {
+    expect(planAppleTransaction(facts({ appAccountToken: null }), ctx({ claimable: true })).kind).toBe('subscription_period');
+  });
+
+  it('never lets a token-less consumable be claimed', () => {
+    expect(planAppleTransaction(facts({ appAccountToken: null, productId: 'ai.pagespace.ios.credits.100', expiresDateMs: null }), ctx({ claimable: true })))
+      .toEqual({ kind: 'refuse', reason: 'account_mismatch' });
   });
 
   it('refuses a product we do not sell', () => {
@@ -278,11 +294,87 @@ describe('allocateClawback', () => {
 });
 
 describe('reconcileRevocation', () => {
-  it('revokes once, reinstates a reversed refund once, and otherwise does nothing', () => {
-    expect(reconcileRevocation({ storedRevoked: false, factsRevoked: true })).toBe('revoke');
-    expect(reconcileRevocation({ storedRevoked: true, factsRevoked: false })).toBe('reinstate');
-    expect(reconcileRevocation({ storedRevoked: true, factsRevoked: true })).toBe('none');
-    expect(reconcileRevocation({ storedRevoked: false, factsRevoked: false })).toBe('none');
+  it('revokes a newly revoked transaction, keyed by its revocation instant', () => {
+    expect(reconcileRevocation({ storedRevokedAtMs: null, factsRevokedAtMs: NOW, isRefundReversal: false })).toEqual({ kind: 'revoke', revokedAtMs: NOW });
+  });
+
+  it('revokes again after a reversal is followed by a second refund (a new instant)', () => {
+    expect(reconcileRevocation({ storedRevokedAtMs: null, factsRevokedAtMs: NOW + DAY, isRefundReversal: false })).toEqual({ kind: 'revoke', revokedAtMs: NOW + DAY });
+  });
+
+  it('does nothing for a revocation it already recorded', () => {
+    expect(reconcileRevocation({ storedRevokedAtMs: NOW, factsRevokedAtMs: NOW, isRefundReversal: false })).toEqual({ kind: 'none' });
+  });
+
+  it('reinstates ONLY on a verified REFUND_REVERSED notification — never on a device post or another notification', () => {
+    expect(reconcileRevocation({ storedRevokedAtMs: NOW, factsRevokedAtMs: null, isRefundReversal: true })).toEqual({ kind: 'reinstate', revokedAtMs: NOW });
+    expect(reconcileRevocation({ storedRevokedAtMs: NOW, factsRevokedAtMs: null, isRefundReversal: false })).toEqual({ kind: 'none' });
+  });
+
+  it('does nothing for a transaction that was never revoked', () => {
+    expect(reconcileRevocation({ storedRevokedAtMs: null, factsRevokedAtMs: null, isRefundReversal: true })).toEqual({ kind: 'none' });
+  });
+});
+
+describe('isStalePayload', () => {
+  it('is stale when Apple signed it before the newest payload already applied', () => {
+    expect(isStalePayload({ lastSignedMs: NOW, signedMs: NOW - 1 })).toBe(true);
+    expect(isStalePayload({ lastSignedMs: NOW, signedMs: NOW })).toBe(false);
+    expect(isStalePayload({ lastSignedMs: NOW, signedMs: NOW + 1 })).toBe(false);
+    expect(isStalePayload({ lastSignedMs: null, signedMs: NOW })).toBe(false);
+  });
+
+  it('treats an unsigned-date payload as older than anything recorded', () => {
+    expect(isStalePayload({ lastSignedMs: NOW, signedMs: null })).toBe(true);
+    expect(isStalePayload({ lastSignedMs: null, signedMs: null })).toBe(false);
+  });
+});
+
+describe('nextSubscriptionState', () => {
+  const current = { status: 'grace_period' as const, expiresAtMs: NOW + 5 * DAY, latestPurchaseMs: NOW - 30 * DAY };
+
+  it('takes the incoming state when nothing is on file', () => {
+    expect(nextSubscriptionState(null, { status: 'active', expiresAtMs: NOW + DAY, purchaseMs: NOW, fromNotification: false }))
+      .toEqual({ apply: true, status: 'active', expiresAtMs: NOW + DAY });
+  });
+
+  it('never applies an older period', () => {
+    expect(nextSubscriptionState(current, { status: 'active', expiresAtMs: NOW + DAY, purchaseMs: NOW - 60 * DAY, fromNotification: true }).apply).toBe(false);
+  });
+
+  it('lets a device sync of the same period neither downgrade the status nor shorten access (Restore during grace)', () => {
+    expect(nextSubscriptionState(current, { status: 'expired', expiresAtMs: NOW - DAY, purchaseMs: current.latestPurchaseMs, fromNotification: false }))
+      .toEqual({ apply: true, status: 'grace_period', expiresAtMs: NOW + 5 * DAY });
+  });
+
+  it('lets a notification move the same period anywhere (Apple says so)', () => {
+    expect(nextSubscriptionState(current, { status: 'expired', expiresAtMs: NOW - DAY, purchaseMs: current.latestPurchaseMs, fromNotification: true }))
+      .toEqual({ apply: true, status: 'expired', expiresAtMs: NOW - DAY });
+  });
+
+  it('applies a revocation from any source', () => {
+    expect(nextSubscriptionState(current, { status: 'revoked', expiresAtMs: NOW - DAY, purchaseMs: current.latestPurchaseMs, fromNotification: false }))
+      .toEqual({ apply: true, status: 'revoked', expiresAtMs: NOW - DAY });
+  });
+
+  it('takes a newer period from a device sync', () => {
+    expect(nextSubscriptionState(current, { status: 'active', expiresAtMs: NOW + 30 * DAY, purchaseMs: NOW, fromNotification: false }))
+      .toEqual({ apply: true, status: 'active', expiresAtMs: NOW + 30 * DAY });
+  });
+});
+
+describe('sandboxFundingAllowed', () => {
+  it('always funds real (Production) money', () => {
+    expect(sandboxFundingAllowed({ environment: 'Production', fundedSandboxRecently: 99, maxSandboxFundings: 3, allowlisted: false })).toBe(true);
+  });
+
+  it('funds a few Sandbox purchases per user (App Review), then stops (TestFlight buys are free)', () => {
+    expect(sandboxFundingAllowed({ environment: 'Sandbox', fundedSandboxRecently: 2, maxSandboxFundings: 3, allowlisted: false })).toBe(true);
+    expect(sandboxFundingAllowed({ environment: 'Sandbox', fundedSandboxRecently: 3, maxSandboxFundings: 3, allowlisted: false })).toBe(false);
+  });
+
+  it('lets an allowlisted tester past the cap', () => {
+    expect(sandboxFundingAllowed({ environment: 'Sandbox', fundedSandboxRecently: 50, maxSandboxFundings: 3, allowlisted: true })).toBe(true);
   });
 });
 

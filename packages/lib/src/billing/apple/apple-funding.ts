@@ -13,15 +13,18 @@
  * from the credit ledger's partial unique index on stripeRef, keyed per Apple
  * transaction:
  *   apple:<transactionId>           the grant (a subscription period or a credit pack)
- *   apple-refund:<transactionId>    the clawback of that grant after a refund
- *   apple-reinstate:<transactionId> the re-grant after Apple reversed that refund
+ *   apple-refund:<transactionId>:<revokedAtMs>    the clawback of that grant, per refund
+ *   apple-reinstate:<transactionId>:<revokedAtMs> the re-grant after Apple reversed that refund
+ * Payloads are ordered by Apple's signedDate: one signed before the newest already
+ * applied (a replayed pre-refund receipt, a delayed notification retry) changes nothing,
+ * and only a verified REFUND_REVERSED notification can undo a refund.
  * The user row is locked FOR UPDATE first — the same order the Stripe webhook and the
  * tier reconciler take — and the tier is re-derived across BOTH stores before it is
  * written, so neither store's events can demote a plan the other one sold.
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
@@ -41,9 +44,13 @@ import {
   classifyAppleNotification,
   combineTiers,
   entitlementEndMs,
+  isStalePayload,
+  nextSubscriptionState,
   planAppleTransaction,
   reconcileRevocation,
+  sandboxFundingAllowed,
   toTransactionFacts,
+  type SubscriptionStateOnFile,
   type AppleTransactionFacts,
   type DecodedTransactionLike,
   type RefuseReason,
@@ -56,6 +63,10 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export interface AppleApplyConfig {
   bundleId: string;
   allowSandbox: boolean;
+  /** Sandbox purchases that may fund credit per user per window (sandboxFundingAllowed). */
+  sandboxMaxFundings: number;
+  /** User ids whose Sandbox purchases always fund (internal testers). */
+  sandboxAllowlist: readonly string[];
 }
 
 export type AppleApplyResult =
@@ -69,6 +80,10 @@ export type AppleApplyResult =
 export interface ApplyAppleTransactionInput {
   userId: string;
   decoded: DecodedTransactionLike;
+  /** Who sent it: the signed-in buyer's device, or Apple. */
+  source: 'device' | 'notification';
+  /** The notification type when `source` is 'notification'. */
+  notificationType?: string;
   /** App Store status code from a server notification; null for a device sync. */
   notificationStatus?: number | null;
   renewal?: VerifiedRenewalInfo | null;
@@ -84,8 +99,10 @@ const STRIPE_REF_ARBITER = {
 } as const;
 
 export const appleGrantRef = (transactionId: string) => `apple:${transactionId}`;
-export const appleRefundRef = (transactionId: string) => `apple-refund:${transactionId}`;
-export const appleReinstateRef = (transactionId: string) => `apple-reinstate:${transactionId}`;
+/** One clawback per refund, keyed by its revocation instant (a refund after a reversal is a new one). */
+export const appleRefundRef = (transactionId: string, revokedAtMs: number) => `apple-refund:${transactionId}:${revokedAtMs}`;
+/** The re-grant after Apple reversed the refund at `revokedAtMs`. */
+export const appleReinstateRef = (transactionId: string, revokedAtMs: number) => `apple-reinstate:${transactionId}:${revokedAtMs}`;
 
 async function ledgerRefExists(tx: Tx, ref: string): Promise<boolean> {
   const rows = await tx.select({ id: creditLedger.id }).from(creditLedger).where(eq(creditLedger.stripeRef, ref)).limit(1);
@@ -108,10 +125,10 @@ async function writeMergedTier(tx: Tx, userId: string, priceTier: PriceTierResol
 
 /**
  * Claw a refunded grant back out of the personal root: what the buckets hold leaves
- * them, the rest is owed as debt. Keyed on apple-refund:<transactionId>; returns
+ * them, the rest is owed as debt. Keyed on apple-refund:<transactionId>:<revokedAtMs>; returns
  * whether it was newly applied.
  */
-async function clawBack(tx: Tx, input: { userId: string; transactionId: string; cents: number; first: 'monthly' | 'topup' }): Promise<boolean> {
+async function clawBack(tx: Tx, input: { userId: string; fundingRef: string; cents: number; first: 'monthly' | 'topup' }): Promise<boolean> {
   const walletId = await ensurePersonalRootWalletId(tx, input.userId);
   const [locked] = await tx
     .select({ monthlyRemainingCents: wallets.monthlyRemainingCents, topupRemainingCents: wallets.topupRemainingCents, debtCents: wallets.debtCents })
@@ -132,7 +149,7 @@ async function clawBack(tx: Tx, input: { userId: string; transactionId: string; 
       bucket: input.first,
       amountCents: -clawed.appliedCents,
       appliedCents: -clawed.appliedCents,
-      stripeRef: appleRefundRef(input.transactionId),
+      stripeRef: input.fundingRef,
       consumeStatus: 'applied',
     })
     .onConflictDoNothing(STRIPE_REF_ARBITER)
@@ -161,79 +178,114 @@ async function clawBack(tx: Tx, input: { userId: string; transactionId: string; 
   return true;
 }
 
-async function recordTransaction(tx: Tx, userId: string, facts: AppleTransactionFacts, kind: 'subscription' | 'consumable'): Promise<{ storedRevoked: boolean; isNew: boolean }> {
+interface RecordedTransaction {
+  isNew: boolean;
+  /** The payload is older than the newest one applied to this transaction: it changes nothing. */
+  stale: boolean;
+  /** The revocation instant on file BEFORE this payload. */
+  storedRevokedAtMs: number | null;
+  /** Whether this transaction has funded credit (counts toward the Sandbox cap). */
+  funded: boolean;
+}
+
+async function readTransaction(tx: Tx, userId: string, facts: AppleTransactionFacts, kind: 'subscription' | 'consumable'): Promise<RecordedTransaction> {
   const [existing] = await tx
-    .select({ revokedAt: appStoreTransactions.revokedAt })
+    .select({ revokedAt: appStoreTransactions.revokedAt, lastSignedAt: appStoreTransactions.lastSignedAt, funded: appStoreTransactions.funded })
     .from(appStoreTransactions)
     .where(eq(appStoreTransactions.transactionId, facts.transactionId))
     .for('update');
-  const revokedAt = facts.revocationDateMs === null ? null : new Date(facts.revocationDateMs);
-  if (!existing) {
-    await tx.insert(appStoreTransactions).values({
-      transactionId: facts.transactionId,
-      originalTransactionId: facts.originalTransactionId,
-      userId,
-      productId: facts.productId,
-      productKind: kind,
-      environment: facts.environment,
-      purchaseDate: new Date(facts.purchaseDateMs),
-      expiresDate: facts.expiresDateMs === null ? null : new Date(facts.expiresDateMs),
-      priceMilliunits: facts.priceMilliunits,
-      currency: facts.currency,
-      storefront: facts.storefront,
-      revokedAt,
-    }).onConflictDoNothing({ target: appStoreTransactions.transactionId });
-    return { storedRevoked: false, isNew: true };
+  if (existing) {
+    return {
+      isNew: false,
+      stale: isStalePayload({ lastSignedMs: existing.lastSignedAt?.getTime() ?? null, signedMs: facts.signedDateMs }),
+      storedRevokedAtMs: existing.revokedAt?.getTime() ?? null,
+      funded: existing.funded,
+    };
   }
-  if ((existing.revokedAt === null) !== (revokedAt === null)) {
-    await tx.update(appStoreTransactions).set({ revokedAt }).where(eq(appStoreTransactions.transactionId, facts.transactionId));
-  }
-  return { storedRevoked: existing.revokedAt !== null, isNew: false };
+  await tx.insert(appStoreTransactions).values({
+    transactionId: facts.transactionId,
+    originalTransactionId: facts.originalTransactionId,
+    userId,
+    productId: facts.productId,
+    productKind: kind,
+    environment: facts.environment,
+    purchaseDate: new Date(facts.purchaseDateMs),
+    expiresDate: facts.expiresDateMs === null ? null : new Date(facts.expiresDateMs),
+    priceMilliunits: facts.priceMilliunits,
+    currency: facts.currency,
+    storefront: facts.storefront,
+    lastSignedAt: facts.signedDateMs === null ? null : new Date(facts.signedDateMs),
+  }).onConflictDoNothing({ target: appStoreTransactions.transactionId });
+  return { isNew: true, stale: false, storedRevokedAtMs: null, funded: false };
 }
+
+/** Sandbox transactions of this user that funded credit inside the cap window. */
+async function recentSandboxFundings(tx: Tx, userId: string, now: Date): Promise<number> {
+  const [row] = await tx
+    .select({ n: sql<number>`count(*)::int` })
+    .from(appStoreTransactions)
+    .where(and(
+      eq(appStoreTransactions.userId, userId),
+      eq(appStoreTransactions.environment, 'Sandbox'),
+      eq(appStoreTransactions.funded, true),
+      gt(appStoreTransactions.createdAt, new Date(now.getTime() - SANDBOX_FUNDING_WINDOW_MS)),
+    ));
+  return row?.n ?? 0;
+}
+
+/** The rolling window the Sandbox funding cap counts over. */
+export const SANDBOX_FUNDING_WINDOW_MS = 30 * 86_400_000;
 
 async function upsertSubscription(tx: Tx, input: {
   userId: string;
   facts: AppleTransactionFacts;
-  existing: { latestPurchaseMs: number } | null;
+  existing: SubscriptionStateOnFile & { lastSignedMs: number | null } | null;
+  fromNotification: boolean;
   notificationStatus: number | null;
   renewal: VerifiedRenewalInfo | null;
   now: Date;
 }): Promise<void> {
   const { facts, now } = input;
+  const signedAt = facts.signedDateMs === null ? null : new Date(facts.signedDateMs);
   const expiresDateMs = facts.expiresDateMs ?? facts.purchaseDateMs;
-  const status = appleSubscriptionStatus({ facts, notificationStatus: input.notificationStatus, nowMs: now.getTime() });
-  const expiresAt = new Date(entitlementEndMs({ expiresDateMs, gracePeriodExpiresMs: input.renewal?.gracePeriodExpiresMs ?? null, status }));
+  const incomingStatus = appleSubscriptionStatus({ facts, notificationStatus: input.notificationStatus, nowMs: now.getTime() });
+  const incomingExpiresMs = entitlementEndMs({ expiresDateMs, gracePeriodExpiresMs: input.renewal?.gracePeriodExpiresMs ?? null, status: incomingStatus });
   if (!input.existing) {
     await tx.insert(appStoreSubscriptions).values({
       userId: input.userId,
       originalTransactionId: facts.originalTransactionId,
       latestTransactionId: facts.transactionId,
       productId: facts.productId,
-      status,
+      status: incomingStatus,
       environment: facts.environment,
       currentPeriodStart: new Date(facts.purchaseDateMs),
-      expiresAt,
+      expiresAt: new Date(incomingExpiresMs),
       autoRenew: input.renewal?.autoRenew ?? true,
+      lastSignedAt: signedAt,
     }).onConflictDoNothing({ target: appStoreSubscriptions.originalTransactionId });
     return;
   }
-  // An older period arriving late (a refund of last month, a replayed sync) updates its own
-  // transaction's books only; the subscription's state follows its latest period.
-  if (facts.purchaseDateMs < input.existing.latestPurchaseMs) {
-    if (input.renewal) {
-      await tx.update(appStoreSubscriptions).set({ autoRenew: input.renewal.autoRenew, updatedAt: now })
-        .where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
-    }
-    return;
-  }
+  // Apple's signing order decides: an older payload (a replayed device post, a delayed
+  // notification retry) changes nothing about the subscription.
+  if (isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs })) return;
+  const next = nextSubscriptionState(input.existing, {
+    status: incomingStatus,
+    expiresAtMs: incomingExpiresMs,
+    purchaseMs: facts.purchaseDateMs,
+    fromNotification: input.fromNotification,
+  });
   await tx.update(appStoreSubscriptions).set({
-    latestTransactionId: facts.transactionId,
-    productId: facts.productId,
-    status,
-    environment: facts.environment,
-    currentPeriodStart: new Date(facts.purchaseDateMs),
-    expiresAt,
+    ...(next.apply ? {
+      latestTransactionId: facts.transactionId,
+      productId: facts.productId,
+      status: next.status,
+      environment: facts.environment,
+      currentPeriodStart: new Date(facts.purchaseDateMs),
+      expiresAt: new Date(next.expiresAtMs),
+    } : {}),
+    // Renewal preferences describe the subscription, whichever period the payload is about.
     ...(input.renewal ? { autoRenew: input.renewal.autoRenew } : {}),
+    lastSignedAt: signedAt,
     updatedAt: now,
   }).where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
 }
@@ -245,6 +297,7 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
   if (!facts) return { result: 'refused', reason: 'malformed' };
   const now = input.now ?? new Date();
   const { userId } = input;
+  const fromNotification = input.source === 'notification';
 
   return db.transaction(async (tx): Promise<AppleApplyResult> => {
     // Shared lock order with the Stripe webhook and the tier reconciler: user, then mirror.
@@ -252,7 +305,13 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
     if (!user) return { result: 'refused', reason: 'unknown_user' };
 
     const [owned] = await tx
-      .select({ userId: appStoreSubscriptions.userId, currentPeriodStart: appStoreSubscriptions.currentPeriodStart })
+      .select({
+        userId: appStoreSubscriptions.userId,
+        status: appStoreSubscriptions.status,
+        expiresAt: appStoreSubscriptions.expiresAt,
+        currentPeriodStart: appStoreSubscriptions.currentPeriodStart,
+        lastSignedAt: appStoreSubscriptions.lastSignedAt,
+      })
       .from(appStoreSubscriptions)
       .where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId))
       .for('update');
@@ -263,76 +322,107 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
       allowSandbox: input.config.allowSandbox,
       expectedAccountToken: await accountTokenForUser(tx, userId),
       ownershipEstablished: owned?.userId === userId,
+      // Only the signed-in buyer posting from their device may claim an unowned token-less
+      // subscription; a notification can never assign one to anybody.
+      claimable: !fromNotification && !owned,
     });
     if (plan.kind === 'refuse') return { result: 'refused', reason: plan.reason };
 
     const product = appleProduct(facts.productId);
     const productKind = product?.kind === 'subscription' ? 'subscription' : 'consumable';
-    const recorded = await recordTransaction(tx, userId, facts, productKind);
-    const revocation = recorded.isNew
-      ? (facts.revocationDateMs !== null ? 'revoke' : 'none')
-      : reconcileRevocation({ storedRevoked: recorded.storedRevoked, factsRevoked: facts.revocationDateMs !== null });
+    const recorded = await readTransaction(tx, userId, facts, productKind);
+    const revocation = recorded.stale
+      ? ({ kind: 'none' } as const)
+      : reconcileRevocation({
+          storedRevokedAtMs: recorded.storedRevokedAtMs,
+          factsRevokedAtMs: facts.revocationDateMs,
+          isRefundReversal: fromNotification && input.notificationType === 'REFUND_REVERSED',
+        });
+    // The revocation state after this payload: credit is never granted while it is revoked.
+    const revokedAfter = revocation.kind === 'revoke' ? revocation.revokedAtMs
+      : revocation.kind === 'reinstate' ? null
+      : recorded.storedRevokedAtMs;
 
     if (productKind === 'subscription') {
       await upsertSubscription(tx, {
         userId,
         facts,
-        existing: owned ? { latestPurchaseMs: owned.currentPeriodStart.getTime() } : null,
+        existing: owned ? {
+          status: owned.status,
+          expiresAtMs: owned.expiresAt.getTime(),
+          latestPurchaseMs: owned.currentPeriodStart.getTime(),
+          lastSignedMs: owned.lastSignedAt?.getTime() ?? null,
+        } : null,
+        fromNotification,
         notificationStatus: input.notificationStatus ?? null,
         renewal: input.renewal ?? null,
         now,
       });
     }
 
+    const mayFund = async (): Promise<boolean> => recorded.funded || sandboxFundingAllowed({
+      environment: facts.environment,
+      fundedSandboxRecently: facts.environment === 'Sandbox' ? await recentSandboxFundings(tx, userId, now) : 0,
+      maxSandboxFundings: input.config.sandboxMaxFundings,
+      allowlisted: input.config.sandboxAllowlist.includes(userId),
+    });
+
     let applied = false;
+    let funded = recorded.funded;
     switch (plan.kind) {
-      case 'subscription_period': {
-        if (plan.allowanceCents > 0) {
-          const funded = await fundMonthlyGrant(tx, {
-            userId,
-            fundingRef: appleGrantRef(facts.transactionId),
-            allowanceCents: plan.allowanceCents,
-            paidCents: plan.paidCents,
-            periodStart: new Date(plan.periodStartMs),
-            periodEnd: new Date(plan.periodEndMs),
-          });
-          applied = funded.applied;
-        }
-        if (revocation === 'reinstate' && plan.allowanceCents > 0 && await ledgerRefExists(tx, appleRefundRef(facts.transactionId))) {
-          const reinstated = await fundMonthlyGrant(tx, {
-            userId,
-            fundingRef: appleReinstateRef(facts.transactionId),
-            allowanceCents: plan.allowanceCents,
-            paidCents: plan.paidCents,
-            periodStart: null,
-            periodEnd: null,
-          });
-          applied = applied || reinstated.applied;
-        }
-        break;
-      }
+      case 'subscription_period':
       case 'consumable': {
-        applied = (await fundTopup(tx, { userId, fundingRef: appleGrantRef(facts.transactionId), topupCents: plan.topupCents })).applied;
-        if (revocation === 'reinstate' && await ledgerRefExists(tx, appleRefundRef(facts.transactionId))) {
-          const reinstated = await fundTopup(tx, { userId, fundingRef: appleReinstateRef(facts.transactionId), topupCents: plan.topupCents });
-          applied = applied || reinstated.applied;
+        const grantCents = plan.kind === 'consumable' ? plan.topupCents : plan.allowanceCents;
+        if (revokedAfter !== null || grantCents <= 0) break;
+        if (!(await mayFund())) {
+          loggers.api.warn('App Store Sandbox purchase not funded: Sandbox funding cap reached', { userId, transactionId: facts.transactionId });
+          break;
         }
+        const fund = (fundingRef: string) => plan.kind === 'consumable'
+          ? fundTopup(tx, { userId, fundingRef, topupCents: plan.topupCents })
+          : fundMonthlyGrant(tx, {
+              userId,
+              fundingRef,
+              allowanceCents: plan.allowanceCents,
+              paidCents: plan.paidCents,
+              // A re-grant after a reversed refund must not move the root's period clock.
+              periodStart: fundingRef === appleGrantRef(facts.transactionId) ? new Date(plan.periodStartMs) : null,
+              periodEnd: fundingRef === appleGrantRef(facts.transactionId) ? new Date(plan.periodEndMs) : null,
+            });
+        applied = (await fund(appleGrantRef(facts.transactionId))).applied;
+        if (revocation.kind === 'reinstate' && await ledgerRefExists(tx, appleRefundRef(facts.transactionId, revocation.revokedAtMs))) {
+          applied = (await fund(appleReinstateRef(facts.transactionId, revocation.revokedAtMs))).applied || applied;
+        }
+        funded = funded || applied;
         break;
       }
       case 'revoke_subscription':
       case 'revoke_consumable': {
         // Only what this transaction actually granted is clawed back: a refund for a
         // transaction we never funded (or a $0 period) takes nothing.
-        if (plan.clawbackCents > 0 && await ledgerRefExists(tx, appleGrantRef(facts.transactionId))) {
+        if (revocation.kind === 'revoke' && plan.clawbackCents > 0 && await ledgerRefExists(tx, appleGrantRef(facts.transactionId))) {
           applied = await clawBack(tx, {
             userId,
-            transactionId: facts.transactionId,
+            fundingRef: appleRefundRef(facts.transactionId, revocation.revokedAtMs),
             cents: plan.clawbackCents,
             first: plan.kind === 'revoke_subscription' ? 'monthly' : 'topup',
           });
         }
         break;
       }
+    }
+
+    if (!recorded.isNew && !recorded.stale) {
+      await tx.update(appStoreTransactions).set({
+        revokedAt: revokedAfter === null ? null : new Date(revokedAfter),
+        lastSignedAt: facts.signedDateMs === null ? null : new Date(facts.signedDateMs),
+        funded,
+      }).where(eq(appStoreTransactions.transactionId, facts.transactionId));
+    } else if (recorded.isNew && (funded || revokedAfter !== null)) {
+      await tx.update(appStoreTransactions).set({
+        revokedAt: revokedAfter === null ? null : new Date(revokedAfter),
+        funded,
+      }).where(eq(appStoreTransactions.transactionId, facts.transactionId));
     }
 
     const subscriptionTier = await writeMergedTier(tx, userId, input.priceTier, now, user.subscriptionTier);
@@ -388,6 +478,8 @@ export async function applyAppleNotification(input: {
   const applied = await applyAppleTransaction({
     userId,
     decoded: notification.transaction,
+    source: 'notification',
+    notificationType: notification.type,
     notificationStatus: notification.status,
     renewal: notification.renewal,
     priceTier: input.priceTier,

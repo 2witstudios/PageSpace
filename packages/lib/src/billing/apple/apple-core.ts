@@ -40,6 +40,7 @@ export interface DecodedTransactionLike {
   currency?: string;
   storefront?: string;
   inAppOwnershipType?: string;
+  signedDate?: number;
 }
 
 /** A verified transaction, normalized. Dates are epoch milliseconds. */
@@ -59,6 +60,8 @@ export interface AppleTransactionFacts {
   currency: string | null;
   storefront: string | null;
   familyShared: boolean;
+  /** When Apple signed this payload — Apple's ordering of payloads about the same transaction. */
+  signedDateMs: number | null;
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -98,6 +101,7 @@ export function toTransactionFacts(decoded: DecodedTransactionLike): AppleTransa
     currency: nonEmpty(decoded.currency) ? decoded.currency : null,
     storefront: nonEmpty(decoded.storefront) ? decoded.storefront : null,
     familyShared: decoded.inAppOwnershipType === 'FAMILY_SHARED',
+    signedDateMs: finite(decoded.signedDate) ? decoded.signedDate : null,
   };
 }
 
@@ -110,6 +114,12 @@ export interface PlanContext {
   expectedAccountToken: string | null;
   /** Whether that user already owns this originalTransactionId. */
   ownershipEstablished: boolean;
+  /**
+   * Whether a token-less SUBSCRIPTION nobody owns yet may be claimed by this (signed-in)
+   * user — one started outside the app's purchase call, e.g. an offer-code redemption in the
+   * App Store, which StoreKit cannot tag with our token. True only for a device post.
+   */
+  claimable: boolean;
 }
 
 export type RefuseReason =
@@ -136,8 +146,8 @@ export type AppleTransactionPlan =
   | { kind: 'revoke_consumable'; productId: string; clawbackCents: number }
   | { kind: 'refuse'; reason: RefuseReason };
 
-function ownedByCaller(facts: AppleTransactionFacts, ctx: PlanContext): boolean {
-  if (facts.appAccountToken === null) return ctx.ownershipEstablished;
+function ownedByCaller(facts: AppleTransactionFacts, ctx: PlanContext, kind: 'subscription' | 'consumable' | null): boolean {
+  if (facts.appAccountToken === null) return ctx.ownershipEstablished || (ctx.claimable && kind === 'subscription');
   return ctx.expectedAccountToken !== null && facts.appAccountToken === ctx.expectedAccountToken.toLowerCase();
 }
 
@@ -146,9 +156,8 @@ export function planAppleTransaction(facts: AppleTransactionFacts, ctx: PlanCont
   if (facts.bundleId !== ctx.bundleId) return { kind: 'refuse', reason: 'wrong_bundle' };
   if (facts.environment === 'Sandbox' && !ctx.allowSandbox) return { kind: 'refuse', reason: 'sandbox_refused' };
   if (facts.familyShared) return { kind: 'refuse', reason: 'family_shared' };
-  if (!ownedByCaller(facts, ctx)) return { kind: 'refuse', reason: 'account_mismatch' };
-
   const product = appleProduct(facts.productId);
+  if (!ownedByCaller(facts, ctx, product?.kind ?? null)) return { kind: 'refuse', reason: 'account_mismatch' };
   if (!product) return { kind: 'refuse', reason: 'unknown_product' };
   const revoked = facts.revocationDateMs !== null;
 
@@ -270,11 +279,81 @@ export function allocateClawback(
   return { ...next, appliedCents: amount - remaining, debtCents: remaining };
 }
 
-/** What a transaction's revocation state asks of the books, against what they recorded. */
-export function reconcileRevocation(input: { storedRevoked: boolean; factsRevoked: boolean }): 'revoke' | 'reinstate' | 'none' {
-  if (input.factsRevoked && !input.storedRevoked) return 'revoke';
-  if (!input.factsRevoked && input.storedRevoked) return 'reinstate';
-  return 'none';
+export type RevocationAction =
+  | { kind: 'revoke'; revokedAtMs: number }
+  | { kind: 'reinstate'; revokedAtMs: number }
+  | { kind: 'none' };
+
+/**
+ * What a transaction's revocation state asks of the books, against what they recorded.
+ * Each refund is keyed by its own revocation instant, so a refund after a reversed refund
+ * claws back again. A revocation is only ever undone by a verified REFUND_REVERSED
+ * notification: a payload that merely lacks a revocationDate (a replayed pre-refund
+ * receipt, a delayed retry) never reinstates anything.
+ */
+export function reconcileRevocation(input: {
+  storedRevokedAtMs: number | null;
+  factsRevokedAtMs: number | null;
+  isRefundReversal: boolean;
+}): RevocationAction {
+  if (input.factsRevokedAtMs !== null) {
+    return input.storedRevokedAtMs === input.factsRevokedAtMs ? { kind: 'none' } : { kind: 'revoke', revokedAtMs: input.factsRevokedAtMs };
+  }
+  if (input.storedRevokedAtMs !== null && input.isRefundReversal) return { kind: 'reinstate', revokedAtMs: input.storedRevokedAtMs };
+  return { kind: 'none' };
+}
+
+/**
+ * Whether a payload is older than the newest one already applied — Apple's signedDate, not
+ * arrival order, decides. A payload without a signedDate sorts before anything recorded.
+ */
+export function isStalePayload(input: { lastSignedMs: number | null; signedMs: number | null }): boolean {
+  if (input.lastSignedMs === null) return false;
+  return input.signedMs === null || input.signedMs < input.lastSignedMs;
+}
+
+export interface SubscriptionStateOnFile {
+  status: AppStoreSubscriptionStatus;
+  expiresAtMs: number;
+  latestPurchaseMs: number;
+}
+
+/**
+ * The subscription state to write for an incoming payload. An older period changes
+ * nothing. A device sync of the CURRENT period knows less than Apple's notifications did —
+ * it cannot see a billing grace period — so it may extend access or revoke, but never
+ * downgrade the status or shorten access; a notification moves the period anywhere.
+ */
+export function nextSubscriptionState(
+  current: SubscriptionStateOnFile | null,
+  incoming: { status: AppStoreSubscriptionStatus; expiresAtMs: number; purchaseMs: number; fromNotification: boolean },
+): { apply: boolean; status: AppStoreSubscriptionStatus; expiresAtMs: number } {
+  const take = { apply: true, status: incoming.status, expiresAtMs: incoming.expiresAtMs };
+  if (!current) return take;
+  if (incoming.purchaseMs < current.latestPurchaseMs) return { apply: false, status: current.status, expiresAtMs: current.expiresAtMs };
+  if (incoming.purchaseMs > current.latestPurchaseMs || incoming.fromNotification || incoming.status === 'revoked') return take;
+  const keepsStatus = current.status === 'grace_period' || (current.status === 'active' && incoming.status === 'expired');
+  return {
+    apply: true,
+    status: keepsStatus ? current.status : incoming.status,
+    expiresAtMs: Math.max(current.expiresAtMs, incoming.expiresAtMs),
+  };
+}
+
+/**
+ * Whether a purchase may fund credit. Real money always does. Sandbox money is free —
+ * App Review buys in Sandbox against production, but so does every TestFlight tester —
+ * so each user's Sandbox purchases fund only a few times in a rolling window, unless the
+ * user is an allowlisted tester. The tier still follows a Sandbox subscription either way.
+ */
+export function sandboxFundingAllowed(input: {
+  environment: AppStoreEnvironment;
+  fundedSandboxRecently: number;
+  maxSandboxFundings: number;
+  allowlisted: boolean;
+}): boolean {
+  if (input.environment !== 'Sandbox' || input.allowlisted) return true;
+  return input.fundedSandboxRecently < input.maxSandboxFundings;
 }
 
 /** Notification types whose signed transaction changes something we mirror. */
