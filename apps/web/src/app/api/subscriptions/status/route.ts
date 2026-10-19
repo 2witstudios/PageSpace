@@ -8,8 +8,7 @@ import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscr
 import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { appleRowEntitles } from '@pagespace/lib/billing/apple/apple-core';
-import { hasRenewableAppleSubscription, latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
+import { appleEntitledTier, hasRenewableAppleSubscription, latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { resolveBillingProvider } from '@/lib/iap-server/apple-http';
 
@@ -67,12 +66,13 @@ export async function GET(request: NextRequest) {
     // whichever store sells the current plan. Account deletion warns on it: deleting the
     // account never cancels an App Store subscription.
     const appStoreRenews = await hasRenewableAppleSubscription(db, user.id, new Date(), { autoRenewing: true });
-    const now = Date.now();
+    // Entitlement comes from every App Store row, not just the latest-expiring one.
+    const appleTier = await appleEntitledTier(db, user.id, new Date());
     const billingProvider = resolveBillingProvider({
       stripeEntitled: subscription !== null
         && (subscription.status === 'active' || subscription.status === 'trialing')
         && getPersonalTierFromPrice(subscription.stripePriceId) !== 'free',
-      appleEntitled: appStore !== null && appleRowEntitles({ status: appStore.status, expiresAtMs: appStore.expiresAt.getTime() }, now),
+      appleEntitled: appleTier !== 'free',
     });
 
     // Compute storage config from subscription tier

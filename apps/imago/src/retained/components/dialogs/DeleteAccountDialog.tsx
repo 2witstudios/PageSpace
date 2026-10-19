@@ -21,7 +21,7 @@ import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
  * Whether Apple will charge the viewer again — GET /api/subscriptions/status `appStoreRenews`
  * (auto-renew on, renewal-capable), or an App Store-sold current plan.
  */
-async function fetchAppStoreRenews(url: string): Promise<boolean> {
+async function fetchAppStoreRenews([url]: readonly [string, "app-store-renews"]): Promise<boolean> {
   const response = await fetchWithAuth(url);
   if (!response.ok) return false;
   const body: { billingProvider?: string | null; appStoreRenews?: boolean } = await response.json();
@@ -70,7 +70,12 @@ export function DeleteAccountDialog({
   ownedOrganizations,
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
-  const { data: appStoreRenews } = useSWR(isOpen ? "/api/subscriptions/status" : null, fetchAppStoreRenews, { revalidateOnFocus: false });
+  // A key of its own: this caches a boolean, not the status body other readers of the URL expect.
+  const { data: appStoreRenews } = useSWR(
+    isOpen ? (["/api/subscriptions/status", "app-store-renews"] as const) : null,
+    fetchAppStoreRenews,
+    { revalidateOnFocus: false },
+  );
 
   const isEmailMatch = emailConfirmation.trim().toLowerCase() === userEmail.toLowerCase();
   const isRefused = ownedOrganizations !== undefined && ownedOrganizations.length > 0;

@@ -50,8 +50,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 // The App Store mirror read (lib billing/apple): none unless a test sets one.
 const mockLatestAppleSubscription = vi.hoisted(() => vi.fn());
 const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn());
+const mockAppleEntitledTier = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
   latestAppleSubscription: mockLatestAppleSubscription,
+  appleEntitledTier: mockAppleEntitledTier,
   hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
 }));
 vi.mock('@/lib/stripe/price-config', () => ({
@@ -133,6 +135,8 @@ describe('GET /api/subscriptions/status', () => {
     mockLatestAppleSubscription.mockResolvedValue(null);
     mockHasRenewableAppleSubscription.mockReset();
     mockHasRenewableAppleSubscription.mockResolvedValue(false);
+    mockAppleEntitledTier.mockReset();
+    mockAppleEntitledTier.mockResolvedValue('free');
   });
 
   describe('which store sells the plan', () => {
@@ -161,8 +165,10 @@ describe('GET /api/subscriptions/status', () => {
       const expiresAt = new Date(Date.now() + 86_400_000);
       mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
       mockLatestAppleSubscription.mockResolvedValue({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt, autoRenew: true, environment: 'Production' });
+      mockAppleEntitledTier.mockResolvedValue('pro');
       const body = await (await GET(request())).json();
       expect(body.billingProvider).toBe('apple');
+      expect(mockAppleEntitledTier).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date));
       expect(body.appStore).toEqual({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: expiresAt.toISOString(), autoRenew: true, environment: 'Production' });
     });
 
@@ -182,6 +188,13 @@ describe('GET /api/subscriptions/status', () => {
       const body = await (await GET(request())).json();
       expect(body.billingProvider).toBeNull();
       expect(body.appStore).toMatchObject({ status: 'active', autoRenew: false });
+    });
+
+    it('is apple when another App Store row entitles, even if the latest-expiring row does not', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
+      mockLatestAppleSubscription.mockResolvedValue({ status: 'revoked', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: new Date(Date.now() + 86_400_000), autoRenew: false, environment: 'Production' });
+      mockAppleEntitledTier.mockResolvedValue('pro');
+      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
     });
   });
 
