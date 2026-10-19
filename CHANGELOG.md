@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
 - Imago's Tasks and Messages sidebars have a proper header now. New list and New message sit in the header as + buttons beside Close sidebar, like New page in Files, and the "Create page" button is gone from both sidebars, which frees the space it took.
 - Imago's Files view no longer shows the "N pages in <drive> · Browse files" line above the chat. The Browse files link is still available from the Files section itself.
 - The drive picker in Imago opens centered and full-size, as it does in the classic interface, instead of as a narrow panel pinned beside the sidebar.

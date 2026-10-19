@@ -26,11 +26,23 @@ describe('palette classes', () => {
     });
   });
 
+  test('input halo follows the highlight', () => {
+    assert({
+      given: 'the palette input with and without a highlighted result',
+      should: 'drop its halo only while a result carries the focus cue',
+      actual: {
+        highlighted: paletteInputClass(true).includes('focus-visible:shadow-none'),
+        unhighlighted: paletteInputClass(false).includes('focus-visible:shadow-none'),
+      },
+      expected: { highlighted: true, unhighlighted: false },
+    });
+  });
+
   test('field', () => {
     assert({
       given: 'the field row, its input and the scope toggle',
       should: 'be a hairline-ruled row with a borderless composer-height input',
-      actual: [paletteFieldClass, paletteInputClass, paletteScopeClass],
+      actual: [paletteFieldClass, paletteInputClass(false), paletteScopeClass],
       expected: [
         'flex items-center gap-2 border-b border-hairline px-3 text-ink-muted',
         'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint',
