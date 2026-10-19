@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
+
 - Imago's tabs now work like browser tabs, as in the classic interface: opening a page loads it into the tab you're in instead of adding a new tab every time. Each tab keeps its own Back and Forward history, and the browser's Back and Forward move within the tab you're in. To open a new tab, use + (New tab), or ⌘/Ctrl-click or middle-click a link, which opens it beside the current tab without leaving it.
 
 - The pricing page and Choose Your Plan page are easier to read: each plan's included credits, top-up rate, storage and models sit in a clear spec list, and Business's team terms (seats, extra-seat credits and checkout) have their own labeled panel instead of cramped small print. Choose Your Plan now centers its two personal plans side by side.

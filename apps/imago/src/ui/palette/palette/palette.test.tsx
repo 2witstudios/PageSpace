@@ -10,6 +10,10 @@ import { getUiState, setUiState } from '../../store/store';
 import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
 import { fakeWeb, type FakeRoute } from '../../test-support/fake-web';
 
+/** What the palette asked the server for its search; Imago's id, read for its orb, is not part of it. */
+const searches = (web: ReturnType<typeof fakeWeb>): string[] =>
+  web.requests.map((request) => request.url).filter((url) => url !== '/api/user/builtin-agents');
+
 const router = vi.hoisted(() => ({ pushed: [] as string[] }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: (href: string) => router.pushed.push(href) }),
@@ -131,7 +135,7 @@ describe('CommandPalette', () => {
         closedBefore,
         prevented,
         focusedField,
-        asked: web.requests.map((request) => request.url),
+        asked: searches(web),
         first,
         second,
         pushed: router.pushed,
@@ -209,7 +213,7 @@ describe('CommandPalette', () => {
         'ask every drive, list the pages the server answered with each one’s drive, then the people, and open the agent’s drive chat talking to it',
       actual: {
         ticked: toggle.getAttribute('aria-checked'),
-        asked: web.requests.map((request) => request.url),
+        asked: searches(web),
         rows,
         placeholder,
         pushed: router.pushed,
@@ -241,7 +245,7 @@ describe('CommandPalette', () => {
     assert({
       given: 'the palette opened from the DMs, which name no drive',
       should: 'search the viewer’s Home drive and say nothing matched',
-      actual: [placeholder, web.requests.map((request) => request.url)],
+      actual: [placeholder, searches(web)],
       expected: ['Search Home…', ['/api/mentions/search?q=road&types=page%2Cuser&driveId=home-1']],
     });
   });

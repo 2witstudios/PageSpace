@@ -137,6 +137,22 @@
   box-shadow: inset 0 1px 0 0 var(--glass-sheen);
 }
 
+/* Imago's orb without WebGL2 (or before the engine's first frame): a still chrome ball from the
+   same metal tokens, so it is honest and theme-correct but does not move. */
+@utility orb-chrome {
+  border-radius: 999px;
+  background: radial-gradient(
+    circle at 36% 30%,
+    var(--metal-key) 0 7%,
+    var(--metal-sky) 16%,
+    color-mix(in oklch, var(--metal-sky) 55%, var(--metal-room)) 34%,
+    var(--metal-room) 52%,
+    var(--metal-flag) 70%,
+    var(--metal-sky) 92%,
+    var(--metal-room) 100%
+  );
+}
+
 /* Border widths are not a token namespace in Tailwind v4, so the two the
    frame needs own a utility rather than an arbitrary value. */
 @utility border-l-quote {

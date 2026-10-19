@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import type { PageTypeValue } from '@pagespace/lib/utils/enums';
-import { renderIcon } from '../../components/icon/icon.render';
+import { renderPageIcon } from '../../metal/page-icon';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
 import { cn } from '../../cn';
 
@@ -38,16 +38,18 @@ export type PaneRowProps = {
   readonly current: boolean;
   /** The age beside a recent (now, 1h); none for a favorite. */
   readonly meta?: string;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: boolean;
   /** A phone row: 44px tall. */
   readonly roomy?: boolean;
 };
 
-export function PaneRow({ href, title, type, current, meta, roomy = false }: PaneRowProps) {
+export function PaneRow({ href, title, type, current, meta, imago = false, roomy = false }: PaneRowProps) {
   const look = pageTypeIcons[type];
   return (
     <Link href={href} prefetch={true} className={paneRowClass(current, roomy)} aria-current={current ? 'page' : undefined}>
       <span className={look.hue} aria-hidden="true">
-        {renderIcon({ name: look.icon, size: 15 })}
+        {renderPageIcon({ icon: look.icon, size: 15, imago })}
       </span>
       <span className="min-w-0 flex-1 truncate">{type === 'CHANNEL' ? `#${title}` : title}</span>
       {meta === undefined ? null : <span className="text-xs text-ink-faint">{meta}</span>}

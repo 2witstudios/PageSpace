@@ -4,6 +4,9 @@ import type { ChatAgent } from './chat-model/chat';
 /** The conversation an agent turn is streaming into. */
 export type StreamingTurn = { readonly conversationId: string };
 
+/** Where the viewer's own turn is: sent and waiting (thinking), or replying (speaking). Imago's orb moves with it. */
+export type StreamingPhase = 'thinking' | 'speaking';
+
 const withStreaming = (state: UiState, streaming: StreamingTurn | null): UiState => ({
   ...state,
   resources: { ...state.resources, streaming },
@@ -41,6 +44,8 @@ export const chatPlugin = {
   resources: (): {
     /** The conversation an agent turn is streaming into; SWR leaves it alone meanwhile. */
     readonly streaming: StreamingTurn | null;
+    /** The viewer's own turn: thinking until the reply starts, then speaking; null when none is under way. */
+    readonly streamingPhase: StreamingPhase | null;
     /** What the viewer has typed in the chat composer; kept across navigation. */
     readonly chatDraft: string;
     /** The conversation the chat pane shows; null until one is chosen (the agent's latest). */
@@ -53,12 +58,14 @@ export const chatPlugin = {
     readonly chatNew: boolean;
     /** What Imago's column body shows: the thread, or its History view (C-Chat-History). */
     readonly chatView: 'thread' | 'history';
-  } => ({ streaming: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' }),
+  } => ({ streaming: null, streamingPhase: null, chatDraft: '', chatConversationId: null, chatAgent: null, chatAgentLost: null, chatNew: false, chatView: 'thread' }),
   transactions: {
     startStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? state : withStreaming(state, { conversationId }),
     endStreaming: (state: UiState, conversationId: string): UiState =>
       isStreaming(state, conversationId) ? withStreaming(state, null) : state,
+    setStreamingPhase: (state: UiState, streamingPhase: StreamingPhase | null): UiState =>
+      state.resources.streamingPhase === streamingPhase ? state : withResources(state, { streamingPhase }),
     setChatDraft: (state: UiState, chatDraft: string): UiState =>
       state.resources.chatDraft === chatDraft ? state : withResources(state, { chatDraft }),
     openConversation: (state: UiState, chatConversationId: string): UiState =>

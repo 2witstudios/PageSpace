@@ -5,6 +5,7 @@
 // the Files strip, the sortable table or tiles, the row menu, the empty and
 // drop states, and the dialogs its menu opens.
 
+import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
@@ -66,6 +67,7 @@ export function FilesBrowser({ driveId, folderIds }: FilesBrowserProps): ReactNo
   const client = useApiClient();
   const { mutate } = useSWRConfig();
   const tree = useFileTree(driveId);
+  const imagoPageId = useImagoPageId();
   const pending = useUiState(selectPending);
   const createError = useUiState(selectCreateError);
   const favorites = useFavorites(driveId);
@@ -258,6 +260,7 @@ export function FilesBrowser({ driveId, folderIds }: FilesBrowserProps): ReactNo
       id: node.id,
       title: node.name,
       pageType: node.pageType,
+      ...(node.id === imagoPageId ? { imago: true as const } : {}),
       typeLabel: typeLabelOf(node.pageType),
       updated: node.updatedAt === undefined ? null : shortDate(node.updatedAt),
       created: node.createdAt === undefined ? null : shortDate(node.createdAt),

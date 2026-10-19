@@ -14,6 +14,9 @@ import { usePermissions } from '@/retained/hooks/usePermissions';
 import SessionChat from '@/retained/components/agents/chat/SessionChat';
 import type { AgentInfo } from '@/retained/types/agent';
 import { RetainedSurface } from './retained-provider';
+import { useImagoPageId } from '@/ui/chat/use-chat-data/use-chat-data';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
+import { ImagoThread } from '@/ui/metal/imago-thread';
 import { useApiClient } from '@/api/swr-provider';
 import { createConversation } from '@/ui/chat/chat-api/chat-api';
 import { dispatch, transactions } from '@/ui/store/transactions';
@@ -29,12 +32,13 @@ import { OnboardingGate } from '@/retained/components/onboarding/OnboardingGate'
 function HomeWelcome() {
   const { line } = useHomeSignals();
   return <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-auto px-4">
+    <ImagoOrb size="hero" live label="Imago" />
     <HomeLine line={line} />
     <HomeSuggestions suggestions={line.suggestions} onSelect={text => dispatch(transactions.setChatDraft, text)} />
   </div>;
 }
 
-export function RetainedChat({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated }: {
+type RetainedChatProps = {
   agentId: string | null; name: string; conversationId: string | null; resolving: boolean;
   /** Imago's chat home (section 'chat'): a new, empty conversation greets the user with the Home line. */
   home?: boolean;
@@ -50,7 +54,20 @@ export function RetainedChat({ agentId, name, conversationId, resolving, placeho
    * move the Imago column.
    */
   isolated?: boolean;
-}) {
+};
+
+/**
+ * One chat host for Imago and any agent page. In Imago's own chat its orb stands in for the
+ * spinner, and the chat is marked so the orb listens while the viewer types to it.
+ */
+export function RetainedChat(props: RetainedChatProps) {
+  const imago = useImagoPageId() === (props.agentId ?? undefined);
+  return <ImagoThread value={imago}>
+    <div className="contents" {...(imago ? { 'data-imago-chat': '' } : {})}><RetainedChatHost {...props} /></div>
+  </ImagoThread>;
+}
+
+function RetainedChatHost({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated }: RetainedChatProps) {
   const sharedSelection = useRetainedChatSelection(state => state.selection);
   const selection = isolated ? null : sharedSelection;
   const selectedAgentId = selection ? selection.agentId : agentId;

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { renderIcon } from '../../components/icon/icon.render';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { phoneAskClass } from './phone-shell-class';
 
 export type PhoneAskProps =
@@ -15,7 +15,7 @@ export type PhoneAskProps =
 export function PhoneAsk({ href, onPress }: PhoneAskProps): ReactNode {
   const content = (
     <>
-      {renderIcon({ name: 'sparkle', size: 14 })}
+      <ImagoOrb size="glyph" live />
       Ask
     </>
   );

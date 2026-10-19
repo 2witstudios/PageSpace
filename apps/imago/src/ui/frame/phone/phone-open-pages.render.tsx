@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactNode } from 'react';
 import type { IconName } from '../../components/icon/icon-names';
 import { renderIcon } from '../../components/icon/icon.render';
+import { renderPageIcon } from '../../metal/page-icon';
 import {
   phoneSheetClass,
   phoneSheetCloseAllClass,
@@ -23,6 +24,8 @@ export type OpenPageRowProps = {
   readonly icon: IconName;
   /** The type hue class (text-type-*), or none for screens. */
   readonly hue: string | null;
+  /** Imago's own page: its orb in place of the type icon. */
+  readonly imago?: boolean;
   readonly current: boolean;
   /** The row's link was followed: make its tab the active one. */
   readonly onOpen: () => void;
@@ -30,12 +33,12 @@ export type OpenPageRowProps = {
 };
 
 /** One row: the type icon and title as a link, then its close control (36px). */
-export function renderOpenPageRow({ path, title, icon, hue, current, onOpen, onClose }: OpenPageRowProps): ReactNode {
+export function renderOpenPageRow({ path, title, icon, hue, imago, current, onOpen, onClose }: OpenPageRowProps): ReactNode {
   return (
     <div key={path} className={phoneSheetRowClass(current)} data-tab-path={path}>
       <Link href={path} prefetch={true} className={phoneSheetLinkClass} onClick={(event) => !event.defaultPrevented && onOpen()}>
         <span className={hue ?? 'text-ink-muted'} aria-hidden="true">
-          {renderIcon({ name: icon, size: 18 })}
+          {renderPageIcon({ icon, size: 18, imago })}
         </span>
         <span className="min-w-0 truncate">{title}</span>
       </Link>

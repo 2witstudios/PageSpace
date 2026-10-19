@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { headControlClass } from '../../frame/controls/controls-class';
 import { useDisclosure } from '../../frame/disclosure/use-disclosure';
 import type { AgentMenu } from '../chat-agents/chat-agents';
@@ -30,11 +31,15 @@ export type AgentPickerProps = {
   readonly onNewAgent: (() => void) | null;
 };
 
-const spark = (imago: boolean, size: 'head' | 'row'): ReactNode => (
-  <span className={agentTileClass(imago, size)} aria-hidden="true">
-    {renderIcon({ name: 'sparkle', size: size === 'head' ? 12 : 14 })}
-  </span>
-);
+/** Imago is its liquid-metal orb, alive in the head; any other agent is the sparkle on its hue. */
+const spark = (imago: boolean, size: 'head' | 'row'): ReactNode =>
+  imago ? (
+    <ImagoOrb size={size === 'head' ? 'tile' : 'row'} live={size === 'head'} />
+  ) : (
+    <span className={agentTileClass(false, size)} aria-hidden="true">
+      {renderIcon({ name: 'sparkle', size: size === 'head' ? 12 : 14 })}
+    </span>
+  );
 
 /**
  * Who Imago's column talks to (C-Chat-AgentPicker): "Choose agent: <name>" opens a non-modal
@@ -64,9 +69,9 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
           </button>
         </div>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col">
-          {agents.groups.map((group, index) => (
+          {agents.groups.map((group) => (
             <div key={group.label} className="flex flex-col">
-              {index === 0 ? null : <div className={pickerGroupLabelClass}>{group.label}</div>}
+              {group.options.some((option) => option.imago === true) ? null : <div className={pickerGroupLabelClass}>{group.label}</div>}
               {group.options.map((option) => {
                 const checked = option.value === agents.value;
                 return (
@@ -79,7 +84,7 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
                     className={pickerRowClass(checked, option.disabled)}
                     onClick={() => pick(option.value)}
                   >
-                    {spark(index === 0, 'row')}
+                    {spark(option.imago === true, 'row')}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-sm font-medium text-ink">{option.title}</span>
                       {option.meta === undefined ? null : <span className="truncate text-xs text-ink-muted">{option.meta}</span>}

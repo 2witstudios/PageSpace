@@ -21,7 +21,7 @@ describe('agentMenu()', () => {
           {
             label: 'Imago',
             options: [
-              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model' },
+              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model', imago: true },
             ],
           },
           {
@@ -56,7 +56,7 @@ describe('agentMenu()', () => {
       expected: [
         {
           label: 'Imago',
-          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model' }],
+          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model', imago: true }],
         },
       ],
     });

@@ -11,6 +11,9 @@ export function StreamingBridge() {
   const own = usePendingStreamsStore(state => [...state.streams.values()].filter(stream => stream.isOwn)
     .map(stream => stream.conversationId).sort().join(','));
   const id = (pending || own).split(',')[0] || null;
+  // Imago's orb moves with the turn: thinking while a send waits, speaking once its own stream runs.
+  const phase = own ? 'speaking' : pending ? 'thinking' : null;
+  useEffect(() => { dispatch(transactions.setStreamingPhase, phase); }, [phase]);
   const previous = useRef<string | null>(null);
   const { mutate } = useSWRConfig();
   useEffect(() => {

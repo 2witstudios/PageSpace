@@ -10,6 +10,8 @@ export type RailItem = {
   readonly label: string;
   /** The section in the current drive, basePath-relative; null with no drive. */
   readonly href: string | null;
+  /** Chat is where Imago lives: its tile is Imago's orb rather than a line icon. */
+  readonly imago?: boolean;
 };
 
 /** The six drive tools under the divider; Members is one of them (SPEC v3). */
@@ -32,7 +34,7 @@ const driveHref = (driveId: string | null, section: string): string | null => {
  * Messages and Tasks, each in the current drive. DMs live under Messages.
  */
 export const railItems = (driveId: string | null): readonly RailItem[] => [
-  { id: 'chat', icon: 'chat', label: 'Chat', href: driveHref(driveId, '') },
+  { id: 'chat', icon: 'chat', label: 'Chat', href: driveHref(driveId, ''), imago: true },
   { id: 'files', icon: 'files', label: 'Files', href: driveHref(driveId, 'files') },
   { id: 'messages', icon: 'messages', label: 'Messages', href: driveHref(driveId, 'messages') },
   { id: 'tasks', icon: 'tasks', label: 'Tasks', href: driveHref(driveId, 'tasks') },

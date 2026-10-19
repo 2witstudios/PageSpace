@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { renderIcon } from '../../components/icon/icon.render';
 import { dispatch, transactions } from '../../store/transactions';
 import type { HideableSection } from '../stage/stage';
@@ -53,7 +54,7 @@ export function CloseImago(): ReactNode {
 export function AskPill({ label = 'Ask' }: { readonly label?: string }): ReactNode {
   return (
     <button type="button" className={askPillClass} onClick={() => dispatch(transactions.expandImago, undefined)}>
-      {renderIcon({ name: 'sparkle', size: 12 })}
+      <ImagoOrb size="glyph" live />
       {label}
     </button>
   );

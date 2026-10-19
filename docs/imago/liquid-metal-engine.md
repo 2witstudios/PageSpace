@@ -1,6 +1,6 @@
 # Imago Liquid Metal — design
 
-- **Status:** Proposed (design + working prototype; not yet in `apps/imago`)
+- **Status:** Implemented in `apps/imago/src/ui/metal` (the confirmed prototype, ported)
 - **Date:** 2026-10-18
 - **Prototype:** `prototypes/imago-liquid-metal/index.html` (one file, WebGL2, no dependencies)
 - **Related:** ADR 0007 (Imago app, token-locked design system), `apps/imago/src/app/globals.css` (tokens), `apps/imago/src/ui/chat/use-agent-chat` (`AgentTurnStatus`)
@@ -167,30 +167,52 @@ Typing in the composer adds a small pulse per keystroke, so Imago visibly takes 
 
 A glyph cannot carry choreography, so it carries only mood: swell, speed and tarnish.
 
-## 4. Architecture in `apps/imago`
+## 4. Architecture in `apps/imago` (as built)
 
-One engine, many views. Browsers cap live WebGL contexts at about 16 and destroy the oldest when a page goes over, so a context per blob would fail in a long session.
+One engine, many views. Browsers cap live WebGL contexts at about 16 and destroy the oldest when a page goes over, so a context per orb would fail in a long session.
 
 ```
 apps/imago/src/ui/metal/
-  metal-mood.ts            pure: moodFor(), MOODS targets, size classes        (unit-tested)
-  metal-springs.ts         pure: makeSprings(), stepSprings(), droplet layout   (unit-tested)
-  metal-optics.ts          pure TS mirror of the zone maths, for tests          (unit-tested)
-  metal-world.ts           DOM → world texture painter (data-metal-env / -ink)
-  metal-studio.ts          token probe → linear-RGB studio uniforms
-  metal-renderer.ts        WebGL2 program, shader source, draw(view)
-  metal-engine.ts          singleton: view registry, rAF scheduler, budgets, context loss
-  imago-blob.tsx           <ImagoBlob size="hero|avatar|glyph" mood=… />  (container)
-  imago-blob.render.tsx    the <canvas role="img">                          (render)
-  imago-blob-class.ts      class module, exact-string tested per house style
+  metal-mood.ts           pure: MOODS, moodFor(), detailFor() size classes           (unit-tested)
+  metal-springs.ts        pure: makeSprings(), stepSprings(), kick(), orbBalls()    (unit-tested)
+  metal-shader.ts         the confirmed GLSL, verbatim from the prototype
+  metal-studio.ts         token probe → linear-RGB studio; per-theme gains           (pure parts tested)
+  metal-world.ts          DOM → quarter-scale world texture
+  metal-engine.ts         singleton: one WebGL2 context, view registry, rAF loop, context loss
+  imago-orb/              <ImagoOrb size live? label?>: container, render, class (exact-string tested)
+  page-icon.tsx           renderPageIcon(): a page's icon, or Imago's orb for Imago's page
+  imago-thread.tsx        context: is this chat Imago's own (its thinking glyph is the orb)
+  author-avatar.tsx       an agent post's face: Imago posts as its orb
 ```
 
-- **Rendering:** one offscreen WebGL2 canvas. For each visible view: set the viewport to its device-pixel size, draw, then `drawImage` the region into that view's own 2D canvas in the same task. Views therefore stay in normal DOM flow, z-order and clipping (popovers cover them correctly), unlike a full-screen overlay canvas.
-- **Coordinates:** each view passes its viewport rect, so its reflection samples the world at its true position. Two blobs on screen show different reflections.
-- **Context loss:** handle `webglcontextlost` and `webglcontextrestored`. Views show the still fallback (§8) until the context is restored.
-- **Store:** the mood is read through `useUiState` selectors (the composer focus flag plus chat status). The engine subscribes outside React, so a frame never re-renders React.
-- **Tokens:** new `--metal-*` colour tokens in `globals.css` (every one `light-dark()`, enforced by `theme.test.ts`) and size tokens for the three classes in `frame.css`. No arbitrary Tailwind values.
-- **Marking the world:** `data-metal-env` on the rail, panes, cards and composer, and `data-metal-ink` on text roots. That is opt-in and cheap, and one test asserts that the shell's major regions carry it.
+- **Rendering:** one offscreen WebGL2 canvas. For each visible view the engine sets the viewport to the view's device-pixel size, draws, then `drawImage`s the region into that view's own 2D canvas in the same task. Views therefore stay in normal DOM flow, z-order and clipping (popovers cover them correctly), unlike a full-screen overlay canvas.
+- **Views:**
+  - **live:** draws every frame with Imago's mood.
+  - **still:** draws once, and again on a theme or size change. On hover (`pointerenter` on its parent) it animates for 1.4s and settles.
+  - The loop runs only while a visible view needs frames. It stops when the tab is hidden, and `IntersectionObserver` skips views offscreen.
+- **Mood:** `moodFor()` reads two things outside React:
+  - `streamingPhase`, a chat-slice resource. The retained `StreamingBridge` sets it to thinking while a send is pending and speaking once the viewer's own stream runs.
+  - Whether a text field inside `[data-imago-chat]` has focus. `RetainedChat` marks Imago's own chat that way.
+- **Tokens:** the `--metal-*` colours are `light-dark()` pairs on `:root` in `globals.css`. The per-theme numbers (key gain, page gain, reflectance, contact shadow) live in `studioGains()`, because `:root` only holds colours. The sizes are `--spacing-orb-hero` (120px) and `--spacing-orb-glyph` (16px), plus the existing agent tile, picker row and avatar sizes. Without WebGL2, the `orb-chrome` utility draws a still chrome ball from the same tokens.
+- **Marking the world:** the painter reads the shell's existing `data-slot` regions (rail, stage, list, object, chat, empty) as surfaces and their columns' text as line bars, so no markup changed. Anything else can opt in with `data-metal-env` or `data-metal-ink`, or opt out with `data-metal-skip`.
+- **Coordinates:** each view passes its viewport rect, so its edge reflection samples the world at its true position.
+- **Context loss:** the engine handles `webglcontextlost` and `webglcontextrestored`. Views fall back to the still chrome until the context is restored.
+
+## 4a. Where Imago appears
+
+| Tier | Where | Size |
+|---|---|---|
+| **Live** (moves with Imago's mood) | Chat head picker trigger while Imago is talking | `tile` (22px) |
+| | Imago's empty chat (Home welcome), above the Home line | `hero` (120px) |
+| | Thinking indicator in Imago's own thread (other agents keep the spinner) | `glyph` (16px) |
+| | Ask pill, empty-middle "Ask Imago", phone Ask | `glyph` |
+| **Still** (alive on hover) | Rail's Chat button | `tile` |
+| | Left sidebar tree row for Imago's page | the row's 16px |
+| | Imago's row in the agent picker | `row` (30px) |
+| | Tabs, phone open pages, favorites and recents, empty-middle recents, files browser, ⌘K results | `glyph` (`row` in the browser's grid) |
+| | Imago's own posts in channels | `avatar` (28px) |
+
+User agents keep the sparkle and the agent hue. Only Imago is metal. The picker now marks Imago's row by the agent itself (`AgentOption.imago`) rather than by being the first group, so a drive with no built-in agents no longer gives its first agent Imago's tile.
 
 ## 5. Environment capture: options considered
 
@@ -252,8 +274,5 @@ It works in every engine, costs about 1–2ms per repaint, is theme-correct by c
 
 ## 11. Rollout
 
-1. Pure modules and their tests (mood, springs, optics maths), plus tokens and the theme test.
-2. Engine, renderer and world painter behind `NEXT_PUBLIC_IMAGO_METAL` (env only, like `IMAGO_ENABLED`).
-3. `<ImagoBlob>` in the empty chat (hero) and the chat header (avatar). Mark the world.
-4. Inline glyph on streaming messages, the ask pill, and the agent picker.
-5. Performance pass on Capacitor iOS/Android WebViews, then remove the flag.
+1. Done: pure modules and tests, tokens, engine, `<ImagoOrb>`, and every surface in §4a. It ships with Imago itself, behind `IMAGO_ENABLED` and with no flag of its own.
+2. Next: a performance pass on real devices, including the Capacitor iOS and Android WebViews. It has so far only been rendered in headless Chromium on software GL.

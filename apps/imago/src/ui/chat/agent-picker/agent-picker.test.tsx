@@ -6,6 +6,7 @@ import { click, mount, press, unmountAll } from '../../test-support/dom';
 import { agentMenu } from '../chat-agents/chat-agents';
 import { AgentPicker, type AgentPickerProps } from './agent-picker';
 import { agentTileClass, pickerRowClass, pickerTriggerClass } from './agent-picker-class';
+import { imagoOrbClass } from '../../metal/imago-orb/imago-orb-class';
 
 afterEach(unmountAll);
 
@@ -53,7 +54,7 @@ describe('AgentPicker', () => {
     const { container } = show();
     assert({
       given: 'Imago talking, the picker closed',
-      should: 'name the agent in a labelled trigger with the spine spark tile, and keep the popover shut',
+      should: 'name the agent in a labelled trigger with Imago’s orb (its still chrome without WebGL2), and keep the popover shut',
       actual: [
         summary(container)?.getAttribute('aria-label'),
         summary(container)?.className,
@@ -61,7 +62,7 @@ describe('AgentPicker', () => {
         summary(container)?.textContent,
         details(container)?.open,
       ],
-      expected: ['Choose agent: Imago', pickerTriggerClass, agentTileClass(true, 'head'), 'Imago', false],
+      expected: ['Choose agent: Imago', pickerTriggerClass, imagoOrbClass('tile', true), 'Imago', false],
     });
   });
 
@@ -93,7 +94,7 @@ describe('AgentPicker', () => {
         'Talk to',
         'Agent',
         [
-          ['Imago', 'Global · your chosen model', 'true', true, pickerRowClass(true, false), agentTileClass(true, 'row')],
+          ['Imago', 'Global · your chosen model', 'true', true, pickerRowClass(true, false), imagoOrbClass('row', true)],
           ['Launch Agent', 'claude-sonnet-5-5 · Launch', 'false', false, pickerRowClass(false, false), agentTileClass(false, 'row')],
         ],
         ['Agents in Studio'],

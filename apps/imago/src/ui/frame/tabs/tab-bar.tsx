@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { pageTypeIcons } from '../../components/page-type-icon/page-type-icon';
+import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { dispatch, transactions } from '../../store/transactions';
 import { pageKey } from '../../files/page-object/page-object';
 import type { Stage } from '../stage/stage';
@@ -23,8 +24,9 @@ type TabItemProps = {
 function PageTab({ path, pageId, selected, onOpen, onClose }: TabItemProps & { readonly pageId: string }) {
   const { data } = useSWR<unknown>(pageKey(pageId));
   const page = pageTabOf(data);
+  const imago = useImagoPageId() === pageId;
   const look = page === null ? { icon: 'page' as const, hue: null } : pageTypeIcons[page.type];
-  return renderTab({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, selected, onOpen, onClose });
+  return renderTab({ path, title: page?.title ?? 'Loading…', icon: look.icon, hue: look.hue, imago, selected, onOpen, onClose });
 }
 
 function TabItem(props: TabItemProps) {
