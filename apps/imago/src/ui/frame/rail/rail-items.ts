@@ -113,8 +113,15 @@ export const messagesUnread = (badges: unknown): number => {
   return count(dms) + count(channels);
 };
 
+/** One named count from a /api/sidebar/badges body; nothing loaded or a non-count shows none. */
+const badgeCount = (badges: unknown, key: 'files' | 'tasks' | 'calendar'): number =>
+  typeof badges !== 'object' || badges === null ? 0 : count((badges as Readonly<Record<string, unknown>>)[key]);
+
+/** Files counts the file mentions waiting for the viewer. */
+export const filesUnread = (badges: unknown): number => badgeCount(badges, 'files');
+
+/** Tasks counts the tasks assigned to the viewer. */
+export const tasksUnread = (badges: unknown): number => badgeCount(badges, 'tasks');
+
 /** Calendar counts the pending invites to upcoming events the viewer has not answered. */
-export const calendarUnread = (badges: unknown): number => {
-  if (typeof badges !== 'object' || badges === null) return 0;
-  return count((badges as { readonly calendar?: unknown }).calendar);
-};
+export const calendarUnread = (badges: unknown): number => badgeCount(badges, 'calendar');

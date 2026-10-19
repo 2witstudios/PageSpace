@@ -89,7 +89,21 @@ describe('Rail', () => {
       given: 'two unread DMs and five unread channel messages, with three pending calendar invites',
       should: 'load the badges once through the imago client, show 7 on Messages and 3 on Calendar in the amber badge',
       actual: [to(requests, BADGES), badge?.textContent, container.querySelectorAll('.bg-notice').length],
-      expected: [[BADGES], '7', 2],
+      expected: [[BADGES], '7', 4],
+    });
+  });
+
+  test('the Files and Tasks counts from /api/sidebar/badges', async () => {
+    const { container } = railAt('/drive-1', { dms: 0, channels: 0, files: 9, tasks: 1, calendar: 0 });
+    await settle(() => {
+      control(container, 'Files, 9 unread');
+    });
+
+    assert({
+      given: 'nine file mentions and one assigned task',
+      should: 'show 9 on Files and 1 on Tasks',
+      actual: [control(container, 'Files, 9 unread').textContent?.includes('9'), control(container, 'Tasks, 1 unread') !== null],
+      expected: [true, true],
     });
   });
 

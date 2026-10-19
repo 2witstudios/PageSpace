@@ -10,7 +10,9 @@ import {
   activeRailItem,
   activeRailPlace,
   calendarUnread,
+  filesUnread,
   messagesUnread,
+  tasksUnread,
   moreItems,
   railDrive,
   railItems,
@@ -48,7 +50,12 @@ export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
     settings: settingsItem(driveId),
     activeId: activeRailItem(stage),
     activeAt: activeRailPlace(stage),
-    unread: { messages: messagesUnread(badges), calendar: calendarUnread(badges) },
+    unread: {
+      messages: messagesUnread(badges),
+      files: filesUnread(badges),
+      tasks: tasksUnread(badges),
+      calendar: calendarUnread(badges),
+    },
     bell: <NotificationBell count={notifications} current={stage.section === 'notifications'} />,
     onSearch: () => dispatch(transactions.openPalette, undefined),
     onReopen:

@@ -5,7 +5,9 @@ import {
   activeRailItem,
   activeRailPlace,
   calendarUnread,
+  filesUnread,
   messagesUnread,
+  tasksUnread,
   moreItems,
   secondaryItems,
   railItems,
@@ -225,6 +227,27 @@ describe('calendarUnread()', () => {
       should: 'show no badge rather than a wrong number',
       actual: [calendarUnread(undefined), calendarUnread({ error: 'nope' }), calendarUnread({ calendar: '3' })],
       expected: [0, 0, 0],
+    });
+  });
+});
+
+describe('filesUnread() and tasksUnread()', () => {
+  test('the file mentions and assigned tasks from the badges body', () => {
+    const badges = { dms: 2, channels: 3, files: 7, tasks: 1, calendar: 4 };
+    assert({
+      given: 'a /api/sidebar/badges body with seven file mentions and one assigned task',
+      should: 'show each count on its own item',
+      actual: [filesUnread(badges), tasksUnread(badges)],
+      expected: [7, 1],
+    });
+  });
+
+  test('nothing loaded, or a body that is not counts', () => {
+    assert({
+      given: 'no body yet and malformed counts',
+      should: 'show no badge rather than a wrong number',
+      actual: [filesUnread(undefined), tasksUnread({ files: '7', tasks: -1 })],
+      expected: [0, 0],
     });
   });
 });
