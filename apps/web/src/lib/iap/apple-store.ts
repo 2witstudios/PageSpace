@@ -18,6 +18,7 @@ import { mutate } from 'swr';
 import { APPLE_PRODUCTS, appleProductIds } from '@pagespace/lib/billing/apple/apple-products';
 import { post, ApiRequestError } from '@/lib/auth/auth-fetch';
 import {
+  APPLE_BILLING_CHANGED_EVENT,
   PAGESPACE_STORE_PLUGIN,
   classifyTransactionResponse,
   finishDecision,
@@ -50,8 +51,9 @@ export const PageSpaceStore = registerPlugin<PageSpaceStorePlugin>(PAGESPACE_STO
 /** SWR keys whose data a confirmed App Store transaction changes. */
 export const APPLE_BILLING_SWR_KEYS = ['/api/subscriptions/status', '/api/credits'] as const;
 
-/** Revalidate the subscription status and credit balance caches. Never rejects. */
+/** Revalidate the subscription status and credit balance caches, and announce the change. Never rejects. */
 export async function revalidateBillingCaches(): Promise<void> {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(APPLE_BILLING_CHANGED_EVENT));
   try {
     await Promise.all(APPLE_BILLING_SWR_KEYS.map((key) => mutate(key)));
   } catch (err) {

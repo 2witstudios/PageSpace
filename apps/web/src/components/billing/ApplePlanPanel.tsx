@@ -12,6 +12,7 @@ import { useAppleProducts } from '@/hooks/useAppleProducts';
 import type { PlanDefinition } from '@/lib/subscription/plans';
 import {
   APPLE_AUTO_RENEW_DISCLOSURE,
+  APPLE_STANDARD_EULA_URL,
   MANAGED_ON_WEB_TEXT,
   ORG_PLAN_MANAGED_TEXT,
   applePlanAction,
@@ -182,7 +183,7 @@ export function ApplePlanPanel({ plan, subscriptionTier, billingProvider, onChan
             </>
           )}
           <p className="text-xs text-muted-foreground">
-            <MarketingLink href="/terms" className="underline">Terms of Use</MarketingLink>
+            <MarketingLink href={APPLE_STANDARD_EULA_URL} className="underline">Terms of Use</MarketingLink>
             {' · '}
             <MarketingLink href="/privacy" className="underline">Privacy Policy</MarketingLink>
           </p>

@@ -227,6 +227,20 @@ export function applePlanAction({
   return 'subscribe';
 }
 
+/**
+ * Dispatched on `window` after the server confirmed an App Store transaction changed the
+ * account — including ones that complete in the background (Ask to Buy, renewals) — so
+ * views that hold billing state outside SWR refetch it.
+ */
+export const APPLE_BILLING_CHANGED_EVENT = 'pagespace:apple-billing-changed';
+
+/**
+ * The Terms of Use the App Store paywall links (App Review 3.1.2): Apple's standard EULA.
+ * Our own /terms page states web prices and links to web checkout, which the iOS paywall
+ * must never show (3.1.1 / 3.1.3).
+ */
+export const APPLE_STANDARD_EULA_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
+
 /** Auto-renewal disclosure shown next to the App Store subscription (App Review 3.1.2). */
 export const APPLE_AUTO_RENEW_DISCLOSURE =
   'Payment is charged to your Apple ID at confirmation. Subscription renews automatically each month unless cancelled at least 24 hours before the end of the period. Manage or cancel in your App Store account settings.';

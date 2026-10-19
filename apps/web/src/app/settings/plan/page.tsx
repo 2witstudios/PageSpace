@@ -17,6 +17,7 @@ import { BillingGuard } from '@/components/billing/BillingGuard';
 import { ApplePlanPanel } from '@/components/billing/ApplePlanPanel';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import {
+  APPLE_BILLING_CHANGED_EVENT,
   MANAGED_IN_APP_STORE_DETAIL,
   MANAGED_IN_APP_STORE_TITLE,
   type AppStoreSubscriptionSummary,
@@ -110,6 +111,14 @@ export default function PlanPage() {
     fetchSubscriptionData();
   }, []);
 
+  // An App Store transaction confirmed in the background (Ask to Buy approval, renewal,
+  // refund) changes the plan this page shows: refetch it in place.
+  useEffect(() => {
+    const refresh = () => void fetchSubscriptionData({ quiet: true });
+    window.addEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
+  }, []);
+
   // Clear URL params after showing alerts
   useEffect(() => {
     if (success || canceled) {
@@ -161,18 +170,19 @@ export default function PlanPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  const fetchSubscriptionData = async () => {
+  const fetchSubscriptionData = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     try {
-      setLoading(true);
+      if (!quiet) setLoading(true);
       setError(null);
       const res = await fetchWithAuth('/api/subscriptions/status');
       if (!res.ok) throw new Error('Failed to fetch subscription data');
       const data = await res.json();
       setSubscriptionData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      // A background refresh keeps what is on screen rather than replacing it with an error.
+      if (!quiet) setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 

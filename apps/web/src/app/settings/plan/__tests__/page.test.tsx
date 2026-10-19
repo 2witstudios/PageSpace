@@ -142,11 +142,24 @@ describe('PlanPage on the Apple channel (iOS with StoreKit)', () => {
     expect(screen.getByRole('button', { name: 'Restore Purchases' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Manage Subscription' })).not.toBeInTheDocument();
     expect(screen.getByTestId('apple-auto-renew-disclosure')).toHaveTextContent(/renews automatically each month/);
-    expect(screen.getByRole('link', { name: 'Terms of Use' })).toHaveAttribute('href', '/terms');
+    // Apple's standard EULA: our /terms page states web prices and links to web checkout.
+    expect(screen.getByRole('link', { name: 'Terms of Use' })).toHaveAttribute('href', 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/');
     expect(screen.getByRole('link', { name: 'Privacy Policy' })).toHaveAttribute('href', '/privacy');
     // No web price, no Stripe upgrade CTA.
     expect(screen.queryByTestId('plan-price')).not.toBeInTheDocument();
     expect(screen.queryByText(/Upgrade to/)).not.toBeInTheDocument();
+  });
+
+  it('refetches the plan when an App Store purchase completes in the background (Ask to Buy approval)', async () => {
+    mockStatusResponse({ subscriptionTier: 'free', billingProvider: null, appStore: null });
+    render(<PlanPage />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Subscribe' })).toBeInTheDocument());
+
+    mockStatusResponse({ subscriptionTier: 'pro', billingProvider: 'apple', appStore: { status: 'active' } });
+    window.dispatchEvent(new Event('pagespace:apple-billing-changed'));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Manage Subscription' })).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Subscribe' })).not.toBeInTheDocument();
   });
 
   it('offers no Subscribe while the subscription status is unknown (it may already be paid on the web)', async () => {

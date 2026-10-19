@@ -5,7 +5,7 @@ import { isCapacitorApp } from '@/lib/capacitor-bridge';
 import { openExternalUrl } from '@/lib/navigation/app-navigation';
 
 interface MarketingLinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href'> {
-  /** A same-host path served by the marketing site, e.g. `/terms`. */
+  /** A same-host path served by the marketing site, e.g. `/terms`, or an absolute URL. */
   href: string;
   children: ReactNode;
 }
