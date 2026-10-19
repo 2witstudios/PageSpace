@@ -12,7 +12,7 @@ export type RailItem = {
   readonly href: string | null;
 };
 
-/** The six drive tools under the divider; Members is one of them (SPEC v3). */
+/** A drive tool, on the spine or behind More. */
 export type SecondaryItem = {
   readonly id: DriveTool;
   readonly icon: IconName;
@@ -54,12 +54,19 @@ export const classicHref = (driveId: string, path: string): string =>
   `/dashboard/${encodeURIComponent(driveId)}/${path}`;
 
 /**
- * Under the divider (SPEC v3 spine, C-Files-Doc): Calendar, Agents, Workflows, Activity,
- * Members and Trash, each a route of the current drive.
+ * Under the divider: Calendar and Agents, the tools that carry their own notifications or are
+ * used as destinations in their own right, each a route of the current drive.
  */
 export const secondaryItems = (driveId: string | null): readonly SecondaryItem[] => [
   { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar') },
   { id: 'agents', icon: 'agents', label: 'Agents', href: driveHref(driveId, 'agents') },
+];
+
+/**
+ * Behind the More entry at the foot: the housekeeping tools, which carry no notifications and
+ * are visited rarely. Each is a route of the current drive.
+ */
+export const moreItems = (driveId: string | null): readonly SecondaryItem[] => [
   { id: 'workflows', icon: 'workflows', label: 'Workflows', href: driveHref(driveId, 'workflows') },
   { id: 'activity', icon: 'activity', label: 'Activity', href: driveHref(driveId, 'activity') },
   { id: 'members', icon: 'members', label: 'Members', href: driveHref(driveId, 'members') },
@@ -104,4 +111,10 @@ export const messagesUnread = (badges: unknown): number => {
   if (typeof badges !== 'object' || badges === null) return 0;
   const { dms, channels } = badges as { readonly dms?: unknown; readonly channels?: unknown };
   return count(dms) + count(channels);
+};
+
+/** Calendar counts the pending invites to upcoming events the viewer has not answered. */
+export const calendarUnread = (badges: unknown): number => {
+  if (typeof badges !== 'object' || badges === null) return 0;
+  return count((badges as { readonly calendar?: unknown }).calendar);
 };

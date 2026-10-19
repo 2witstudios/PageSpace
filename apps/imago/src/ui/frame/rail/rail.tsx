@@ -9,7 +9,9 @@ import { NotificationBell } from './notification-bell';
 import {
   activeRailItem,
   activeRailPlace,
+  calendarUnread,
   messagesUnread,
+  moreItems,
   railDrive,
   railItems,
   secondaryItems,
@@ -42,10 +44,11 @@ export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
   return renderRail({
     items: railItems(driveId),
     tools: secondaryItems(driveId),
+    more: moreItems(driveId),
     settings: settingsItem(driveId),
     activeId: activeRailItem(stage),
     activeAt: activeRailPlace(stage),
-    unread: { messages: messagesUnread(badges) },
+    unread: { messages: messagesUnread(badges), calendar: calendarUnread(badges) },
     bell: <NotificationBell count={notifications} current={stage.section === 'notifications'} />,
     onSearch: () => dispatch(transactions.openPalette, undefined),
     onReopen:

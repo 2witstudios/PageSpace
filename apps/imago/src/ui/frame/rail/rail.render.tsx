@@ -1,5 +1,7 @@
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
+import { accountItemClass, accountMenuClass } from '../avatar-menu/avatar-menu-class';
 import {
   spineDividerClass,
   spineListClass,
@@ -11,6 +13,8 @@ import type { RailItem, RailItemId, RailPlace, SecondaryItem } from './rail-item
 export type RailRenderProps = {
   readonly items: readonly RailItem[];
   readonly tools: readonly SecondaryItem[];
+  /** Behind the More entry at the foot: the housekeeping tools. */
+  readonly more: readonly SecondaryItem[];
   readonly settings: RailItem;
   readonly activeId: RailItemId | null;
   /** The active item's own URL is open, or a place inside its section. */
@@ -70,7 +74,7 @@ export function renderRail(props: RailRenderProps): ReactNode {
               label: entry.label,
               href: entry.href,
               current: current(entry.id),
-              unread: 0,
+              unread: unread[entry.id] ?? 0,
               onReopen: entry.id === activeId ? onReopen : undefined,
             })}
           </li>
@@ -78,6 +82,38 @@ export function renderRail(props: RailRenderProps): ReactNode {
       </ul>
       <div className="flex-1" />
       <ul className={spineListClass}>
+        <li className="relative">
+          <details>
+            <summary
+              className={`${spineTileClass('small', props.more.some((entry) => entry.id === activeId))} summary-plain`}
+              aria-label="More"
+            >
+              {renderIcon({ name: 'more', size: 18 })}
+              {renderRailTooltip('More')}
+            </summary>
+            <ul className={accountMenuClass} aria-label="More tools">
+              {props.more.map((entry) => (
+                <li key={entry.id}>
+                  {entry.href === null ? (
+                    <span className={accountItemClass} aria-disabled="true">
+                      {renderIcon({ name: entry.icon, size: 16 })}
+                      {entry.label}
+                    </span>
+                  ) : (
+                    <Link
+                      href={entry.href}
+                      aria-current={entry.id === activeId ? 'page' : undefined}
+                      className={accountItemClass}
+                    >
+                      {renderIcon({ name: entry.icon, size: 16 })}
+                      {entry.label}
+                    </Link>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </details>
+        </li>
         <li>{props.bell}</li>
         <li>
           {renderRailButton({
