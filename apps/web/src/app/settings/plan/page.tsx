@@ -14,6 +14,14 @@ import { EmbeddedCheckoutForm } from '@/components/billing/EmbeddedCheckoutForm'
 import { PlanChangeConfirmation } from '@/components/billing/PlanChangeConfirmation';
 import { PlanCard } from '@/components/billing/PlanCard';
 import { BillingGuard } from '@/components/billing/BillingGuard';
+import { ApplePlanPanel } from '@/components/billing/ApplePlanPanel';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
+import {
+  APPLE_BILLING_CHANGED_EVENT,
+  MANAGED_IN_APP_STORE_DETAIL,
+  MANAGED_IN_APP_STORE_TITLE,
+  type BillingProvider,
+} from '@/lib/iap/apple-store-core';
 import {
   getPersonalPlans,
   getPlan,
@@ -46,12 +54,16 @@ interface SubscriptionData {
     scheduledPriceId?: string | null;
     scheduledChangeDate?: string | null;
   };
+  /** Who sells the current paid personal plan: Stripe (web), Apple (In-App Purchase), or neither. */
+  billingProvider?: BillingProvider;
 }
 
 export default function PlanPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { resolvedTheme } = useTheme();
+  const { channel } = useBillingVisibility();
+  const isAppleChannel = channel === 'apple';
   const [subscriptionData, setSubscriptionData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -95,6 +107,14 @@ export default function PlanPage() {
 
   useEffect(() => {
     fetchSubscriptionData();
+  }, []);
+
+  // An App Store transaction confirmed in the background (Ask to Buy approval, renewal,
+  // refund) changes the plan this page shows: refetch it in place.
+  useEffect(() => {
+    const refresh = () => void fetchSubscriptionData({ quiet: true });
+    window.addEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(APPLE_BILLING_CHANGED_EVENT, refresh);
   }, []);
 
   // Clear URL params after showing alerts
@@ -148,23 +168,29 @@ export default function PlanPage() {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  const fetchSubscriptionData = async () => {
+  const fetchSubscriptionData = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     try {
-      setLoading(true);
-      setError(null);
+      // A background refresh leaves the error on screen alone (it may be about something else).
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
       const res = await fetchWithAuth('/api/subscriptions/status');
       if (!res.ok) throw new Error('Failed to fetch subscription data');
       const data = await res.json();
       setSubscriptionData(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      // A background refresh keeps what is on screen rather than replacing it with an error.
+      if (!quiet) setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   const handlePlanSelect = async (targetTier: SubscriptionTier) => {
     if (!subscriptionData) return;
+    // Stripe never sells on the Apple channel, nor changes a plan the App Store sold.
+    if (isAppleChannel || subscriptionData.billingProvider === 'apple') return;
 
     const target = getPlan(targetTier);
     const currentTier = subscriptionData.subscriptionTier;
@@ -327,9 +353,12 @@ export default function PlanPage() {
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
     : null;
+  // Bought through the App Store: Stripe must not sell, change or cancel it here.
+  const managedInAppStore = !isAppleChannel && subscriptionData?.billingProvider === 'apple';
+  const proPlan = plans.find((plan) => plan.id === 'pro') ?? getPlan('pro');
 
   return (
-    <BillingGuard>
+    <BillingGuard surface="purchases">
     <div className="container mx-auto p-6 space-y-8">
       {/* Header */}
       <div>
@@ -385,8 +414,29 @@ export default function PlanPage() {
         </div>
       )}
 
+      {/* Web, but the plan was bought in the iOS app: no Stripe controls for it. */}
+      {managedInAppStore && (
+        <Alert data-testid="managed-in-app-store">
+          <AlertDescription>
+            <span className="font-medium">{MANAGED_IN_APP_STORE_TITLE}.</span> {MANAGED_IN_APP_STORE_DETAIL}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* iOS with StoreKit: In-App Purchase only — never Stripe checkout or a web price. */}
+      {/* Only once the status is known: an unknown status must never offer Subscribe to
+          someone who may already pay on the web (that would bill one plan twice). */}
+      {isAppleChannel && subscriptionData && (
+        <ApplePlanPanel
+          plan={proPlan}
+          subscriptionTier={subscriptionData.subscriptionTier}
+          billingProvider={subscriptionData.billingProvider}
+          onChanged={fetchSubscriptionData}
+        />
+      )}
+
       {/* Embedded Checkout */}
-      {checkoutPlan && clientSecret && subscriptionId && (
+      {!isAppleChannel && checkoutPlan && clientSecret && subscriptionId && (
         <Card className="max-w-lg mx-auto relative">
           <CardHeader>
             <CardTitle>Complete Your Subscription</CardTitle>
@@ -421,7 +471,7 @@ export default function PlanPage() {
       )}
 
       {/* Plan Cards - Only show when not in checkout */}
-      {!checkoutPlan && (
+      {!isAppleChannel && !checkoutPlan && (
         <div className="mx-auto grid w-full max-w-4xl grid-cols-1 gap-6 pt-6 pb-4 md:grid-cols-2">
           {plans.map((plan) => (
             <PlanCard
@@ -435,6 +485,9 @@ export default function PlanPage() {
               onManageBilling={() => router.push('/settings/billing')}
               onCancelSchedule={handleCancelSchedule}
               cancellingSchedule={cancellingSchedule}
+              actionOverride={managedInAppStore ? (
+                <p className="text-center text-sm text-muted-foreground">{MANAGED_IN_APP_STORE_TITLE}</p>
+              ) : undefined}
               className={plan.highlighted ? 'relative z-10' : ''}
             />
           ))}
@@ -516,7 +569,7 @@ export default function PlanPage() {
       )}
 
       {/* Plan Change Confirmation Dialog */}
-      {targetPlan && subscriptionData && (
+      {!isAppleChannel && !managedInAppStore && targetPlan && subscriptionData && (
         <PlanChangeConfirmation
           open={changePlanDialog}
           onOpenChange={setChangePlanDialog}

@@ -14,6 +14,7 @@ import { ORG_ERROR_COPY, orgErrorCode, orgErrorMessage } from '@/lib/orgs/org-er
 import { cn } from '@/lib/utils/index';
 import { documentAllowsPaymentElement, paymentRouteFor } from '@/lib/orgs/payment-routes';
 import { OrgPaymentForm } from './OrgPaymentForm';
+import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 
 /** Opens the org's Stripe billing portal (it returns to /orgs/[orgId]/settings). */
 export async function goToOrgBillingPortal(orgId: string): Promise<void> {
@@ -44,6 +45,9 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, classN
   className?: string;
 }) {
   const { resolvedTheme } = useTheme();
+  // Reactivation and the portal are Stripe: never offered in the iOS app, where
+  // org plans are web-only (Guideline 3.1.3(c)) and there is no CTA or link.
+  const { showBilling } = useBillingVisibility();
   const [busy, setBusy] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [needsSupport, setNeedsSupport] = useState(false);
@@ -82,12 +86,12 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, classN
 
   // Arrived from Reactivate on another org page: start paying here.
   useEffect(() => {
-    if (autoStarted.current || notice?.kind !== 'reactivate') return;
+    if (autoStarted.current || notice?.kind !== 'reactivate' || !showBilling) return;
     if (new URLSearchParams(window.location.search).get('reactivate') !== '1') return;
     autoStarted.current = true;
     void reactivate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notice?.kind]);
+  }, [notice?.kind, showBilling]);
 
   if (!notice) return null;
 
@@ -115,6 +119,7 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, classN
                 Payment received — activation is finishing; this page updates automatically.
               </span>
             ) : null}
+            {showBilling ? (
             <div className="mt-1.5 flex flex-wrap gap-2">
               {needsSupport ? (
                 <Button size="sm" onClick={() => setSupportOpen(true)}>
@@ -130,6 +135,9 @@ export function OrgBillingBanner({ orgId, orgName, notice, onReactivated, classN
                 Billing portal
               </Button>
             </div>
+            ) : (
+              <span className="text-xs text-foreground/80">Organization billing isn&apos;t managed in this app.</span>
+            )}
           </>
         ) : (
           <>

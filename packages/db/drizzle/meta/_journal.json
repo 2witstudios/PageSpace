@@ -2437,6 +2437,13 @@
       "when": 1792110230314,
       "tag": "0378_storage_addon",
       "breakpoints": true
+    },
+    {
+      "idx": 348,
+      "version": "7",
+      "when": 1792418795839,
+      "tag": "0379_app_store_purchases",
+      "breakpoints": true
     }
   ]
 }

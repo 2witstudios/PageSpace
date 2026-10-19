@@ -2,10 +2,11 @@
  * Periodic reconciler for the users.subscriptionTier cache — the counterpart
  * of the wallet balance-drift sweep (wallet-reconcile), for subscription tiers.
  *
- * The cache is written only by the Stripe webhook, so a missed/failed webhook
- * leaves it stale indefinitely. This sweep walks every user, re-derives the
- * tier from their subscriptions rows (Stripe's local mirror — no Stripe
- * calls), and repairs repairable drift in place with logging + audit-friendly
+ * The cache is written by the Stripe webhook and the App Store paths, so a missed/failed
+ * event leaves it stale indefinitely — and an App Store plan also lapses on its own once
+ * its paid period ends. This sweep walks every user, re-derives the tier from their
+ * subscriptions rows (Stripe's local mirror — no Stripe calls) merged with their App
+ * Store subscriptions (apple-entitlement), and repairs repairable drift in place with logging + audit-friendly
  * details. Unknown prices and absent subscription rows confer no paid entitlement;
  * the cache is repaired to the verified result even when diagnosis is indeterminate.
  */
@@ -23,6 +24,8 @@ import {
   type PriceTierResolver,
   type SubscriptionRowLike,
 } from './subscription-tier-sync';
+import { combineTiers } from './apple/apple-core';
+import { appleEntitledTier, appleEntitledTiers } from './apple/apple-entitlement';
 
 /** Subscription rows include a non-entitled status too, so we can tell "no record at all" apart from "canceled". */
 type ReconcileSubscriptionRow = SubscriptionRowLike & { userId: string };
@@ -96,6 +99,10 @@ export async function reconcileSubscriptionTiers(options: {
       .from(subscriptions)
       .where(inArray(subscriptions.userId, batch.map((u) => u.id)));
 
+    // The App Store half of each user's plan: a tier is one fact whichever store sold it.
+    const now = new Date();
+    const appleTiers = await appleEntitledTiers(db, batch.map((u) => u.id), now);
+
     const rowsByUser = new Map<string, ReconcileSubscriptionRow[]>();
     for (const row of subRows) {
       const list = rowsByUser.get(row.userId) ?? [];
@@ -110,8 +117,9 @@ export async function reconcileSubscriptionTiers(options: {
       .map((user) => {
         const allRows = rowsByUser.get(user.id) ?? [];
         const entitledRows = allRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status));
-        const derived = deriveTierFromSubscriptions(entitledRows, options.priceTier);
-        const hasAnySubscriptionRecord = allRows.length > 0;
+        const stripeDerived = deriveTierFromSubscriptions(entitledRows, options.priceTier);
+        const derived = { ...stripeDerived, tier: combineTiers(stripeDerived.tier, appleTiers.get(user.id) ?? 'free') };
+        const hasAnySubscriptionRecord = allRows.length > 0 || appleTiers.has(user.id);
         const drift = computeTierDrift({ storedTier: user.subscriptionTier, derived });
         if (!drift.drifted) return null;
         return {
@@ -136,10 +144,11 @@ export async function reconcileSubscriptionTiers(options: {
           if (!current || current.tier !== user.subscriptionTier) return false;
           const currentRows = await tx.select({ status: subscriptions.status, stripePriceId: subscriptions.stripePriceId })
             .from(subscriptions).where(eq(subscriptions.userId, user.id));
-          const derived = deriveTierFromSubscriptions(
+          const stripeDerived = deriveTierFromSubscriptions(
             currentRows.filter((row) => ENTITLED_SUBSCRIPTION_STATUSES.includes(row.status)),
             options.priceTier,
           );
+          const derived = { ...stripeDerived, tier: combineTiers(stripeDerived.tier, await appleEntitledTier(tx, user.id, now)) };
           const freshDrift = computeTierDrift({ storedTier: current.tier, derived });
           if (!freshDrift.drifted || freshDrift.expectedTier !== drift.expectedTier) return false;
           await tx.update(users).set({ subscriptionTier: freshDrift.expectedTier, updatedAt: new Date() })

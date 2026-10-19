@@ -689,6 +689,36 @@
       "import": "./dist/billing/deployment-capability.js",
       "require": "./dist/billing/deployment-capability.js"
     },
+    "./billing/apple/apple-products": {
+      "types": "./dist/billing/apple/apple-products.d.ts",
+      "import": "./dist/billing/apple/apple-products.js",
+      "require": "./dist/billing/apple/apple-products.js"
+    },
+    "./billing/apple/apple-core": {
+      "types": "./dist/billing/apple/apple-core.d.ts",
+      "import": "./dist/billing/apple/apple-core.js",
+      "require": "./dist/billing/apple/apple-core.js"
+    },
+    "./billing/apple/apple-verify": {
+      "types": "./dist/billing/apple/apple-verify.d.ts",
+      "import": "./dist/billing/apple/apple-verify.js",
+      "require": "./dist/billing/apple/apple-verify.js"
+    },
+    "./billing/apple/apple-funding": {
+      "types": "./dist/billing/apple/apple-funding.d.ts",
+      "import": "./dist/billing/apple/apple-funding.js",
+      "require": "./dist/billing/apple/apple-funding.js"
+    },
+    "./billing/apple/apple-account": {
+      "types": "./dist/billing/apple/apple-account.d.ts",
+      "import": "./dist/billing/apple/apple-account.js",
+      "require": "./dist/billing/apple/apple-account.js"
+    },
+    "./billing/apple/apple-entitlement": {
+      "types": "./dist/billing/apple/apple-entitlement.d.ts",
+      "import": "./dist/billing/apple/apple-entitlement.js",
+      "require": "./dist/billing/apple/apple-entitlement.js"
+    },
     "./billing/subscription-tiers": {
       "types": "./dist/billing/subscription-tiers.d.ts",
       "import": "./dist/billing/subscription-tiers.js",
@@ -4081,6 +4111,7 @@
     }
   },
   "dependencies": {
+    "@apple/app-store-server-library": "3.1.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@clickhouse/client": "^1.23.1",
     "@fly/sprites": "0.0.1-rc37",

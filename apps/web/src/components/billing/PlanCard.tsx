@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,11 @@ interface PlanCardProps {
   onManageBilling?: () => void;
   onCancelSchedule?: () => void;
   cancellingSchedule?: boolean;
+  /**
+   * Rendered in place of the action button — e.g. "Managed in the App Store"
+   * when the plan was bought in the iOS app and Stripe must not change it.
+   */
+  actionOverride?: ReactNode;
   className?: string;
 }
 
@@ -32,6 +37,7 @@ export function PlanCard({
   onManageBilling,
   onCancelSchedule,
   cancellingSchedule = false,
+  actionOverride,
   className,
 }: PlanCardProps) {
   // MON-6 / SEAT-2: price, seat terms, and per-seat credits from the same source as the
@@ -252,7 +258,7 @@ export function PlanCard({
         </div>
 
         <div className="mt-auto">
-          {getActionButton()}
+          {actionOverride ?? getActionButton()}
         </div>
       </CardContent>
     </Card>

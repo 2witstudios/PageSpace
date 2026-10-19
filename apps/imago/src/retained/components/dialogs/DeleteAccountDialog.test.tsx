@@ -1,14 +1,28 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { ApiRequestError } from "@/retained/lib/auth/auth-fetch"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { SWRConfig } from "swr"
+
+const mocks = vi.hoisted(() => ({ billingProvider: null as string | null, appStoreRenews: false, statusOk: true }))
+vi.mock("@/retained/lib/auth/auth-fetch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/retained/lib/auth/auth-fetch")>()),
+  fetchWithAuth: vi.fn(async () => ({ ok: mocks.statusOk, status: mocks.statusOk ? 200 : 500, json: async () => ({ billingProvider: mocks.billingProvider, appStoreRenews: mocks.appStoreRenews }) })),
+}))
+
+import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch"
 import { DeleteAccountDialog, ownedOrganizationsFrom } from "./DeleteAccountDialog"
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  mocks.billingProvider = null
+  mocks.appStoreRenews = false
+  mocks.statusOk = true
+})
 
 const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccountDialog>> = {}) => {
   const onConfirm = vi.fn()
   render(
+    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
     <DeleteAccountDialog
       isOpen
       onClose={vi.fn()}
@@ -18,6 +32,7 @@ const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccou
       soloDrivesCount={0}
       {...overrides}
     />
+    </SWRConfig>
   )
   return { onConfirm }
 }
@@ -41,14 +56,73 @@ describe("ownedOrganizationsFrom", () => {
 })
 
 describe("DeleteAccountDialog", () => {
-  it("keeps Delete Account Permanently disabled until the email is typed", () => {
+  it("tells an App Store subscriber that deleting the account does not cancel the subscription, and where to cancel it", async () => {
+    mocks.billingProvider = "apple"
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+    expect(screen.getByText(/Settings › Apple ID › Subscriptions/)).toBeTruthy()
+  })
+
+  it("warns when Apple will charge again even though Stripe sells the current plan", async () => {
+    mocks.billingProvider = "stripe"
+    mocks.appStoreRenews = true
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+  })
+
+  it("shows no App Store notice to anyone else", async () => {
+    mocks.billingProvider = "stripe"
+    renderDialog()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByTestId("app-store-deletion-notice")).toBeNull()
+  })
+
+  it("warns anyway when the App Store status cannot be read, rather than implying there is no subscription", async () => {
+    mocks.statusOk = false
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+    // The read is bounded, so a request that never answers ends the same way.
+    expect(fetchWithAuth).toHaveBeenCalledWith("/api/subscriptions/status", { signal: expect.any(AbortSignal) })
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    expect(deleteButton().disabled).toBe(false)
+  })
+
+  it("on reopen, waits for a fresh App Store answer instead of trusting a cached 'no subscription'", async () => {
+    const cache = new Map()
+    const props = { onClose: vi.fn(), onConfirm: vi.fn(), userEmail: "jono@studio.example", isDeleting: false, soloDrivesCount: 0 }
+    const tree = (isOpen: boolean) => (
+      <SWRConfig value={{ provider: () => cache, dedupingInterval: 0 }}>
+        <DeleteAccountDialog isOpen={isOpen} {...props} />
+      </SWRConfig>
+    )
+    const { rerender } = render(tree(true))
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    await waitFor(() => expect(deleteButton().disabled).toBe(false))
+
+    // Closed, the user subscribes in the App Store; on reopen the check is still in flight.
+    rerender(tree(false))
+    vi.mocked(fetchWithAuth).mockImplementationOnce(() => new Promise<Response>(() => {}))
+    rerender(tree(true))
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(deleteButton().disabled).toBe(true)
+  })
+
+  it("keeps Delete Account Permanently disabled until the email is typed and the App Store status is known", async () => {
     const { onConfirm } = renderDialog()
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    // The App Store answer is still loading: confirming waits for it.
     expect(deleteButton().disabled).toBe(true)
     fireEvent.click(deleteButton())
     expect(onConfirm).not.toHaveBeenCalled()
 
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "" } })
+    await waitFor(() => expect(deleteButton().disabled).toBe(true))
+    fireEvent.click(deleteButton())
+    expect(onConfirm).not.toHaveBeenCalled()
+
     fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
-    expect(deleteButton().disabled).toBe(false)
+    await waitFor(() => expect(deleteButton().disabled).toBe(false))
     fireEvent.click(deleteButton())
     expect(onConfirm).toHaveBeenCalledWith("jono@studio.example")
   })

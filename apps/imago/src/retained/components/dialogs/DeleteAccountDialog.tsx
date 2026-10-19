@@ -1,4 +1,5 @@
 import { useState } from "react";
+import useSWR from "swr";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +15,30 @@ import { Label } from "@/retained/components/ui/label";
 import { Alert, AlertDescription } from "@/retained/components/ui/alert";
 import { AlertTriangle } from "lucide-react";
 import { SignInWithAppleDeletionNotice, type AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
-import { ApiRequestError } from "@/retained/lib/auth/auth-fetch";
+import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
+
+const APP_STORE_STATUS_TIMEOUT_MS = 10_000;
+
+/**
+ * Whether Apple will charge the viewer again — GET /api/subscriptions/status `appStoreRenews`
+ * (auto-renew on, renewal-capable), or an App Store-sold current plan. A failed request
+ * throws: an unknown answer is never read as "no subscription".
+ */
+async function fetchAppStoreRenews([url]: readonly [string, "app-store-renews"]): Promise<boolean> {
+  // Bounded: a request that never answers becomes an error (the warning shows) instead of
+  // leaving confirmation disabled forever.
+  const response = await fetchWithAuth(url, { signal: AbortSignal.timeout(APP_STORE_STATUS_TIMEOUT_MS) });
+  if (!response.ok) throw new Error(`Failed to fetch subscription status: ${response.status}`);
+  const body: { billingProvider?: string | null; appStoreRenews?: boolean } = await response.json();
+  return body.appStoreRenews === true || body.billingProvider === "apple";
+}
+
+/**
+ * Account deletion cannot cancel a subscription Apple bills, so an App Store subscriber is
+ * told where to cancel it before deleting (Imago has no StoreKit sheet to open).
+ */
+export const APP_STORE_DELETION_NOTICE =
+  "Deleting your account does not cancel your App Store subscription. Cancel it in your App Store subscriptions first to stop being charged. On your iPhone or iPad: Settings › Apple ID › Subscriptions.";
 
 /**
  * The organizations a DELETE /api/account refusal names as still owned by the viewer. Only the
@@ -51,12 +75,23 @@ export function DeleteAccountDialog({
   ownedOrganizations,
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
+  // A key of its own: this caches a boolean, not the status body other readers of the URL expect.
+  const { data: appStoreRenews, error: appStoreStatusError, isValidating: isAppStoreStatusValidating } = useSWR(
+    isOpen ? (["/api/subscriptions/status", "app-store-renews"] as const) : null,
+    fetchAppStoreRenews,
+    { revalidateOnFocus: false },
+  );
 
   const isEmailMatch = emailConfirmation.trim().toLowerCase() === userEmail.toLowerCase();
   const isRefused = ownedOrganizations !== undefined && ownedOrganizations.length > 0;
+  // Confirming waits for THIS open's App Store answer — a cached one may predate a new
+  // subscription. If it cannot be had, the warning shows anyway rather than blocking
+  // deletion on a billing read.
+  const isAppStoreStatusPending = isOpen && (isAppStoreStatusValidating || (appStoreRenews === undefined && appStoreStatusError === undefined));
+  const showAppStoreNotice = appStoreRenews === true || appStoreStatusError !== undefined;
 
   const handleConfirm = () => {
-    if (isEmailMatch && !isRefused) {
+    if (isEmailMatch && !isRefused && !isAppStoreStatusPending) {
       onConfirm(emailConfirmation);
     }
   };
@@ -109,6 +144,13 @@ export function DeleteAccountDialog({
             </Alert>
           )}
 
+          {showAppStoreNotice && (
+            <Alert role="status" data-testid="app-store-deletion-notice">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>{APP_STORE_DELETION_NOTICE}</AlertDescription>
+            </Alert>
+          )}
+
           {appleSignInRevocation && <SignInWithAppleDeletionNotice revocation={appleSignInRevocation} />}
 
           <div className="space-y-2">
@@ -131,7 +173,7 @@ export function DeleteAccountDialog({
           <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
           <AlertDialogAction
             onClick={handleConfirm}
-            disabled={!isEmailMatch || isRefused || isDeleting}
+            disabled={!isEmailMatch || isRefused || isDeleting || isAppStoreStatusPending}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             {isDeleting ? "Deleting Account..." : "Delete Account Permanently"}

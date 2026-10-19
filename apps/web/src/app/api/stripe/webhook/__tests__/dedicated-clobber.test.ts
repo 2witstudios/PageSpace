@@ -94,6 +94,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const mockApplyStripeFunding = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/credit-funding', () => ({ applyStripeFunding: mockApplyStripeFunding }));
+// No App Store plan here: the merged tier is the Stripe one.
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({ appleEntitledTier: vi.fn(async () => 'free') }));
 // Every customer here is a person's: the org fork (org-handlers) declines every event.
 vi.mock('../org-handlers', () => ({
   routeOrgSubscriptionEvent: vi.fn().mockResolvedValue(false),

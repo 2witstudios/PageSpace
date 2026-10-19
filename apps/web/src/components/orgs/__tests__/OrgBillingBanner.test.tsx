@@ -2,7 +2,9 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ paymentHere: false, assign: vi.fn(), startOrgSubscription: vi.fn() }));
+const mocks = vi.hoisted(() => ({ paymentHere: false, assign: vi.fn(), startOrgSubscription: vi.fn(), showBilling: true }));
+
+vi.mock('@/hooks/useBillingVisibility', () => ({ useBillingVisibility: () => ({ showBilling: mocks.showBilling }) }));
 
 vi.mock('next-themes', () => ({ useTheme: () => ({ resolvedTheme: 'light' }) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), message: vi.fn() } }));
@@ -26,11 +28,24 @@ const reactivate = { kind: 'reactivate' as const, reason: 'canceled' as const, c
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.paymentHere = false;
+  mocks.showBilling = true;
   mocks.startOrgSubscription.mockResolvedValue({ subscription: {}, payment: { kind: 'confirm_payment', clientSecret: 'cs_1' }, activation: 'payment_required' });
   Object.defineProperty(window, 'location', { value: { ...window.location, search: '', assign: mocks.assign }, writable: true });
 });
 
 describe('OrgBillingBanner', () => {
+  it('in the iOS app (no Stripe channel), offers no Reactivate, no billing portal, and never starts paying', async () => {
+    mocks.showBilling = false;
+    mocks.paymentHere = true;
+    window.location.search = '?reactivate=1';
+    render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} />);
+    expect(screen.queryByRole('button', { name: 'Reactivate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Billing portal' })).toBeNull();
+    expect(screen.getByText(/isn.t managed in this app/)).toBeTruthy();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.startOrgSubscription).not.toHaveBeenCalled();
+  });
+
   it('SEAT-9 (partial): off the payment route, Reactivate loads Plan & seats fresh (the Payment Element needs a document without COEP)', async () => {
     render(<OrgBillingBanner orgId="org_1" orgName="Northwind Labs" notice={reactivate} />);
     await userEvent.click(screen.getByRole('button', { name: 'Reactivate' }));

@@ -75,6 +75,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- External webhooks (no user session, verified by external party) ---
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
+  ['iap/apple/notifications', 'Apple-initiated App Store Server Notification, verified by its JWS signature against Apple Root CA G3'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
   ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
   ['webhooks/[token]', 'Signature-verified inbound page-webhook intake — no user session, authenticated by per-webhook HMAC secret; minting/managing the webhook is audited in the /api/pages/[pageId]/webhooks routes'],
