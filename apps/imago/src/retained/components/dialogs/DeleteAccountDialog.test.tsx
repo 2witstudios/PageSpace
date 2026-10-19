@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { SWRConfig } from "swr"
 
-const mocks = vi.hoisted(() => ({ billingProvider: null as string | null }))
+const mocks = vi.hoisted(() => ({ billingProvider: null as string | null, appStoreRenews: false }))
 vi.mock("@/retained/lib/auth/auth-fetch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/retained/lib/auth/auth-fetch")>()),
-  fetchWithAuth: vi.fn(async () => ({ ok: true, json: async () => ({ billingProvider: mocks.billingProvider }) })),
+  fetchWithAuth: vi.fn(async () => ({ ok: true, json: async () => ({ billingProvider: mocks.billingProvider, appStoreRenews: mocks.appStoreRenews }) })),
 }))
 
 import { ApiRequestError } from "@/retained/lib/auth/auth-fetch"
@@ -15,6 +15,7 @@ import { DeleteAccountDialog, ownedOrganizationsFrom } from "./DeleteAccountDial
 afterEach(() => {
   cleanup()
   mocks.billingProvider = null
+  mocks.appStoreRenews = false
 })
 
 const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccountDialog>> = {}) => {
@@ -59,6 +60,13 @@ describe("DeleteAccountDialog", () => {
     renderDialog()
     expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
     expect(screen.getByText(/Settings › Apple ID › Subscriptions/)).toBeTruthy()
+  })
+
+  it("warns when Apple will charge again even though Stripe sells the current plan", async () => {
+    mocks.billingProvider = "stripe"
+    mocks.appStoreRenews = true
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
   })
 
   it("shows no App Store notice to anyone else", async () => {

@@ -105,8 +105,17 @@ export const appleRefundRef = (transactionId: string, revokedAtMs: number) => `a
 export const appleReinstateRef = (transactionId: string, revokedAtMs: number) => `apple-reinstate:${transactionId}:${revokedAtMs}`;
 
 async function ledgerRefExists(tx: Tx, ref: string): Promise<boolean> {
-  const rows = await tx.select({ id: creditLedger.id }).from(creditLedger).where(eq(creditLedger.stripeRef, ref)).limit(1);
-  return rows.length > 0;
+  return (await ledgerAmountCents(tx, ref)) !== null;
+}
+
+/**
+ * What the ledger row keyed `ref` recorded, or null when there is none. A refund claws back
+ * — and a reversal re-grants — exactly what the purchase was credited at the time, never the
+ * current catalog's figure (a pack or price can change after it was bought).
+ */
+async function ledgerAmountCents(tx: Tx, ref: string): Promise<number | null> {
+  const rows = await tx.select({ amountCents: creditLedger.amountCents }).from(creditLedger).where(eq(creditLedger.stripeRef, ref)).limit(1);
+  return rows[0]?.amountCents ?? null;
 }
 
 /** Re-derive the user's tier across both stores and write it if it changed. */
@@ -378,33 +387,36 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
           loggers.api.warn('App Store Sandbox purchase not funded: Sandbox funding cap reached', { userId, transactionId: facts.transactionId });
           break;
         }
-        const fund = (fundingRef: string) => plan.kind === 'consumable'
-          ? fundTopup(tx, { userId, fundingRef, topupCents: plan.topupCents })
+        const fund = (fundingRef: string, cents: number) => plan.kind === 'consumable'
+          ? fundTopup(tx, { userId, fundingRef, topupCents: cents })
           : fundMonthlyGrant(tx, {
               userId,
               fundingRef,
-              allowanceCents: plan.allowanceCents,
+              allowanceCents: cents,
               paidCents: plan.paidCents,
               // A re-grant after a reversed refund must not move the root's period clock.
               periodStart: fundingRef === appleGrantRef(facts.transactionId) ? new Date(plan.periodStartMs) : null,
               periodEnd: fundingRef === appleGrantRef(facts.transactionId) ? new Date(plan.periodEndMs) : null,
             });
-        applied = (await fund(appleGrantRef(facts.transactionId))).applied;
+        applied = (await fund(appleGrantRef(facts.transactionId), grantCents)).applied;
         if (revocation.kind === 'reinstate' && await ledgerRefExists(tx, appleRefundRef(facts.transactionId, revocation.revokedAtMs))) {
-          applied = (await fund(appleReinstateRef(facts.transactionId, revocation.revokedAtMs))).applied || applied;
+          // Re-grant what the purchase was originally credited, not today's catalog figure.
+          const originalCents = (await ledgerAmountCents(tx, appleGrantRef(facts.transactionId))) ?? grantCents;
+          applied = (await fund(appleReinstateRef(facts.transactionId, revocation.revokedAtMs), originalCents)).applied || applied;
         }
         funded = funded || applied;
         break;
       }
       case 'revoke_subscription':
       case 'revoke_consumable': {
-        // Only what this transaction actually granted is clawed back: a refund for a
-        // transaction we never funded (or a $0 period) takes nothing.
-        if (revocation.kind === 'revoke' && plan.clawbackCents > 0 && await ledgerRefExists(tx, appleGrantRef(facts.transactionId))) {
+        // Only what this transaction actually granted — the amount its ledger row recorded —
+        // is clawed back: a refund for a transaction we never funded (or a $0 period) takes nothing.
+        const grantedCents = revocation.kind === 'revoke' ? await ledgerAmountCents(tx, appleGrantRef(facts.transactionId)) : null;
+        if (revocation.kind === 'revoke' && grantedCents !== null && grantedCents > 0) {
           applied = await clawBack(tx, {
             userId,
             fundingRef: appleRefundRef(facts.transactionId, revocation.revokedAtMs),
-            cents: plan.clawbackCents,
+            cents: grantedCents,
             first: plan.kind === 'revoke_subscription' ? 'monthly' : 'topup',
           });
         }

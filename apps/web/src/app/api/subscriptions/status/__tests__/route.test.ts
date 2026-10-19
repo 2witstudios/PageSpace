@@ -49,8 +49,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 // The App Store mirror read (lib billing/apple): none unless a test sets one.
 const mockLatestAppleSubscription = vi.hoisted(() => vi.fn());
+const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn());
 vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
   latestAppleSubscription: mockLatestAppleSubscription,
+  hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
 }));
 vi.mock('@/lib/stripe/price-config', () => ({
   getPersonalTierFromPrice: (priceId: string) => (priceId === 'price_pro' ? 'pro' : 'free'),
@@ -129,6 +131,8 @@ describe('GET /api/subscriptions/status', () => {
     mockSelectLimit.mockResolvedValue([]);
     mockLatestAppleSubscription.mockReset();
     mockLatestAppleSubscription.mockResolvedValue(null);
+    mockHasRenewableAppleSubscription.mockReset();
+    mockHasRenewableAppleSubscription.mockResolvedValue(false);
   });
 
   describe('which store sells the plan', () => {
@@ -160,6 +164,16 @@ describe('GET /api/subscriptions/status', () => {
       const body = await (await GET(request())).json();
       expect(body.billingProvider).toBe('apple');
       expect(body.appStore).toEqual({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: expiresAt.toISOString(), autoRenew: true, environment: 'Production' });
+    });
+
+    it('reports an App Store subscription Apple will still charge, even when Stripe sells the current plan', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
+      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
+      mockHasRenewableAppleSubscription.mockResolvedValue(true);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBe('stripe');
+      expect(body.appStoreRenews).toBe(true);
+      expect(mockHasRenewableAppleSubscription).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date), { autoRenewing: true });
     });
 
     it('is not apple once the App Store period has ended', async () => {

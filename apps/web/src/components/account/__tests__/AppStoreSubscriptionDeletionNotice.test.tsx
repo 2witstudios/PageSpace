@@ -22,8 +22,8 @@ const renderFresh = () =>
     </SWRConfig>,
   );
 
-function status(billingProvider: string | null) {
-  mocks.fetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ subscriptionTier: 'pro', billingProvider }) });
+function status(billingProvider: string | null, appStoreRenews = billingProvider === 'apple') {
+  mocks.fetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ subscriptionTier: 'pro', billingProvider, appStoreRenews }) });
 }
 
 describe('AppStoreSubscriptionDeletionNotice', () => {
@@ -56,6 +56,13 @@ describe('AppStoreSubscriptionDeletionNotice', () => {
     await waitFor(() => expect(screen.getByTestId('app-store-deletion-notice')).toBeInTheDocument());
     expect(screen.getByText(/Settings › Apple ID › Subscriptions/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Manage Subscription' })).not.toBeInTheDocument();
+  });
+
+  it('warns a Stripe subscriber who also has an App Store subscription Apple will still charge (e.g. in billing retry)', async () => {
+    mocks.channel = 'stripe';
+    status('stripe', true);
+    renderFresh();
+    await waitFor(() => expect(screen.getByTestId('app-store-deletion-notice')).toBeInTheDocument());
   });
 
   it('on an iOS binary without StoreKit, still warns', async () => {

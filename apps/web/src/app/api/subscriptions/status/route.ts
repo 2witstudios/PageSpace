@@ -9,7 +9,7 @@ import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pages
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { appleRowEntitles } from '@pagespace/lib/billing/apple/apple-core';
-import { latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
+import { hasRenewableAppleSubscription, latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
 import { resolveBillingProvider } from '@/lib/iap-server/apple-http';
 
@@ -63,6 +63,10 @@ export async function GET(request: NextRequest) {
     }
 
     const appStore = await latestAppleSubscription(db, user.id);
+    // Whether Apple will charge this account again (auto-renew on, renewal-capable status) —
+    // whichever store sells the current plan. Account deletion warns on it: deleting the
+    // account never cancels an App Store subscription.
+    const appStoreRenews = await hasRenewableAppleSubscription(db, user.id, new Date(), { autoRenewing: true });
     const now = Date.now();
     const billingProvider = resolveBillingProvider({
       stripeEntitled: subscription !== null
@@ -92,6 +96,7 @@ export async function GET(request: NextRequest) {
       // Which store sells the current plan — the clients show the other store's purchase
       // controls only when this is not the store they can manage it in.
       billingProvider,
+      appStoreRenews,
       appStore: appStore ? {
         status: appStore.status,
         productId: appStore.productId,

@@ -17,12 +17,15 @@ import { AlertTriangle } from "lucide-react";
 import { SignInWithAppleDeletionNotice, type AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
 import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
 
-/** Who sells the viewer's plan (GET /api/subscriptions/status `billingProvider`). */
-async function fetchBillingProvider(url: string): Promise<string | null> {
+/**
+ * Whether Apple will charge the viewer again — GET /api/subscriptions/status `appStoreRenews`
+ * (auto-renew on, renewal-capable), or an App Store-sold current plan.
+ */
+async function fetchAppStoreRenews(url: string): Promise<boolean> {
   const response = await fetchWithAuth(url);
-  if (!response.ok) return null;
-  const body: { billingProvider?: string | null } = await response.json();
-  return body.billingProvider ?? null;
+  if (!response.ok) return false;
+  const body: { billingProvider?: string | null; appStoreRenews?: boolean } = await response.json();
+  return body.appStoreRenews === true || body.billingProvider === "apple";
 }
 
 /**
@@ -67,7 +70,7 @@ export function DeleteAccountDialog({
   ownedOrganizations,
 }: DeleteAccountDialogProps) {
   const [emailConfirmation, setEmailConfirmation] = useState("");
-  const { data: billingProvider } = useSWR(isOpen ? "/api/subscriptions/status" : null, fetchBillingProvider, { revalidateOnFocus: false });
+  const { data: appStoreRenews } = useSWR(isOpen ? "/api/subscriptions/status" : null, fetchAppStoreRenews, { revalidateOnFocus: false });
 
   const isEmailMatch = emailConfirmation.trim().toLowerCase() === userEmail.toLowerCase();
   const isRefused = ownedOrganizations !== undefined && ownedOrganizations.length > 0;
@@ -126,7 +129,7 @@ export function DeleteAccountDialog({
             </Alert>
           )}
 
-          {billingProvider === "apple" && (
+          {appStoreRenews === true && (
             <Alert role="status" data-testid="app-store-deletion-notice">
               <AlertTriangle className="h-4 w-4" />
               <AlertDescription>{APP_STORE_DELETION_NOTICE}</AlertDescription>

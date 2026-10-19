@@ -375,6 +375,29 @@ describe('App Store credit packs', () => {
     expect(record.revokedAt?.getTime()).toBe(t0);
   });
 
+  it('a refund claws back — and a reversal re-grants — what the purchase was credited, not today\'s catalog figure', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const txn = packTxn(u.token, 100);
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
+    // As if the pack had granted 1200¢ when it was bought (the catalog has since changed to 1000¢).
+    await db.update(creditLedger).set({ amountCents: 1200 }).where(eq(creditLedger.stripeRef, `apple:${txn.transactionId}`));
+    await db.update(wallets).set({ topupRemainingCents: 1200 }).where(personalRootWalletOf(u.id));
+
+    const t0 = Date.now();
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...txn, revocationDate: t0, signedDate: t0 }, renewal: null },
+      priceTier, config,
+    });
+    expect(await root(u.id)).toMatchObject({ topupRemainingCents: 0, debtCents: 0 });
+
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND_REVERSED', subtype: null, status: null, transaction: { ...txn, signedDate: t0 + 1 }, renewal: null },
+      priceTier, config,
+    });
+    expect((await root(u.id)).topupRemainingCents).toBe(1200);
+  });
+
   it('a refund for a pack we never funded takes nothing', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
@@ -422,6 +445,9 @@ describe('who a transaction belongs to', () => {
     })).toMatchObject({ result: 'applied' });
     const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
     expect(sub).toMatchObject({ latestTransactionId: tokenless.transactionId, autoRenew: false });
+    // Still renewal-capable for the sweep, but Apple will not charge again: no deletion warning needed.
+    expect(await hasRenewableAppleSubscription(db, u.id, new Date())).toBe(true);
+    expect(await hasRenewableAppleSubscription(db, u.id, new Date(), { autoRenewing: true })).toBe(false);
   });
 
   it('refuses a notification whose buyer it cannot find', async () => {

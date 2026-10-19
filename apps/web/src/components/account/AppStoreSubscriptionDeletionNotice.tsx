@@ -9,7 +9,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import type { BillingProvider } from '@/lib/iap/apple-store-core';
 
-async function fetchStatus(url: string): Promise<{ billingProvider?: BillingProvider }> {
+async function fetchStatus(url: string): Promise<{ billingProvider?: BillingProvider; appStoreRenews?: boolean }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error(`Failed to fetch: ${response.status}`);
   return response.json();
@@ -22,7 +22,7 @@ export const APP_STORE_DELETION_NOTICE =
 export const APP_STORE_CANCEL_ELSEWHERE = 'On your iPhone or iPad: Settings › Apple ID › Subscriptions.';
 
 /**
- * For an App Store subscriber, on every client: account deletion cannot cancel an
+ * For anyone Apple will charge again, on every client: account deletion cannot cancel an
  * Apple-billed subscription, so say so wherever the account can be deleted. The iOS app
  * with StoreKit also offers Apple's Manage Subscriptions sheet; elsewhere the notice says
  * where to cancel. Renders nothing for anyone else.
@@ -33,7 +33,9 @@ export function AppStoreSubscriptionDeletionNotice() {
   const { data } = useSWR(isReady ? '/api/subscriptions/status' : null, fetchStatus, { revalidateOnFocus: false });
   const [opening, setOpening] = useState(false);
 
-  if (data?.billingProvider !== 'apple') return null;
+  // Apple may charge again even when it does not sell the current plan (billing retry, or a
+  // second subscription beside a Stripe plan), so the server's renewal flag decides.
+  if (!data || !(data.appStoreRenews || data.billingProvider === 'apple')) return null;
 
   const manage = async () => {
     setOpening(true);

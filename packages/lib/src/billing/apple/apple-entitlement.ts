@@ -58,14 +58,19 @@ export async function appleEntitledTiers(executor: Executor, userIds: readonly s
   return tiers;
 }
 
-/** Whether Apple may still renew one of the user's subscriptions (so it, not the sweep, grants). */
-export async function hasRenewableAppleSubscription(executor: Executor, userId: string, now: Date): Promise<boolean> {
+/**
+ * Whether Apple may still renew one of the user's subscriptions (so it, not the sweep, grants).
+ * With `autoRenewing`, only subscriptions whose auto-renew is on — the ones Apple will charge
+ * again — count (the account-deletion warning).
+ */
+export async function hasRenewableAppleSubscription(executor: Executor, userId: string, now: Date, opts: { autoRenewing?: boolean } = {}): Promise<boolean> {
   const rows = await executor
     .select({ id: appStoreSubscriptions.id })
     .from(appStoreSubscriptions)
     .where(and(
       eq(appStoreSubscriptions.userId, userId),
       inArray(appStoreSubscriptions.status, [...APPLE_RENEWAL_CAPABLE_STATUSES]),
+      ...(opts.autoRenewing ? [eq(appStoreSubscriptions.autoRenew, true)] : []),
       // A long-lapsed row stuck in billing retry (Apple retries for up to 60 days) is no
       // longer a renewal source.
       gt(appStoreSubscriptions.expiresAt, new Date(now.getTime() - APPLE_BILLING_RETRY_WINDOW_MS)),
