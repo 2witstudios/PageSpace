@@ -20,7 +20,7 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 
 > **App Review note (Guideline 4.2):** Apple scrutinizes thin WebView wrappers. Our native
 > value — push notifications, Sign in with Apple, native social login, the keychain plugin,
-> app-icon badge sync, and universal links — is what clears this bar. Always submit with
+> StoreKit in-app purchases, app-icon badge sync, and universal links — is what clears this bar. Always submit with
 > reviewer notes calling these out plus a working demo account (see "Submitting", below).
 
 ## Native capabilities (entitlements)
@@ -160,8 +160,8 @@ resulting changes to `project.pbxproj` and `Package.resolved` so CI/TestFlight b
 
 Bump both, in `ios/App/App.xcodeproj/project.pbxproj` (Debug + Release configs):
 
-- `MARKETING_VERSION` — user-facing version (currently `1.4`)
-- `CURRENT_PROJECT_VERSION` — build number, must strictly increase per upload (currently `5`)
+- `MARKETING_VERSION` — user-facing version (currently `1.0` in the project file)
+- `CURRENT_PROJECT_VERSION` — build number, must strictly increase per upload (currently `10`)
 
 `Info.plist` reads these via `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`.
 
@@ -224,8 +224,23 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       ships in the plist, so no per-upload prompt)
 - [ ] APNs Auth Key (`MWV7BG9H8Q`) registered in Apple Developer and linked to the app, and
       production `pagespace-web` runs `NODE_ENV=production` (otherwise every push is rejected)
-- [ ] No purchase surface reachable on iOS — walk `/settings/billing`, `/settings/usage`, and any
-      in-app link that reaches marketing pricing (Guideline 3.1.1)
+- [ ] In-app purchase rules hold on iOS (Guideline 3.1.1) — walk `/settings/billing`,
+      `/settings/usage`, and every in-app link that could reach marketing pricing:
+  - Personal plans (PageSpace Pro) and credit packs are bought **only** through StoreKit
+    (`PageSpaceStore` plugin). No Stripe checkout, no web link-out, no external payment URL, and
+    no mention of web prices anywhere on iOS (anti-steering).
+  - Storage add-ons and custom credit top-ups are hidden on iOS (web-only).
+  - Organization / enterprise / seat billing stays web-only under Guideline 3.1.3(c): iOS shows
+    "managed by your organization" with no button and no link. A personal plan bought on the web
+    shows "Your plan is managed on the web", with no button, link or URL.
+  - Prices shown are StoreKit's localized `displayPrice`, never hardcoded USD.
+  - The plan screen has **Restore Purchases** and **Manage Subscription** buttons.
+  - The auto-renew disclosure is shown next to the subscribe button (price + period, charged to
+    Apple ID, renews monthly unless cancelled 24 hours before the period ends, manage in App Store
+    account settings).
+  - Terms of Use (EULA) and Privacy Policy links are on the purchase screen, and the EULA + Privacy
+    Policy URLs are filled in on the App Store Connect app page.
+  - The In-App Purchases are attached to the version being submitted (see "In-App Purchases").
 - [ ] Reviewer notes emphasize native features — push, Sign in with Apple, native Google sign-in,
       keychain session persistence, app-icon badge, universal links — plus a working demo account
       with seeded content
@@ -235,6 +250,101 @@ bundle exec fastlane release   # deliver: push metadata + submit the App Store v
       Settings → your name → Sign-In & Security → Sign in with Apple, and that signing in again asks
       for name and email
 - [ ] Submit for review
+
+## In-App Purchases
+
+Individual plans and credit packs are sold through Apple In-App Purchase (StoreKit 2). The native
+side is `ios/App/App/Plugins/PageSpaceStorePlugin.swift` (jsName `PageSpaceStore`, registered in
+`MyViewController.swift`); the web layer drives the flow and the server verifies every signed
+transaction before granting anything. The plugin never finishes a transaction itself — the web
+layer calls `finish` only after the server has answered — so a failed upload is redelivered by
+StoreKit on the next launch.
+
+Because the plugin is native, the feature needs a new binary. An older binary loading the live web
+app has no `PageSpaceStore` plugin and keeps hiding every purchase surface.
+
+| Product ID | Type | Grants | US price |
+|---|---|---|---|
+| `ai.pagespace.ios.pro.monthly` | Auto-renewable, 1 month, group "PageSpace Plans" | Pro tier | $17.99 |
+| `ai.pagespace.ios.credits.100` | Consumable | 100 credits | $11.99 |
+| `ai.pagespace.ios.credits.250` | Consumable | 250 credits | $29.99 |
+| `ai.pagespace.ios.credits.500` | Consumable | 500 credits | $58.99 |
+
+The catalog the server uses is `packages/lib/src/billing/apple/apple-products.ts`; keep it, this
+table, App Store Connect and `ios/App/PageSpace.storekit` in step.
+
+### Testing locally with `PageSpace.storekit`
+
+`ios/App/PageSpace.storekit` is a local StoreKit configuration with the four products above. The
+shared `App` scheme's Run action points at it, so running from Xcode (Debug) in the simulator or on
+a device buys against the local test store — no App Store Connect, no network, no real money.
+
+- Check it is selected: **Product → Scheme → Edit Scheme… → Run → Options → StoreKit
+  Configuration** = `PageSpace.storekit`.
+- **Debug → StoreKit → Manage Transactions…** lists purchases; refund, delete, approve/decline Ask
+  to Buy, and speed up renewals there (Editor → Subscription Renewal Rate in the `.storekit` file).
+- Local-store transactions are signed by Xcode, not Apple, so the production server **rejects**
+  them. Use them to test the native and UI flow; to test end-to-end against the server, use a
+  Sandbox tester instead (clear the StoreKit Configuration in the scheme, or use TestFlight).
+- It only affects runs launched from Xcode. Archives and TestFlight builds always use the real
+  (Sandbox / Production) App Store.
+
+### Sandbox testers
+
+App Store Connect → Users and Access → **Sandbox** → Test Accounts → +. Use an address that is not
+an existing Apple Account. On the device: Settings → App Store → **Sandbox Account** → sign in.
+TestFlight builds always buy in Sandbox. Sandbox subscriptions renew every 5 minutes (1 month) for
+up to 12 renewals; clear a tester's purchase history from the same Sandbox page.
+
+The server must allow Sandbox (`APPLE_IAP_ALLOW_SANDBOX=true`, below) for these purchases to be
+credited — App Review also buys in Sandbox, against the production server.
+
+### App Store Connect setup checklist
+
+- [ ] **Paid Apps agreement** active (Business → Agreements), with banking and tax forms complete.
+      In-App Purchases cannot be created or sold without it.
+- [ ] Enrolled in the **App Store Small Business Program** (15% commission — the prices above
+      assume it).
+- [ ] App → Monetization → **Subscriptions**: create group **PageSpace Plans**, add
+      `ai.pagespace.ios.pro.monthly` (1 month, $17.99 US base price, display name "PageSpace Pro"),
+      with group and subscription localizations.
+- [ ] App → Monetization → **In-App Purchases**: create the three consumables
+      (`ai.pagespace.ios.credits.100` $11.99, `.250` $29.99, `.500` $58.99; display names
+      "100 Credits", "250 Credits", "500 Credits").
+- [ ] Every product has a **review screenshot** (the purchase screen in the app) and review notes,
+      and is in "Ready to Submit".
+- [ ] On the app version page, add the products under **In-App Purchases and Subscriptions** so
+      they ship with the version (first-time IAPs must be submitted with a binary).
+- [ ] App Information → **App Store Server Notifications**: Version 2, Production URL **and**
+      Sandbox URL both `https://pagespace.ai/api/iap/apple/notifications`.
+- [ ] Production `pagespace-web` env (Fly secrets; add the names to PageSpace-Deploy
+      `fly/SECRETS.md`):
+  - `APPLE_IAP_BUNDLE_ID` — optional, defaults to `ai.pagespace.ios`.
+  - `APPLE_IAP_APP_APPLE_ID` — the numeric **Apple ID** of the app (App Store Connect → App
+    Information → General Information). Required to verify Production transactions.
+  - `APPLE_IAP_ALLOW_SANDBOX=true` — while App Review and TestFlight need to buy. Sandbox
+    purchases are free, so turn this off only if Sandbox accounts must never grant entitlements
+    in production (App Review would then fail to purchase).
+- [ ] EULA (Terms of Use) and Privacy Policy URLs set on the App Store page (required for
+      auto-renewable subscriptions, Guideline 3.1.2).
+
+### App Review reply
+
+Paste into the Resolution Center reply (and keep the gist in the reviewer notes):
+
+> Thank you for the review. We have updated the app so that individual plans are now sold using
+> In-App Purchase. PageSpace Pro (an auto-renewable monthly subscription) and AI credit packs
+> (consumables) are available in the app via StoreKit, with Restore Purchases and Manage
+> Subscription available on the billing screen, and the app no longer links to or mentions any
+> external purchase method.
+>
+> Organization and enterprise plans are sold directly to businesses and managed by organization
+> administrators outside the app, as permitted under Guideline 3.1.3(c) (Enterprise Services).
+> Members of such organizations see that their plan is managed by their organization; the app
+> offers no button, link, or call to action to purchase it.
+>
+> To test: sign in with the demo account below, open Settings → Billing, and purchase PageSpace Pro
+> or a credit pack with a Sandbox account.
 
 ## The Facebook SDK that ships but never runs
 
