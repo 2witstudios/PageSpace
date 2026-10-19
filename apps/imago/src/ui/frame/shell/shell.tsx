@@ -255,11 +255,12 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {missing
-          ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) })
-          : isTasksIndex(stage) && stage.driveId !== null
-            ? <TasksGround driveId={stage.driveId} />
-            : children}
+        {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : (
+          <>
+            {isTasksIndex(stage) && stage.driveId !== null ? <TasksGround driveId={stage.driveId} /> : null}
+            {children}
+          </>
+        )}
       </div>
     </section>
   );
