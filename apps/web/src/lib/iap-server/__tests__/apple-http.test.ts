@@ -34,8 +34,14 @@ describe('notificationReply', () => {
   it('acks every final outcome so Apple stops redelivering', () => {
     expect(notificationReply({ result: 'test' }).status).toBe(200);
     expect(notificationReply({ result: 'ignored', reason: 'type' }).status).toBe(200);
-    expect(notificationReply({ result: 'refused', reason: 'unknown_user' }).status).toBe(200);
+    expect(notificationReply({ result: 'refused', reason: 'account_mismatch' }).status).toBe(200);
     expect(notificationReply({ result: 'applied', kind: 'revoked', subscriptionTier: 'free', userId: 'user_1' }).body).toEqual({ received: true, result: 'applied' });
+  });
+});
+
+describe('notificationReply for a buyer not found yet', () => {
+  it('answers non-2xx so Apple redelivers once the device has synced the purchase', () => {
+    expect(notificationReply({ result: 'refused', reason: 'unknown_user' })).toEqual({ status: 503, body: { error: 'buyer_not_found' } });
   });
 });
 

@@ -44,7 +44,10 @@ vi.mock('@pagespace/lib/billing/apple/apple-funding', () => ({
 }));
 vi.mock('@pagespace/lib/billing/apple/apple-account', () => ({ getOrCreateAccountToken: mocks.getOrCreateAccountToken }));
 vi.mock('@pagespace/lib/deployment-mode', () => ({ isBillingEnabled: mocks.isBillingEnabled }));
-vi.mock('@/lib/subscription/credit-balance', () => ({ emitCreditsUpdated: mocks.emitCreditsUpdated }));
+vi.mock('@/lib/subscription/credit-balance', () => ({
+  emitCreditsUpdated: mocks.emitCreditsUpdated,
+  getCreditBalance: async () => ({ topup: { remaining: 2500 } }),
+}));
 vi.mock('@/lib/stripe/price-config', () => ({ getPersonalTierFromPrice: () => 'free' }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -90,7 +93,7 @@ describe('POST /api/iap/apple/transactions', () => {
   it('applies a verified transaction for the signed-in caller and refreshes their balance', async () => {
     const res = await postTransaction(req('/api/iap/apple/transactions', { signedTransaction: JWS }));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ result: 'applied', kind: 'consumable', subscriptionTier: 'free' });
+    expect(await res.json()).toEqual({ result: 'applied', kind: 'consumable', subscriptionTier: 'free', balance: { topup: { remaining: 2500 } } });
     expect(mocks.verifyTransaction).toHaveBeenCalledWith(JWS);
     expect(mocks.applyAppleTransaction).toHaveBeenCalledWith(expect.objectContaining({
       userId: 'user_1',
@@ -153,9 +156,16 @@ describe('POST /api/iap/apple/notifications', () => {
 
   it('acks a refusal (a retry cannot change it) and records the reason', async () => {
     mocks.verifyNotification.mockResolvedValue(verified);
-    mocks.applyAppleNotification.mockResolvedValue({ result: 'refused', reason: 'unknown_user' });
+    mocks.applyAppleNotification.mockResolvedValue({ result: 'refused', reason: 'account_mismatch' });
     expect((await postNotification(req('/api/iap/apple/notifications', { signedPayload: JWS }))).status).toBe(200);
-    expect(mocks.updateSet).toHaveBeenCalledWith(expect.objectContaining({ error: 'unknown_user' }));
+    expect(mocks.updateSet).toHaveBeenCalledWith(expect.objectContaining({ processedAt: expect.any(Date), error: 'account_mismatch' }));
+  });
+
+  it('given a buyer it cannot resolve yet, records the error, leaves it unprocessed and answers non-2xx so Apple retries', async () => {
+    mocks.verifyNotification.mockResolvedValue(verified);
+    mocks.applyAppleNotification.mockResolvedValue({ result: 'refused', reason: 'unknown_user' });
+    expect((await postNotification(req('/api/iap/apple/notifications', { signedPayload: JWS }))).status).toBe(503);
+    expect(mocks.updateSet).toHaveBeenCalledWith({ processedAt: null, error: 'unknown_user' });
   });
 
   it('answers 500 when applying fails, so Apple redelivers', async () => {

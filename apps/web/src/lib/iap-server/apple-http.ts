@@ -10,7 +10,7 @@
  *
  * Apple redelivers a notification on any non-2xx, so the notification mapping returns
  * 200 for everything that has been dealt with (including a refusal, which retrying cannot
- * change) and 5xx only for what a retry could fix.
+ * change) and 5xx only for what a retry could fix — an unresolved buyer among them.
  */
 
 import type { AppleVerificationFailure } from '@pagespace/lib/billing/apple/apple-verify';
@@ -41,8 +41,15 @@ export function transactionReply(result: AppleApplyResult): HttpReply {
   return { status: 200, body: { result: result.result, kind: result.kind, subscriptionTier: result.subscriptionTier } };
 }
 
-/** Whether a notification's outcome is final (ack 200) — every outcome apply returns is. */
+/**
+ * Ack a notification's final outcome with 200. The one exception is a buyer we cannot
+ * resolve yet: answer 503 so Apple redelivers (it retries for days) — by then the device
+ * may have synced the purchase, linking it to its account.
+ */
 export function notificationReply(result: AppleNotificationResult): HttpReply {
+  if (result.result === 'refused' && result.reason === 'unknown_user') {
+    return { status: 503, body: { error: 'buyer_not_found' } };
+  }
   return { status: 200, body: { received: true, result: result.result } };
 }
 

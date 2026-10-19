@@ -66,9 +66,12 @@ export async function POST(request: NextRequest) {
       config: { bundleId: config.bundleId, allowSandbox: config.allowSandbox },
     });
 
+    // An unresolved buyer is retried (notificationReply answers 503): record why, but leave
+    // it unprocessed so the redelivery applies it instead of being acked as a duplicate.
+    const retry = result.result === 'refused' && result.reason === 'unknown_user';
     await db
       .update(appStoreNotifications)
-      .set({ processedAt: new Date(), error: result.result === 'refused' ? result.reason : null })
+      .set({ processedAt: retry ? null : new Date(), error: result.result === 'refused' ? result.reason : null })
       .where(eq(appStoreNotifications.notificationUUID, notificationUUID));
 
     loggers.api.info('App Store notification processed', {

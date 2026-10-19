@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
-import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import { emitCreditsUpdated, getCreditBalance } from '@/lib/subscription/credit-balance';
 import { readJwsField, transactionReply, verificationFailureReply } from '@/lib/iap-server/apple-http';
 import { AppleVerificationError, getAppleVerifier } from '@pagespace/lib/billing/apple/apple-verify';
 import { applyAppleTransaction } from '@pagespace/lib/billing/apple/apple-funding';
@@ -53,10 +53,12 @@ export async function POST(request: NextRequest) {
     });
     if (result.result === 'refused') {
       loggers.api.warn('App Store transaction refused', { userId, transactionId: decoded.transactionId, reason: result.reason });
-    } else {
-      void emitCreditsUpdated(userId);
+      return NextResponse.json(reply.body, { status: reply.status });
     }
-    return NextResponse.json(reply.body, { status: reply.status });
+    void emitCreditsUpdated(userId);
+    // The balance the purchase left, so the device can show it without a second round trip.
+    const balance = await getCreditBalance(userId, result.subscriptionTier).catch(() => null);
+    return NextResponse.json({ ...reply.body, balance }, { status: reply.status });
   } catch (error) {
     if (error instanceof AppleVerificationError) {
       loggers.api.warn('App Store transaction did not verify', { userId, failure: error.failure });
