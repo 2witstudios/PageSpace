@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { APPLE_PRODUCTS, APPLE_PRO_MONTHLY } from '@pagespace/lib/billing/apple/apple-products';
 import {
+  appleAutoRenewDisclosure,
   appleCreditPacks,
   applePlanAction,
   appleProProduct,
@@ -145,6 +146,19 @@ describe('purchaseResultFromSync / purchaseResultMessage', () => {
 
   it('given a consumable, should say credits were added', () => {
     expect(purchaseResultMessage({ status: 'success', subscriptionTier: 'free', kind: 'consumable' })?.text).toMatch(/credits/i);
+  });
+});
+
+describe('appleAutoRenewDisclosure', () => {
+  it('states the renewal period StoreKit reports, as the price line does', () => {
+    expect(appleAutoRenewDisclosure({ unit: 'month', value: 1 })).toContain('renews automatically each month unless');
+    expect(appleAutoRenewDisclosure({ unit: 'week', value: 1 })).toContain('renews automatically each week unless');
+    expect(appleAutoRenewDisclosure({ unit: 'month', value: 3 })).toContain('renews automatically every 3 months unless');
+  });
+
+  it('never invents a period StoreKit did not report', () => {
+    expect(appleAutoRenewDisclosure(undefined)).toContain('renews automatically at the end of each period unless');
+    expect(appleAutoRenewDisclosure({ unit: 'month', value: 0 })).not.toMatch(/month/);
   });
 });
 

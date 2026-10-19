@@ -30,12 +30,14 @@ export const APP_STORE_CANCEL_ELSEWHERE = 'On your iPhone or iPad: Settings › 
 export function AppStoreSubscriptionDeletionNotice() {
   const { channel, isReady } = useBillingVisibility();
   const isApple = channel === 'apple';
-  const { data } = useSWR(isReady ? '/api/subscriptions/status' : null, fetchStatus, { revalidateOnFocus: false });
+  const { data, error } = useSWR(isReady ? '/api/subscriptions/status' : null, fetchStatus, { revalidateOnFocus: false });
   const [opening, setOpening] = useState(false);
 
   // Apple may charge again even when it does not sell the current plan (billing retry, or a
-  // second subscription beside a Stripe plan), so the server's renewal flag decides.
-  if (!data || !(data.appStoreRenews || data.billingProvider === 'apple')) return null;
+  // second subscription beside a Stripe plan), so the server's renewal flag decides. A status
+  // that cannot be read warns anyway: unknown is never taken as "no subscription".
+  const warns = error !== undefined || (data !== undefined && (data.appStoreRenews === true || data.billingProvider === 'apple'));
+  if (!warns) return null;
 
   const manage = async () => {
     setOpening(true);

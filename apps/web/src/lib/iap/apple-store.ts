@@ -36,7 +36,6 @@ export interface PageSpaceStorePlugin {
   getProducts(options: { productIds: string[] }): Promise<{ products: StoreKitProduct[] }>;
   purchase(options: { productId: string; appAccountToken: string }): Promise<StoreKitPurchaseResult>;
   finish(options: { transactionId: string }): Promise<Record<string, never>>;
-  currentEntitlements(): Promise<{ transactions: StoreKitTransaction[] }>;
   unfinished(): Promise<{ transactions: StoreKitTransaction[] }>;
   restore(): Promise<{ transactions: StoreKitTransaction[] }>;
   manageSubscriptions(): Promise<Record<string, never>>;

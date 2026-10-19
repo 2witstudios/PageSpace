@@ -42,6 +42,13 @@ describe('AppStoreSubscriptionDeletionNotice', () => {
     await waitFor(() => expect(mocks.manage).toHaveBeenCalledTimes(1));
   });
 
+  it('warns anyway when the status cannot be read: unknown is never taken as no subscription', async () => {
+    mocks.channel = 'stripe';
+    mocks.fetchWithAuth.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    renderFresh();
+    await waitFor(() => expect(screen.getByTestId('app-store-deletion-notice')).toBeInTheDocument());
+  });
+
   it('renders nothing for a Stripe subscriber', async () => {
     status('stripe');
     renderFresh();

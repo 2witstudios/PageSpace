@@ -24,7 +24,7 @@ export type Platform = 'ios' | 'android' | 'web';
  * rather than "is this iOS?" — that keeps platform knowledge in the single table
  * below instead of scattering it across the app.
  */
-export type NativeCapability = 'secureStore' | 'nativeAuth' | 'push' | 'badge' | 'storeKit';
+export type NativeCapability = 'secureStore' | 'nativeAuth' | 'push' | 'badge';
 
 /**
  * An identity provider that can be driven through a native SDK.
@@ -46,20 +46,12 @@ const PLATFORM_CAPABILITIES: Record<
   Readonly<Record<NativeCapability, boolean>>
 > = {
   // PageSpaceKeychain (Swift), @capgo/capacitor-social-login,
-  // @capacitor/push-notifications, @capawesome/capacitor-badge,
-  // PageSpaceStore (Swift, StoreKit 2 in-app purchases).
-  //
-  // `storeKit: true` is the platform's capability, not a promise about the
-  // binary: iOS builds that predate the PageSpaceStore plugin still load the
-  // remote web app, so anything that sells through it must ALSO check
-  // `isNativePluginAvailable('PageSpaceStore')` at runtime (see
-  // useBillingVisibility).
+  // @capacitor/push-notifications, @capawesome/capacitor-badge.
   ios: Object.freeze({
     secureStore: true,
     nativeAuth: true,
     push: true,
     badge: true,
-    storeKit: true,
   }),
   // PageSpaceSecureStoragePlugin (registered in MainActivity.java as
   // "PageSpaceKeychain"), @capgo/capacitor-social-login (Google only),
@@ -69,13 +61,11 @@ const PLATFORM_CAPABILITIES: Record<
   // code path is wired, not that every device will show a count: the Android
   // badge is drawn by the launcher, and launchers that do not implement one
   // ignore or reject the write. useNativeBadgeSync treats that as a no-op.
-  // No Play Billing plugin: Android buys through the web (Stripe).
   android: Object.freeze({
     secureStore: true,
     nativeAuth: true,
     push: true,
     badge: true,
-    storeKit: false,
   }),
   // A plain browser tab has none of these.
   web: Object.freeze({
@@ -83,7 +73,6 @@ const PLATFORM_CAPABILITIES: Record<
     nativeAuth: false,
     push: false,
     badge: false,
-    storeKit: false,
   }),
 };
 
@@ -108,7 +97,6 @@ const NATIVE_AUTH_PROVIDERS: Record<Platform, readonly NativeAuthProvider[]> = {
 interface CapacitorGlobal {
   isNativePlatform?: () => boolean;
   getPlatform?: () => string;
-  isPluginAvailable?: (name: string) => boolean;
 }
 
 /**
@@ -213,21 +201,6 @@ export function getNativeCapabilities(): Readonly<
   Record<NativeCapability, boolean>
 > {
   return PLATFORM_CAPABILITIES[getPlatform()];
-}
-
-/**
- * Check whether the running native binary registered a plugin under `name`.
- *
- * The capability table says what a platform can do; this says what the binary
- * in the user's hand actually ships. The two differ whenever a plugin is added
- * after older binaries are already installed — those still load the remote web
- * app, so a feature needing the new plugin must check both. False outside a
- * native shell and during SSR.
- */
-export function isNativePluginAvailable(name: string): boolean {
-  if (!isCapacitorApp()) return false;
-  const capacitor = (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
-  return !!capacitor?.isPluginAvailable?.(name);
 }
 
 /**

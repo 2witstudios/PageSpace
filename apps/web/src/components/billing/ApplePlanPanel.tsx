@@ -11,10 +11,10 @@ import { MarketingLink } from '@/components/ui/MarketingLink';
 import { useAppleProducts } from '@/hooks/useAppleProducts';
 import type { PlanDefinition } from '@/lib/subscription/plans';
 import {
-  APPLE_AUTO_RENEW_DISCLOSURE,
   APPLE_STANDARD_EULA_URL,
   MANAGED_ON_WEB_TEXT,
   ORG_PLAN_MANAGED_TEXT,
+  appleAutoRenewDisclosure,
   applePlanAction,
   formatAppleProductPrice,
   purchaseResultMessage,
@@ -178,7 +178,7 @@ export function ApplePlanPanel({ plan, subscriptionTier, billingProvider, onChan
                 Restore Purchases
               </Button>
               <p className="text-xs text-muted-foreground" data-testid="apple-auto-renew-disclosure">
-                {APPLE_AUTO_RENEW_DISCLOSURE}
+                {appleAutoRenewDisclosure(pro?.subscriptionPeriod)}
               </p>
             </>
           )}

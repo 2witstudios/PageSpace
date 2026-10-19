@@ -22,7 +22,6 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getProducts", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "purchase", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "finish", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "currentEntitlements", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "unfinished", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "restore", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "manageSubscriptions", returnType: CAPPluginReturnPromise)
@@ -122,12 +121,6 @@ public class PageSpaceStorePlugin: CAPPlugin, CAPBridgedPlugin {
                 break
             }
             call.resolve([:])
-        }
-    }
-
-    @objc func currentEntitlements(_ call: CAPPluginCall) {
-        Task {
-            call.resolve(["transactions": await self.collect(Transaction.currentEntitlements)])
         }
     }
 

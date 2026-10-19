@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { SWRConfig } from "swr"
 
-const mocks = vi.hoisted(() => ({ billingProvider: null as string | null, appStoreRenews: false }))
+const mocks = vi.hoisted(() => ({ billingProvider: null as string | null, appStoreRenews: false, statusOk: true }))
 vi.mock("@/retained/lib/auth/auth-fetch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/retained/lib/auth/auth-fetch")>()),
-  fetchWithAuth: vi.fn(async () => ({ ok: true, json: async () => ({ billingProvider: mocks.billingProvider, appStoreRenews: mocks.appStoreRenews }) })),
+  fetchWithAuth: vi.fn(async () => ({ ok: mocks.statusOk, status: mocks.statusOk ? 200 : 500, json: async () => ({ billingProvider: mocks.billingProvider, appStoreRenews: mocks.appStoreRenews }) })),
 }))
 
 import { ApiRequestError } from "@/retained/lib/auth/auth-fetch"
@@ -16,6 +16,7 @@ afterEach(() => {
   cleanup()
   mocks.billingProvider = null
   mocks.appStoreRenews = false
+  mocks.statusOk = true
 })
 
 const renderDialog = (overrides: Partial<React.ComponentProps<typeof DeleteAccountDialog>> = {}) => {
@@ -76,14 +77,29 @@ describe("DeleteAccountDialog", () => {
     expect(screen.queryByTestId("app-store-deletion-notice")).toBeNull()
   })
 
-  it("keeps Delete Account Permanently disabled until the email is typed", () => {
+  it("warns anyway when the App Store status cannot be read, rather than implying there is no subscription", async () => {
+    mocks.statusOk = false
+    renderDialog()
+    expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    expect(deleteButton().disabled).toBe(false)
+  })
+
+  it("keeps Delete Account Permanently disabled until the email is typed and the App Store status is known", async () => {
     const { onConfirm } = renderDialog()
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
+    // The App Store answer is still loading: confirming waits for it.
     expect(deleteButton().disabled).toBe(true)
     fireEvent.click(deleteButton())
     expect(onConfirm).not.toHaveBeenCalled()
 
+    fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "" } })
+    await waitFor(() => expect(deleteButton().disabled).toBe(true))
+    fireEvent.click(deleteButton())
+    expect(onConfirm).not.toHaveBeenCalled()
+
     fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
-    expect(deleteButton().disabled).toBe(false)
+    await waitFor(() => expect(deleteButton().disabled).toBe(false))
     fireEvent.click(deleteButton())
     expect(onConfirm).toHaveBeenCalledWith("jono@studio.example")
   })

@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => {
       getProducts: vi.fn(),
       purchase: vi.fn(),
       finish: vi.fn(),
-      currentEntitlements: vi.fn(),
       unfinished: vi.fn(),
       restore: vi.fn(),
       manageSubscriptions: vi.fn(),

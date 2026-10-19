@@ -20,7 +20,6 @@ import {
   APPLE_BILLING_CHANGED_EVENT,
   MANAGED_IN_APP_STORE_DETAIL,
   MANAGED_IN_APP_STORE_TITLE,
-  type AppStoreSubscriptionSummary,
   type BillingProvider,
 } from '@/lib/iap/apple-store-core';
 import {
@@ -57,7 +56,6 @@ interface SubscriptionData {
   };
   /** Who sells the current paid personal plan: Stripe (web), Apple (In-App Purchase), or neither. */
   billingProvider?: BillingProvider;
-  appStore?: AppStoreSubscriptionSummary | null;
 }
 
 export default function PlanPage() {

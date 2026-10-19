@@ -26,7 +26,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, gt, inArray, sql } from '@pagespace/db/operators';
+import { and, eq, gt, inArray, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { creditLedger } from '@pagespace/db/schema/credits';
 import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
@@ -515,7 +515,7 @@ export type AppleNotificationResult =
   | Extract<AppleApplyResult, { result: 'refused' }>
   | (Extract<AppleApplyResult, { result: 'applied' | 'duplicate' }> & { userId: string })
   | { result: 'test' }
-  | { result: 'ignored'; reason: 'type' | 'no_transaction' };
+  | { result: 'ignored'; reason: 'type' | 'no_transaction' | 'account_deleted' };
 
 /**
  * Apply a verified App Store Server Notification: resolve its buyer from the
@@ -547,6 +547,22 @@ export async function applyAppleNotification(input: {
     userId = owned?.userId ?? null;
   }
   if (!userId) {
+    // The buyer deleted their account: the subscription mirror and account token went with
+    // it, the transactions stayed, anonymised. Apple renews until the subscription is
+    // cancelled, so acknowledge — a retry can never find an owner.
+    const [orphaned] = await db
+      .select({ transactionId: appStoreTransactions.transactionId })
+      .from(appStoreTransactions)
+      .where(and(eq(appStoreTransactions.originalTransactionId, facts.originalTransactionId), isNull(appStoreTransactions.userId)))
+      .limit(1);
+    if (orphaned) {
+      loggers.api.info('App Store notification for a deleted account acknowledged', {
+        notificationUUID: notification.notificationUUID,
+        type: notification.type,
+        transactionId: facts.transactionId,
+      });
+      return { result: 'ignored', reason: 'account_deleted' };
+    }
     loggers.api.warn('App Store notification for an unknown buyer', {
       notificationUUID: notification.notificationUUID,
       type: notification.type,

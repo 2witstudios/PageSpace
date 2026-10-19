@@ -533,6 +533,26 @@ describe('who a transaction belongs to', () => {
     })).toEqual({ result: 'refused', reason: 'unknown_user' });
   });
 
+  it('acknowledges a notification for a deleted account instead of asking Apple to retry it for days', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const first = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: first, priceTier, config });
+    // Account deletion: the mirror and the token go with the user; the transactions stay, anonymised.
+    await db.delete(creditLedger).where(eq(creditLedger.userId, u.id));
+    await db.delete(wallets).where(personalRootWalletOf(u.id));
+    await db.delete(users).where(eq(users.id, u.id));
+
+    const renewalId = nextTxnId();
+    const renewal = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: renewalId });
+    expect(await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'DID_RENEW', subtype: null, status: 1, transaction: renewal, renewal: null },
+      priceTier, config,
+    })).toEqual({ result: 'ignored', reason: 'account_deleted' });
+    expect(await db.select().from(appStoreTransactions).where(eq(appStoreTransactions.transactionId, renewalId))).toHaveLength(0);
+  });
+
   it('refuses Sandbox money when the deployment does not allow it', async () => {
     if (!dbAvailable) return;
     const u = await newUser();

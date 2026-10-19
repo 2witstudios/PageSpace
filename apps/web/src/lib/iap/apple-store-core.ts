@@ -190,17 +190,8 @@ export function appleCreditPacks(products: readonly AppleStoreProduct[]): AppleS
   return products.filter((p) => p.kind === 'consumable');
 }
 
-/** Who sells the user's current paid personal plan (GET /api/subscriptions/status). */
+/** The store holding the user's paid personal plan contract (GET /api/subscriptions/status). */
 export type BillingProvider = 'stripe' | 'apple' | null;
-
-/** The App Store subscription summary GET /api/subscriptions/status carries. */
-export interface AppStoreSubscriptionSummary {
-  status: string;
-  productId: string;
-  expiresAt: string | null;
-  autoRenew: boolean;
-  environment: string;
-}
 
 /**
  * What the Pro card offers on the Apple channel. Pure.
@@ -241,9 +232,15 @@ export const APPLE_BILLING_CHANGED_EVENT = 'pagespace:apple-billing-changed';
  */
 export const APPLE_STANDARD_EULA_URL = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
 
-/** Auto-renewal disclosure shown next to the App Store subscription (App Review 3.1.2). */
-export const APPLE_AUTO_RENEW_DISCLOSURE =
-  'Payment is charged to your Apple ID at confirmation. Subscription renews automatically each month unless cancelled at least 24 hours before the end of the period. Manage or cancel in your App Store account settings.';
+/**
+ * Auto-renewal disclosure shown next to the App Store subscription (App Review 3.1.2), in
+ * the renewal period StoreKit reports — the same one the price line shows.
+ */
+export function appleAutoRenewDisclosure(period: StoreKitSubscriptionPeriod | undefined): string {
+  const valid = period && Number.isFinite(period.value) && period.value > 0;
+  const every = !valid ? 'at the end of each period' : period.value === 1 ? `each ${period.unit}` : `every ${period.value} ${period.unit}s`;
+  return `Payment is charged to your Apple ID at confirmation. Subscription renews automatically ${every} unless cancelled at least 24 hours before the end of the period. Manage or cancel in your App Store account settings.`;
+}
 
 /** Shown on the web when the user's plan was bought through the App Store. */
 export const MANAGED_IN_APP_STORE_TITLE = 'Managed in the App Store';
