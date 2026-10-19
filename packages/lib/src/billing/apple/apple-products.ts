@@ -22,9 +22,6 @@ import { CREDIT_PACKS, centsFromCredits, creditPackPriceCents, tierListPriceCent
 /** Apple's Small Business Program commission, in basis points (15%). */
 export const APPLE_SMALL_BUSINESS_COMMISSION_BPS = 1500;
 
-/** The App Store Connect subscription group every plan belongs to. */
-export const APPLE_SUBSCRIPTION_GROUP = 'PageSpace Plans';
-
 export interface AppleSubscriptionProduct {
   kind: 'subscription';
   productId: string;
