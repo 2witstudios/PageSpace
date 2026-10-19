@@ -145,7 +145,7 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
             spellCheck={false}
             value={query}
             placeholder={`Search ${scope}…`}
-            className={paletteInputClass}
+            className={paletteInputClass(highlighted >= 0)}
             onChange={(event) => typeQuery(event.currentTarget.value)}
           />
           <span className={paletteScopeClass}>

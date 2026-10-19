@@ -8,7 +8,6 @@ import { fakeWeb } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TasksPane } from './tasks-pane';
 
-vi.mock('@/retained-adapters/create-actions', () => ({ CreateActions: () => null }));
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 

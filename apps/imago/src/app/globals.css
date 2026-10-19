@@ -274,6 +274,12 @@
     box-shadow: var(--focus-ring);
     border-radius: var(--radius-sm);
   }
+
+  /* A document is an editing surface, not a control: it draws its own caret,
+     and a halo around the whole reading column reads as a border. */
+  [contenteditable]:focus-visible {
+    box-shadow: none;
+  }
 }
 
 /* Reduced motion cuts every duration to 0.01ms and every delay to zero:

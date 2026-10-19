@@ -9,6 +9,7 @@ import { renderPaneHeader } from '../../frame/pane/pane-header';
 import { listBodyClass, listPaneClass } from '../../frame/list-pane/list-pane-class';
 import type { ListPane } from '../../frame/stage/stage';
 import { messageNameClass, messagesNoteClass } from '../messages-pane/messages-pane-class';
+import { renderNewMessageLink } from '../messages-pane/messages-pane.render';
 import type { MessageablePerson } from './dm-index-model';
 
 const segment = encodeURIComponent;
@@ -122,7 +123,12 @@ export function renderDmIndexPane(props: DmIndexRenderProps): ReactNode {
     <section className={listPaneClass(variant)} aria-label="Direct messages">
       {renderPaneHeader({
         title: 'Direct messages',
-        actions: <span className="flex flex-none items-center gap-1">{close}</span>,
+        actions: (
+          <span className="flex flex-none items-center gap-1">
+            {renderNewMessageLink()}
+            {close}
+          </span>
+        ),
       })}
       <div className={listBodyClass}>
         <label className="mx-1 mb-2 flex h-8 items-center gap-2 rounded-lg bg-surface-overlay px-3 text-ink-faint">

@@ -100,8 +100,8 @@ function renderRow(row: GroundRow, driveId: string): ReactNode {
 }
 
 /**
- * The Tasks ground: the viewer's tasks in one status group, grouped by due
- * date. Drawn above the Imago thread, as the Messages ground is.
+ * The Tasks index: the viewer's tasks in one status group, grouped by due
+ * date. It fills the middle column, with Imago docked beside it.
  */
 export function renderTasksGround({ heading, subtitle, status, onStatus, state }: TasksGroundRenderProps): ReactNode {
   const rows = state.kind === 'ready' ? state.sections.reduce((count, section) => count + section.rows.length, 0) : null;

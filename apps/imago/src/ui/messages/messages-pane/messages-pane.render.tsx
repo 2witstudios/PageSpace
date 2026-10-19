@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { Fragment, type ReactNode } from 'react';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderButton } from '../../components/button/button.render';
+import { iconButtonClass } from '../../components/icon-button/icon-button-class';
 import { renderIcon } from '../../components/icon/icon.render';
 import { listGroupLabelClass } from '../../components/list-group/list-group-class';
 import { renderListGroup } from '../../components/list-group/list-group.render';
@@ -84,6 +85,15 @@ const renderRow = ({ id, kind, name, href, avatarUrl, unreadCount, selected }: M
     </li>
   );
 };
+
+/** The Messages head's + : a new conversation, which the /dm/new page starts. */
+export function renderNewMessageLink(): ReactNode {
+  return (
+    <Link href="/dm/new" aria-label="New message" title="New message" className={iconButtonClass('quiet')}>
+      {renderIcon({ name: 'plus' })}
+    </Link>
+  );
+}
 
 /** A labelled section that has no rows, saying why; a failed one offers to ask again. */
 const renderNote = (label: string, text: string, role?: 'status' | 'alert', retry?: () => void): ReactNode => (
