@@ -219,8 +219,12 @@ function DrivePickerBody({ onClose, onCreate }: DrivePickerBodyProps) {
 
       <CommandList
         className="max-h-[60vh] max-sm:min-h-0 max-sm:flex-1 max-sm:max-h-none"
-        // Let a swipe return to browsing without closing the picker or clearing the query.
-        onTouchStart={() => searchRef.current?.blur()}
+        // Dismiss the keyboard while keeping focus inside the modal.
+        onTouchStart={(event) => {
+          if (searchRef.current === event.currentTarget.ownerDocument.activeElement) {
+            event.currentTarget.closest<HTMLElement>('[role="dialog"]')?.focus({ preventScroll: true });
+          }
+        }}
       >
         {/* All drives is a focus like any drive: a row, first, and picking it keeps the section you are in. */}
         {!isSearching && allDrivesRow}

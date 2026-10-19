@@ -169,7 +169,7 @@ describe('DriveSwitcherDialog', () => {
       });
       expect(search).not.toHaveFocus();
       expect(search).toHaveValue('engineering');
-      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(screen.getByRole('dialog')).toHaveFocus();
       expect(onOpenChange).not.toHaveBeenCalledWith(false);
     });
 
