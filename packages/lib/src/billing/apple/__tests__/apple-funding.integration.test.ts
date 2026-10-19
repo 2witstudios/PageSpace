@@ -362,3 +362,40 @@ describe('one plan whichever store sold it', () => {
     expect(ledger).toHaveLength(1);
   });
 });
+
+describe('the sweeps see App Store plans', () => {
+  it('the hourly comped-root sweep leaves an App Store subscriber to Apple\'s renewal, and rolls a lapsed one', async () => {
+    if (!dbAvailable) return;
+    const { rollDuePersonalRoots } = await import('../../wallet-funding-shell');
+    const u = await newUser();
+    const original = nextTxnId();
+    await applyAppleTransaction({ userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    // Its root period has ended (renewal not yet in), but Apple may still renew it.
+    await db.update(wallets).set({ monthlyPeriodEnd: new Date(Date.now() - 1000) }).where(personalRootWalletOf(u.id));
+    await rollDuePersonalRoots({ now: new Date() });
+    expect((await ledgerFor(u.id)).filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+
+    // Revoked long ago: no renewal will come, so a still-Pro cache is a comped account.
+    await db.update(appStoreSubscriptions).set({ status: 'expired' }).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    await rollDuePersonalRoots({ now: new Date() });
+    expect((await ledgerFor(u.id)).filter((r) => r.entryType === 'monthly_grant')).toHaveLength(2);
+  });
+
+  it('the tier reconciler restores an App Store Pro the cache lost, and drops one whose period ended', async () => {
+    if (!dbAvailable) return;
+    const { reconcileSubscriptionTiers } = await import('../../subscription-tier-reconcile');
+    const u = await newUser();
+    const original = nextTxnId();
+    await applyAppleTransaction({ userId: u.id, decoded: subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original }), priceTier, config });
+    await db.update(users).set({ subscriptionTier: 'free' }).where(eq(users.id, u.id));
+
+    const restored = await reconcileSubscriptionTiers({ priceTier, userIds: [u.id] });
+    expect(restored).toMatchObject({ drifted: 1, repaired: 1 });
+    expect(await tierOf(u.id)).toBe('pro');
+
+    await db.update(appStoreSubscriptions).set({ expiresAt: new Date(Date.now() - 1000) }).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    const lapsed = await reconcileSubscriptionTiers({ priceTier, userIds: [u.id] });
+    expect(lapsed).toMatchObject({ repaired: 1 });
+    expect(await tierOf(u.id)).toBe('free');
+  });
+});

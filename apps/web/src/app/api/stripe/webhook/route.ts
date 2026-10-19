@@ -8,6 +8,8 @@ import { isStorageAddonConfigured, isStorageAddonPrice, personalSubscriptionItem
 import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
+import { combineTiers } from '@pagespace/lib/billing/apple/apple-core';
+import { appleEntitledTier } from '@pagespace/lib/billing/apple/apple-entitlement';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
@@ -590,10 +592,11 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       }
     });
 
-    // Update user subscription tier
+    // Update user subscription tier — merged with any App Store plan, so a Stripe event
+    // never demotes a plan the user bought on iOS (one plan, whichever store sold it).
     await tx.update(users)
       .set({
-        subscriptionTier,
+        subscriptionTier: combineTiers(subscriptionTier, await appleEntitledTier(tx, userId, new Date())),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
@@ -623,10 +626,12 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   // Use transaction to ensure user and subscription updates are atomic
   await db.transaction(async (tx) => {
-    // Downgrade to free tier
+    // Downgrade off the Stripe plan — to free, or to the tier an App Store subscription
+    // still entitles (a Stripe cancellation never takes away a plan bought on iOS).
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     await tx.update(users)
       .set({
-        subscriptionTier: 'free',
+        subscriptionTier: await appleEntitledTier(tx, userId, new Date()),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));

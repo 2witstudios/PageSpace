@@ -342,7 +342,8 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
 }
 
 export type AppleNotificationResult =
-  | AppleApplyResult
+  | Extract<AppleApplyResult, { result: 'refused' }>
+  | (Extract<AppleApplyResult, { result: 'applied' | 'duplicate' }> & { userId: string })
   | { result: 'test' }
   | { result: 'ignored'; reason: 'type' | 'no_transaction' };
 
@@ -384,7 +385,7 @@ export async function applyAppleNotification(input: {
     return { result: 'refused', reason: 'unknown_user' };
   }
 
-  return applyAppleTransaction({
+  const applied = await applyAppleTransaction({
     userId,
     decoded: notification.transaction,
     notificationStatus: notification.status,
@@ -393,4 +394,5 @@ export async function applyAppleNotification(input: {
     config: input.config,
     now: input.now,
   });
+  return applied.result === 'refused' ? applied : { ...applied, userId };
 }

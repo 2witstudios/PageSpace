@@ -47,6 +47,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
+// The App Store mirror read (lib billing/apple): none unless a test sets one.
+const mockLatestAppleSubscription = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
+  latestAppleSubscription: mockLatestAppleSubscription,
+}));
+vi.mock('@/lib/stripe/price-config', () => ({
+  getPersonalTierFromPrice: (priceId: string) => (priceId === 'price_pro' ? 'pro' : 'free'),
+}));
 
 // Import after mocks
 import { GET } from '../route';
@@ -94,6 +102,7 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: overrides.currentPeriodStart ?? new Date('2024-01-01'),
   currentPeriodEnd: overrides.currentPeriodEnd ?? new Date('2024-02-01'),
   cancelAtPeriodEnd: overrides.cancelAtPeriodEnd ?? false,
+  stripePriceId: 'price_pro',
 });
 
 describe('GET /api/subscriptions/status', () => {
@@ -118,6 +127,48 @@ describe('GET /api/subscriptions/status', () => {
       orderBy: mockSelectOrderBy,
     }));
     mockSelectLimit.mockResolvedValue([]);
+    mockLatestAppleSubscription.mockReset();
+    mockLatestAppleSubscription.mockResolvedValue(null);
+  });
+
+  describe('which store sells the plan', () => {
+    const request = () => new Request('https://example.com/api/subscriptions/status', { method: 'GET' }) as unknown as import('next/server').NextRequest;
+
+    it('is null for a free user with no purchase anywhere', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBeNull();
+      expect(body.appStore).toBeNull();
+    });
+
+    it('is stripe for an active Stripe Pro subscription', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
+      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
+      expect((await (await GET(request())).json()).billingProvider).toBe('stripe');
+    });
+
+    it('is not stripe for a past-due Stripe subscription', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
+      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'past_due' })]);
+      expect((await (await GET(request())).json()).billingProvider).toBeNull();
+    });
+
+    it('is apple for an entitled App Store subscription, and reports it', async () => {
+      const expiresAt = new Date(Date.now() + 86_400_000);
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
+      mockLatestAppleSubscription.mockResolvedValue({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt, autoRenew: true, environment: 'Production' });
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBe('apple');
+      expect(body.appStore).toEqual({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: expiresAt.toISOString(), autoRenew: true, environment: 'Production' });
+    });
+
+    it('is not apple once the App Store period has ended', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+      mockLatestAppleSubscription.mockResolvedValue({ status: 'active', productId: 'ai.pagespace.ios.pro.monthly', expiresAt: new Date(Date.now() - 1000), autoRenew: false, environment: 'Production' });
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBeNull();
+      expect(body.appStore).toMatchObject({ status: 'active', autoRenew: false });
+    });
   });
 
   describe('Free tier user', () => {

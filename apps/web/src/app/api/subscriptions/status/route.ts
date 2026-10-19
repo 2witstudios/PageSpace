@@ -8,6 +8,10 @@ import { getStorageConfigFromSubscription } from '@pagespace/lib/services/subscr
 import { TIERS, toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { appleRowEntitles } from '@pagespace/lib/billing/apple/apple-core';
+import { latestAppleSubscription } from '@pagespace/lib/billing/apple/apple-entitlement';
+import { getPersonalTierFromPrice } from '@/lib/stripe/price-config';
+import { resolveBillingProvider } from '@/lib/iap-server/billing-provider';
 
 /**
  * MON-2: the included-credit figure per tier, computed HERE from `tierAllowanceCents`
@@ -58,6 +62,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    const appStore = await latestAppleSubscription(db, user.id);
+    const now = Date.now();
+    const billingProvider = resolveBillingProvider({
+      stripeEntitled: subscription !== null
+        && (subscription.status === 'active' || subscription.status === 'trialing')
+        && getPersonalTierFromPrice(subscription.stripePriceId) !== 'free',
+      appleEntitled: appStore !== null && appleRowEntitles({ status: appStore.status, expiresAtMs: appStore.expiresAt.getTime() }, now),
+    });
+
     // Compute storage config from subscription tier
     // Coerce the untyped column through the canonical vocabulary (schema contract).
     const subscriptionTier = toPersonalSubscriptionTier(user.subscriptionTier);
@@ -75,6 +88,16 @@ export async function GET(request: NextRequest) {
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
         scheduledPriceId: subscription.scheduledPriceId,
         scheduledChangeDate: subscription.scheduledChangeDate,
+      } : null,
+      // Which store sells the current plan — the clients show the other store's purchase
+      // controls only when this is not the store they can manage it in.
+      billingProvider,
+      appStore: appStore ? {
+        status: appStore.status,
+        productId: appStore.productId,
+        expiresAt: appStore.expiresAt,
+        autoRenew: appStore.autoRenew,
+        environment: appStore.environment,
       } : null,
       storage: {
         used: user.storageUsedBytes || 0,

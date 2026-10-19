@@ -76,6 +76,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: vi.fn(),
 }));
 
+// The App Store mirror (lib billing/apple): no App Store plan unless a test sets one.
+const mockAppleEntitledTier = vi.hoisted(() => vi.fn(async () => 'free'));
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({ appleEntitledTier: mockAppleEntitledTier }));
+
 // Import after mocks
 import { POST } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
@@ -225,6 +229,23 @@ describe('POST /api/stripe/create-subscription', () => {
 
     expect(response.status).toBe(404);
     expect(body.error).toBe('User not found');
+  });
+
+  it('given an App Store Pro plan, refuses a Stripe checkout with 409 so one plan is never billed twice', async () => {
+    mockAppleEntitledTier.mockResolvedValueOnce('pro');
+    mockSelectWhere.mockResolvedValue([mockUser({ subscriptionTier: 'pro' })]);
+
+    const request = createMockRequest('https://example.com/api/stripe/create-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ priceId: mockPriceId }),
+    });
+
+    const response = await POST(request);
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.code).toBe('managed_by_app_store');
+    expect(mockStripeSubscriptionsCreate).not.toHaveBeenCalled();
   });
 
   it('should return 400 when user already has paid subscription', async () => {

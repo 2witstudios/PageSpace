@@ -134,6 +134,13 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
 
+// The App Store half of the merged tier (lib billing/apple): Free unless a test says the
+// user also holds an App Store plan.
+const mockAppleEntitledTier = vi.hoisted(() => vi.fn(async () => 'free'));
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
+  appleEntitledTier: mockAppleEntitledTier,
+}));
+
 // Mock the prepaid-credit funding shell. The route's unit tests must NOT load the real
 // billing module — it opens a pg pool and drives a query chain the mock db can't satisfy,
 // which would turn every funding-relevant event into a 500. Funding correctness lives in
@@ -651,6 +658,41 @@ describe('POST /api/stripe/webhook', () => {
           subscriptionTier: 'free',
         })
       );
+    });
+
+    it('given the user also holds an App Store Pro plan, a Stripe deletion leaves them on Pro', async () => {
+      mockAppleEntitledTier.mockResolvedValueOnce('pro');
+      const subscription = mockSubscription({ status: 'canceled' });
+      const event = mockStripeEvent('customer.subscription.deleted', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'pro' }));
+      expect(mockUpdateSet).not.toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }));
+    });
+
+    it('given the user also holds an App Store Pro plan, an inactive Stripe subscription does not demote them', async () => {
+      mockAppleEntitledTier.mockResolvedValueOnce('pro');
+      const subscription = mockSubscription({ status: 'past_due' });
+      const event = mockStripeEvent('customer.subscription.updated', subscription);
+      mockStripeWebhooksConstructEvent.mockReturnValue(event);
+
+      const request = new Request('https://example.com/api/stripe/webhook', {
+        method: 'POST',
+        body: JSON.stringify(event),
+        headers: { 'stripe-signature': 'valid_signature' },
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'pro' }));
     });
 
     it('should skip and return 200 when user not found for subscription (warning only)', async () => {
