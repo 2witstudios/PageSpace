@@ -17,6 +17,7 @@ import { RetainedSurface } from './retained-provider';
 import { useImagoPageId } from '@/ui/chat/use-chat-data/use-chat-data';
 import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
 import { ImagoThread } from '@/ui/metal/imago-thread';
+import { useImagoPhase } from './imago-phase';
 import { useApiClient } from '@/api/swr-provider';
 import { createConversation } from '@/ui/chat/chat-api/chat-api';
 import { dispatch, transactions } from '@/ui/store/transactions';
@@ -29,10 +30,10 @@ import { useDriveSpend } from '@/retained/hooks/useConversationSpend';
 import { OnboardingGate } from '@/retained/components/onboarding/OnboardingGate';
 
 /** Classic's Home line and suggestions for a new, empty conversation; picking one fills the composer. */
-function HomeWelcome() {
+function HomeWelcome({ imago }: { imago: boolean }) {
   const { line } = useHomeSignals();
   return <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-auto px-4">
-    <ImagoOrb size="hero" live label="Imago" />
+    {imago && <ImagoOrb size="hero" live label="Imago" />}
     <HomeLine line={line} />
     <HomeSuggestions suggestions={line.suggestions} onSelect={text => dispatch(transactions.setChatDraft, text)} />
   </div>;
@@ -61,13 +62,19 @@ type RetainedChatProps = {
  * spinner, and the chat is marked so the orb listens while the viewer types to it.
  */
 export function RetainedChat(props: RetainedChatProps) {
-  const imago = useImagoPageId() === (props.agentId ?? undefined);
+  // The agent and conversation actually shown: a shared selection overrides the props, as in the host.
+  const sharedSelection = useRetainedChatSelection(state => state.selection);
+  const selection = props.isolated ? null : sharedSelection;
+  const shownAgentId = selection ? selection.agentId : props.agentId;
+  const imagoPageId = useImagoPageId();
+  const imago = imagoPageId !== null && shownAgentId === imagoPageId;
+  useImagoPhase(imago ? (selection?.conversationId ?? props.conversationId) : null);
   return <ImagoThread value={imago}>
-    <div className="contents" {...(imago ? { 'data-imago-chat': '' } : {})}><RetainedChatHost {...props} /></div>
+    <div className="contents" {...(imago ? { 'data-imago-chat': '' } : {})}><RetainedChatHost {...props} imago={imago} /></div>
   </ImagoThread>;
 }
 
-function RetainedChatHost({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated }: RetainedChatProps) {
+function RetainedChatHost({ agentId, name, conversationId, resolving, placeholder, aboveComposer, ownsCreditsAlert, home, isolated, imago }: RetainedChatProps & { imago: boolean }) {
   const sharedSelection = useRetainedChatSelection(state => state.selection);
   const selection = isolated ? null : sharedSelection;
   const selectedAgentId = selection ? selection.agentId : agentId;
@@ -146,7 +153,7 @@ function RetainedChatHost({ agentId, name, conversationId, resolving, placeholde
   if (!page || (resolving && !selection && !shownId)) return renderLoadingState('Opening chat…');
   if (!shownId) return <RetainedSurface className="bg-tint"><div className="@container flex h-full min-w-0 min-h-0 flex-col">
     <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">{home
-      ? <HomeWelcome />
+      ? <HomeWelcome imago={imago} />
       : <ChatMessagesArea messages={[]} isLoading={false} isStreaming={false} />}</div>
     {home && <OnboardingGate />}
     {creationError && <p role="alert" className="px-2 text-sm text-destructive">Could not open this chat. Try sending again.</p>}

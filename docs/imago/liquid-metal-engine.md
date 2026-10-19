@@ -125,10 +125,10 @@ The studio's **key light follows device tilt** (`DeviceOrientationEvent`, after 
 
 The first prototype orbited separate droplets around a core. In idle they read as limbs: a starfish, not an orb. The body is now **one orb**, and every liquid behaviour happens on or just under its surface:
 
-- **Orb:** a sphere (radius ≈ 0.54 of the view's half-width), ray-marched in a single fragment shader (72 steps max, orthographic).
+- **Orb:** a sphere (radius ≈ 0.54 of the view's half-width), ray-marched in a single orthographic fragment shader (see **Ray march** below).
 - **Surface modes:** smooth low-order polynomial modes on the unit direction from the centre: a quadrupole (`x²−y²`, `2xy`), an octupole (`x³−3xy²`, `3x²y−y³`), and a `z·x`/`z·y` term, each rotating slowly. Together they make the surface swell and settle like a drop of mercury. They are polynomials because an angle-based (`atan`) mode pinches at the pole facing the viewer, which showed up as a visible "+" in the face.
 - **Bulges:** 1–3 droplets *inside* the orb, each on a tilted great circle at `core − r + swell`, so they push the surface out by `swell` (0–0.06) as they travel. They are joined with polynomial smooth-min (`k` ≈ 0.22–0.26) and kept off the hidden underside. They never leave the orb.
-- **Folds:** fine creases from domain-warped waves. The position is warped twice by sine fields that drift at different rates, then a product of sines is subtracted from the distance (amplitude `0.021 + churn·0.2`). They barely change the silhouette but bend every reflection, and that bending is most of what reads as liquid. The mood's churn deepens them: thinking churns hardest.
+- **Folds:** fine creases from domain-warped waves. The position is warped twice by sine fields that drift at different rates, then a product of sines is subtracted from the distance (amplitude `0.015 + churn·0.18`). They barely change the silhouette but bend every reflection, and that bending is most of what reads as liquid. The mood's churn deepens them: thinking churns hardest.
 - **Pulse:** a decaying radial ripple across the face, sent by each streamed token and by touch.
 - **Ray march:** the folds need finer marching, at 110 steps and a step factor of 0.75. The cost on real devices has not been profiled yet.
 - **Motion:** every parameter chases its mood target on an **underdamped spring** (stiffness 90, damping 11, ζ ≈ 0.58). That overshoot is the gel feel. Orbits advance by integrating phase (`phase += speed·dt`), so a change of speed never makes the droplets jump.
@@ -159,13 +159,25 @@ Typing in the composer adds a small pulse per keystroke, so Imago visibly takes 
 
 ### D7. Size classes
 
-| Class | Where | Bulges | Wobble / churn / pulse | Contact shadow |
-|---|---|---|---|---|
-| `hero` (≈200px) | empty chat, Imago home | 3 | full | yes (light mode) |
-| `avatar` (≈28px) | chat header, agent picker, ask pill | 2 | full / half / yes | faint |
-| `glyph` (≈18px) | inline in a streaming message | 1 | half / none / none | none |
+What an orb can carry depends on how large it is drawn (`detailFor()`, by rendered width):
 
-A glyph cannot carry choreography, so it carries only mood: swell, speed and tarnish.
+| Rendered width | Bulges | Wobble / folds / pulse | Contact shadow |
+|---|---|---|---|
+| ≥ 80px | 3 | full / full / yes | yes (light mode) |
+| 24–80px | 2 | full / half / yes | none |
+| < 24px | 1 | half / none / none | none |
+
+The sizes it is drawn at are tokens:
+
+| Size | Width | Where |
+|---|---|---|
+| `hero` | 120px (`--spacing-orb-hero`) | Imago's empty chat |
+| `row` | 30px (agent row tile) | Imago's row in the agent picker; the files browser's grid |
+| `avatar` | 28px (`--spacing-avatar-sm`) | Imago's channel posts |
+| `tile` | 22px (agent tile) | the chat head and the rail |
+| `glyph` | 16px (`--spacing-orb-glyph`) | lists, tabs, search, the thinking indicator and the Ask buttons |
+
+(The prototype draws a 200px hero, a 30px avatar and a 22px glyph.) A glyph cannot carry choreography, so it carries only mood: swell and speed.
 
 ## 4. Architecture in `apps/imago` (as built)
 

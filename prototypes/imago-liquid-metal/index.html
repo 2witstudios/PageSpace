@@ -657,7 +657,8 @@ function frame(now) {
     else stepSprings(v.springs, target, dt);
     const s = v.springs;
     if (!still) { v.time += dt; v.phase += dt * s.speed.x; }
-    v.pulse *= Math.exp(-dt * 3.2);
+    // Reduced motion: no ripples either.
+    v.pulse = still ? 0 : v.pulse * Math.exp(-dt * 3.2);
     render(v);
   }
 }
@@ -771,8 +772,10 @@ async function send(text) {
     pulseAll(.32); markWorld(); chat.scrollTop = chat.scrollHeight;
     await wait(55 + Math.random() * 90);
   }
-  mood = 'idle'; busy = false;
-  if (gv) { await wait(600); gv.springs.core.v -= 1; }
+  mood = 'idle';
+  // The reply's glyph settles, then leaves the engine, keeping its last frame.
+  if (gv) { await wait(600); gv.springs.core.v -= 1; await wait(1200); gv.dispose(); }
+  busy = false;
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -256,14 +256,17 @@ class MetalEngine {
       this.mood = mood;
       for (const view of this.views) if (view.mode === 'live') view.dirty = true;
     }
-    // Speaking ripples the surface as the reply arrives.
-    if (mood === 'speaking' && now >= this.nextTokenPulse) {
+    // Speaking ripples the surface as the reply arrives; never under reduced motion.
+    if (!still && mood === 'speaking' && now >= this.nextTokenPulse) {
       for (const view of this.views) if (view.mode === 'live') view.pulse = Math.min(1.4, view.pulse + 0.32);
       this.nextTokenPulse = now + 70 + Math.random() * 110;
     }
 
+    // The world is repainted only on a tick where some orb will draw; until then it stays dirty.
+    const animates = (view: View) => !still && (view.mode === 'live' || now < view.aliveUntil);
+    const drawing = [...this.views].some((view) => view.visible && (view.dirty || animates(view)));
     const live = [...this.views].some((view) => view.visible && view.mode === 'live');
-    if (this.worldDirty && (now - this.worldPaintedAt >= WORLD_INTERVAL || !live)) {
+    if (drawing && this.worldDirty && (now - this.worldPaintedAt >= WORLD_INTERVAL || !live)) {
       if (paintWorld(this.world, this.doc)) this.uploadWorld();
       this.worldDirty = false;
       this.worldPaintedAt = now;
@@ -278,7 +281,7 @@ class MetalEngine {
     let more = false;
     for (const view of this.views) {
       if (!view.visible) continue;
-      const animating = !still && (view.mode === 'live' || now < view.aliveUntil);
+      const animating = animates(view);
       if (!animating && !view.dirty) continue;
       const targets = MOODS[view.mode === 'live' ? mood : 'idle'];
       view.springs = stepSprings(view.springs, targets, dt, still);
@@ -288,10 +291,10 @@ class MetalEngine {
         view.pulse *= Math.exp(-dt * 3.2);
         more = true;
       }
-      this.render(view);
-      view.dirty = false;
+      // A view with no size yet (a hidden or collapsed container) stays owed a draw.
+      if (this.render(view)) view.dirty = false;
     }
-    if (more || this.worldDirty) this.schedule();
+    if (more || (drawing && this.worldDirty)) this.schedule();
   }
 
   private uploadWorld(): void {
@@ -320,10 +323,11 @@ class MetalEngine {
     return this.pointer === null ? { x: 0, y: 0 } : toward(this.pointer.x, this.pointer.y, 420);
   }
 
-  private render(view: View): void {
+  /** Draws one view; false when it has no size to draw into yet. */
+  private render(view: View): boolean {
     const { gl, uniforms: u, studio } = this;
     const rect = view.canvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
+    if (rect.width === 0 || rect.height === 0) return false;
     const win = this.doc.defaultView as Window;
     const dpr = Math.min(2, win.devicePixelRatio || 1);
     const width = Math.round(rect.width * dpr);
@@ -353,7 +357,7 @@ class MetalEngine {
     gl.uniform1f(u.uK, s.k.x);
     gl.uniform1f(u.uChurn, s.churn.x * detail.churnScale);
     gl.uniform1f(u.uWobble, s.wobble.x * detail.wobbleScale);
-    gl.uniform1f(u.uPulse, detail.pulses ? view.pulse : 0);
+    gl.uniform1f(u.uPulse, detail.pulses && !this.reduceMotion.matches ? view.pulse : 0);
     gl.uniform1f(u.uRough, 0);
     gl.uniform1f(u.uDim, 0);
     gl.uniform1f(u.uSquash, Math.max(0.5, s.squash.x));
@@ -373,6 +377,7 @@ class MetalEngine {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     view.ctx.clearRect(0, 0, width, height);
     view.ctx.drawImage(this.glCanvas, 0, this.glCanvas.height - height, width, height, 0, 0, width, height);
+    return true;
   }
 }
 
