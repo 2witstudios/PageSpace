@@ -87,7 +87,16 @@ The face reflects a studio defined as tokens beside the existing ones, so the th
 /* numbers, per theme: key gain 2.2 / 2.2; page gain 1 / 1.15; contact shadow .2 / 0 */
 ```
 
-The studio is laid out the way a chrome product shot is lit:
+**Revision (as prototyped now): designed bands, not a photographed room.** The app is mostly flat panes and white space, so a true mirror reflects light and little else. A reflective studio (a horizon, a floor, softboxes) still read as a mirror ball rather than liquid metal. The face now reflects a designed field instead, as Paper's LiquidMetal shader does:
+
+- **Bands:** broad flowing light/dark bands (`fract(dot(R, dir) · 1.35 − t·0.045)`) through a chrome ramp, with a broad bright band, a thin bright line and a dark gunmetal floor between them.
+- **Folds:** the folds bend the bands, and each colour channel is a little out of phase, which leaves thin colour fringes where bands meet.
+- **Copper:** a copper glow sits in the dip after each bright band.
+- **Lights:** the pointer-following key and one tall strip light remain, so light still moves across it.
+- **Material:** polished steel (`F0 ≈ 0.6`, rising to white at the edges by Fresnel) with a slight satin finish, so it has a metal body instead of reading as clear.
+- **The page:** it only tints the outer edge, at 30%.
+
+The horizon studio below is what that revision replaced. It is kept here for the record:
 
 - **Horizon:** a sharp horizon arcs across the face (elevation `R.y + 0.38·(1 − R.z) − 0.1`). Above it is a cool sky with faint banding; below it is gunmetal ground with seams and a pool of light. A thin bright glint runs along the horizon line.
 - **Copper:** a narrow copper glow sits just under the horizon. It is what fills the folds' recesses, as in the reference images, without browning the whole lower half.

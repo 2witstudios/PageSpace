@@ -420,7 +420,7 @@ float sdf(vec3 p){
   vec3 w = q*3.1 + vec3(t*.23, -t*.19, t*.15);
   w += .42*sin(w.yzx*1.7 + vec3(t*.31, t*.27, -t*.22));
   w += .21*sin(w.zxy*3.3 - t*.4);
-  d -= (.021 + uChurn*.2) * sin(w.x*2.1)*sin(w.y*1.9 + 1.)*sin(w.z*2.3 + 2.);
+  d -= (.015 + uChurn*.18) * sin(w.x*2.1)*sin(w.y*1.9 + 1.)*sin(w.z*2.3 + 2.);
   float rp = length(p.xy-uBalls[0].xy);
   d += uPulse*.03*sin(rp*16.-t*10.)*exp(-rp*2.);
   return d*min(1.,uSquash);
@@ -445,26 +445,32 @@ float box(vec3 R, vec3 dir, vec2 size, float soft){
   float sd = length(max(e, 0.)) + min(max(e.x, e.y), 0.);
   return 1. - smoothstep(-soft, soft, sd);
 }
+// The orb's own reflection. The app is mostly flat panes, so a true mirror would mostly reflect
+// light and nothing else. Like Paper's LiquidMetal, the environment is a designed field of light
+// and dark bands that flows slowly; the folds bend it, and each colour channel sits a little out
+// of phase, which leaves thin colour fringes where bands meet.
+float band(float x, float soft){
+  float broad = smoothstep(0., .2, x) * (1. - smoothstep(.42, .42 + soft, x));
+  float line = exp(-pow((x - .63)/.028, 2.));
+  return broad + line*.75;
+}
 vec3 studio(vec3 R, float rough){
-  // Elevation, bowed so the horizon arcs across the face as it does in a chrome ball.
-  float el = R.y + .38*(1. - R.z) - .1;
-  float soft = .006 + rough*.25;
-  // Sky: cool, brightest high up, with the faint banding a lit room leaves on chrome.
-  vec3 sky = mix(uSky*.5, uSky, smoothstep(.0, .85, el)) * (.88 + .12*sin(el*22.));
-  // Ground: dark, with a copper glow just under the horizon (what fills the folds' recesses).
-  // The ground has structure (a floor's seams and pools of light), so the lower half never goes flat.
-  float seams = sin(R.x*13. + el*4.)*sin(el*21.);
-  vec3 ground = uRoom * (.7 + .3*seams) * (1. + .5*exp(-abs(R.x + .3)*4.)*smoothstep(-.6, -.1, el));
-  ground = mix(ground, uWarm, exp(-abs(el)*16.)*.7) * mix(1., .4, smoothstep(0., -.7, el));
-  vec3 c = mix(ground, sky, smoothstep(-soft, soft, el));
-  c += uKey * .35 * exp(-abs(el - .025)*90.);
-  // Light sources: the key follows the pointer; two tall strips stand at the sides.
-  c += uKey * uKeyGain * box(R, uKeyDir, vec2(.2, .14), soft*1.5);
-  c += uKey * uKeyGain*.7 * box(R, vec3(-.75, .35, .55), vec2(.05, .5), soft*1.5);
-  c += uKey * uKeyGain*.45 * box(R, vec3(.8, .15, .6), vec2(.035, .45), soft*1.5);
-  // The flag: a dark card low at the horizon, so the silhouette keeps an edge on any page.
+  float soft = .025 + rough*.3;
+  float u = dot(R, normalize(vec3(.35, 1., .3)));
+  u += .1*sin(R.x*3.1 + uTime*.37) + .06*sin(R.z*4.3 - uTime*.29);
+  float flow = uTime*.045;
+  vec3 v = fract(vec3(u + .02, u, u - .02)*1.35 - flow);
+  vec3 b = vec3(band(v.r, soft), band(v.g, soft), band(v.b, soft));
+  vec3 c = mix(uRoom*.45, uSky, b);
+  // Copper in the dip just after each bright band: the warmth of the reference recesses.
+  float dip = exp(-pow((v.g - .5)/.05, 2.));
+  c += uWarm * dip * .35;
+  // Light still matters: the key follows the pointer, and a tall strip catches one edge.
+  c += uKey * uKeyGain * box(R, uKeyDir, vec2(.2, .14), soft*.6);
+  c += uKey * uKeyGain*.6 * box(R, vec3(-.85, .3, .4), vec2(.05, .55), soft*.6);
+  // The flag: a dark card at grazing, so the silhouette keeps an edge on any page.
   float flag = 1. - smoothstep(.06, .3, R.z);
-  return mix(c, uFlag, flag*.75);
+  return mix(c, uFlag, flag*.55);
 }
 // The page plane: reflect into z=0 and read the proxy world there.
 vec3 world(vec3 P, vec3 R, float rough){
@@ -489,24 +495,26 @@ vec4 shade(vec3 P){
   vec3 n = nrm(P);
   vec3 V = vec3(0.,0.,-1.);
   vec3 R = reflect(V, n);
-  float rough = uRough;
-  // The page shows only at the outer edge, compressed; inside it the dark flag holds the form.
-  float wPlane = 1. - smoothstep(-.55, -.3, R.z);
+  // A slight satin finish: reflections soften, so the metal has a body instead of reading as clear.
+  float rough = max(uRough, .1);
+  // The page only tints the outer edge; the metal never turns into a window onto it.
+  float wPlane = (1. - smoothstep(-.55, -.3, R.z)) * .3;
   vec3 env = mix(studio(R, rough), world(P, R, rough), wPlane);
   // Dispersion: a slight spread of red and blue toward the edges, the fringe chrome photographs carry.
   float disp = .07*(1. - clamp(n.z, 0., 1.));
   vec3 Rr = reflect(V, normalize(n + vec3(n.xy, 0.)*disp));
   vec3 Rb = reflect(V, normalize(n - vec3(n.xy, 0.)*disp));
-  float wr = 1. - smoothstep(-.55, -.3, Rr.z), wb = 1. - smoothstep(-.55, -.3, Rb.z);
+  float wr = (1. - smoothstep(-.55, -.3, Rr.z))*.3, wb = (1. - smoothstep(-.55, -.3, Rb.z))*.3;
   env.r = mix(studio(Rr, rough), world(P, Rr, rough), wr).r;
   env.b = mix(studio(Rb, rough), world(P, Rb, rough), wb).b;
   if(uZones > .5){
     float flag = (1.-smoothstep(.08,.46,R.z))*(1.-wPlane);
-    env = mix(mix(vec3(.82,.8,.72), vec3(.05,.07,.1), flag), vec3(.12,.36,.85), wPlane);
+    env = mix(mix(vec3(.82,.8,.72), vec3(.05,.07,.1), flag), vec3(.12,.36,.85), wPlane/.3);
   }
-  // Polished silver: F0 near 1, Schlick toward white at grazing.
+  // Polished steel, not a silver mirror: about 60% reflectance head-on, rising toward white at the
+  // edges (Schlick). The darker body and bright rim are what read as solid metal.
   float cosT = clamp(n.z, 0., 1.);
-  vec3 F0 = vec3(.96,.955,.94);
+  vec3 F0 = vec3(.6, .6, .62);
   vec3 F = F0 + (1.-F0)*pow(1.-cosT, 5.);
   float ao = clamp(sdf(P+n*.09)/.09, 0., 1.);
   vec3 col = env*F*mix(.55, 1., ao);
