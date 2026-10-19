@@ -677,7 +677,7 @@ describe('Shell', () => {
     );
     const messages = rail.querySelector('a[aria-label^="Messages"]');
     navigate('/drive-1/messages/channel-1');
-    const current = rail.querySelector(':scope > ul [aria-current]');
+    const current = rail.querySelector(':scope ul [aria-current]');
 
     assert({
       given: 'the shell on a drive chat, then on a channel',
@@ -686,7 +686,7 @@ describe('Shell', () => {
         names,
         [...rail.querySelectorAll('button')].some((button) => button.textContent?.includes('Log out')),
         current === messages,
-        rail.querySelectorAll(':scope > ul [aria-current]').length,
+        rail.querySelectorAll(':scope ul [aria-current]').length,
         rail.querySelector('summary[aria-label="Account menu"]')?.classList.contains('spine-avatar-ring'),
       ],
       expected: [
@@ -699,10 +699,7 @@ describe('Shell', () => {
           'Tasks',
           'Calendar',
           'Agents',
-          'Workflows',
-          'Activity',
-          'Members',
-          'Trash',
+          'More',
           'Notifications',
           'Drive settings',
           'Account menu',
@@ -756,7 +753,7 @@ describe('Shell', () => {
       should: 'link the rail into the Home drive, mark no section current and ring the avatar instead',
       actual: [
         slot('rail').querySelector('a[aria-label="Drive settings"]')?.getAttribute('href'),
-        slot('rail').querySelector(':scope > ul [aria-current]'),
+        slot('rail').querySelector(':scope ul [aria-current]'),
         slot('rail').querySelector('summary[aria-label="Account menu"]')?.classList.contains('spine-avatar-ring'),
       ],
       expected: ['/home-1/settings', null, true],

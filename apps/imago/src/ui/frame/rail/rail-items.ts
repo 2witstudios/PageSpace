@@ -12,7 +12,7 @@ export type RailItem = {
   readonly href: string | null;
 };
 
-/** The six drive tools under the divider; Members is one of them (SPEC v3). */
+/** A drive tool, on the spine or behind More. */
 export type SecondaryItem = {
   readonly id: DriveTool;
   readonly icon: IconName;
@@ -54,12 +54,19 @@ export const classicHref = (driveId: string, path: string): string =>
   `/dashboard/${encodeURIComponent(driveId)}/${path}`;
 
 /**
- * Under the divider (SPEC v3 spine, C-Files-Doc): Calendar, Agents, Workflows, Activity,
- * Members and Trash, each a route of the current drive.
+ * Under the divider: Calendar and Agents, the tools that carry their own notifications or are
+ * used as destinations in their own right, each a route of the current drive.
  */
 export const secondaryItems = (driveId: string | null): readonly SecondaryItem[] => [
   { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar') },
   { id: 'agents', icon: 'agents', label: 'Agents', href: driveHref(driveId, 'agents') },
+];
+
+/**
+ * Behind the More entry at the foot: the housekeeping tools, which carry no notifications and
+ * are visited rarely. Each is a route of the current drive.
+ */
+export const moreItems = (driveId: string | null): readonly SecondaryItem[] => [
   { id: 'workflows', icon: 'workflows', label: 'Workflows', href: driveHref(driveId, 'workflows') },
   { id: 'activity', icon: 'activity', label: 'Activity', href: driveHref(driveId, 'activity') },
   { id: 'members', icon: 'members', label: 'Members', href: driveHref(driveId, 'members') },
@@ -105,3 +112,16 @@ export const messagesUnread = (badges: unknown): number => {
   const { dms, channels } = badges as { readonly dms?: unknown; readonly channels?: unknown };
   return count(dms) + count(channels);
 };
+
+/** One named count from a /api/sidebar/badges body; nothing loaded or a non-count shows none. */
+const badgeCount = (badges: unknown, key: 'files' | 'tasks' | 'calendar'): number =>
+  typeof badges !== 'object' || badges === null ? 0 : count((badges as Readonly<Record<string, unknown>>)[key]);
+
+/** Files counts the file mentions waiting for the viewer. */
+export const filesUnread = (badges: unknown): number => badgeCount(badges, 'files');
+
+/** Tasks counts the tasks assigned to the viewer. */
+export const tasksUnread = (badges: unknown): number => badgeCount(badges, 'tasks');
+
+/** Calendar counts the pending invites to upcoming events the viewer has not answered. */
+export const calendarUnread = (badges: unknown): number => badgeCount(badges, 'calendar');
