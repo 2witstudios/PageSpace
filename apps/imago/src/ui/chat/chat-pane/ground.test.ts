@@ -9,10 +9,10 @@ const PAGE = 'bcdefghijklmnopqrstuvwxy';
 describe('groundFor()', () => {
   test('each section index and an open object', () => {
     assert({
-      given: 'the Files index, the Messages index, /dm, a page and the drive chat',
-      should: 'show the Files intro, the unread counts, the people you can message, then nothing',
+      given: 'the Files index, a drive Messages index, /dm, a page and the drive chat',
+      should: 'show the Files intro, then nothing on a drive Messages index, the people you can message on /dm, then nothing',
       actual: [`/${DRIVE}/files`, `/${DRIVE}/messages`, '/dm', `/${DRIVE}/files/${PAGE}`, `/${DRIVE}`].map((path) => groundFor(stageFor(path))),
-      expected: ['files', 'messages', 'dm', null, null],
+      expected: ['files', null, 'dm', null, null],
     });
   });
 
