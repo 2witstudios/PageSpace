@@ -329,6 +329,11 @@ function paintWorld() {
   // Text: one bar per line box, in the text's own color at glyph coverage.
   const range = document.createRange();
   for (const root of document.querySelectorAll('[data-metal-ink]')) {
+    // Message bubbles are surfaces: paint them first, then the text bars over them.
+    for (const el of root.querySelectorAll('.msg')) {
+      const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
+      wctx.fillStyle = cs.backgroundColor; wctx.beginPath(); wctx.roundRect(r.left, r.top, r.width, r.height, 14); wctx.fill();
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       if (!n.nodeValue.trim()) continue;
@@ -343,13 +348,6 @@ function paintWorld() {
         wctx.fillRect(r.left, r.top + (r.height - h) / 2, r.width, h);
       }
       wctx.globalAlpha = 1;
-    }
-    // Rendered bubbles and the composer read as surfaces too.
-    for (const el of root.querySelectorAll('.msg')) {
-      const r = el.getBoundingClientRect(); const cs = getComputedStyle(el);
-      wctx.globalCompositeOperation = 'destination-over';
-      wctx.fillStyle = cs.backgroundColor; wctx.beginPath(); wctx.roundRect(r.left, r.top, r.width, r.height, 14); wctx.fill();
-      wctx.globalCompositeOperation = 'source-over';
     }
   }
   worldDirty = false; worldVersion++;
@@ -647,13 +645,16 @@ function frame(now) {
   key.y += ((.5 - ny * .45) - key.y) * Math.min(1, dt * 4);
 
   const m = effectiveMood();
-  document.getElementById('stateText').textContent = m;
+  // Only on a change: the status sits inside the observed shell, so each write would repaint the world.
+  const stateText = document.getElementById('stateText');
+  if (stateText.textContent !== m) stateText.textContent = m;
   for (const v of views) {
     if (!v.visible) continue;
     const target = { ...MOODS[m] };
     target.rough = Math.max(target.rough, (1 - polish) * .6);
-    stepSprings(v.springs, target, still ? 1 : dt);
-    if (still) for (const k of KEYS) v.springs[k].v = 0;
+    // Reduced motion lands on the targets at once; a one-second Euler step would diverge.
+    if (still) for (const k of KEYS) v.springs[k] = { x: target[k], v: 0 };
+    else stepSprings(v.springs, target, dt);
     const s = v.springs;
     if (!still) { v.time += dt; v.phase += dt * s.speed.x; }
     v.pulse *= Math.exp(-dt * 3.2);
