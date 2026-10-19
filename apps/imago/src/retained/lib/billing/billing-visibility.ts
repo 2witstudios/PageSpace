@@ -15,7 +15,7 @@ export interface BillingChannelInput {
   /** Platform detection has finished (false on the server and the first client render). */
   isReady: boolean;
   isIOS: boolean;
-  /** iOS has the storeKit capability AND the running binary registered PageSpaceStore. */
+  /** The running binary can sell through StoreKit. Imago never does: its caller passes false. */
   storeKitAvailable: boolean;
 }
 

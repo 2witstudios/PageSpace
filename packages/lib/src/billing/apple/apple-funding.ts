@@ -196,6 +196,9 @@ async function clawBack(tx: Tx, input: { userId: string; fundingRef: string; cen
  * root's debt first and crediting the rest to `bucket` — the inverse of {@link clawBack}.
  * Unlike a renewal it forgives nothing and leaves the allowance and period clock alone.
  * Keyed on apple-reinstate:<transactionId>:<revokedAtMs>; returns whether newly applied.
+ * Accepted for v1 (with review P2-4): if a renewal's refill already forgave the debt the
+ * refund created, the reversal still restores the full grant — rare (a reversal after a
+ * renewal), bounded by one grant, and never in the buyer's disfavour.
  */
 async function restoreGrant(tx: Tx, input: { userId: string; fundingRef: string; cents: number; bucket: 'monthly' | 'topup' }): Promise<boolean> {
   const walletId = await ensurePersonalRootWalletId(tx, input.userId);
@@ -327,6 +330,7 @@ async function upsertSubscription(tx: Tx, input: {
   }
   const order = subscriptionPayloadOrder(input.existing, { purchaseMs: facts.purchaseDateMs, signedMs: facts.signedDateMs });
   if (order === 'ignore') return;
+  const newestSigned = !isStalePayload({ lastSignedMs: input.existing.lastSignedMs, signedMs: facts.signedDateMs });
   if (order === 'renewal_only') {
     if (input.renewal) {
       await tx.update(appStoreSubscriptions).set({ autoRenew: input.renewal.autoRenew, updatedAt: now })
@@ -349,9 +353,12 @@ async function upsertSubscription(tx: Tx, input: {
       currentPeriodStart: new Date(facts.purchaseDateMs),
       expiresAt: new Date(next.expiresAtMs),
     } : {}),
-    // Renewal preferences describe the subscription, whichever period the payload is about.
-    ...(input.renewal ? { autoRenew: input.renewal.autoRenew } : {}),
-    lastSignedAt: signedAt,
+    // Renewal preferences describe the subscription, whichever period the payload is about,
+    // but only the newest-signed payload's count: a delayed renewal for a newer period moves
+    // the period forward without rolling back preferences signed after it, and the signing
+    // clock on file never moves backwards.
+    ...(input.renewal && newestSigned ? { autoRenew: input.renewal.autoRenew } : {}),
+    ...(newestSigned ? { lastSignedAt: signedAt } : {}),
     updatedAt: now,
   }).where(eq(appStoreSubscriptions.originalTransactionId, facts.originalTransactionId));
 }
@@ -490,20 +497,16 @@ export async function applyAppleTransaction(input: ApplyAppleTransactionInput): 
       }
     }
 
-    // First funding stamps fundedAt (the Sandbox cap counts it); later payloads keep it.
+    // First funding stamps fundedAt (the Sandbox cap counts it) whichever payload funded —
+    // even a stale copy of a capped purchase; later payloads keep it. Only a payload newer
+    // than the one on file changes the revocation state and the signing clock.
     const fundedAt = funded && !recorded.funded ? { fundedAt: now } : {};
-    if (!recorded.isNew && !recorded.stale) {
-      await tx.update(appStoreTransactions).set({
-        revokedAt: revokedAfter === null ? null : new Date(revokedAfter),
-        lastSignedAt: facts.signedDateMs === null ? null : new Date(facts.signedDateMs),
-        ...fundedAt,
-      }).where(eq(appStoreTransactions.transactionId, facts.transactionId));
-    } else if (recorded.isNew && (funded || revokedAfter !== null)) {
-      await tx.update(appStoreTransactions).set({
-        revokedAt: revokedAfter === null ? null : new Date(revokedAfter),
-        ...fundedAt,
-      }).where(eq(appStoreTransactions.transactionId, facts.transactionId));
-    }
+    const revocationState = recorded.stale ? {} : { revokedAt: revokedAfter === null ? null : new Date(revokedAfter) };
+    const signingClock = !recorded.isNew && !recorded.stale ? { lastSignedAt: facts.signedDateMs === null ? null : new Date(facts.signedDateMs) } : {};
+    const changes = { ...revocationState, ...signingClock, ...fundedAt };
+    // A new row was inserted as-is: it needs writing only once it funded or was revoked.
+    const writes = recorded.isNew ? funded || revokedAfter !== null : Object.keys(changes).length > 0;
+    if (writes) await tx.update(appStoreTransactions).set(changes).where(eq(appStoreTransactions.transactionId, facts.transactionId));
 
     const subscriptionTier = await writeMergedTier(tx, userId, input.priceTier, now, user.subscriptionTier);
     const kind = plan.kind === 'revoke_subscription' || plan.kind === 'revoke_consumable' ? 'revoked' : productKind;

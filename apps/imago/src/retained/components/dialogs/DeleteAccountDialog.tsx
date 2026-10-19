@@ -17,13 +17,17 @@ import { AlertTriangle } from "lucide-react";
 import { SignInWithAppleDeletionNotice, type AppleSignInRevocation } from "@/retained/components/account/SignInWithAppleDeletionNotice";
 import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch";
 
+const APP_STORE_STATUS_TIMEOUT_MS = 10_000;
+
 /**
  * Whether Apple will charge the viewer again — GET /api/subscriptions/status `appStoreRenews`
  * (auto-renew on, renewal-capable), or an App Store-sold current plan. A failed request
  * throws: an unknown answer is never read as "no subscription".
  */
 async function fetchAppStoreRenews([url]: readonly [string, "app-store-renews"]): Promise<boolean> {
-  const response = await fetchWithAuth(url);
+  // Bounded: a request that never answers becomes an error (the warning shows) instead of
+  // leaving confirmation disabled forever.
+  const response = await fetchWithAuth(url, { signal: AbortSignal.timeout(APP_STORE_STATUS_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`Failed to fetch subscription status: ${response.status}`);
   const body: { billingProvider?: string | null; appStoreRenews?: boolean } = await response.json();
   return body.appStoreRenews === true || body.billingProvider === "apple";

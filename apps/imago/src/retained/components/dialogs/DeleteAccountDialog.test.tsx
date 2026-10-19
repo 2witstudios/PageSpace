@@ -9,7 +9,7 @@ vi.mock("@/retained/lib/auth/auth-fetch", async (importOriginal) => ({
   fetchWithAuth: vi.fn(async () => ({ ok: mocks.statusOk, status: mocks.statusOk ? 200 : 500, json: async () => ({ billingProvider: mocks.billingProvider, appStoreRenews: mocks.appStoreRenews }) })),
 }))
 
-import { ApiRequestError } from "@/retained/lib/auth/auth-fetch"
+import { ApiRequestError, fetchWithAuth } from "@/retained/lib/auth/auth-fetch"
 import { DeleteAccountDialog, ownedOrganizationsFrom } from "./DeleteAccountDialog"
 
 afterEach(() => {
@@ -81,6 +81,8 @@ describe("DeleteAccountDialog", () => {
     mocks.statusOk = false
     renderDialog()
     expect(await screen.findByTestId("app-store-deletion-notice")).toBeTruthy()
+    // The read is bounded, so a request that never answers ends the same way.
+    expect(fetchWithAuth).toHaveBeenCalledWith("/api/subscriptions/status", { signal: expect.any(AbortSignal) })
     fireEvent.change(screen.getByLabelText(/Type your email address/), { target: { value: "jono@studio.example" } })
     expect(deleteButton().disabled).toBe(false)
   })

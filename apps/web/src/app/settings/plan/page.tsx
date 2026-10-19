@@ -170,8 +170,11 @@ export default function PlanPage() {
 
   const fetchSubscriptionData = async ({ quiet = false }: { quiet?: boolean } = {}) => {
     try {
-      if (!quiet) setLoading(true);
-      setError(null);
+      // A background refresh leaves the error on screen alone (it may be about something else).
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
       const res = await fetchWithAuth('/api/subscriptions/status');
       if (!res.ok) throw new Error('Failed to fetch subscription data');
       const data = await res.json();

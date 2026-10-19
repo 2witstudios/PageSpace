@@ -17,6 +17,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { applyAppleNotification, applyAppleTransaction, type AppleApplyConfig } from '../apple-funding';
 import { getOrCreateAccountToken } from '../apple-account';
 import { hasRenewableAppleSubscription } from '../apple-entitlement';
+import { walletDriftAlerts } from '../../wallet-reconcile';
 import type { DecodedTransactionLike } from '../apple-core';
 import type { VerifiedNotification } from '../apple-verify';
 import type { SubscriptionTier } from '../../subscription-tiers';
@@ -83,6 +84,14 @@ async function root(userId: string) {
 async function tierOf(userId: string) {
   const [u] = await db.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId));
   return u.tier;
+}
+
+/** Spend everything in the root through the ledger, so the books still reconcile. */
+async function spendAll(userId: string) {
+  const w = await root(userId);
+  const spent = w.monthlyRemainingCents + w.topupRemainingCents;
+  await db.insert(creditLedger).values({ userId, walletId: w.id, entryType: 'adjustment', bucket: 'monthly', amountCents: -spent, appliedCents: -spent, consumeStatus: 'applied' });
+  await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(personalRootWalletOf(userId));
 }
 
 async function ledgerFor(userId: string) {
@@ -268,6 +277,27 @@ describe('App Store subscription state follows Apple, not arrival order', () => 
     expect(await tierOf(u.id)).toBe('pro');
   });
 
+  it('a delayed renewal moves the period forward without rolling back renewal preferences signed after it', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const original = nextTxnId();
+    const now = Date.now();
+    const periodN = subscriptionTxn(u.token, { originalTransactionId: original, transactionId: original, purchaseDate: now - 31 * DAY, expiresDate: now - DAY, signedDate: now - 31 * DAY });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: periodN, priceTier, config });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...periodN, revocationDate: now, signedDate: now + 100 }, renewal: { autoRenew: false, gracePeriodExpiresMs: null } },
+      priceTier, config,
+    });
+    const renewal = subscriptionTxn(u.token, { originalTransactionId: original, purchaseDate: now - DAY, expiresDate: now + 29 * DAY, signedDate: now });
+    await applyAppleNotification({
+      notification: { notificationUUID: createId(), type: 'DID_RENEW', subtype: null, status: 1, transaction: renewal, renewal: { autoRenew: true, gracePeriodExpiresMs: null } },
+      priceTier, config,
+    });
+    const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
+    expect(sub).toMatchObject({ status: 'active', latestTransactionId: renewal.transactionId, autoRenew: false });
+    expect(sub.lastSignedAt?.getTime()).toBe(now + 100);
+  });
+
   it('Restore Purchases during a billing grace period keeps Pro (the device cannot see the grace)', async () => {
     if (!dbAvailable) return;
     const u = await newUser();
@@ -329,6 +359,28 @@ describe('Sandbox money', () => {
     const later = new Date(Date.now() + 31 * DAY);
     for (const pack of packs) await applyAppleTransaction({ source: 'device', userId: u.id, decoded: pack, priceTier, config: capped, now: later });
     expect((await root(u.id)).topupRemainingCents).toBe(6000);
+  });
+
+  it('a stale copy of a capped purchase that funds later still counts toward the cap', async () => {
+    if (!dbAvailable) return;
+    const u = await newUser();
+    const capped = { ...config, sandboxMaxFundings: 1 };
+    const signed = Date.now();
+    const first = packTxn(u.token, 100);
+    const second = packTxn(u.token, 100, { signedDate: signed });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: first, priceTier, config: capped });
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: second, priceTier, config: capped });
+    expect((await root(u.id)).topupRemainingCents).toBe(1000);
+
+    // After the window: an older-signed copy of the capped purchase funds it...
+    const later = new Date(Date.now() + 31 * DAY);
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: { ...second, signedDate: signed - 10 }, priceTier, config: capped, now: later });
+    expect((await root(u.id)).topupRemainingCents).toBe(2000);
+    const [row] = await db.select().from(appStoreTransactions).where(eq(appStoreTransactions.transactionId, String(second.transactionId)));
+    expect(row.fundedAt?.getTime()).toBe(later.getTime());
+    // ...and that funding counts: the next one in the same window is capped.
+    await applyAppleTransaction({ source: 'device', userId: u.id, decoded: packTxn(u.token, 100), priceTier, config: capped, now: later });
+    expect((await root(u.id)).topupRemainingCents).toBe(2000);
   });
 
   it('funds an allowlisted tester past the cap, and never caps real money', async () => {
@@ -397,8 +449,7 @@ describe('App Store credit packs', () => {
     const pack = packTxn(u.token, 500);
     await applyAppleTransaction({ source: 'device', userId: u.id, decoded: sub, priceTier, config });
     await applyAppleTransaction({ source: 'device', userId: u.id, decoded: pack, priceTier, config });
-    // Everything granted is spent.
-    await db.update(wallets).set({ monthlyRemainingCents: 0, topupRemainingCents: 0 }).where(personalRootWalletOf(u.id));
+    await spendAll(u.id);
 
     const t0 = Date.now() + 5;
     await applyAppleNotification({ notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...sub, revocationDate: t0, signedDate: t0 }, renewal: null }, priceTier, config });
@@ -408,6 +459,8 @@ describe('App Store credit packs', () => {
     await applyAppleNotification({ notification: { notificationUUID: createId(), type: 'REFUND_REVERSED', subtype: null, status: 1, transaction: { ...sub, signedDate: t0 + 10 }, renewal: null }, priceTier, config });
     expect(await root(u.id)).toMatchObject({ debtCents: 5000, monthlyRemainingCents: 0, topupRemainingCents: 0 });
     expect((await ledgerFor(u.id)).filter((r) => r.entryType === 'debt_forgiven')).toHaveLength(0);
+    // The restore row moves exactly what the wallet gained: the books still reconcile.
+    expect(await walletDriftAlerts({ toleranceCents: 0, limit: 10, walletIds: [(await root(u.id)).id] })).toEqual([]);
   });
 
   it('a refunded pack cannot be re-credited by replaying its pre-refund receipt, or by any payload that is not a REFUND_REVERSED notification', async () => {
