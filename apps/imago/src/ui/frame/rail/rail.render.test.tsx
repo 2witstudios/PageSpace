@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
-import { spineDividerClass, spineTileClass } from '../rail-button/rail-button-class';
+import { spineDividerClass, spineScrollClass, spineTileClass } from '../rail-button/rail-button-class';
 import { moreItems, railItems, secondaryItems, settingsItem } from './rail-items';
 import { renderRail, type RailRenderProps } from './rail.render';
 
@@ -201,9 +201,9 @@ describe('renderRail()', () => {
 
     assert({
       given: 'no drive switcher',
-      should: 'render no wrapper for it',
-      actual: markup({ brand: null }).startsWith('<div'),
-      expected: false,
+      should: 'open the scroll region on Search, with no wrapper for it',
+      actual: markup({ brand: null }).startsWith(`<div class="${spineScrollClass}"><button`),
+      expected: true,
     });
   });
 });

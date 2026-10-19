@@ -5,6 +5,7 @@ import { accountItemClass, accountMenuClass } from '../avatar-menu/avatar-menu-c
 import {
   spineDividerClass,
   spineListClass,
+  spineScrollClass,
   spineTileClass,
 } from '../rail-button/rail-button-class';
 import { renderRailButton, renderRailTooltip } from '../rail-button/rail-button.render';
@@ -45,6 +46,7 @@ export function renderRail(props: RailRenderProps): ReactNode {
   const current = (id: RailItemId) => (id === activeId ? activeAt : null);
   return (
     <>
+      <div className={spineScrollClass}>
       {props.brand === null ? null : <div className="mb-2">{props.brand}</div>}
       <button type="button" className={`${spineTileClass('small', false)} mb-2`} aria-label="Search" onClick={props.onSearch}>
         {renderIcon({ name: 'search', size: 18 })}
@@ -80,7 +82,7 @@ export function renderRail(props: RailRenderProps): ReactNode {
           </li>
         ))}
       </ul>
-      <div className="flex-1" />
+      </div>
       <ul className={spineListClass}>
         <li className="relative">
           <details>

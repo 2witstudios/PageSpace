@@ -56,7 +56,7 @@ export const columnsRowClass = 'relative flex min-h-0 flex-1';
  * layer above the panes, so its tooltips and menus paint over an open pane.
  */
 export const railClass =
-  'relative z-rail flex h-full min-h-0 w-rail-width flex-none flex-col items-center gap-rail-gap overflow-y-auto bg-spine py-rail-y text-spine-ink';
+  'relative z-rail flex h-full w-rail-width flex-none flex-col items-center gap-rail-gap bg-spine py-rail-y text-spine-ink';
 
 /** The object and chat columns inside their panes. */
 export const columnClass = 'flex h-full w-full min-w-0 flex-col';
