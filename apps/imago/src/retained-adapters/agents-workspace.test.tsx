@@ -10,7 +10,7 @@ vi.mock('@/ui/frame/drives/home-drive-context', () => ({ useHomeDriveId: () => '
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/retained/components/agents/AgentsSurface', () => ({ default: () => <div data-surface="" /> }));
 vi.mock('@/ui/tools/agents/session-toolbar', () => ({ SessionToolbar: () => <div data-toolbar="" /> }));
-vi.mock('@/ui/tools/agents/account-agents-pane', () => ({ AccountAgentsPane: () => <section aria-label="Console: agents and sessions" /> }));
+vi.mock('@/ui/tools/agents/home-console-pane', () => ({ HomeConsolePane: () => <section aria-label="Console: agents and sessions" /> }));
 
 const { AgentsWorkspace } = await import('./agents-workspace');
 

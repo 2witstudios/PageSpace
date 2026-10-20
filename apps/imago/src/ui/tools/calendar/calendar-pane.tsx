@@ -39,7 +39,8 @@ const rowClass = 'flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-sm
 /**
  * The Calendar tool's pane (C-Drive-Calendar): the Event button, the October mini month, the
  * CALENDARS group (the drive, or on Home, the dashboard, Personal and every drive as the grid
- * shows them; then Google when it is connected and this is not on-prem) and the EVENT TYPES legend. The visible date is the URL's, so the middle follows the picker.
+ * shows them; then Google when it is connected and this is not on-prem) and the EVENT TYPES
+ * legend. The visible date is the URL's, so the middle follows the picker.
  */
 export function CalendarPane({ driveId, close, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const { state, update } = useCalendarState();

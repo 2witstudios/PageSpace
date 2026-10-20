@@ -13,7 +13,7 @@ import { renderToolPane } from '../../frame/tool-pane/tool-pane.render';
 import { useAgentSessions, type AgentSessionRow } from './agents-data';
 import { renderSessionAction } from './agents-pane';
 import { agoLabel, filterSessions, groupSessionsByEnv, type SessionGroup } from './agents-pane.model';
-import { envStatusOf, type EnvDotTone } from './account-agents-pane.model';
+import { envStatusOf, type EnvDotTone } from './home-console-pane.model';
 
 const groupLabelClass = 'flex items-center gap-2 px-2 pt-3 pb-1 text-2xs font-medium tracking-wide text-ink-muted uppercase';
 
@@ -30,14 +30,14 @@ const sessionRowClass = (selected: boolean): string =>
   );
 
 /**
- * Home's Console pane (C-Account-Agents): the agent sessions of every drive the viewer can
+ * Home's Console pane (C-Account-Agents, now Home's): the agent sessions of every drive the viewer can
  * reach, grouped drive → environment, each environment with its status dot. Session starts one
  * in Home, the drive it is opened on, as Home's Tasks creates its lists in Home. The selected
  * session is the shared agent-surface selection, so the middle follows it. A drive's
  * environments load per drive, so each drive is its own component and the list is the drive
  * list the store holds.
  */
-export function AccountAgentsPane({ driveId, close }: { readonly driveId: string; readonly close: ReactNode }): ReactNode {
+export function HomeConsolePane({ driveId, close }: { readonly driveId: string; readonly close: ReactNode }): ReactNode {
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);

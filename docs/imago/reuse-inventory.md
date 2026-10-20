@@ -30,10 +30,10 @@ classic dashboard. Current master remains the PR target.
 | Rich results, questions and approvals | `components/ai/shared/chat/MessageRenderer`, `tool-calls`, `ask-user` | Original result registry and interactive answer/approval handlers inside the single host |
 | Open page / cross-drive references | `hooks/usePageNavigation`, `lib/ai/shared/hooks/useOpenPagePane` | Page IDs resolve their authorized actual drive; `imagoHref` maps source routes; page-pane tool navigates the native object slot |
 | Agent page configuration | `components/ai/page-agents/PageAgentSettingsTab` | AI_CHAT object configuration + Chat action; save only after editable permission |
-| Agent sessions/environments/terminals | `components/agents/AgentsSurface` | `/:drive/agents`, `/account/agents`; source PaneChat becomes a selector for the one shell chat |
+| Agent sessions/environments/terminals | `components/agents/AgentsSurface` | `/:drive/agents` (on Home, every drive's sessions); source PaneChat becomes a selector for the one shell chat |
 | Account and integrations | `app/settings`, `app/dashboard/connections`, `components/settings` | `/account/*`; original on-prem/billing/native gates preserved; Storage redirects to unified Usage |
 | Drive configuration and roster | `app/dashboard/[driveId]/settings`, `members`, `components/settings/RoleEditor` | `/:drive/settings/*`, `/:drive/members/*` |
-| Calendar, activity and trash | Original drive/user routes and corresponding components | Native rail overflow and `/account/{calendar,activity,trash}` |
+| Calendar, activity and trash | Original drive/user routes and corresponding components | Native rail overflow, Home's every-drive Calendar and Activity, and `/account/trash` |
 
 ## Maintained adapters
 

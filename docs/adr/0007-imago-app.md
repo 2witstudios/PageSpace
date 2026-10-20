@@ -96,7 +96,7 @@ D5's intent — secondary destinations behind one overflow — stands; only its 
 ## 9. What this ADR defers
 
 - **Global pipeline deletion** — `global-chat-turn.ts`, `/api/ai/global/*`, the `'global'` conversation type and `global_assistant_config` stay, because classic and the frozen desktop/mobile/MCP/CLI wire contract still use them (DEC-3). Imago never calls them; deletion moves to a cutover epic.
-- **Classic's driveless layer** — `/dashboard/*` driveless routes and `lib/dashboard/focus.ts` are retired at cutover, not edited now. The `context: 'user'` aggregate APIs stay: Home reads them as the dashboard (D4, amended). DEC-11 (no aggregate "my tasks across drives" view) is withdrawn; the account's `/account/{tasks,calendar,activity,agents,messages}` screens are gone and redirect to Home's sections.
+- **Classic's driveless layer** — `/dashboard/*` driveless routes and `lib/dashboard/focus.ts` are retired at cutover, not edited now. The `context: 'user'` aggregate APIs stay: Home reads them as the dashboard (D4, amended). DEC-11 (no aggregate "my tasks across drives" view) is withdrawn; the account's `/account/{tasks,calendar,activity,agents,messages}` screens are gone and redirect to Home's sections, query string kept.
 - **Unified messaging tables** — new drive-scoped tables for one messaging model, triggers and preferences (decision record §7) belong to a separate data-model epic.
 - **Native clients** — SwiftUI clients and a generated cross-platform token source (decision record §8).
 - **Mobile** — Imago is desktop-first; native wrappers keep loading `/dashboard` (DEC-4).

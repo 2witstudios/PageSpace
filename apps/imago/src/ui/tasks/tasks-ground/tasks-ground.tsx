@@ -5,7 +5,7 @@ import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, useTaskViewStore, viewFor } from '../task-views/task-views';
 import { useDriveTasks } from '../use-tasks/use-tasks';
-import { useHomeDriveId } from '../../frame/drives/home-drive-context';
+import { useIsHome } from '../../frame/drives/home-drive-context';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
@@ -16,7 +16,7 @@ import { renderTasksGround } from './tasks-ground.render';
  * dashboard, it is the viewer's tasks across every drive, each row naming its drive.
  */
 export function TasksGround({ driveId }: { readonly driveId: string }) {
-  const allDrives = driveId === useHomeDriveId();
+  const allDrives = useIsHome(driveId);
   const view = useTaskViewStore((state) => state.view);
   const [status, setStatus] = useState<StatusGroupFilter>('active');
   const { response, error, retry } = useDriveTasks(allDrives ? null : driveId, status, viewFor(view).dueDateFilter);

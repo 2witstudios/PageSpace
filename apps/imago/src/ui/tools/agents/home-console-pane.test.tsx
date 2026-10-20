@@ -68,13 +68,13 @@ vi.mock('./agents-data', async (importOriginal) => {
   };
 });
 
-const { AccountAgentsPane } = await import('./account-agents-pane');
+const { HomeConsolePane } = await import('./home-console-pane');
 
 afterEach(unmountAll);
 
-describe('AccountAgentsPane (IMC-7.29)', () => {
+describe('HomeConsolePane (IMC-7.29)', () => {
   test('Home’s Console starts a session in Home', () => {
-    const root = mount(<AccountAgentsPane driveId="home" close={null} />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const pane = root.querySelector('[aria-label="Console: agents and sessions"]');
     const start = Array.from(root.querySelectorAll('button')).find((button) => button.textContent === 'Session');
     start?.click();
@@ -87,7 +87,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('a pane with a search field, sessions grouped drive then environment', () => {
-    const root = mount(<AccountAgentsPane driveId="home" close={null} />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const drive = root.querySelector('section[aria-label="Studio"]');
     const env = drive?.querySelector('section[aria-label="studio-web"]');
     assert({
@@ -103,7 +103,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('environments carry status dots labelled for their state', () => {
-    const root = mount(<AccountAgentsPane driveId="home" close={null} />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     assert({
       given: 'a running and a stopped environment',
       should: 'label the dots Environment running and Environment stopped',
@@ -116,7 +116,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('the selected session is marked and an environment with no sessions says so', () => {
-    const root = mount(<AccountAgentsPane driveId="home" close={null} />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const current = root.querySelector('[aria-current="true"]');
     assert({
       given: 'the shared selection and an environment with no session',
@@ -127,7 +127,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('a drive with no environments reads "No environments in this drive"', () => {
-    const root = mount(<AccountAgentsPane driveId="home" close={null} />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const emptyDrive = root.querySelector('section[aria-label="Ops"]');
     assert({
       given: 'a drive whose environment listing is empty',

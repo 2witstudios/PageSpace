@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useHomeDriveId } from './home-drive-context';
+import { useIsHome } from './home-drive-context';
 
 /**
  * A drive tool's middle on Home, the dashboard, or on any other drive: the route renders both and
@@ -12,5 +12,5 @@ export function HomeScoped({ driveId, home, drive }: {
   readonly home: ReactNode;
   readonly drive: ReactNode;
 }): ReactNode {
-  return driveId === useHomeDriveId() ? home : drive;
+  return useIsHome(driveId) ? home : drive;
 }
