@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveAccess } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { serveAvatarFile } from '@/lib/avatars/avatar-route';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -23,7 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
       resourceId: driveId,
       details: { route: 'drive-avatar', operation: 'read' },
     });
-    return new NextResponse('Not Found', { status: 404 });
+    return deniedResponse(actorFromAuth(auth), driveId, new NextResponse('Not Found', { status: 404 }));
   }
   return serveAvatarFile('drive', driveId, filename);
 }
