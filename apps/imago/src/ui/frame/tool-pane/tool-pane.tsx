@@ -23,7 +23,7 @@ export function ToolPane({ tool, driveId, close }: ToolPaneProps & { readonly to
   const allDrives = driveId === useHomeDriveId() && isDashboardTool(tool);
   switch (tool) {
     case 'calendar':
-      return <CalendarPane driveId={driveId} close={close} />;
+      return <CalendarPane driveId={driveId} close={close} allDrives={allDrives} />;
     case 'agents':
       return allDrives ? <AccountAgentsPane driveId={driveId} close={close} /> : <AgentsPane driveId={driveId} close={close} />;
     case 'workflows':
