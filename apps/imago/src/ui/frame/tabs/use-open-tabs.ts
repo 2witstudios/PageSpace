@@ -80,9 +80,10 @@ export function useCloseTab(stage: Stage): (id: string, whenLast?: 'section' | '
     if (result.next !== null) return router.push(result.next.path);
     if (whenLast === 'stay') return;
     // As in classic, closing the last tab leaves one, here on the section, even when the
-    // viewer is already there (no navigation then syncs one in).
+    // viewer is already there (no navigation then syncs one in). The root is no place: the
+    // sync opens the tab where its redirect lands.
     const section = sectionPath(stage);
-    dispatch(transactions.openNewTab, { path: section, id: createTabId() });
+    if (tabPathFor(section) !== null) dispatch(transactions.openNewTab, { path: section, id: createTabId() });
     if (section !== pathname) router.push(section);
   };
 }

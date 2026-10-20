@@ -56,4 +56,16 @@ describe('ClosePage', () => {
       expected: [['/d1/files'], ['/d1/files']],
     });
   });
+
+  test('the last tab, off a drive', () => {
+    navigation.pathname = '/account/display';
+    seed([newTab('a', '/account/display')], 'a');
+    close();
+    assert({
+      given: 'Close page on the only tab, on an account screen (its section is the root)',
+      should: 'go to the root without seeding a tab there, for the sync to open one where it redirects',
+      actual: [getUiState().resources.openTabs, navigation.pushed],
+      expected: [[], ['/']],
+    });
+  });
 });
