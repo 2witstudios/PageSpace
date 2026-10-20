@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, consoleGround, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, consoleStage, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -93,39 +93,86 @@ describe('stageFor() tasks', () => {
 describe('stageFor() settings and account', () => {
   test('drive settings', () => {
     assert({
-      given: 'a drive’s settings path',
-      should: 'open the settings as the object beside the 260px settings nav',
-      actual: stageFor('/drive-1/settings'),
-      expected: {
-        driveId: 'drive-1',
-        section: 'settings',
-        list: 'tree',
-        object: { kind: 'settings' },
-      },
+      given: 'a drive’s settings path, then one of its screens',
+      should: 'open the settings nav alone beside the chat, then the screen as the object beside the narrowed nav',
+      actual: [stageFor('/drive-1/settings'), stageFor('/drive-1/settings/general')],
+      expected: [
+        { driveId: 'drive-1', section: 'settings', list: 'list', object: null },
+        { driveId: 'drive-1', section: 'settings', list: 'tree', object: { kind: 'settings' } },
+      ],
     });
   });
 
   test('drive tools', () => {
     assert({
-      given: 'a drive tool path',
-      should: 'title the tool by its spine name',
-      actual: stageFor('/drive-1/calendar').object,
-      expected: { kind: 'settings', title: 'Calendar', tool: 'calendar' },
-    });
-    assert({
-      given: 'the agents route, which the spine calls Console',
-      should: 'title it Console, as its tab does',
-      actual: stageFor('/drive-1/agents').object,
-      expected: { kind: 'settings', title: 'Console', tool: 'agents' },
+      given: 'a drive tool path, then its screen',
+      should: 'open the tool’s pane alone as its own section, then its screen as the object',
+      actual: [stageFor('/drive-1/calendar'), stageFor('/drive-1/workflows/view')],
+      expected: [
+        { driveId: 'drive-1', section: 'calendar', list: 'list', object: null },
+        { driveId: 'drive-1', section: 'workflows', list: 'tree', object: { kind: 'tool' } },
+      ],
     });
   });
 
   test('account', () => {
     assert({
-      given: 'the user-level account path',
-      should: 'open the account as the object beside its nav, with no drive',
-      actual: stageFor('/account'),
-      expected: { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } },
+      given: 'the user-level account path, then one of its screens',
+      should: 'open the account nav alone with no drive, then the screen as the object',
+      actual: [stageFor('/account'), stageFor('/account/display')],
+      expected: [
+        { driveId: null, section: 'account', list: 'list', object: null },
+        { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } },
+      ],
+    });
+  });
+});
+
+describe('stageFor() one shape for every rail destination', () => {
+  const indexes = ['files', 'messages', 'tasks', 'calendar', 'agents', 'workflows', 'activity', 'members', 'trash', 'settings'];
+  // The Console's session rides its query (consoleStage), so its index is checked here and its open session there.
+  const selections = [
+    '/d1/files/p1',
+    '/d1/messages/c1',
+    '/d1/tasks/view/today',
+    '/d1/calendar/view',
+    '/d1/workflows/view',
+    '/d1/activity/view',
+    '/d1/members/all',
+    '/d1/trash/view',
+    '/d1/settings/general',
+  ];
+
+  test('the rail opens the sidebar alone', () => {
+    assert({
+      given: 'each rail destination’s own address',
+      should: 'open its sidebar wide with nothing in the middle, so the chat is the ground',
+      actual: indexes.map((section) => {
+        const stage = stageFor(`/d1/${section}`);
+        return [stage.section, stage.list, stage.object === null];
+      }),
+      expected: indexes.map((section) => [section, 'list', true]),
+    });
+  });
+
+  test('the sidebar opens the middle', () => {
+    assert({
+      given: 'something picked in each sidebar',
+      should: 'open it as the object beside the narrowed sidebar, in the same section',
+      actual: selections.map((path) => {
+        const stage = stageFor(path);
+        return [stage.section, stage.list, stage.object !== null];
+      }),
+      expected: indexes.filter((section) => section !== 'agents').map((section) => [section, 'tree', true]),
+    });
+  });
+
+  test('a smart view', () => {
+    assert({
+      given: 'a Tasks smart view path',
+      should: 'open the view as the object',
+      actual: stageFor('/d1/tasks/view/overdue').object,
+      expected: { kind: 'taskView', viewId: 'overdue' },
     });
   });
 });
@@ -166,16 +213,17 @@ describe('stageFor() unknown and malformed paths', () => {
         stageFor('/drive-1/tasks/list-1/extra'),
         stageFor('/drive-1/settings/extra'),
       ],
-      expected: [driveChat, driveChat, driveChat, driveChat, driveChat, stageFor('/drive-1/settings')],
+      expected: [driveChat, driveChat, driveChat, driveChat, driveChat, stageFor('/drive-1/settings/general')],
     });
   });
 
   test('a drive tool with trailing segments', () => {
     assert({
       given: 'a drive tool addressed with the segments no tool route holds, or more than Members’ one',
-      should: 'fall back to the drive’s chat, keeping only the real Members sub-routes',
+      should: 'fall back to the drive’s chat, keeping only the tools’ screens and the real Members sub-routes',
       actual: [
         stageFor('/drive-1/calendar/anything'),
+        stageFor('/drive-1/calendar/view/extra'),
         stageFor('/drive-1/trash/a/b/c'),
         stageFor('/drive-1/members/u1'),
         stageFor('/drive-1/members/invite'),
@@ -184,8 +232,9 @@ describe('stageFor() unknown and malformed paths', () => {
       expected: [
         driveChat,
         driveChat,
-        stageFor('/drive-1/members'),
-        stageFor('/drive-1/members'),
+        driveChat,
+        stageFor('/drive-1/members/all'),
+        stageFor('/drive-1/members/all'),
         driveChat,
       ],
     });
@@ -196,7 +245,7 @@ describe('stageFor() unknown and malformed paths', () => {
       given: 'a user-level route with extra segments',
       should: 'fall back to the root chat, never read a reserved word as a drive',
       actual: [stageFor('/dm/conversation-1/extra'), stageFor('/account/extra')],
-      expected: [root, stageFor('/account')],
+      expected: [root, stageFor('/account/display')],
     });
   });
 
@@ -267,11 +316,13 @@ describe('paneLayout()', () => {
         paneLayout(stageFor('/drive-1/files'), { collapsedSections: none }),
         paneLayout(stageFor('/drive-1/files/page-1'), { collapsedSections: none }),
         paneLayout(stageFor('/drive-1/settings'), { collapsedSections: none }),
+        paneLayout(stageFor('/drive-1/settings/general'), { collapsedSections: none }),
       ],
       expected: [
         { list: 'list', listHidden: false, object: false },
         { list: 'list', listHidden: false, object: false },
         { list: 'tree', listHidden: false, object: true },
+        { list: 'list', listHidden: false, object: false },
         { list: 'tree', listHidden: false, object: true },
       ],
     });
@@ -362,10 +413,10 @@ describe('paneLayout()', () => {
       given: 'settings and account each with its own section collapsed, then with only the other sections collapsed',
       should: 'close only the nav whose own section is collapsed and keep the object',
       actual: [
-        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['settings'] }),
-        paneLayout(stageFor('/account'), { collapsedSections: ['account'] }),
-        paneLayout(stageFor('/drive-1/settings'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'account'] }).list,
-        paneLayout(stageFor('/account'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'settings'] }).list,
+        paneLayout(stageFor('/drive-1/settings/general'), { collapsedSections: ['settings'] }),
+        paneLayout(stageFor('/account/display'), { collapsedSections: ['account'] }),
+        paneLayout(stageFor('/drive-1/settings/general'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'account'] }).list,
+        paneLayout(stageFor('/account/display'), { collapsedSections: ['chat', 'files', 'messages', 'tasks', 'settings'] }).list,
       ],
       expected: [
         { list: 'closed', listHidden: true, object: true },
@@ -378,15 +429,17 @@ describe('paneLayout()', () => {
 
   test('a drive tool has its pane, and it hides with Close sidebar', () => {
     assert({
-      given: 'a drive tool, open and then with its section collapsed',
-      should: 'show the 260px pane, then report it hidden',
+      given: 'a drive tool’s screen, open and then with its own section collapsed',
+      should: 'show the narrowed pane, then report it hidden, remembered per tool',
       actual: [
-        paneLayout(stageFor('/drive-1/members'), { collapsedSections: [] }),
-        paneLayout(stageFor('/drive-1/members'), { collapsedSections: ['settings'] }),
+        paneLayout(stageFor('/drive-1/members/all'), { collapsedSections: [] }),
+        paneLayout(stageFor('/drive-1/members/all'), { collapsedSections: ['members'] }),
+        paneLayout(stageFor('/drive-1/members/all'), { collapsedSections: ['calendar'] }).list,
       ],
       expected: [
         { list: 'tree', listHidden: false, object: true },
         { list: 'closed', listHidden: true, object: true },
+        'tree',
       ],
     });
   });
@@ -398,22 +451,22 @@ describe('paneLayout()', () => {
       actual: [stageFor('/drive-1/members/u1'), stageFor('/drive-1/members/invite')].map((stage) => ({
         driveId: stage.driveId,
         list: stage.list,
-        tool: stage.object?.kind === 'settings' ? stage.object.tool : null,
+        section: stage.section,
       })),
       expected: [
-        { driveId: 'drive-1', list: 'tree', tool: 'members' },
-        { driveId: 'drive-1', list: 'tree', tool: 'members' },
+        { driveId: 'drive-1', list: 'tree', section: 'members' },
+        { driveId: 'drive-1', list: 'tree', section: 'members' },
       ],
     });
   });
 
   test('every section is a hideable section (SPEC v3.2)', () => {
-    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+    const every: readonly HideableSection[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account', 'calendar', 'agents', 'workflows', 'activity', 'members', 'trash'];
     assert({
       given: 'every section named as hideable',
       should: 'accept them all: each left pane closes with Close sidebar',
       actual: every.length,
-      expected: 6,
+      expected: 12,
     });
   });
 });
@@ -433,8 +486,13 @@ describe('chatContextFor() density', () => {
         stageFor('/dm/conversation-1'),
         stageFor('/drive-1/tasks'),
         stageFor('/drive-1/tasks/list-1'),
+        stageFor('/drive-1/tasks/view/today'),
+        stageFor('/drive-1/calendar'),
+        stageFor('/drive-1/calendar/view'),
         stageFor('/drive-1/settings'),
+        stageFor('/drive-1/settings/general'),
         stageFor('/account'),
+        stageFor('/account/display'),
       ].map((stage) => chatContextFor(stage).density),
       expected: [
         'roomy',
@@ -447,6 +505,11 @@ describe('chatContextFor() density', () => {
         'roomy',
         'dense',
         'dense',
+        'roomy',
+        'dense',
+        'roomy',
+        'dense',
+        'roomy',
         'dense',
       ],
     });
@@ -518,8 +581,8 @@ describe('chatContextFor() with names', () => {
       given: 'the drive settings and the account',
       should: 'label them by what they are and invite any question',
       actual: [
-        chatContextFor(stageFor('/drive-1/settings'), { drive: 'Home' }),
-        chatContextFor(stageFor('/account')),
+        chatContextFor(stageFor('/drive-1/settings/general'), { drive: 'Home' }),
+        chatContextFor(stageFor('/account/display')),
       ],
       expected: [
         { density: 'dense', contextLabel: 'Home settings in context', placeholder: 'Ask anything…' },
@@ -540,7 +603,7 @@ describe('chatContextFor() before names load', () => {
         chatContextFor(stageFor('/drive-1/messages/channel-1')),
         chatContextFor(stageFor('/dm/conversation-1')),
         chatContextFor(stageFor('/drive-1/tasks/list-1')),
-        chatContextFor(stageFor('/drive-1/settings')),
+        chatContextFor(stageFor('/drive-1/settings/general')),
       ].map(({ contextLabel, placeholder }) => [contextLabel, placeholder]),
       expected: [
         ['This drive in context', 'Ask anything…'],
@@ -623,34 +686,35 @@ describe('stageFor() notifications (IMC-9.14)', () => {
   });
 });
 
-describe('consoleGround()', () => {
-  const consoleStage = stageFor('/drive-1/agents');
+describe('consoleStage()', () => {
+  const console = stageFor('/drive-1/agents');
 
   test('the Console with no session open', () => {
     assert({
       given: 'the Console route and no selected session',
-      should: 'widen its pane to the list and leave the middle to Imago',
-      actual: consoleGround(consoleStage, false),
-      expected: { driveId: 'drive-1', section: 'settings', list: 'list', object: null },
+      should: 'leave its pane alone beside Imago, as every section index does',
+      actual: consoleStage(console, false),
+      expected: { driveId: 'drive-1', section: 'agents', list: 'list', object: null },
     });
   });
 
   test('the Console with a session open', () => {
     assert({
       given: 'the Console route and a selected session',
-      should: 'keep the session grid in the middle beside the narrowed pane',
-      actual: consoleGround(consoleStage, true),
-      expected: consoleStage,
+      should: 'open the session grid as the object beside the narrowed pane',
+      actual: consoleStage(console, true),
+      expected: { driveId: 'drive-1', section: 'agents', list: 'tree', object: { kind: 'tool' } },
     });
   });
 
   test('every other stage', () => {
     const calendar = stageFor('/drive-1/calendar');
     assert({
-      given: 'another drive tool with nothing "selected"',
-      should: 'leave the stage as the route made it',
-      actual: [consoleGround(calendar, false), isConsole(calendar), isConsole(consoleStage)],
-      expected: [calendar, false, true],
+      given: 'another drive tool with a session "open", and a Console sub-route',
+      should: 'leave the other tool as the route made it, and claim no Console sub-route',
+      actual: [consoleStage(calendar, true), isConsole(calendar), isConsole(console), stageFor('/drive-1/agents/view')],
+      expected: [calendar, false, true, stageFor('/drive-1')],
     });
   });
 });
+

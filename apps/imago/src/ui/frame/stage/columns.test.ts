@@ -52,24 +52,29 @@ describe('columnsFor() — the C-Files-Doc renderVals machine (IMC-1.3)', () => 
     });
   });
 
-  test('the Tasks index: its list fills the middle, and Imago docks beside it', () => {
-    const tasks = stageFor('/drive1/tasks');
-    const columns = columnsFor(tasks, ui());
+  test('every rail destination: the sidebar alone leaves Imago the ground', () => {
+    const indexes = ['/d1', '/d1/files', '/d1/messages', '/d1/tasks', '/d1/calendar', '/d1/agents', '/d1/workflows', '/d1/activity', '/d1/members', '/d1/trash', '/d1/settings', '/account', '/dm'];
     assert({
-      given: 'the Tasks index of a drive with nothing hidden',
-      should: 'open the middle column for the list and dock Imago beside it, with no Close Imago',
-      actual: [columns.page, columns.imago, columns.collapseImago, columns.closeImago, columns.closePage],
-      expected: [true, 'docked', true, false, false],
+      given: 'each section’s own address, with nothing hidden',
+      should: 'open no middle and make Imago the ground with Close Imago',
+      actual: indexes.map((path) => {
+        const columns = columnsFor(stageFor(path), ui());
+        return [columns.page, columns.imago, columns.closeImago, columns.closePage];
+      }),
+      expected: indexes.map(() => [false, 'ground', true, false]),
     });
   });
 
-  test('the Tasks index: Imago collapses to the Ask pill in its head', () => {
-    const columns = columnsFor(stageFor('/drive1/tasks'), ui({ imagoCollapsed: true }));
+  test('every rail destination: an object from the sidebar docks Imago and can be closed', () => {
+    const selections = ['/d1/files/p1', '/d1/messages/c1', '/d1/tasks/view/today', '/d1/tasks/l1', '/d1/calendar/view', '/d1/members/all', '/d1/settings/general', '/account/display', '/dm/c1'];
     assert({
-      given: 'the Tasks index with Imago collapsed',
-      should: 'fold Imago to the Ask pill in the middle head',
-      actual: [columns.imago, columns.askPill],
-      expected: ['collapsed', true],
+      given: 'something picked in each sidebar',
+      should: 'open the middle, dock Imago beside it and offer Close page',
+      actual: selections.map((path) => {
+        const columns = columnsFor(stageFor(path), ui());
+        return [columns.page, columns.imago, columns.closePage];
+      }),
+      expected: selections.map(() => [true, 'docked', true]),
     });
   });
 

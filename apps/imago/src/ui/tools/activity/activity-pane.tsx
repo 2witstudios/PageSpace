@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import type { ApiClient } from '@/api/client';
 import { cn } from '../../cn';
-import { renderToolPane, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
+import { renderToolPane, renderToolScreenRow, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
+import { toolScreenHref, useToolScreen } from '../../frame/tool-pane/tool-screen';
 import {
   activityRanges,
   activityQuery,
@@ -45,11 +46,10 @@ const labelClass = 'text-2xs font-medium text-ink-faint';
  * timeline reads the same state. On Home (`allDrives`) the timeline is the viewer's own activity
  * across every drive, so there is no one else to filter by.
  */
-export function ActivityPane({ driveId, close, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+export function ActivityPane({ driveId, close, variant, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const queryDriveId = allDrives ? null : driveId;
   const client = useApiClient();
-  const router = useRouter();
-  const pathname = usePathname();
+  const screen = useToolScreen(driveId, 'activity');
   const searchParams = useSearchParams();
   const current = new URLSearchParams(searchParams.toString());
   const state = parseActivityUrl(current);
@@ -60,8 +60,9 @@ export function ActivityPane({ driveId, close, allDrives = false }: ToolPaneProp
   const [exportFailed, setExportFailed] = useState(false);
 
   const setFilter = (key: ActivityFilterKey, value: string | undefined) => {
+    // A filter set from the pane alone opens the timeline beside it, filtered.
     const query = withActivityFilter(current, key, value).toString();
-    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    screen.open(query ? `?${query}` : '');
   };
 
   const exportCsv = async () => {
@@ -88,8 +89,10 @@ export function ActivityPane({ driveId, close, allDrives = false }: ToolPaneProp
     title: 'Activity',
     label: 'Filters',
     close,
+    variant,
     children: (
       <div className="flex flex-col gap-4 px-1 py-2">
+        {renderToolScreenRow({ href: toolScreenHref(driveId, 'activity'), label: 'All activity', selected: screen.onScreen && searchParams.toString() === '' })}
         {allDrives ? null : <div className="flex flex-col gap-1">
           <label htmlFor="activity-actor" className={labelClass}>People &amp; agents</label>
           <select

@@ -5,6 +5,9 @@ import { IMAGO_BASE_PATH, signInOrigin } from '@/lib/auth/sign-in-url';
 import { useRouter as useNextRouter, usePathname as useNextPathname } from 'next/navigation';
 export { useParams, useSearchParams, notFound, redirect, useSelectedLayoutSegment, useSelectedLayoutSegments } from 'next/navigation';
 
+/** The single-screen drive tools, whose screen lives at /<drive>/<tool>/view. The Console opens a session by its query instead. */
+const screenTools = ['calendar', 'workflows', 'activity', 'trash'];
+
 /** Translate retained UI destinations, leaving API, preview and public URLs alone. */
 export function imagoHref(href: string): string {
   const suffixAt = href.search(/[?#]/);
@@ -26,6 +29,9 @@ export function imagoHref(href: string): string {
   else if (['connections', 'storage', 'drives'].includes(first)) destination = `/account/${first}`;
   else if (!second) destination = `/${first}`;
   else if (second === 'channels') destination = `/${first}/messages${rest.length ? `/${rest.join('/')}` : ''}`;
+  // A tool's own screen is the object its pane opens (stage.ts): /view, or Members' /all.
+  else if (screenTools.includes(second) && rest.length === 0) destination = `/${first}/${second}/view`;
+  else if (second === 'members' && rest.length === 0) destination = `/${first}/members/all`;
   else if (['files', 'tasks', 'settings', 'calendar', 'agents', 'workflows', 'activity', 'trash', 'members'].includes(second)) destination = `/${segments.join('/')}`;
   else destination = `/${first}/files/${second}${rest.length ? `/${rest.join('/')}` : ''}`;
   return destination + (query ?? '');
@@ -88,6 +94,9 @@ export function classicPathname(pathname: string | null): string {
   const [drive, section, ...rest] = pathname.split('/').filter(Boolean);
   if (!drive) return '/dashboard';
   if (section === 'files' && rest.length) return `/dashboard/${drive}/${rest.join('/')}`;
+  // A tool's screen reads as classic's tool route.
+  if (section !== undefined && screenTools.includes(section) && rest.length === 1 && rest[0] === 'view') return `/dashboard/${drive}/${section}`;
+  if (section === 'members' && rest.length === 1 && rest[0] === 'all') return `/dashboard/${drive}/members`;
   return `/dashboard/${drive}${section ? `/${section === 'messages' ? 'channels' : section}` : ''}${rest.length ? `/${rest.join('/')}` : ''}`;
 }
 

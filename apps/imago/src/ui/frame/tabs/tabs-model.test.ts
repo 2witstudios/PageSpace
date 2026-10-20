@@ -27,19 +27,19 @@ const ops = newTab('c', '/d1/messages/ops');
 describe('opensTab() (IMC-1.5)', () => {
   test('pages, settings and account screens open a tab', () => {
     assert({
-      given: 'a page, a channel, a drive tool, drive settings and an account screen',
-      should: 'open a tab for each',
-      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display'].map(opensTab),
-      expected: [true, true, true, true, true],
+      given: 'a page, a channel, a drive tool’s screen, the Console, drive settings and an account screen',
+      should: 'open a tab for each (the Console’s sessions ride its query, inside its one tab)',
+      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar/view', '/d1/agents', '/d1/settings/general', '/account/display'].map(opensTab),
+      expected: [true, true, true, true, true, true],
     });
   });
 
   test('the chat and a section index open no tab of their own', () => {
     assert({
-      given: 'the drive chat and section indexes',
+      given: 'the drive chat and each kind of section index',
       should: 'open none: nothing is in the middle but Imago',
-      actual: ['/d1', '/d1/files', '/d1/messages', '/d1/tasks'].map(opensTab),
-      expected: [false, false, false, false],
+      actual: ['/d1', '/d1/files', '/d1/messages', '/d1/tasks', '/d1/calendar', '/d1/settings', '/account'].map(opensTab),
+      expected: [false, false, false, false, false, false, false],
     });
   });
 });
@@ -313,12 +313,19 @@ describe('closeTab()', () => {
 describe('sectionPath()', () => {
   test('where Close page goes', () => {
     assert({
-      given: 'a page, a channel, a drive tool, a setting and an account screen',
-      should: 'go to its section, keeping the tabs',
-      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display', '/dm/c1'].map(
-        (path) => sectionPath(stageFor(path)),
-      ),
-      expected: ['/d1/files', '/d1/messages', '/d1', '/d1', '/', '/dm'],
+      given: 'a page, a channel, a task view, a drive tool, a member, a setting, an account screen and a DM',
+      should: 'go back to the sidebar it was opened from, never the drive’s chat',
+      actual: [
+        '/d1/files/plan',
+        '/d1/messages/ops',
+        '/d1/tasks/view/today',
+        '/d1/calendar/view',
+        '/d1/members/u1',
+        '/d1/settings/general',
+        '/account/display',
+        '/dm/c1',
+      ].map((path) => sectionPath(stageFor(path))),
+      expected: ['/d1/files', '/d1/messages', '/d1/tasks', '/d1/calendar', '/d1/members', '/d1/settings', '/account', '/dm'],
     });
   });
 });

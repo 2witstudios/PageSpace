@@ -6,6 +6,8 @@ import { ListGroup } from '../../components/list-group/list-group';
 import { renderEmptyState, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import type { Progress } from '../task-tree/task-tree';
 import type { TaskViewId } from '../task-views/task-views';
+import type { GroundRow } from '../tasks-ground/ground-rows';
+import { dueClass } from '../tasks-ground/tasks-ground-class';
 import {
   taskListBarClass,
   taskListCountClass,
@@ -17,6 +19,8 @@ import {
   taskViewClass,
   taskViewCountClass,
   taskViewDotClass,
+  taskGlanceMoreClass,
+  taskGlanceRowClass,
   tasksPaneLabelClass,
   tasksPaneMessageClass,
 } from './tasks-pane-class';
@@ -48,7 +52,8 @@ export type TaskViewRenderProps = {
   /** undefined while the counts load. */
   readonly count: number | undefined;
   readonly selected: boolean;
-  readonly onSelect: () => void;
+  /** Opens the view's tasks in the middle. */
+  readonly href: string;
 };
 
 /** The Tasks head's + : an untitled list at the drive's top, opened so it can be renamed. */
@@ -56,7 +61,7 @@ export function renderNewListButton(onNew: () => void): ReactNode {
   return renderIconButton({ name: 'plus', label: 'New list', onClick: onNew });
 }
 
-/** The smart views, each with its count; picking one filters the ground. */
+/** The smart views, each with its count; picking one opens its tasks in the middle. */
 export function renderTaskViews({ views }: { readonly views: readonly TaskViewRenderProps[] }): ReactNode {
   return (
     <section aria-label="Views" className="flex flex-col gap-1">
@@ -64,19 +69,61 @@ export function renderTaskViews({ views }: { readonly views: readonly TaskViewRe
       {views.map((view) => {
         const warn = view.warn && view.count !== undefined && view.count > 0;
         return (
-          <button
+          <Link
             key={view.id}
-            type="button"
-            aria-pressed={view.selected}
+            href={view.href}
+            prefetch
+            aria-current={view.selected ? 'page' : undefined}
             className={taskViewClass(view.selected)}
-            onClick={view.onSelect}
           >
             <span aria-hidden="true" className={taskViewDotClass(view.dotClass)} />
             <span className="min-w-0 flex-1 truncate">{view.label}</span>
             <span className={taskViewCountClass(warn)}>{view.count ?? ''}</span>
-          </button>
+          </Link>
         );
       })}
+    </section>
+  );
+}
+
+export type TaskGlanceRenderProps = {
+  /** The overdue and due-this-week tasks to show; undefined while they load. */
+  readonly rows: readonly GroundRow[] | undefined;
+  /** How many more are due than the rows shown; See all shows only when there are some. */
+  readonly more: number;
+  /** Where See all goes: the view that holds every one of them. */
+  readonly moreHref: string;
+};
+
+/**
+ * Needs attention: the viewer's overdue and due-this-week tasks at a glance, so the pane is
+ * useful beside the chat before anything opens. Each row opens its task; nothing shows when
+ * nothing is due.
+ */
+export function renderTaskGlance({ rows, more, moreHref }: TaskGlanceRenderProps): ReactNode {
+  if (rows === undefined || rows.length === 0) return null;
+  return (
+    <section aria-label="Needs attention" className="flex flex-col gap-px pt-3">
+      <p className={tasksPaneLabelClass}>Needs attention</p>
+      <ul className="flex flex-col gap-px">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <Link
+              href={`/${encodeURIComponent(row.driveId)}/tasks/${encodeURIComponent(row.pageId)}`}
+              prefetch
+              className={taskGlanceRowClass}
+            >
+              <span className="min-w-0 flex-1 truncate">{row.title}</span>
+              <span className={dueClass(row.dueTone)}>{row.due}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      {more > 0 ? (
+        <Link href={moreHref} prefetch className={taskGlanceMoreClass}>
+          See all
+        </Link>
+      ) : null}
     </section>
   );
 }

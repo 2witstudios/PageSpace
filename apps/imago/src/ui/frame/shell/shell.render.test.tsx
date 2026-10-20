@@ -99,10 +99,11 @@ describe('renderShell()', () => {
         ),
         /data-list="closed" data-list-hidden="true" data-object="page"/.test(markup('/drive-1/files/page-1', ['files'])),
         markup('/dm/conversation-1').includes('data-object="conversation"'),
-        markup('/account').includes('data-object="account"'),
-        /data-section="account" data-list="tree"/.test(markup('/account')),
+        markup('/account/display').includes('data-object="account"'),
+        /data-section="account" data-list="tree"/.test(markup('/account/display')),
+        /data-section="account" data-list="list"/.test(markup('/account')) && !markup('/account').includes('data-object='),
       ],
-      expected: [true, true, false, true, true, true, true, true],
+      expected: [true, true, false, true, true, true, true, true, true],
     });
   });
 

@@ -76,13 +76,13 @@ describe('MembersPane', () => {
       expected: {
         heading: true,
         rows: [
-          { label: 'Everyone', count: '9', href: '#everyone' },
-          { label: 'People', count: '4', href: '#people' },
-          { label: 'Guests', count: '1', href: '#page-link-guests' },
-          { label: 'Agents', count: '3', href: '#agents' },
-          { label: 'Apps', count: '1', href: '#apps' },
-          { label: 'Pending invites', count: '1', href: '#pending' },
-          { label: 'Invite links', count: '1', href: '#links' },
+          { label: 'Everyone', count: '9', href: '/d1/members/all#everyone' },
+          { label: 'People', count: '4', href: '/d1/members/all#people' },
+          { label: 'Guests', count: '1', href: '/d1/members/all#page-link-guests' },
+          { label: 'Agents', count: '3', href: '/d1/members/all#agents' },
+          { label: 'Apps', count: '1', href: '/d1/members/all#apps' },
+          { label: 'Pending invites', count: '1', href: '/d1/members/all#pending' },
+          { label: 'Invite links', count: '1', href: '/d1/members/all#links' },
         ],
       },
     });
@@ -174,7 +174,7 @@ describe('MembersPane', () => {
         guests: [...container.querySelectorAll('ul[aria-label="Guests"] li')].map((li) => li.textContent),
       },
       expected: {
-        back: '/d1/members',
+        back: '/d1/members/all',
         people: [
           ['/d1/members/u1', null],
           ['/d1/members/u2', 'page'],
@@ -212,7 +212,7 @@ describe('MembersPane', () => {
       expected: {
         waiting: ['alex@freelance.exampleReviewer · expires Oct 16', 'mo@studio.exampleMember · expired'],
         links: true,
-        manage: '/d1/members#links',
+        manage: '/d1/members/all#links',
       },
     });
     nav.pathname = '/d1/members';

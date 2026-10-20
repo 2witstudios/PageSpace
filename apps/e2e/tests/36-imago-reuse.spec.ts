@@ -110,7 +110,8 @@ test('settings and typed object views stay in Imago', async ({ browser, baseURL 
     await expect(page.locator(selector).first()).toBeVisible();
     await expect(page.getByText('Open in classic', { exact: true })).toHaveCount(0);
   }
-  await page.goto('/imago/account');
+  // The account's own address is its nav alone beside Imago; Overview opens from the nav.
+  await page.goto('/imago/account/overview');
   // The account overview (v3 settings screen): its single h1 is the account's name.
   await expect(page.getByRole('heading', { level: 1, name: user.name, exact: true })).toBeVisible();
   for (const title of ['Drives', 'Storage', 'Connections', 'AI Providers', 'Personalization']) {

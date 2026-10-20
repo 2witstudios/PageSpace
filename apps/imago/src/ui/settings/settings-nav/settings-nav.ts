@@ -40,7 +40,7 @@ export const driveSettingsNav = (driveId: string, ctx: NavContext, access?: Driv
   const owner = access === undefined || (access.role === 'OWNER' && !access.home);
   return keep(
     [
-      { label: 'Overview', href: base },
+      { label: 'Overview', href: `${base}/overview` },
       { label: 'General', href: `${base}/general` },
       { label: 'Members & roles', href: `${base}/roles` },
       { label: 'Wallet', href: `${base}/wallet` },
@@ -62,7 +62,7 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
       label: 'You',
       items: keep(
         [
-          { label: 'Overview', href: '/account' },
+          { label: 'Overview', href: '/account/overview' },
           { label: 'Profile', href: '/account/profile' },
           { label: 'Display', href: '/account/display' },
           { label: 'Personalization', href: '/account/personalization' },
@@ -127,13 +127,10 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
   ].filter((group) => group.items.length > 0);
 
 /**
- * The row the path belongs to: the longest href that is the path or its ancestor. A root row
- * (/account, /d1/settings) matches only itself, so it is not marked under every screen.
+ * The row the path belongs to: the longest href that is the path or its ancestor. Every row is
+ * a screen under the nav (Overview too), so the nav's own address marks none.
  */
 export const activeNavHref = (items: readonly NavItem[], pathname: string): string | null => {
-  const roots = new Set(items.filter((item) => !items.some((other) => other !== item && item.href.startsWith(`${other.href}/`))).map((item) => item.href));
-  const matches = items.filter((item) =>
-    pathname === item.href || (!roots.has(item.href) || item.href.split('/').length > 3 ? pathname.startsWith(`${item.href}/`) : false),
-  );
+  const matches = items.filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
   return matches.sort((a, b) => b.href.length - a.href.length)[0]?.href ?? null;
 };

@@ -1,8 +1,8 @@
-// The Tasks index's smart views: the viewer's own tasks, narrowed to one
-// due-date window (or none). The pane lists them with counts, and the ground
-// shows the rows of the view picked, so the choice lives in one tiny store.
+// The Tasks pane's smart views: the viewer's own tasks, narrowed to one
+// due-date window (or none). The pane lists them with counts, and picking one
+// opens its rows in the middle at /<drive>/tasks/view/<id>, so the URL holds the choice.
 
-import { create } from 'zustand';
+import { taskViewSegment } from '../../frame/stage/stage';
 import type { DueDateFilter } from '../task-model/task';
 
 /** A view's id: the viewer's tasks with no due window, or one window. */
@@ -33,13 +33,9 @@ export const viewFor = (id: TaskViewId): TaskView => taskViews.find((view) => vi
 /** The ground's heading: the viewer's own tasks, or the window the view names. */
 export const groundHeading = (id: TaskViewId): string => (id === 'assigned' ? 'Assigned to you' : viewFor(id).label);
 
-export type TaskViewState = {
-  readonly view: TaskViewId;
-  readonly setView: (view: TaskViewId) => void;
-};
+/** Whether a URL segment names a smart view. */
+export const isTaskViewId = (id: string): id is TaskViewId => taskViews.some((view) => view.id === id);
 
-/** The view picked on the Tasks index, shared by its pane and its ground. */
-export const useTaskViewStore = create<TaskViewState>()((set) => ({
-  view: 'assigned',
-  setView: (view) => set({ view }),
-}));
+/** Where a smart view opens: its tasks in the middle, the Tasks pane beside them. */
+export const taskViewHref = (driveId: string, id: TaskViewId): string =>
+  `/${encodeURIComponent(driveId)}/tasks/${taskViewSegment}/${id}`;

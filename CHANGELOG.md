@@ -29,6 +29,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
   - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
   - Every navigation loads into the tab you're in, as in the classic interface, including the drive's chat and a section's index (Files, Messages, Tasks) from the rail. Before, those left the tab showing the last page you opened.
+- Imago's left rail shows its tooltips in full instead of clipping them, and no longer scrolls sideways.
 - Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
 - Imago's Console works like the classic Agents console again:
   - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
@@ -44,7 +45,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
 - Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.
 
-- Imago's Tasks now open in the middle of the screen, like a page, with Imago beside it on the right instead of taking over the whole screen. Collapse Imago to fold it to the Ask pill, as with a page.
+- Every spot on Imago's rail now works the same way. Clicking one opens its sidebar, and Imago's chat fills the rest of the screen. Picking something in that sidebar (a page, a task view, a calendar date, a setting, a workflow, a member group) opens it in the middle, and the chat moves to the right. Closing it with × brings back that same sidebar with the chat in the middle. It no longer sends you to Home. This now applies to Tasks, Calendar, Console, Workflows, Activity, Members, Trash, Drive settings and Account, as well as Files and Messages.
+  - Tasks' sidebar shows your overdue and due-this-week tasks at a glance, under the smart views. Picking a view opens its tasks in the middle.
+  - Calendar's sidebar is the filter again, as in the classic calendar. It has checkboxes to show or hide each calendar (on Home), user events, agent events and tasks. The row of filter pills across the top of Home's calendar is gone.
+  - Trash's sidebar filters by Pages or Files, and Activity's sidebar has an "All activity" row.
+  - The chat in the right column now has the same narrow layout everywhere. On Tasks it used to keep the wide full-screen layout.
 
 - Imago no longer draws a blue focus outline around a document when you click into it, and the ⌘K search palette and new-page palette no longer show a focus outline on their fields when they open. The highlighted result marks where the keyboard is.
 - Imago's Tasks and Messages sidebars have a proper header now. New list and New message sit in the header as + buttons beside Close sidebar, like New page in Files, and the "Create page" button is gone from both sidebars, which frees the space it took.

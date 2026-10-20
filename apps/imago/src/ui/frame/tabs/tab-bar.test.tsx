@@ -118,13 +118,13 @@ describe('TabBar (IMC-1.5)', () => {
   });
 
   test('tabs persist under imago’s own key', async () => {
-    navigation.pathname = '/d1/calendar';
+    navigation.pathname = '/d1/calendar/view';
     render();
     await settle(() => {
       if (!window.localStorage.getItem(tabsStorageKey('d1'))?.includes('calendar')) throw new Error('not saved');
     });
     assert({
-      given: 'a drive tool opened',
+      given: 'a drive tool’s screen opened',
       should: 'append it to the stored tabs, never touching classic’s tabs-storage',
       actual: [JSON.parse(window.localStorage.getItem(tabsStorageKey('d1')) ?? '{}').tabs.length, window.localStorage.getItem('tabs-storage')],
       expected: [4, null],

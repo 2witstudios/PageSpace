@@ -1,4 +1,4 @@
-import type { DriveTool, Stage } from '../stage/stage';
+import { toolOf, type DriveTool, type Stage } from '../stage/stage';
 
 /**
  * Home is the dashboard (ADR 0007 D4, amended; useIsHome in home-drive-context.tsx tells a screen
@@ -16,5 +16,6 @@ export const isDashboardTool = (tool: DriveTool): boolean => dashboardTools.incl
 export const isDashboard = (stage: Stage, homeDriveId: string | null): boolean => {
   if (homeDriveId === null || stage.driveId !== homeDriveId) return false;
   if (stage.section === 'chat' || stage.section === 'messages' || stage.section === 'tasks') return true;
-  return stage.object?.kind === 'settings' && stage.object.tool !== undefined && isDashboardTool(stage.object.tool);
+  const tool = toolOf(stage);
+  return tool !== null && isDashboardTool(tool);
 };

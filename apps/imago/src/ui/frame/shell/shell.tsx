@@ -13,7 +13,6 @@ import { renderNewMessageLink } from '../../messages/messages-pane/messages-pane
 import { DmIndexPane } from '../../messages/dm-index/dm-index';
 import { CommandPalette } from '../../palette/palette/palette';
 import { NewTaskListAction, TasksPane } from '../../tasks/tasks-pane/tasks-pane';
-import { TasksGround } from '../../tasks/tasks-ground/tasks-ground';
 import { ToolPane } from '../tool-pane/tool-pane';
 import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
@@ -48,16 +47,16 @@ import { TOKEN_WIDTHS, dockedColumns } from '../pane-resize/pane-sizes';
 import { useRowWidth } from '../pane-resize/use-row-width';
 import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
-  consoleGround,
+  consoleStage,
   isConsole,
   isHideableSection,
-  isTasksIndex,
   type HideableSection,
   isListSection,
   paneLayout,
   stageFor,
+  stageTitle,
+  toolOf,
   type PaneLayout,
-  type Section,
   type Stage,
 } from '../stage/stage';
 import { columnClass } from './shell-class';
@@ -78,16 +77,6 @@ export type ShellProps = {
   readonly homeDriveId: string | null;
   /** The viewer's drives as the server listed them for this page load; SWR revalidates them. */
   readonly initialDrives: readonly DriveSummary[];
-};
-
-const titles: Readonly<Record<Section, string>> = {
-  chat: 'Chat',
-  files: 'Files',
-  messages: 'Messages',
-  tasks: 'Tasks',
-  settings: 'Settings',
-  account: 'Account',
-  notifications: 'Notifications',
 };
 
 const selectCollapsed = (state: UiState) => state.resources.collapsedSections;
@@ -133,6 +122,7 @@ const rowsFor = (stage: Stage): ReactNode => {
       <TasksPane
         driveId={stage.driveId}
         selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
+        selectedViewId={stage.object?.kind === 'taskView' ? stage.object.viewId : null}
       />
     );
   }
@@ -157,11 +147,14 @@ const listFor = (
 ): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
-  if (stage.section === 'settings' && stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool !== undefined) {
-    return <ToolPane tool={stage.object.tool} driveId={stage.driveId} close={<CloseSidebar section="settings" />} />;
+  const tool = toolOf(stage);
+  if (tool !== null) {
+    return stage.driveId === null ? null : (
+      <ToolPane tool={tool} driveId={stage.driveId} variant={layout.list} close={<CloseSidebar section={tool} />} />
+    );
   }
-  if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} />;
-  if (stage.section === 'account') return <AccountNavPane />;
+  if (stage.section === 'settings') return stage.driveId === null ? null : <DriveSettingsNavPane driveId={stage.driveId} variant={layout.list} />;
+  if (stage.section === 'account') return <AccountNavPane variant={layout.list} />;
   if (!isListSection(stage.section)) return null;
   // The user-level /dm index: the Direct messages pane alone, with no drive's channels.
   if (stage.section === 'messages' && stage.driveId === null) {
@@ -179,17 +172,17 @@ const listFor = (
         driveId={stage.driveId}
         selectedPageId={stage.object?.kind === 'page' ? stage.object.pageId : null}
         variant={layout.list}
-        title={titles.files}
+        title={stageTitle(stage)}
         phoneHeader={
           phoneDrive === undefined
             ? undefined
-            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} mark={phoneDrive.mark} title={titles.files} newPage={newPage} />
+            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} mark={phoneDrive.mark} title={stageTitle(stage)} newPage={newPage} />
         }
       />
     );
   }
   return (
-    <ListPane section={stage.section} variant={layout.list} title={titles[stage.section]} actions={headActionsFor(stage)}>
+    <ListPane section={stage.section} variant={layout.list} title={stageTitle(stage)} actions={headActionsFor(stage)}>
       {rowsFor(stage)}
     </ListPane>
   );
@@ -216,7 +209,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const routeStage = stageFor(pathname);
   // The Console's open session rides the query string; with none open, Imago holds its middle.
   const search = useSearchParams()?.toString() ?? '';
-  const stage = consoleGround(routeStage, parseAgentSelection(search).sessionId !== null);
+  const stage = consoleStage(routeStage, parseAgentSelection(search).sessionId !== null);
   const tier = useViewportTier();
   const phone = tier === 'phone';
   const paneSheetOpen = useUiState(selectPaneSheetOpen);
@@ -248,7 +241,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         tier,
       );
   const drive = drives?.find((entry) => entry.id === stage.driveId);
-  const title = missing ? 'Not found' : stage.object?.kind === 'settings' && stage.object.title ? stage.object.title : titles[stage.section];
+  const title = missing ? 'Not found' : stageTitle(stage);
   const hydrated = useHydrated();
   // Ask on a phone page opens Imago full-screen; it is the page it was asked on, so leaving the page ends it.
   const [askedAt, setAskedAt] = useState<string | null>(null);
@@ -280,10 +273,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {missing ? renderNotFound({ ...DRIVE_NOT_FOUND, homeHref: homeHref(homeDriveId) }) : (
-          <>
-            {isTasksIndex(stage) && stage.driveId !== null ? <TasksGround driveId={stage.driveId} /> : null}
-            {children}
-          </>
+          children
         )}
       </div>
     </section>
@@ -322,7 +312,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     );
     // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
     const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
-    const listScreen = missing ? null : listFor(routeStage, layout, onTree ? { name: drive?.name ?? null, mark: drive ?? undefined } : undefined);
+    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null, mark: drive ?? undefined } : undefined);
     const screen =
       asking
         ? phoneChat
@@ -384,8 +374,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       />
     ),
     banner: <><AppBanner /><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface></>,
-    tabBar: <TabBar stage={routeStage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} homeHref={driveHomeHref(railDrive(stage, homeDriveId))} />,
-    list: missing ? null : listFor(routeStage, layout),
+    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} homeHref={driveHomeHref(railDrive(stage, homeDriveId))} />,
+    list: missing ? null : listFor(stage, layout),
     object: objectColumn,
     chat: chatColumn,
     empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,

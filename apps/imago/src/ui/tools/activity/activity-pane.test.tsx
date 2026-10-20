@@ -9,19 +9,23 @@ import { ActivityPane } from './activity-pane';
 
 const nav = vi.hoisted(() => ({
   replace: vi.fn(),
+  push: vi.fn(),
   search: '',
+  pathname: '/d1/activity/view',
 }));
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: nav.replace }),
-  usePathname: () => '/d1/activity',
+  useRouter: () => ({ replace: nav.replace, push: nav.push }),
+  usePathname: () => nav.pathname,
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 
 afterEach(() => {
   unmountAll();
   nav.replace.mockReset();
+  nav.push.mockReset();
   nav.search = '';
+  nav.pathname = '/d1/activity/view';
 });
 
 const ACTORS = 'GET /api/activities/actors?context=drive&driveId=d1';
@@ -110,7 +114,7 @@ describe('ActivityPane', () => {
       given: 'the 24h range chosen while a resource is filtered',
       should: 'replace the URL keeping the resource and naming the range',
       actual: nav.replace.mock.calls[0]?.[0],
-      expected: '/d1/activity?resourceType=page&range=24h',
+      expected: '/d1/activity/view?resourceType=page&range=24h',
     });
   });
 
@@ -122,7 +126,7 @@ describe('ActivityPane', () => {
       given: '7 days chosen from a 24h view',
       should: 'drop the range key, which is the default',
       actual: nav.replace.mock.calls[0]?.[0],
-      expected: '/d1/activity',
+      expected: '/d1/activity/view',
     });
   });
 
@@ -134,7 +138,34 @@ describe('ActivityPane', () => {
       given: 'the page chip already pressed',
       should: 'clear the resource filter',
       actual: nav.replace.mock.calls[0]?.[0],
-      expected: '/d1/activity',
+      expected: '/d1/activity/view',
+    });
+  });
+
+  test('a filter set from the pane alone opens the timeline', async () => {
+    nav.pathname = '/d1/activity';
+    const { container } = show();
+    await settle(() => expect(button(container, '24h')).toBeDefined());
+    click(button(container, '24h'));
+    assert({
+      given: 'the Activity pane beside the chat, with no timeline open, and a range chosen',
+      should: 'push the timeline screen filtered to it, rather than replace the pane’s address',
+      actual: [nav.push.mock.calls[0]?.[0], nav.replace.mock.calls.length],
+      expected: ['/d1/activity/view?range=24h', 0],
+    });
+  });
+
+  test('All activity opens the unfiltered timeline', async () => {
+    const { container } = show();
+    await settle(() => expect(container.querySelector('a[href="/d1/activity/view"]')).not.toBeNull());
+    assert({
+      given: 'the pane on the timeline with no filter',
+      should: 'link All activity to the timeline screen and mark it current',
+      actual: [
+        container.querySelector('a[href="/d1/activity/view"]')?.textContent,
+        container.querySelector('a[href="/d1/activity/view"]')?.getAttribute('aria-current'),
+      ],
+      expected: ['All activity', 'page'],
     });
   });
 });

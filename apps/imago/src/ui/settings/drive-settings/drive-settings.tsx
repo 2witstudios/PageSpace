@@ -10,7 +10,8 @@ import { renderDriveSettings, type SettingsNotice } from './drive-settings.rende
 export type DriveSettingsObjectProps = { readonly driveId: string };
 
 /**
- * What /imago/[driveId]/settings opens in the object slot. Which controls it
+ * A drive settings screen in the object slot, opened from the settings nav
+ * (/imago/[driveId]/settings itself is the nav alone). Which controls it
  * draws follows the viewer's role and the Home drive guards; whether a change
  * holds is always the server's answer.
  */

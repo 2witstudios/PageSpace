@@ -14,6 +14,10 @@ describe('retained destinations stay inside the persistent shell', () => {
     ['/dashboard/channels/page456', '/p/page456'],
     ['/dashboard/dms/new', '/dm/new'],
     ['/dashboard/drive123/agents?workspace=w&c=c', '/drive123/agents?workspace=w&c=c'],
+    ['/dashboard/drive123/calendar?date=2026-10-20', '/drive123/calendar/view?date=2026-10-20'],
+    ['/dashboard/drive123/trash', '/drive123/trash/view'],
+    ['/dashboard/drive123/members', '/drive123/members/all'],
+    ['/dashboard/drive123/members/invite', '/drive123/members/invite'],
     ['/api/pages/page456', '/api/pages/page456'],
     ['https://other.example/dashboard', 'https://other.example/dashboard'],
   ])('maps %s to %s', (source, destination) => expect(imagoHref(source)).toBe(destination));
@@ -75,4 +79,14 @@ it('org settings use the account shell without a fictitious orgs drive', () => {
 
 it('a pathname unavailable during hydration does not claim a drive or throw', () => {
   expect(classicPathname(null)).toBe('/dashboard');
+});
+
+describe('a tool’s screen reads as classic’s tool route', () => {
+  it.each([
+    ['/drive123/calendar/view', '/dashboard/drive123/calendar'],
+    ['/drive123/calendar/view', '/dashboard/drive123/calendar'],
+    ['/drive123/members/all', '/dashboard/drive123/members'],
+    ['/drive123/members/u1', '/dashboard/drive123/members/u1'],
+    ['/drive123/calendar', '/dashboard/drive123/calendar'],
+  ])('reads %s as %s', (pathname, classic) => expect(classicPathname(pathname)).toBe(classic));
 });

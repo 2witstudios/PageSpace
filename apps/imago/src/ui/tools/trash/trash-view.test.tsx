@@ -192,7 +192,7 @@ describe('TrashView', () => {
         [...root.querySelectorAll('[role="row"]')].slice(1).map((row) => row.textContent?.includes('launch-banner')),
         hrefs,
       ],
-      expected: [[true], ['/d1/trash?type=pages']],
+      expected: [[true], ['/d1/trash/view?type=pages']],
     });
   });
 
