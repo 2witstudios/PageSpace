@@ -38,7 +38,7 @@ const csrfBase = { csrfToken: null, isLoading: false, error: null, refreshToken:
 
 describe('share links, Imago enabled (v3)', () => {
   beforeEach(() => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     vi.mocked(useCSRFToken).mockReturnValue(csrfBase);
   });
 

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { V3_ERROR_TEXT, V3_FINE_PRINT, V3_PRIMARY_BUTTON, V3_SECONDARY_BUTTON, V3_STATUS_TEXT } from '@/components/auth/auth-v3-styles';
 import { buildConsentActionBinding } from './consent-step-up';
 
@@ -122,7 +122,7 @@ export function ConsentActions(props: ConsentActionsProps) {
     }
   }
 
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
 
   if (stepUpStatus === 'awaiting_email') {
     return (

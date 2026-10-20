@@ -19,7 +19,7 @@ function resetStore() {
 describe('cookie banner — v3 frame', () => {
   beforeEach(() => {
     resetStore();
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
   });
   afterEach(() => vi.unstubAllEnvs());
 

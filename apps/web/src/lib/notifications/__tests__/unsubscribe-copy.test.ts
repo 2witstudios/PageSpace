@@ -11,12 +11,12 @@ describe('unsubscribe-copy', () => {
   });
 
   it('given Imago is off, should point preference links at the classic settings page', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     expect(getNotificationPreferencesHref()).toBe('/settings/notifications');
   });
 
   it('given Imago is on, should point preference links at /imago/account/notifications', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     expect(getNotificationPreferencesHref()).toBe('/imago/account/notifications');
   });
 });

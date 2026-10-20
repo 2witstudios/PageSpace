@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { AuthLayout } from '@/components/auth/AuthLayout';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { getViewerDisplayName } from '@/lib/auth/viewer-display-name';
 import { ActivateFlow } from './ActivateFlow';
 
@@ -41,7 +41,7 @@ export default async function ActivatePage({ searchParams }: ActivatePageProps) 
   }
 
   // The v3 entry heading is rendered by ActivateFlow so it can change per step.
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const signedInAs = v3 ? await getViewerDisplayName(session.userId) : undefined;
 
   return (

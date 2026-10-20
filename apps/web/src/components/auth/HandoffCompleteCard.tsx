@@ -2,7 +2,7 @@
 
 import { CheckCircle2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { AuthStatusCard } from './AuthStatusCard';
 
 export type HandoffCompleteVariant = 'signed-in' | 'passkey-added';
@@ -34,7 +34,7 @@ export function HandoffCompleteCard({ variant }: HandoffCompleteCardProps) {
     window.close();
   };
 
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <AuthStatusCard
         icon={<CheckCircle2 className="h-5 w-5" />}

@@ -13,10 +13,10 @@ import {
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { AuthStatusCard } from "@/components/auth/AuthStatusCard";
 import { authHomePath } from "@/lib/imago/auth-home";
-import { isImagoEnabled } from "@/lib/imago/imago-enabled";
+import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 
 export default function EmailVerified() {
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <AuthLayout>
         <AuthStatusCard

@@ -20,7 +20,7 @@ import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
 import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
 import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface SignUpClientProps {
   inviteToken?: string;
@@ -62,7 +62,7 @@ export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpCl
   const browserName = getPreferredBrowserName() ?? 'your browser';
   const appLabel = inAppInfo.appName ?? 'this app';
   // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
 
   return (
     <AuthLayout>

@@ -32,7 +32,7 @@ describe('PasskeySetupPage — skip destination', () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it('given Imago is enabled, should show the v3 copy and send "Skip for now" to /imago', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<PasskeySetupPage />);
 
     expect(screen.getByRole('heading', { level: 1, name: 'Secure your account' })).toBeInTheDocument();
@@ -43,7 +43,7 @@ describe('PasskeySetupPage — skip destination', () => {
   });
 
   it('given Imago is off, should send "Skip for now" to /dashboard', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(<PasskeySetupPage />);
 
     await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
@@ -52,7 +52,7 @@ describe('PasskeySetupPage — skip destination', () => {
   });
 
   it('given WebAuthn is unsupported, should show the notice and a "Continue" to /imago when Imago is enabled', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     mockSupported.mockReturnValue(false);
     render(<PasskeySetupPage />);
 

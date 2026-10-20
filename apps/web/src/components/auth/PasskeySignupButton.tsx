@@ -15,7 +15,7 @@ import { persistCsrfToken } from '@/lib/utils/persist-csrf-token';
 import { useWebAuthnSupport } from '@/hooks/useWebAuthnSupport';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getDevicePlatformFields, handleDesktopAuthResponse } from '@/lib/desktop-auth';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface PasskeySignupButtonProps {
   csrfToken: string;
@@ -248,7 +248,7 @@ export function PasskeySignupButton({
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={isRegistering || !!lockedEmail}
               />
-              {lockedEmail && isImagoEnabled() && (
+              {lockedEmail && isV3AuthEnabled() && (
                 <p className="text-xs text-[oklch(0.48_0.015_220)]">
                   Locked to the address the invitation was sent to.
                 </p>

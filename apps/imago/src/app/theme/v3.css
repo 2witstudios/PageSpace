@@ -17,7 +17,11 @@
   --spine-on: light-dark(oklch(1 0 0), oklch(1 0 0));
   /* Imago's column and the tab bar: a breath of blue over the sheet. */
   --tint: light-dark(oklch(0.982 0.005 235), oklch(0.2 0.01 235));
-  --tab-bar: light-dark(oklch(0.975 0.006 235), oklch(0.19 0.01 235));
+  /*
+   * The strip sits a step off the sheet in both themes, so the active tab, which takes the sheet's
+   * colour, reads as the sheet rising into it; no outline needed.
+   */
+  --tab-bar: light-dark(oklch(0.935 0.008 235), oklch(0.12 0.01 235));
   /* Quiet fills: inputs, segmented tracks, hovered rows. */
   --fill: light-dark(oklch(0.15 0.01 220 / 0.04), oklch(0.97 0 0 / 0.06));
   /* Primary on text: links in chips, the selected row. */
@@ -130,13 +134,6 @@
 
 /* The active tab merges into the columns below: sheet white, hairline on its
    left, right and top, no bottom edge (SPEC v3.3). */
-@utility tab-active-edge {
-  box-shadow:
-    inset 1px 0 0 var(--hairline),
-    inset -1px 0 0 var(--hairline),
-    inset 0 1px 0 var(--hairline);
-}
-
 @theme {
   --spacing-tab-bar-top: 6px;
   --spacing-tab-close: 16px;
@@ -150,6 +147,16 @@
   --spacing-agent-row-tile: 30px;
   /* Imago's orb: the empty chat's hero, and the glyph it takes in lists and buttons. */
   --spacing-orb-hero: 120px;
+  /*
+   * The engine draws the ball at about half its canvas (the rest is room for the bulges), so
+   * these canvases run large: the rail's fills its 48px spine tile, the chat head's picker
+   * and its rows sit beside 22px and 30px agent tiles. A row's canvas overhangs by 7px a side
+   * so it takes the 30px tile's place and its label lines up with the agents'.
+   */
+  --spacing-orb-rail: 48px;
+  --spacing-orb-tile: 36px;
+  --spacing-orb-row: 44px;
+  --spacing-orb-row-overhang: 7px;
   --spacing-orb-glyph: 16px;
   --spacing-agent-picker: 340px;
   --spacing-context-chip: 22px;

@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, imagoStartsCollapsed, imagoStartsCollapsedAt, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, imagoStartsCollapsed, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -102,6 +102,21 @@ describe('stageFor() settings and account', () => {
         list: 'tree',
         object: { kind: 'settings' },
       },
+    });
+  });
+
+  test('drive tools', () => {
+    assert({
+      given: 'a drive tool path',
+      should: 'title the tool by its spine name',
+      actual: stageFor('/drive-1/calendar').object,
+      expected: { kind: 'settings', title: 'Calendar', tool: 'calendar' },
+    });
+    assert({
+      given: 'the agents route, which the spine calls Console',
+      should: 'title it Console, as its tab does',
+      actual: stageFor('/drive-1/agents').object,
+      expected: { kind: 'settings', title: 'Console', tool: 'agents' },
     });
   });
 
@@ -585,17 +600,6 @@ describe('imagoStartsCollapsed() (IMC-3.11)', () => {
       should: 'fold Imago only for AI_CHAT',
       actual: ['AI_CHAT', 'DOCUMENT', 'CHANNEL', '', undefined, null].map((type) => imagoStartsCollapsed(type)),
       expected: [true, false, false, false, false, false],
-    });
-  });
-});
-
-describe('imagoStartsCollapsedAt()', () => {
-  test('the screens whose boards open with Imago folded', () => {
-    assert({
-      given: 'drive Calendar and Activity, account Agents and a snapshot, then a page, drive settings and the account overview',
-      should: 'fold Imago on the first four only',
-      actual: ['/d1/calendar', '/d1/activity', '/account/agents', '/account/backups/b1/snapshot', '/d1/files/p1', '/d1/settings', '/account'].map(imagoStartsCollapsedAt),
-      expected: [true, true, true, true, false, false, false],
     });
   });
 });

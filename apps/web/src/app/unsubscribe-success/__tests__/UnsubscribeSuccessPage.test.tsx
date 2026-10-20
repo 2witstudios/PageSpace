@@ -38,14 +38,14 @@ describe('UnsubscribeSuccessPage', () => {
   });
 
   it('given Imago is off, should link both actions to the classic settings and dashboard', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     render(<UnsubscribeSuccessPage />);
     expect(screen.getByRole('link', { name: 'Manage All Preferences' })).toHaveAttribute('href', '/settings/notifications');
     expect(screen.getByRole('link', { name: 'Return to PageSpace' })).toHaveAttribute('href', '/dashboard');
   });
 
   it('given Imago is on, should point Manage All Preferences at /imago/account/notifications', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<UnsubscribeSuccessPage />);
     expect(screen.getByRole('link', { name: 'Manage All Preferences' })).toHaveAttribute(
       'href',

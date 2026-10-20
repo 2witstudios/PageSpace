@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe('ProvisioningStatusPage', () => {
   it('given the tenant is provisioning and Imago is on, should say so with the host and the 3s polling line', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     swrState.data = { slug: 'studio', status: 'provisioning' };
     renderPage();
     expect(await screen.findByRole('heading', { name: 'Setting up your environment' })).toBeInTheDocument();
@@ -65,7 +65,7 @@ describe('ProvisioningStatusPage', () => {
   });
 
   it('given Imago is on, should render the v3 active card with the URL line', async () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     swrState.data = { slug: 'studio', status: 'active' };
     renderPage();
     expect(await screen.findByText('https://studio.pagespace.ai')).toBeInTheDocument();

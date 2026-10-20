@@ -35,6 +35,24 @@ describe('tabLabelFor() (IMC-1.5)', () => {
     });
   });
 
+  test('drive tools carry their spine icon', () => {
+    assert({
+      given: 'Console (the drive agents tool) and a drive settings screen',
+      should: "give the tool its spine icon and leave settings to the tab's default",
+      actual: [tabLabelFor('/d1/agents'), tabLabelFor('/d1/settings')],
+      expected: [{ kind: 'screen', title: 'Console', icon: 'console' }, { kind: 'screen', title: 'Overview' }],
+    });
+  });
+
+  test("the drive's home", () => {
+    assert({
+      given: 'a path that is the drive alone, where New tab opens',
+      should: 'read as the home',
+      actual: tabLabelFor('/d1'),
+      expected: { kind: 'home' },
+    });
+  });
+
   test('a direct message', () => {
     assert({
       given: 'a DM conversation',

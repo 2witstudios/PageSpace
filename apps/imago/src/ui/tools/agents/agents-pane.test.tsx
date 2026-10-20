@@ -59,13 +59,13 @@ const { AgentsPane } = await import('./agents-pane');
 afterEach(unmountAll);
 
 describe('AgentsPane (IMC-6.3)', () => {
-  test('a pane headed Agents, with a Session button and a session search', () => {
+  test('a pane headed Console, with a Session button and a session search', () => {
     const root = mount(<AgentsPane driveId="d1" close={null} />);
     assert({
       given: 'a drive with sessions',
-      should: 'head the pane "Agents" with a Session button and a "Search sessions…" field',
+      should: 'head the pane "Console" with a Session button and a "Search sessions…" field',
       actual: [
-        root.querySelector('section[aria-label="Agents and sessions"]') !== null,
+        root.querySelector('section[aria-label="Console: agents and sessions"]') !== null,
         Array.from(root.querySelectorAll('button')).some((button) => button.textContent === 'Session'),
         root.querySelector('input[aria-label="Search sessions"]')?.getAttribute('placeholder'),
       ],

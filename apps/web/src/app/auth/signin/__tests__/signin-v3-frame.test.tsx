@@ -71,7 +71,7 @@ function setParams(query: string) {
 describe('sign-in page — v3 frame (Imago enabled)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     mockOnPrem.mockReturnValue(false);
     mockIsCapacitorApp.mockReturnValue(false);
     mockInAppSpy.mockReturnValue({ isInApp: false, appName: undefined });
@@ -144,7 +144,7 @@ describe('sign-in page — v3 frame (Imago enabled)', () => {
 describe('sign-in page — classic frame (Imago off) is unchanged', () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', undefined);
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     mockOnPrem.mockReturnValue(false);
     mockIsCapacitorApp.mockReturnValue(false);
     mockInAppSpy.mockReturnValue({ isInApp: false, appName: undefined });

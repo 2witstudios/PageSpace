@@ -24,12 +24,12 @@ import { resolveSigninNext } from "@/lib/auth/resolve-signin-next";
 import { getPreferredBrowserName } from "@/lib/auth/browser-detection";
 import { useConsentStore } from "@/stores/useConsentStore";
 import { useInAppBrowserNotice } from "@/hooks/useInAppBrowserNotice";
-import { isImagoEnabled } from "@/lib/imago/imago-enabled";
+import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 import { AuthStatusPill } from "@/components/auth/AuthStatusPill";
 import { useSigninRecovery } from "./useSigninRecovery";
 import { signinErrorNotice, signinPillNotice } from "./signin-errors";
 
-// v3 (Imago-enabled) look. Only read when isImagoEnabled(); the classic markup keeps its own classes.
+// v3 (Imago-enabled) look. Only read when isV3AuthEnabled(); the classic markup keeps its own classes.
 const V3_PRIMARY_BUTTON =
   "h-10 rounded-[10px] bg-[oklch(0.50_0.16_235)] text-[oklch(0.98_0.005_235)] shadow-none hover:bg-[oklch(0.46_0.16_235)]";
 const V3_LINK = "font-medium text-[oklch(0.50_0.16_235)] hover:text-[oklch(0.42_0.16_235)]";
@@ -47,7 +47,7 @@ function subtitleClass(imago: boolean): string {
 // Shared loading shell: the Suspense fallback (searchParams boundary) and the in-flight
 // silent-recovery state render the same minimal screen, so users never see it change shape.
 function AuthLoading() {
-  const imago = isImagoEnabled();
+  const imago = isV3AuthEnabled();
   return (
     <AuthLayout>
       <div className={imago ? "text-left" : "text-center"}>
@@ -101,7 +101,7 @@ function SignInForm() {
     ...(nextPath && { returnUrl: nextPath }),
   });
   const onPrem = isOnPrem();
-  const imago = isImagoEnabled();
+  const imago = isV3AuthEnabled();
   // v3 shows error and notice params as a status pill; classic shows them as sonner toasts.
   const pill = imago ? signinPillNotice(searchParams) : null;
 
@@ -110,7 +110,7 @@ function SignInForm() {
     const newAccount = searchParams.get("newAccount");
     const onpremMessage = searchParams.get("onprem");
     // v3 renders these as the status pill instead (see `pill` above).
-    const imagoFrame = isImagoEnabled();
+    const imagoFrame = isV3AuthEnabled();
 
     if (onpremMessage === "contact_admin" && !imagoFrame) {
       toast.info("Contact your administrator for an account.");

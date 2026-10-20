@@ -6,7 +6,7 @@ import { cookies } from 'next/headers';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
 import { loadOrgInvitePage } from '@/lib/orgs/org-invite-page';
 import { OrgInviteCard } from '@/components/orgs/OrgInviteCard';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { InviteCardV3 } from './InviteCardV3';
 
 interface InvitePageProps {
@@ -29,7 +29,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
     );
   }
 
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <AuthLayout>
         <InviteCardV3 resolution={resolution} token={token} />

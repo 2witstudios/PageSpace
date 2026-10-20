@@ -18,7 +18,7 @@ describe('OfflinePage', () => {
   });
 
   it('given Imago is on, should render the v3 secondary Try again button', () => {
-    vi.stubEnv('NEXT_PUBLIC_IMAGO_ENABLED', 'true');
+    vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     render(<OfflinePage />);
     expect(screen.getByRole('button', { name: 'Try again' })).toHaveClass('border-[oklch(0.90_0.005_230)]');
   });

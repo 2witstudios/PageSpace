@@ -2,10 +2,10 @@
 
 import { RefreshCw } from 'lucide-react';
 import { V3_SECONDARY_BUTTON } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 export function RefreshButton() {
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   return (
     <button
       onClick={() => window.location.reload()}

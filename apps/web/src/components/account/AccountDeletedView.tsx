@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { StopUsingSignInWithAppleSteps } from "@/components/account/SignInWithAppleDeletionNotice";
 import { AuthLayout } from "@/components/auth/AuthLayout";
 import { AuthStatusCard } from "@/components/auth/AuthStatusCard";
-import { isImagoEnabled } from "@/lib/imago/imago-enabled";
+import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 
 /**
  * Post-deletion landing page for every account deletion (the deletion itself is
@@ -14,7 +14,7 @@ import { isImagoEnabled } from "@/lib/imago/imago-enabled";
  * finish that step.
  */
 export function AccountDeletedView({ showAppleSignInSteps }: { showAppleSignInSteps: boolean }) {
-  if (isImagoEnabled()) {
+  if (isV3AuthEnabled()) {
     return (
       <AuthLayout>
         <AuthStatusCard

@@ -12,7 +12,7 @@ import { sessionRepository } from '@/lib/repositories/session-repository';
 import { AuthLayout } from '@/components/auth/AuthLayout';
 import { ConsentScopeCard } from '@/components/auth/ConsentScopeCard';
 import { V3_BODY, V3_HEADING } from '@/components/auth/auth-v3-styles';
-import { isImagoEnabled } from '@/lib/imago/imago-enabled';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 import { getViewerDisplayName } from '@/lib/auth/viewer-display-name';
 import { ConsentActions } from './ConsentActions';
 
@@ -67,7 +67,7 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const client = authorizeParams.clientId ? getRegisteredClient(authorizeParams.clientId) : null;
   const result = validateAuthorizeRequest(authorizeParams, client);
 
-  const v3 = isImagoEnabled();
+  const v3 = isV3AuthEnabled();
   const signedInAs = v3 ? await getViewerDisplayName(session.userId) : undefined;
   const frame = signedInAs ? { signedInAs } : {};
 

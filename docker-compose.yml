@@ -137,6 +137,8 @@ services:
         - NEXT_PUBLIC_COOKIE_DOMAIN=${NEXT_PUBLIC_COOKIE_DOMAIN:-localhost}
         # Imago's "Try Imago" link; only 'true' shows it. Set with IMAGO_ENABLED.
         - NEXT_PUBLIC_IMAGO_ENABLED=${NEXT_PUBLIC_IMAGO_ENABLED:-false}
+        # Imago v3 look for sign-in and other signed-out pages; independent of the above.
+        - NEXT_PUBLIC_IMAGO_V3_AUTH=${NEXT_PUBLIC_IMAGO_V3_AUTH:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

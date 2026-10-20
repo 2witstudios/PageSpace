@@ -8,11 +8,11 @@ export const tabBarClass =
 export const tabControlClass =
   'flex size-head-control flex-none cursor-pointer items-center justify-center self-center rounded-md border-0 bg-transparent text-ink-muted hover:bg-fill disabled:cursor-default disabled:text-ink-faint disabled:hover:bg-transparent';
 
-/** One tab: up to 180px, never under 76px; the active one is sheet white and merges down. */
+/** One tab: up to 180px, never under 76px; the active one takes the sheet's colour and merges down. */
 export const tabClass = (selected: boolean): string =>
   cn(
     'group relative flex min-w-tab-min shrink basis-tab-max items-center gap-1 rounded-t-lg pr-1 pl-3 text-sm',
-    selected ? '-mb-px bg-background font-semibold text-ink tab-active-edge' : 'text-ink-muted hover:bg-fill',
+    selected ? '-mb-px bg-background font-semibold text-ink' : 'text-ink-muted hover:bg-fill',
   );
 
 export const tabLinkClass =

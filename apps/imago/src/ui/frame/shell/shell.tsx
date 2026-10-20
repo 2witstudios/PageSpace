@@ -40,9 +40,8 @@ import { PhoneFilesHeader } from '../phone/phone-files-header';
 import { phoneDocBodyClass } from '../phone/phone-doc-class';
 import { renderPhoneShell } from '../phone/phone-shell.render';
 import { useViewportTier } from '../viewport/use-viewport-tier';
-import { railDrive } from '../rail/rail-items';
+import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
-  imagoStartsCollapsedAt,
   isHideableSection,
   isTasksIndex,
   type HideableSection,
@@ -200,10 +199,6 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const { data } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
-  // Screens whose boards open with Imago folded fold it on entry; reopening it there is the viewer's choice.
-  useEffect(() => {
-    if (imagoStartsCollapsedAt(pathname)) dispatch(transactions.collapseImago, undefined);
-  }, [pathname]);
   const tier = useViewportTier();
   const phone = tier === 'phone';
   const paneSheetOpen = useUiState(selectPaneSheetOpen);
@@ -344,7 +339,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       />
     ),
     banner: <><AppBanner /><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface></>,
-    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />,
+    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} homeHref={driveHomeHref(railDrive(stage, homeDriveId))} />,
     list: missing ? null : listFor(stage, layout),
     object: objectColumn,
     chat: chatColumn,
