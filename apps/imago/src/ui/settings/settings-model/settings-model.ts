@@ -24,7 +24,16 @@ export type DriveSettings = {
   readonly kind: DriveKind;
   /** The viewer's role in the drive. */
   readonly role: DriveRole;
+  /** The drive's own image (its PageSpace avatar route), null without one. */
+  readonly avatarUrl: string | null;
+  /** The mark palette key its initial sits on (MARK_COLORS), null for the default tile. */
+  readonly color: string | null;
+  /** The owning org, whose avatar the drive's tile shows until it has a mark of its own; null when personal. */
+  readonly orgId: string | null;
 };
+
+/** apps/web's drive avatar route: POST an image (multipart), DELETE to clear it. */
+export const driveAvatarEndpoint = (driveId: string): string => `${drivePath(driveId)}/avatar`;
 
 export type Member = {
   readonly userId: string;
@@ -56,12 +65,17 @@ export const driveOf = (body: unknown): DriveSettings | null => {
     // A missing kind is STANDARD: only kind === 'HOME' is ever protected.
     kind: body.kind === 'HOME' ? 'HOME' : 'STANDARD',
     role: body.isOwned === true ? 'OWNER' : roleOf(body.role),
+    avatarUrl: text(body.avatarUrl),
+    color: text(body.color),
+    orgId: text(body.orgId),
   };
 };
 
 export type DriveActions = {
   readonly rename: boolean;
   readonly imagoAccess: boolean;
+  /** Changing the drive's image and color, as every other drive setting: owners and admins. */
+  readonly appearance: boolean;
 };
 
 /**
@@ -75,6 +89,7 @@ export const driveActions = (drive: DriveSettings): DriveActions => {
   return {
     rename: admin && homeDriveActionError(drive, 'rename') === null,
     imagoAccess: homeDriveActionError(drive, 'imago-access') === null,
+    appearance: admin,
   };
 };
 

@@ -23,6 +23,7 @@ import { cn } from "@/retained/lib/utils";
 
 import { useDrivePicker } from "./useDrivePicker";
 import { OrgMark } from "@/retained/components/orgs/OrgMark";
+import { DriveMark, hasOwnDriveMark } from "@/retained/components/drives/DriveMark";
 
 interface DriveSwitcherDialogProps {
   open: boolean;
@@ -370,7 +371,11 @@ function DriveRow({ drive, group, isCurrent, isFavorite, onSelect, onToggleFavor
       data-current={isCurrent ? "true" : undefined}
       data-drive-id={drive.id}
     >
-      <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
+      {hasOwnDriveMark(drive) ? (
+        <DriveMark drive={drive} size="sm" decorative />
+      ) : (
+        <Folder className="h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
       <span className="min-w-0 flex-1 truncate">{drive.name}</span>
       {accessed && <span className="text-xs text-muted-foreground tabular-nums">{accessed}</span>}
       {/*

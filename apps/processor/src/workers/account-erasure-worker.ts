@@ -38,6 +38,7 @@ import { isClickHouseAnalyticsInPlay } from '@pagespace/lib/observability/clickh
 import { isOnPrem, isTenantMode } from '@pagespace/lib/deployment-mode';
 import type { AccountErasureJobData } from '../types';
 import { deleteUserAvatars } from '../api/avatar';
+import { deleteSubjectAvatars } from '../api/subject-avatar';
 
 function resolveDeploymentMode(): DeploymentMode {
   if (isOnPrem()) return 'onprem';
@@ -109,6 +110,9 @@ export async function runAccountErasureJob(data: AccountErasureJobData): Promise
         throw new Error(`${ERASURE_BLOCKED_PREFIX}: ${plan.multiMemberDriveNames.join(', ')}`);
       }
       for (const driveId of plan.drivesToDelete) {
+        // The drive's image folder first: storage is not in the cascade, and a storage failure then
+        // fails the step while the drive still exists for the retry to find.
+        await deleteSubjectAvatars('drive', driveId);
         await accountRepository.deleteDrive(driveId);
       }
       return ok(

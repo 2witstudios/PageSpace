@@ -94,6 +94,8 @@ const driveFixture = (overrides: { id: string; name: string; ownerId?: string })
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
   orgId: null,
   orgVisibility: 'OPEN' as const,
 });

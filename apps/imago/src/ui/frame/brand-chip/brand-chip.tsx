@@ -26,12 +26,14 @@ export function BrandChip({ currentId, drives }: BrandChipProps) {
   const { orgById } = useMyOrganizations();
   const orgId = /^\/orgs\/([^/]+)(?:\/|$)/.exec(pathname ?? '')?.[1];
   const organization = orgId ? orgById(orgId) : null;
+  const driveOrgId = drives?.find((drive) => drive.id === currentId)?.orgId ?? null;
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
   return renderBrandChip({
     currentId,
     drives,
     organization,
+    orgAvatarUrl: orgById(driveOrgId)?.avatarUrl ?? null,
     open,
     onToggle: () => {
       setOpened(true);

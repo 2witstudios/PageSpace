@@ -44,6 +44,20 @@
   --type-code: light-dark(oklch(0.45 0.03 250), oklch(0.72 0.03 250));
   --type-file: light-dark(oklch(0.5 0.01 220), oklch(0.7 0.01 220));
   --agent-soft: light-dark(oklch(0.55 0.15 25 / 0.12), oklch(0.7 0.14 25 / 0.18));
+  /* The drive mark palette (MARK_COLORS, lib avatars/avatar-core.ts): the tile a drive's initial
+     sits on when the drive picks a color. A saturated step under white reads in both themes, so
+     each carries the same value for dark; classic paints the same keys with Tailwind's 600 steps. */
+  --mark-slate: light-dark(oklch(0.446 0.043 257.281), oklch(0.446 0.043 257.281));
+  --mark-red: light-dark(oklch(0.577 0.245 27.325), oklch(0.577 0.245 27.325));
+  --mark-orange: light-dark(oklch(0.646 0.222 41.116), oklch(0.646 0.222 41.116));
+  --mark-amber: light-dark(oklch(0.666 0.179 58.318), oklch(0.666 0.179 58.318));
+  --mark-green: light-dark(oklch(0.627 0.194 149.214), oklch(0.627 0.194 149.214));
+  --mark-teal: light-dark(oklch(0.6 0.118 184.704), oklch(0.6 0.118 184.704));
+  --mark-blue: light-dark(oklch(0.546 0.245 262.881), oklch(0.546 0.245 262.881));
+  --mark-indigo: light-dark(oklch(0.511 0.262 276.966), oklch(0.511 0.262 276.966));
+  --mark-violet: light-dark(oklch(0.541 0.281 293.009), oklch(0.541 0.281 293.009));
+  --mark-pink: light-dark(oklch(0.592 0.249 0.584), oklch(0.592 0.249 0.584));
+  --mark-on: light-dark(oklch(1 0 0), oklch(1 0 0));
 }
 
 @theme inline {
@@ -76,6 +90,17 @@
   --color-type-code: var(--type-code);
   --color-type-file: var(--type-file);
   --color-agent-soft: var(--agent-soft);
+  --color-mark-slate: var(--mark-slate);
+  --color-mark-red: var(--mark-red);
+  --color-mark-orange: var(--mark-orange);
+  --color-mark-amber: var(--mark-amber);
+  --color-mark-green: var(--mark-green);
+  --color-mark-teal: var(--mark-teal);
+  --color-mark-blue: var(--mark-blue);
+  --color-mark-indigo: var(--mark-indigo);
+  --color-mark-violet: var(--mark-violet);
+  --color-mark-pink: var(--mark-pink);
+  --color-mark-on: var(--mark-on);
 }
 
 /* The stage sheet's lift off the spine. */

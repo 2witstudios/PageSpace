@@ -39,6 +39,8 @@ export type ApiRequestInit = {
   method?: string;
   /** Sent as the JSON request body. */
   json?: unknown;
+  /** Sent as a multipart body (an upload); the browser sets its boundary. Not with `json`. */
+  form?: FormData;
   headers?: Record<string, string>;
   signal?: AbortSignal;
 };
@@ -136,10 +138,11 @@ export function createApiClient(io: ApiClientIO): ApiClient {
     assertRootRelative(path);
     const method = (init.method ?? 'GET').toUpperCase();
     const mutating = MUTATING_METHODS.has(method);
-    const body = init.json === undefined ? undefined : JSON.stringify(init.json);
+    const json = init.json === undefined ? undefined : JSON.stringify(init.json);
+    const body = json ?? init.form;
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...(json === undefined ? {} : { 'Content-Type': 'application/json' }),
       ...init.headers,
     };
 

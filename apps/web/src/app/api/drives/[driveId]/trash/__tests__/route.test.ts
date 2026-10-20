@@ -122,6 +122,8 @@ const createDriveFixture = (overrides: { id: string; name?: string; ownerId?: st
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
   orgId: null,
   orgVisibility: 'OPEN' as const,
 });

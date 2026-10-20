@@ -184,6 +184,7 @@ vi.mock('../api/ingest', () => ({ ingestRouter: 'mock-ingest-router' }));
 vi.mock('../api/verify', () => ({ verifyRouter: 'mock-verify-router' }));
 vi.mock('../api/avatar', () => ({ default: 'mock-avatar-router' }));
 vi.mock('../api/org-avatar', () => ({ default: 'mock-org-avatar-router' }));
+vi.mock('../api/drive-avatar', () => ({ default: 'mock-drive-avatar-router' }));
 vi.mock('../api/delete-file', () => ({ deleteFileRouter: 'mock-delete-file-router' }));
 
 vi.mock('../middleware/auth', () => ({
@@ -703,6 +704,15 @@ describe('Express middleware registration', () => {
     expect(mount).toContain('mock-org-avatar-router');
     expect(mount).toContain(authenticateService);
     expect((requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain('org-avatars:write');
+  });
+
+  it('should mount the drive avatar router at /api/drive-avatar behind service auth and the drive-avatars:write scope', async () => {
+    const { authenticateService, requireScope } = await import('../middleware/auth');
+    const mount = capturedUse.find((args) => args[0] === '/api/drive-avatar');
+    expect(mount).toBeDefined();
+    expect(mount).toContain('mock-drive-avatar-router');
+    expect(mount).toContain(authenticateService);
+    expect((requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain('drive-avatars:write');
   });
 
   it('should mount cache router at /cache', () => {

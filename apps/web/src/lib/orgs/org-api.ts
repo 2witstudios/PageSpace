@@ -7,7 +7,8 @@
 import type { OrgBillingNotice } from '@pagespace/lib/organizations/status-core';
 import type { OrgPolicies as StoredOrgPolicies } from '@pagespace/lib/organizations/policies-core';
 import type { OrgActivation } from '@pagespace/lib/billing/org-subscription-core';
-import { fetchJSON, fetchWithAuth, post, patch, put, del, ApiRequestError } from '@/lib/auth/auth-fetch';
+import { fetchJSON, post, patch, put, del } from '@/lib/auth/auth-fetch';
+import { uploadAvatar } from '@/lib/avatars/avatar-api';
 
 export type OrgRole = 'OWNER' | 'ADMIN' | 'MEMBER';
 
@@ -150,20 +151,11 @@ export const patchOrganization = (orgId: string, body: { name?: string; slug?: s
   patch<{ organization: Organization }>(orgKeys.detail(orgId), body);
 
 /**
- * ORG-1: upload the org's avatar image (Owner and Admins). fetchWithAuth, not post(): the browser
+ * ORG-1: upload the org's avatar image (Owner and Admins), through uploadAvatar: the browser
  * must set the multipart boundary. A refusal throws ApiRequestError, as every org call does.
  */
-export async function uploadOrgAvatar(orgId: string, file: File): Promise<{ organization: { id: string; avatarUrl: string | null } }> {
-  const body = new FormData();
-  body.append('file', file);
-  const response = await fetchWithAuth(`/api/orgs/${orgId}/avatar`, { method: 'POST', body });
-  const data: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error : 'The image could not be uploaded.';
-    throw new ApiRequestError(message, response.status, data ?? undefined);
-  }
-  return data as { organization: { id: string; avatarUrl: string | null } };
-}
+export const uploadOrgAvatar = (orgId: string, file: File) =>
+  uploadAvatar<{ organization: { id: string; avatarUrl: string | null } }>(`/api/orgs/${orgId}/avatar`, file);
 
 export const removeOrgAvatar = (orgId: string) =>
   del<{ organization: { id: string; avatarUrl: string | null } }>(`/api/orgs/${orgId}/avatar`);

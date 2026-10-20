@@ -12,6 +12,12 @@ export type DriveSummary = {
   readonly kind: DriveKind;
   /** When the viewer last opened the drive (the API's own timestamp), null when never. */
   readonly lastAccessedAt?: string | null;
+  /** The drive's own image (its PageSpace avatar route), null without one. */
+  readonly avatarUrl?: string | null;
+  /** The mark palette key its initial sits on, null for the default tile. */
+  readonly color?: string | null;
+  /** The owning org, whose avatar stands in for a drive with no mark of its own; null when personal. */
+  readonly orgId?: string | null;
 };
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -19,10 +25,18 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 
 const summaryOf = (entry: unknown): DriveSummary | null => {
   if (!isRecord(entry) || entry.isTrashed === true) return null;
-  const { id, name, kind, lastAccessedAt } = entry;
+  const { id, name, kind, lastAccessedAt, avatarUrl, color, orgId } = entry;
   if (typeof id !== 'string' || id === '' || typeof name !== 'string') return null;
   if (kind !== 'HOME' && kind !== 'STANDARD') return null;
-  return { id, name, kind, lastAccessedAt: typeof lastAccessedAt === 'string' ? lastAccessedAt : null };
+  return {
+    id,
+    name,
+    kind,
+    lastAccessedAt: typeof lastAccessedAt === 'string' ? lastAccessedAt : null,
+    avatarUrl: typeof avatarUrl === 'string' ? avatarUrl : null,
+    color: typeof color === 'string' ? color : null,
+    orgId: typeof orgId === 'string' ? orgId : null,
+  };
 };
 
 const byName = (a: DriveSummary, b: DriveSummary): number =>

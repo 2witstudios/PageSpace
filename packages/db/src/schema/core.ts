@@ -41,6 +41,10 @@ export const drives = pgTable('drives', {
   publishDefaultOgImageUrl: text('publish_default_og_image_url'), // Drive-wide default social share image for published pages lacking their own
   notFoundPageId: text('not_found_page_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }), // Canvas page rendered as the published site's 404.html; falls back to the generic branded 404 when unset
   publishFaviconUrl: text('publish_favicon_url'), // Drive-wide favicon override for published pages lacking their own <link rel="icon">
+  // The drive's mark: an image PageSpace stores and serves, never an outside URL (drives_avatar_url_chk
+  // below; the pure rule is lib avatars/avatar-core.ts), and the color its initial sits on without one.
+  avatarUrl: text('avatarUrl'),
+  color: text('color'),
 }, (table) => {
     return {
         ownerIdx: index('drives_owner_id_idx').on(table.ownerId),
@@ -55,6 +59,16 @@ export const drives = pgTable('drives', {
         // rather than an app guard so no write path (move-in, backfill, restore) can skip it;
         // safe because orgId is ON DELETE RESTRICT, never SET NULL, so no cascade rewrites it.
         homeNeverOrg: check('drives_home_never_org_check', sql`${table.kind} <> 'HOME' OR ${table.orgId} IS NULL`),
+        // Only this drive's own avatar route, exactly as avatarPath('drive', …) builds it: no other host, no other drive.
+        avatarUrlCheck: check(
+          'drives_avatar_url_chk',
+          sql`${table.avatarUrl} IS NULL OR ${table.avatarUrl} ~ ('^/api/drives/' || ${table.id} || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')`,
+        ),
+        // A key from the fixed mark palette (MARK_COLORS in lib avatars/avatar-core.ts).
+        colorCheck: check(
+          'drives_color_chk',
+          sql`${table.color} IS NULL OR ${table.color} IN ('slate', 'red', 'orange', 'amber', 'green', 'teal', 'blue', 'indigo', 'violet', 'pink')`,
+        ),
     }
 });
 

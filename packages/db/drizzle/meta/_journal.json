@@ -2444,6 +2444,13 @@
       "when": 1792418795839,
       "tag": "0379_app_store_purchases",
       "breakpoints": true
+    },
+    {
+      "idx": 349,
+      "version": "7",
+      "when": 1792465196557,
+      "tag": "0380_drive_avatar",
+      "breakpoints": true
     }
   ]
 }

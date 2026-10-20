@@ -9,6 +9,7 @@ vi.mock('../rail/notification-count', () => ({ useNotificationCount: () => 3 }))
 vi.mock('@/retained/components/layout/navbar/DriveSwitcherDialog', () => ({
   default: ({ open }: { open: boolean }) => (open ? h('div', { role: 'dialog', 'aria-label': 'Switch drive' }) : null),
 }));
+vi.mock('@/retained/hooks/useMyOrganizations', () => ({ useMyOrganizations: () => ({ orgById: () => null }) }));
 const opened = vi.hoisted(() => ({ palette: 0 }));
 vi.mock('../../store/transactions', () => ({
   dispatch: () => {

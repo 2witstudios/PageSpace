@@ -40,6 +40,8 @@ export type ServiceScope =
   | 'avatars:write:any'
   // ORG-1: replace or remove an org's avatar; only on an org-bound token, minted for an org Owner or Admin.
   | 'org-avatars:write'
+  // Replace or remove a drive's avatar; only on a drive-bound token, minted for a drive Owner or Admin.
+  | 'drive-avatars:write'
   | 'queue:read'
   | 'erasure:enqueue'
   | 'broadcast:enqueue'
@@ -141,6 +143,8 @@ export interface PermissionSet {
   isOwner: boolean;
   /** An org Owner or Admin, on an 'organization' resource only. */
   isOrgAdmin?: boolean;
+  /** A drive Owner or Admin, on a 'drive' resource only. */
+  isDriveAdmin?: boolean;
 }
 
 /**
@@ -287,6 +291,7 @@ async function getPermissionsForResource(
         canEdit: drivePerms.canEdit, // Only owners/admins/editors
         canDelete: drivePerms.isOwner || drivePerms.isAdmin,
         isOwner: drivePerms.isOwner,
+        isDriveAdmin: drivePerms.isOwner || drivePerms.isAdmin,
       };
     }
 
@@ -340,6 +345,9 @@ function filterScopesByPermissions(
 
       case 'org-avatars:write':
         return permissions.isOrgAdmin === true;
+
+      case 'drive-avatars:write':
+        return permissions.isDriveAdmin === true;
 
       // Delete scopes require delete permission
       case 'files:delete':

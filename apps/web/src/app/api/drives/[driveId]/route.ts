@@ -16,6 +16,7 @@ import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
 import { publishDriveTransitionInvalidation } from '@pagespace/lib/services/drive-transition-invalidation';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { MARK_COLORS } from '@pagespace/lib/avatars/avatar-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -40,6 +41,8 @@ const patchSchema = z.object({
   // — never trusted as a URL directly.
   ogImageFileId: z.string().min(1).optional(),
   faviconFileId: z.string().min(1).optional(),
+  // The color the drive's initial sits on without an avatar: a mark palette key, null for the default.
+  color: z.enum(MARK_COLORS).nullable().optional(),
 }).strict();
 
 /**
@@ -232,6 +235,7 @@ export async function PATCH(
         resolvedFaviconUrl === undefined
           ? undefined
           : resolvedFaviconUrl || null,
+      color: validatedBody.color,
     });
 
     // A changed 404 page or favicon must be reflected in the site files
@@ -241,8 +245,8 @@ export async function PATCH(
       void regeneratePublishedSiteFiles(driveId);
     }
 
-    // Broadcast drive update event if name, drivePrompt, or homePageId changed
-    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined)) {
+    // Broadcast drive update event if name, drivePrompt, homePageId or the mark color changed
+    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined || validatedBody.color !== undefined)) {
       const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {

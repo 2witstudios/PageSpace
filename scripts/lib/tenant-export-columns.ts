@@ -122,7 +122,7 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     columns: [
       'id', 'name', 'slug', 'ownerId', 'kind', 'orgId', 'orgVisibility', 'isTrashed', 'trashedAt',
       'createdAt', 'updatedAt', 'drivePrompt', 'publishSubdomain',
-      'publish_default_og_image_url', 'publish_favicon_url',
+      'publish_default_og_image_url', 'publish_favicon_url', 'avatarUrl', 'color',
     ],
     // `orgId` travels (Spec X-3): `organizations` is inserted before `drives`,
     // so an org drive arrives as an org drive rather than a personal one.

@@ -13,6 +13,7 @@ import { ingestRouter } from './api/ingest';
 import { verifyRouter } from './api/verify';
 import avatarRouter from './api/avatar';
 import orgAvatarRouter from './api/org-avatar';
+import driveAvatarRouter from './api/drive-avatar';
 import { deleteFileRouter } from './api/delete-file';
 import { erasureRouter } from './api/erasure';
 import { appBuildRouter } from './api/app-build';
@@ -219,6 +220,8 @@ app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avata
 app.use('/avatars', avatarRouter);
 // ORG-1: org avatars, written only with a token bound to the org (no public read here; the web app serves them to members).
 app.use('/api/org-avatar', authenticateService, requireScope('org-avatars:write'), orgAvatarRouter);
+// Drive avatars, written only with a token bound to the drive (the web app serves them to members).
+app.use('/api/drive-avatar', authenticateService, requireScope('drive-avatars:write'), driveAvatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/api/erasure', authenticateService, requireScope('erasure:enqueue'), erasureRouter);
 app.use('/api/app-hosting', authenticateService, requireScope('app-hosting:publish'), appBuildRouter);
