@@ -61,7 +61,7 @@ export type OpenTabs = {
 /**
  * Closes one tab. Closing the one on screen moves to its neighbour; with none left it goes to
  * the section in a tab of its own ('section': the tab bar, Close page) or stays put ('stay':
- * the phone's open-pages sheet). Reads the tabs without syncing them, so any control can close one.
+ * the phone's open-pages sheet). It only reads the tabs, so any control can close one.
  */
 export function useCloseTab(stage: Stage): (id: string, whenLast?: 'section' | 'stay') => void {
   const pathname = usePathname() ?? '/';
@@ -149,9 +149,8 @@ export function useOpenTabs(stage: Stage): OpenTabs {
   const pathname = usePathname() ?? '/';
   const tabs = useUiState(selectTabs);
   const activeId = useUiState(selectActive);
-
-  const isCurrent = (tab: Tab) => tab.id === activeId && tab.path === pathname;
   const close = useCloseTab(stage);
+  const isCurrent = (tab: Tab) => tab.id === activeId && tab.path === pathname;
 
   return {
     tabs,
