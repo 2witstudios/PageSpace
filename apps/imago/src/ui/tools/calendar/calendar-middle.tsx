@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { CalendarView, type EmbeddedCalendarState } from '@/retained/components/calendar/CalendarView';
+import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
 import { CalendarToolbar } from './calendar-toolbar';
 import { formatCalendarDate, stepCalendarDate } from './calendar-state';
 import { useCalendarState } from './use-calendar-state';
@@ -13,7 +14,14 @@ export type CalendarMiddleProps = {
 /** The Calendar's middle (C-Drive-Calendar): the 44px week strip over the retained grid, driven by the URL. */
 export function CalendarMiddle({ driveId }: CalendarMiddleProps): ReactNode {
   const { state, update } = useCalendarState();
+  const showTasks = useCalendarFilterStore((store) => store.showTasks);
+  const toggleTasks = useCalendarFilterStore((store) => store.toggleTasks);
   const embedded: EmbeddedCalendarState = {
+    // The pane's Tasks filter, shared with the grid's own toggle.
+    showTasks,
+    onShowTasksChange: (shown) => {
+      if (shown !== showTasks) toggleTasks();
+    },
     viewMode: state.view,
     currentDate: state.date,
     openEventId: state.eventId,

@@ -63,11 +63,16 @@ describe('persistent chat orchestration', () => {
     const { web } = show(); await settle();
     expect(web.requests.some(request => request.url.includes('/messages'))).toBe(false);
   });
-  it('uses dense context for settings without changing the selected agent', async () => {
+  it('uses dense context beside a settings screen without changing the selected agent', async () => {
     dispatch(transactions.selectAgent, { id: 'p-imago', title: 'Imago' });
-    const { container } = show('/d1/settings'); await settle();
+    const { container } = show('/d1/settings/general'); await settle();
     expect(container.querySelector('aside[aria-label="Imago"]')?.getAttribute('data-density')).toBe('dense');
     expect(host.props?.agentId).toBe('p-imago');
+  });
+
+  it('is roomy on the settings nav alone, where Imago is the ground', async () => {
+    const { container } = show('/d1/settings'); await settle();
+    expect(container.querySelector('aside[aria-label="Imago"]')?.getAttribute('data-density')).toBe('roomy');
   });
 });
 

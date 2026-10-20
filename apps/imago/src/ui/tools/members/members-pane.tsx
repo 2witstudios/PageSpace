@@ -14,7 +14,7 @@ import { useMembersRoster } from './use-members-roster';
  * member's profile (C-Members-Profile) lists the people, agents and guests with the current one
  * marked; the invite form (C-Members-Invite) lists who is waiting to join and the invite links.
  */
-export function MembersPane({ driveId, close }: ToolPaneProps): ReactNode {
+export function MembersPane({ driveId, close, variant: paneVariant }: ToolPaneProps): ReactNode {
   const variant = membersVariantFor(usePathname());
   const overview = variant.kind === 'overview';
   const roster = useMembersRoster(driveId, overview);
@@ -25,6 +25,7 @@ export function MembersPane({ driveId, close }: ToolPaneProps): ReactNode {
       title: 'Members',
       label: 'Member groups',
       close,
+      variant: paneVariant,
       children: renderMembersPaneBody({
         driveId,
         groups: roster.roster === undefined && roster.error === undefined ? undefined : memberGroups(roster.roster),
@@ -42,6 +43,7 @@ export function MembersPane({ driveId, close }: ToolPaneProps): ReactNode {
     title: 'Members',
     label: variant.kind === 'profile' ? 'Members' : 'Member groups',
     close,
+    variant: paneVariant,
     children: body,
   });
 }

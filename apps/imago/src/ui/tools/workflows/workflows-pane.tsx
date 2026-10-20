@@ -13,6 +13,7 @@ import {
 } from '@/retained/components/workflows/workflow-view-model';
 import type { Workflow } from '@/retained/components/workflows/types';
 import { renderToolPane, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
+import { toolScreenHref } from '../../frame/tool-pane/tool-screen';
 import {
   lastRunBadgeClass,
   newWorkflowClass,
@@ -23,10 +24,10 @@ import {
   workflowsPaneMessageClass,
 } from './workflows-pane-class';
 
-function WorkflowRow({ workflow, selected }: { readonly workflow: Workflow; readonly selected: boolean }) {
+function WorkflowRow({ driveId, workflow, selected }: { readonly driveId: string; readonly workflow: Workflow; readonly selected: boolean }) {
   return (
     <Link
-      href={`?id=${encodeURIComponent(workflow.id)}`}
+      href={toolScreenHref(driveId, 'workflows', `?id=${encodeURIComponent(workflow.id)}`)}
       aria-current={selected ? 'page' : undefined}
       className={workflowRowClass(selected)}
     >
@@ -41,8 +42,8 @@ function WorkflowRow({ workflow, selected }: { readonly workflow: Workflow; read
   );
 }
 
-/** The Workflows tool's pane (C-Drive-Workflows): the drive's scheduled workflows; ?id= selects one. */
-export function WorkflowsPane({ driveId, close }: ToolPaneProps): ReactNode {
+/** The Workflows tool's pane (C-Drive-Workflows): the drive's scheduled workflows; a row opens it on the Workflows screen (?id=). */
+export function WorkflowsPane({ driveId, close, variant }: ToolPaneProps): ReactNode {
   const router = useRouter();
   const selectedId = useSearchParams().get('id');
   const { data, error, isLoading } = useWorkflowList(driveId);
@@ -53,19 +54,20 @@ export function WorkflowsPane({ driveId, close }: ToolPaneProps): ReactNode {
   else if (data.length === 0) rows = <p className={workflowsPaneMessageClass}>No workflows yet.</p>;
   else {
     rows = data.map((workflow) => (
-      <WorkflowRow key={workflow.id} workflow={workflow} selected={workflow.id === selectedId} />
+      <WorkflowRow key={workflow.id} driveId={driveId} workflow={workflow} selected={workflow.id === selectedId} />
     ));
   }
 
   return renderToolPane({
     title: 'Workflows',
     actions: (
-      <button type="button" className={newWorkflowClass} onClick={() => router.push('?new=1')}>
+      <button type="button" className={newWorkflowClass} onClick={() => router.push(toolScreenHref(driveId, 'workflows', '?new=1'))}>
         <Icon name="plus" />
         New
       </button>
     ),
     close,
+    variant,
     children: rows,
   });
 }

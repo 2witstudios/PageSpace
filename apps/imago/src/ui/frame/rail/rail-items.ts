@@ -89,7 +89,6 @@ export const driveHomeHref = (driveId: string | null): string | null => driveHre
 /** The URL alone picks the active item; the account belongs to the avatar. */
 export const activeRailItem = (stage: Stage): RailItemId | null => {
   if (stage.section === 'account' || stage.section === 'notifications') return null;
-  if (stage.object?.kind === 'settings' && stage.object.tool !== undefined) return stage.object.tool;
   return stage.section;
 };
 
@@ -101,9 +100,7 @@ export const activeRailItem = (stage: Stage): RailItemId | null => {
 export type RailPlace = 'page' | 'section';
 
 export const activeRailPlace = (stage: Stage): RailPlace =>
-  stage.driveId !== null && (stage.object === null || stage.object.kind === 'settings')
-    ? 'page'
-    : 'section';
+  stage.driveId !== null && stage.object === null ? 'page' : 'section';
 
 const count = (value: unknown): number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;

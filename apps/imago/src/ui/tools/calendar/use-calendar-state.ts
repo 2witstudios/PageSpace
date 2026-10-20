@@ -2,9 +2,13 @@
 
 import { useCallback, useMemo } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { stageFor, toolViewSegment } from '../../frame/stage/stage';
 import { parseCalendarState, withCalendarPatch, type CalendarPatch, type CalendarState } from './calendar-state';
 
-/** The calendar's URL state, read by the pane and the middle alike; `update` replaces the address. */
+/**
+ * The calendar's URL state, read by the pane and the middle alike. On the calendar's screen
+ * `update` replaces the address; from the pane alone (a date picked, Event) it opens the screen.
+ */
 export function useCalendarState(): { readonly state: CalendarState; readonly update: (patch: CalendarPatch) => void } {
   const params = useSearchParams();
   const pathname = usePathname();
@@ -13,7 +17,9 @@ export function useCalendarState(): { readonly state: CalendarState; readonly up
   const state = useMemo(() => parseCalendarState(new URLSearchParams(search), new Date()), [search]);
   const update = useCallback(
     (patch: CalendarPatch) => {
-      router.replace(`${pathname}${withCalendarPatch(search, patch)}`, { scroll: false });
+      const next = withCalendarPatch(search, patch);
+      if (stageFor(pathname).object !== null) router.replace(`${pathname}${next}`, { scroll: false });
+      else router.push(`${pathname}/${toolViewSegment}${next}`, { scroll: false });
     },
     [pathname, router, search],
   );

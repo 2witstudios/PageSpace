@@ -46,3 +46,9 @@ export const taskViewCountClass = (warn: boolean): string =>
 export const tasksPaneLabelClass = 'px-2 pb-1 pt-1 text-2xs font-medium uppercase tracking-wide text-ink-faint';
 
 export const tasksPaneMessageClass = 'px-2 text-sm text-ink-muted';
+
+/** A task in the pane's Needs attention glance: its title, then its due label. */
+export const taskGlanceRowClass = cn(rowBase, 'h-8 items-center gap-2 rounded-lg px-2', rowTone(false));
+
+/** The glance's "See all" link, under its rows. */
+export const taskGlanceMoreClass = 'px-2 pt-1 text-2xs text-ink-faint no-underline hover:text-ink hover:no-underline';

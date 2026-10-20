@@ -1,8 +1,7 @@
-import RetainedPage from '@/retained/app/dashboard/[driveId]/members/page';
-import type { ComponentProps } from 'react';
 import { getViewer } from '@/lib/auth/get-viewer';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
+/** The tool's pane beside the chat. The shell renders the panes; the pane opens the tool's screen as the object. */
+export default async function Page(): Promise<null> {
   await getViewer();
-  return <RetainedPage {...props} />;
+  return null;
 }

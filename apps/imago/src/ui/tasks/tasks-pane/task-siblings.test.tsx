@@ -57,7 +57,7 @@ describe('TasksPane beside an open task', () => {
     });
     const container = mount(
       <ImagoSWRProvider client={web.client}>
-        <TasksPane driveId="d1" selectedPageId="page-p" />
+        <TasksPane driveId="d1" selectedPageId="page-p" selectedViewId={null} />
       </ImagoSWRProvider>,
     );
     await settle(() => {

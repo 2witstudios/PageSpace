@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { mount, unmountAll } from '../../test-support/dom';
+import { click, mount, unmountAll } from '../../test-support/dom';
+import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
 import { CalendarPane, syncedLabel } from './calendar-pane';
 
 const googleStatus = {
@@ -24,7 +25,10 @@ const setMode = (mode: 'cloud' | 'onprem') => {
   process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = mode;
 };
 
-beforeEach(() => setMode('cloud'));
+beforeEach(() => {
+  setMode('cloud');
+  useCalendarFilterStore.setState({ hiddenCalendars: [], hiddenEventTypes: [], showTasks: true });
+});
 afterEach(() => {
   unmountAll();
   delete process.env.NEXT_PUBLIC_DEPLOYMENT_MODE;
@@ -51,7 +55,7 @@ describe('CalendarPane (C-Drive-Calendar)', () => {
   });
 
   test('the six event types, in the board’s order', () => {
-    const labels = Array.from(render().querySelectorAll('ul')[1]?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    const labels = Array.from(render().querySelectorAll('ul')[2]?.querySelectorAll('li') ?? []).map((li) => li.textContent);
     assert({
       given: 'the event types legend',
       should: 'list Default, Meeting, Deadline, Focus, Personal and Travel',
@@ -103,6 +107,57 @@ describe('CalendarPane (C-Drive-Calendar)', () => {
       should: 'list Personal and each drive before Google, as the grid’s chips do',
       actual: calendars.slice(0, 3),
       expected: ['Personal', 'Studio', 'Ops'],
+    });
+  });
+
+  test('the pane is the calendar’s filter (classic’s calendar sidebar)', () => {
+    const root = render();
+    const show = Array.from(root.querySelectorAll('ul')[1]?.querySelectorAll('[role="checkbox"]') ?? []);
+    assert({
+      given: 'a drive calendar with the default filters',
+      should: 'offer User events, Agent events and Tasks as checked filters',
+      actual: show.map((box) => [box.textContent, box.getAttribute('aria-checked')]),
+      expected: [
+        ['User events', 'true'],
+        ['Agent events', 'true'],
+        ['Tasks', 'true'],
+      ],
+    });
+  });
+
+  test('a filter writes the shared filter store the grid reads', () => {
+    const root = render();
+    const boxes = Array.from(root.querySelectorAll('ul')[1]?.querySelectorAll<HTMLButtonElement>('[role="checkbox"]') ?? []);
+    boxes.slice(1).forEach((box) => click(box));
+    const state = useCalendarFilterStore.getState();
+    assert({
+      given: 'Agent events and Tasks unchecked in the pane',
+      should: 'hide agent events and tasks for the grid',
+      actual: [state.hiddenEventTypes, state.showTasks],
+      expected: [['agent'], false],
+    });
+  });
+
+  test('on Home, each calendar shows or hides', () => {
+    const root = mount(<CalendarPane driveId="drv_1" allDrives close={null} />);
+    const studio = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')).find((box) => box.textContent === 'Studio');
+    if (studio) click(studio);
+    const hideAll = Array.from(root.querySelectorAll('button')).find((button) => button.textContent === 'Show all' || button.textContent === 'Hide all');
+    assert({
+      given: 'the Studio calendar unchecked on Home',
+      should: 'hide that drive’s calendar for the grid and offer Show all',
+      actual: [useCalendarFilterStore.getState().hiddenCalendars, hideAll?.textContent],
+      expected: [['drv_1'], 'Show all'],
+    });
+  });
+
+  test('a drive’s own calendar is not a filter', () => {
+    const root = render();
+    assert({
+      given: 'a single drive’s calendar',
+      should: 'list the drive without a checkbox, since there is nothing else to show',
+      actual: root.querySelectorAll('ul')[0]?.querySelector('[role="checkbox"]') ?? null,
+      expected: null,
     });
   });
 });

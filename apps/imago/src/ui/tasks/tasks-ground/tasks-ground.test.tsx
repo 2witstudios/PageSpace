@@ -58,7 +58,7 @@ const button = (root: HTMLElement, label: string) =>
 describe('TasksGround', () => {
   test('the status group is remembered per viewer', async () => {
     localStorage.setItem(STATUS_KEY, 'completed');
-    const container = mount(<TasksGround driveId="d1" />);
+    const container = mount(<TasksGround driveId="d1" view="assigned" />);
     await flush();
     const restored = asked.at(-1);
     click(button(container, 'All'));
@@ -87,7 +87,7 @@ describe('TasksGround', () => {
   });
 
   test('ticking a row, and a refusal', async () => {
-    const container = mount(<TasksGround driveId="d1" />);
+    const container = mount(<TasksGround driveId="d1" view="assigned" />);
     const box = () => container.querySelector<HTMLButtonElement>('[aria-label="Complete Write brief"]') as HTMLButtonElement;
     click(box());
     await flush();

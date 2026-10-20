@@ -4,7 +4,7 @@ import { useParams, useRouter, useSearchParams } from '@/retained-adapters/navig
 import { TrashView } from '@/ui/tools/trash/trash-view';
 import { trashFilterFrom } from '@/ui/tools/trash/trash-model';
 
-/** The trash middle; the Files pane beside it is the shell's. */
+/** The trash middle; the Trash pane beside it (its Type filter) is the shell's. */
 export default function TrashPage() {
   const params = useParams();
   const driveId = params.driveId as string;

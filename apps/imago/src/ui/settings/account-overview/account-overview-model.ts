@@ -98,5 +98,5 @@ export const describeAccountRow = (href: string): string | undefined => DESCRIPT
 /** The overview lists the screens in the nav's groups, without the overview itself. */
 export const overviewGroups = (groups: readonly NavGroup[]): readonly NavGroup[] =>
   groups
-    .map((group) => ({ ...group, items: group.items.filter((item) => item.href !== '/account') }))
+    .map((group) => ({ ...group, items: group.items.filter((item) => item.href !== '/account/overview') }))
     .filter((group) => group.items.length > 0);

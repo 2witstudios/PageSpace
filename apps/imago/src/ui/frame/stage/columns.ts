@@ -1,5 +1,5 @@
 import { floatsOver, type ViewportTier } from '../viewport/viewport-tier';
-import { isTasksIndex, type Stage } from './stage';
+import { hasObject, type Stage } from './stage';
 
 /**
  * The view state the URL does not carry (IMC-1.3). Whether a page is open is the URL's
@@ -52,8 +52,8 @@ export type Columns = {
 export const columnsFor = (stage: Stage, state: ColumnState, tier: ViewportTier = 'desktop'): Columns => {
   const hasPane = stage.list !== 'closed';
   const pane = hasPane && !state.paneCollapsed;
-  // The Tasks index holds its ground in the middle, so Imago sits beside it like beside a page.
-  const page = stage.object !== null || isTasksIndex(stage);
+  // One rule on every section: the sidebar alone leaves Imago as the ground; an object opened from it docks Imago.
+  const page = hasObject(stage);
   const imago: ImagoPlace = page
     ? state.imagoCollapsed
       ? 'collapsed'
@@ -74,6 +74,6 @@ export const columnsFor = (stage: Stage, state: ColumnState, tier: ViewportTier 
     askPill: imago === 'collapsed',
     collapseImago: imago === 'docked' || imago === 'overlay',
     closeImago: imago === 'ground',
-    closePage: stage.object !== null,
+    closePage: page,
   };
 };

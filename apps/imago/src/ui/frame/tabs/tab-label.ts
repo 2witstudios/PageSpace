@@ -1,5 +1,6 @@
 import { isPageTypeValue, type PageTypeValue } from '@pagespace/lib/utils/enums';
 import type { IconName } from '../../components/icon/icon-names';
+import { isTaskViewId, viewFor } from '../../tasks/task-views/task-views';
 
 /** What a tab's label is read from: the page API, the DM list, or the screen's nav name. */
 export type TabLabel =
@@ -28,7 +29,7 @@ const SECTIONS: Readonly<Record<'files' | 'messages' | 'tasks', { readonly title
 
 /** Drive settings, in the SPEC's nav names. */
 const DRIVE_SETTINGS: Readonly<Record<string, string>> = {
-  '': 'Overview',
+  overview: 'Overview',
   general: 'General',
   roles: 'Members & roles',
   wallet: 'Wallet',
@@ -42,7 +43,7 @@ const DRIVE_SETTINGS: Readonly<Record<string, string>> = {
 
 /** Account screens, in the SPEC's nav names (Profile lives at /account/profile; /account/account is its alias). */
 const ACCOUNT: Readonly<Record<string, string>> = {
-  '': 'Overview',
+  overview: 'Overview',
   profile: 'Profile',
   account: 'Profile',
   display: 'Display',
@@ -97,6 +98,8 @@ export const tabLabelFor = (path: string): TabLabel => {
   if (first === 'account') return screen(ACCOUNT[second], 'Account');
   if (first === 'notifications') return screen('Notifications', 'Notifications');
   if (second === '') return { kind: 'home' };
+  // A smart view is a screen of Tasks; every other Tasks object is a task list page.
+  if (second === 'tasks' && third === 'view') return { kind: 'screen', title: isTaskViewId(fourth) ? viewFor(fourth).label : 'Tasks', icon: 'tasks' };
   if (second === 'files' || second === 'messages' || second === 'tasks') {
     return third === '' ? { kind: 'screen', ...SECTIONS[second] } : { kind: 'page', pageId: third };
   }
