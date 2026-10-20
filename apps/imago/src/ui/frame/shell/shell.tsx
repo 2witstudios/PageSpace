@@ -19,6 +19,7 @@ import { askLabelFor } from '../controls/ask-label';
 import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
+import { useLiveDrives } from '../drives/use-live-drives';
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListPane } from '../list-pane/list-pane';
@@ -140,7 +141,11 @@ const headActionsFor = (stage: Stage): ReactNode => {
  * The left pane: the chat's history, a section's list or tree, or the settings and account
  * navs. Files draws its own pane, since its head carries New page beside Close sidebar.
  */
-const listFor = (stage: Stage, layout: PaneLayout, phoneDrive?: { readonly name: string | null }): ReactNode => {
+const listFor = (
+  stage: Stage,
+  layout: PaneLayout,
+  phoneDrive?: { readonly name: string | null; readonly mark?: Pick<DriveSummary, 'avatarUrl' | 'color' | 'orgId'> },
+): ReactNode => {
   if (layout.list === 'closed') return null;
   if (stage.section === 'chat') return <ChatHistory />;
   if (stage.section === 'settings' && stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool !== undefined) {
@@ -169,7 +174,7 @@ const listFor = (stage: Stage, layout: PaneLayout, phoneDrive?: { readonly name:
         phoneHeader={
           phoneDrive === undefined
             ? undefined
-            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} title={titles.files} newPage={newPage} />
+            : (newPage) => <PhoneFilesHeader driveName={phoneDrive.name} mark={phoneDrive.mark} title={titles.files} newPage={newPage} />
         }
       />
     );
@@ -197,6 +202,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const imagoCollapsed = useUiState(selectImagoCollapsed);
   const imagoClosed = useUiState(selectImagoClosed);
   const { data } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
+  useLiveDrives();
   const drives = drivesFrom(data, homeDriveId);
   const stage = stageFor(pathname);
   const tier = useViewportTier();
@@ -293,7 +299,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     );
     // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
     const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
-    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null } : undefined);
+    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null, mark: drive ?? undefined } : undefined);
     const screen =
       asking
         ? phoneChat

@@ -5,8 +5,7 @@
  */
 import { createOrgServiceToken } from '@pagespace/lib/services/validated-service-token';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
-
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
+import { callAvatarStorage, type AvatarStorageRequest } from '@/lib/avatars/avatar-storage';
 
 /** Minted while the caller still holds the org (an org delete mints it before the org is gone). */
 export async function mintOrgAvatarToken(orgId: string, actor: AccessActor): Promise<string> {
@@ -14,21 +13,11 @@ export async function mintOrgAvatarToken(orgId: string, actor: AccessActor): Pro
   return token;
 }
 
-/**
- * POST writes a new file (the answer names it); DELETE with a filename removes that one file; DELETE
- * without one empties the org's folder (only when the org itself is deleted).
- */
+/** The org subject of callAvatarStorage. */
 export function callOrgAvatarStorage(
   orgId: string,
   token: string,
-  init: { method: 'POST' | 'DELETE'; body?: FormData; filename?: string },
+  init: AvatarStorageRequest,
 ): Promise<Response> {
-  const { filename, ...request } = init;
-  const file = filename ? `/${encodeURIComponent(filename)}` : '';
-  return fetch(`${PROCESSOR_URL}/api/org-avatar/${encodeURIComponent(orgId)}${file}`, {
-    ...request,
-    headers: { Authorization: `Bearer ${token}` },
-    // Bounded so a stalled processor can't pin this request slot open.
-    signal: AbortSignal.timeout(60_000),
-  });
+  return callAvatarStorage('org', orgId, token, init);
 }

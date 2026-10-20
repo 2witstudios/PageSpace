@@ -1,12 +1,22 @@
 import type { KeyboardEvent, ReactNode } from 'react';
 import { homeDriveActionError } from '@pagespace/lib/services/drive-guards';
+import { AVATAR_MIME_TYPES, MARK_COLORS, isMarkColor, type MarkColor } from '@pagespace/lib/avatars/avatar-core';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderBadge } from '../../components/badge/badge.render';
+import { renderButton } from '../../components/button/button.render';
+import { buttonClass } from '../../components/button/button-class';
+import { renderDriveMark } from '../../components/drive-mark/drive-mark.render';
+import { markFillClass } from '../../components/drive-mark/drive-mark-class';
+import { renderIcon } from '../../components/icon/icon.render';
 import { renderErrorState, renderLoadingState } from '../../frame/edge-state/edge-state.render';
 import Link from 'next/link';
 import { imagoHref } from '@/retained-adapters/navigation';
 import type { DriveActions, DriveRole, DriveSettings, ImagoAccess, Member } from '../settings-model/settings-model';
 import {
+  appearanceControlsClass,
+  appearancePreviewFillClass,
+  appearancePreviewShapeClass,
+  appearanceRowClass,
   memberEmailClass,
   memberNameClass,
   memberRowClass,
@@ -24,10 +34,20 @@ import {
   settingsTitleClass,
   switchClass,
   switchKnobClass,
+  swatchClass,
+  swatchesClass,
 } from './drive-settings-class';
 
 /** Where a refusal is shown: under the control it came from. */
-export type SettingsNotice = { readonly at: 'name' | 'imago'; readonly message: string };
+export type SettingsNotice = { readonly at: 'name' | 'imago' | 'appearance'; readonly message: string };
+
+/** The drive's image and color: void actions, and a change on its way to the server. */
+export type AppearanceActions = {
+  readonly pending: boolean;
+  readonly upload: (file: File) => void;
+  readonly remove: () => void;
+  readonly setColor: (color: MarkColor | null) => void;
+};
 
 export type DriveSettingsRenderProps = {
   readonly drive: DriveSettings;
@@ -43,7 +63,14 @@ export type DriveSettingsRenderProps = {
   readonly notice: SettingsNotice | null;
   readonly rename: (name: string) => void;
   readonly toggleImagoAccess: (enabled: boolean) => void;
+  readonly appearance: AppearanceActions;
+  /** The owning org's avatar, which the drive's tile shows until it has a mark of its own. */
+  readonly orgAvatarUrl?: string | null;
 };
+
+const AVATAR_ACCEPT = AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
+
+const colorName = (color: MarkColor): string => color.charAt(0).toUpperCase() + color.slice(1);
 
 const ROLE_LABELS: Readonly<Record<DriveRole, string>> = { OWNER: 'Owner', ADMIN: 'Admin', MEMBER: 'Member' };
 
@@ -93,6 +120,72 @@ const driveSection = ({ drive, actions, notice, rename }: DriveSettingsRenderPro
     {drive.kind === 'HOME' ? <p className={settingsDetailClass}>{homeDriveActionError(drive, 'rename')}</p> : null}
   </section>
 );
+
+const swatch = (label: string, fill: string, selected: boolean, appearance: AppearanceActions, pick: () => void): ReactNode => (
+  <li key={label}>
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={selected}
+      title={label}
+      disabled={appearance.pending}
+      className={`${swatchClass(selected)} ${fill}`}
+      onClick={pick}
+    >
+      {selected ? renderIcon({ name: 'check', size: 14 }) : null}
+    </button>
+  </li>
+);
+
+/* The drive's tile as the spine draws it, an image to upload or remove, and
+   the colors its initial may sit on. Shown to those who may change it. */
+const appearanceSection = ({ drive, appearance, notice, orgAvatarUrl }: DriveSettingsRenderProps): ReactNode => {
+  const color = isMarkColor(drive.color) ? drive.color : null;
+  return (
+    <section aria-labelledby="appearance-heading" className={settingsSectionClass}>
+      <h2 id="appearance-heading" className={settingsHeadingClass}>
+        Appearance
+      </h2>
+      <p className={settingsDetailClass}>How this drive appears at the top of the rail and in the drive switcher.</p>
+      <div className={appearanceRowClass}>
+        {renderDriveMark({
+          drive: { ...drive, orgAvatarUrl },
+          shape: appearancePreviewShapeClass,
+          fill: appearancePreviewFillClass,
+        })}
+        <div className={appearanceControlsClass}>
+          {/* The label is the button: pressing it, or the focused input inside it, opens the file picker. */}
+          <label className={buttonClass('secondary')} data-disabled={appearance.pending ? '' : undefined}>
+            {drive.avatarUrl ? 'Change image' : 'Upload image'}
+            <input
+              type="file"
+              accept={AVATAR_ACCEPT}
+              className="sr-only"
+              aria-label={drive.avatarUrl ? 'Change drive image' : 'Upload drive image'}
+              disabled={appearance.pending}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = '';
+                if (file) appearance.upload(file);
+              }}
+            />
+          </label>
+          {drive.avatarUrl
+            ? renderButton({ variant: 'ghost', disabled: appearance.pending, children: 'Remove image', onClick: appearance.remove })
+            : null}
+        </div>
+      </div>
+      <p className={settingsDetailClass}>JPEG, PNG, GIF or WebP, up to 5 MB. Without an image, the initial sits on its color.</p>
+      <ul aria-label="Color" className={swatchesClass}>
+        {swatch('Default', appearancePreviewFillClass, color === null, appearance, () => color === null || appearance.setColor(null))}
+        {MARK_COLORS.map((option) =>
+          swatch(colorName(option), markFillClass[option], color === option, appearance, () => color === option || appearance.setColor(option)),
+        )}
+      </ul>
+      {noticeAt(notice, 'appearance')}
+    </section>
+  );
+};
 
 const imagoSwitch = (access: ImagoAccess, pending: boolean, toggle: (enabled: boolean) => void): ReactNode => (
   <button
@@ -187,6 +280,7 @@ export function renderDriveSettings(props: DriveSettingsRenderProps): ReactNode 
     <div className={settingsClass} data-drive-settings="">
       <h1 className={settingsTitleClass}>Settings</h1>
       {driveSection(props)}
+      {props.actions.appearance ? appearanceSection(props) : null}
       {imagoSection(props)}
       {membersSection(props)}
     </div>

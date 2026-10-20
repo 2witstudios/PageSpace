@@ -95,6 +95,8 @@ const driveRowFixture = {
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
 };
 
 describe('drives.create — request shape', () => {

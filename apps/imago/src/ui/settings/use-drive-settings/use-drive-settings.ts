@@ -14,8 +14,10 @@ import useSWR, { useSWRConfig } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import { DRIVES } from '../../frame/drives/drives';
+import type { MarkColor } from '@pagespace/lib/avatars/avatar-core';
 import {
   driveActions,
+  driveAvatarEndpoint,
   driveEndpoint,
   driveOf,
   imagoAccessEndpoint,
@@ -51,6 +53,9 @@ export type DriveSettingsData = {
   readonly retryAccess: () => void;
   readonly rename: (name: string) => Promise<WriteResult>;
   readonly setImagoAccess: (enabled: boolean) => Promise<WriteResult>;
+  readonly uploadAvatar: (file: File) => Promise<WriteResult>;
+  readonly removeAvatar: () => Promise<WriteResult>;
+  readonly setColor: (color: MarkColor | null) => Promise<WriteResult>;
 };
 
 export function useDriveSettings(driveId: string): DriveSettingsData {
@@ -113,6 +118,42 @@ export function useDriveSettings(driveId: string): DriveSettingsData {
     [accessKey, client, mutateAccess],
   );
 
+  // The drive's image and color: sent, then the server's answer is read back
+  // here and in the drive list, so every tile drawn from it follows.
+  const appearanceWrite = useCallback(
+    async (send: () => Promise<unknown>): Promise<WriteResult> => {
+      let result: WriteResult = { ok: true };
+      try {
+        await send();
+      } catch (error) {
+        result = { ok: false, refusal: refusalOf(error) };
+      }
+      await Promise.all([mutateDrive(), mutateKey(DRIVES)]);
+      return result;
+    },
+    [mutateDrive, mutateKey],
+  );
+
+  const uploadAvatar = useCallback(
+    (file: File): Promise<WriteResult> => {
+      const form = new FormData();
+      form.append('file', file);
+      return appearanceWrite(() => client.apiFetch(driveAvatarEndpoint(driveId), { method: 'POST', form }));
+    },
+    [appearanceWrite, client, driveId],
+  );
+
+  const removeAvatar = useCallback(
+    (): Promise<WriteResult> => appearanceWrite(() => client.apiFetch(driveAvatarEndpoint(driveId), { method: 'DELETE' })),
+    [appearanceWrite, client, driveId],
+  );
+
+  const setColor = useCallback(
+    (color: MarkColor | null): Promise<WriteResult> =>
+      appearanceWrite(() => client.apiFetch(driveKey, { method: 'PATCH', json: { color } })),
+    [appearanceWrite, client, driveKey],
+  );
+
   const retryDrive = useCallback(() => void mutateDrive(), [mutateDrive]);
   const retryMembers = useCallback(() => void membersQuery.mutate(), [membersQuery]);
   const retryAccess = useCallback(() => void mutateAccess(), [mutateAccess]);
@@ -133,5 +174,8 @@ export function useDriveSettings(driveId: string): DriveSettingsData {
     retryAccess,
     rename,
     setImagoAccess,
+    uploadAvatar,
+    removeAvatar,
+    setColor,
   };
 }

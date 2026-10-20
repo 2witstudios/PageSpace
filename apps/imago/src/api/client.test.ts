@@ -204,6 +204,27 @@ describe('apiFetch() GET', () => {
   });
 });
 
+describe('apiFetch() multipart', () => {
+  test('form body', async () => {
+    const browser = fakeBrowser({ '/api/x': () => Response.json({ ok: true }) });
+    const form = new FormData();
+    form.append('file', new Blob(['png'], { type: 'image/png' }), 'a.png');
+    await browser.client.apiFetch('/api/x', { method: 'POST', form });
+    const call = browser.of('/api/x')[0];
+
+    assert({
+      given: 'a POST with a form',
+      should: 'send the form as the body with the CSRF token, and leave its content type to the browser',
+      actual: {
+        body: call?.init?.body === form,
+        contentType: call?.headers['content-type'],
+        header: call?.headers['x-csrf-token'],
+      },
+      expected: { body: true, contentType: undefined, header: 'tok-1' },
+    });
+  });
+});
+
 describe('apiFetch() CSRF', () => {
   test('mutating methods', async () => {
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE', 'post']) {

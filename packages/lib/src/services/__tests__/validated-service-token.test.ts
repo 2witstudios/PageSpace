@@ -462,6 +462,32 @@ describe('createValidatedServiceToken', () => {
     });
   });
 
+  describe('drive avatar scope', () => {
+    const drivePerms = (role: { isOwner: boolean; isAdmin: boolean }) => ({ hasAccess: true, isMember: !role.isOwner, canEdit: true, ...role });
+
+    it('a drive Owner or Admin gets a drive-bound drive-avatars:write token', async () => {
+      for (const role of [{ isOwner: true, isAdmin: false }, { isOwner: false, isAdmin: true }]) {
+        (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValueOnce(drivePerms(role));
+        const result = await createDriveServiceToken(credentialActor('user-1', null), 'drive-1', ['drive-avatars:write']);
+        expect(result.grantedScopes).toEqual(['drive-avatars:write']);
+      }
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'user-1', scopes: ['drive-avatars:write'], resourceType: 'drive', resourceId: 'drive-1',
+      }));
+    });
+
+    it('a drive member who can edit, but is not an Owner or Admin, gets no drive-avatars:write', async () => {
+      (getUserDrivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(drivePerms({ isOwner: false, isAdmin: false }));
+      await expect(createDriveServiceToken(credentialActor('user-1', null), 'drive-1', ['drive-avatars:write'])).rejects.toThrow();
+    });
+
+    it('drive-avatars:write is refused on every other resource type', async () => {
+      mockRequireOrgRole.mockResolvedValue({ ok: true, role: 'OWNER' });
+      await expect(createOrgServiceToken(credentialActor('user-1', null), 'org_nw', ['drive-avatars:write'])).rejects.toThrow();
+      await expect(createUserServiceToken(credentialActor('user-1', null), ['drive-avatars:write'])).rejects.toThrow();
+    });
+  });
+
   describe('convenience functions', () => {
     it('createPageServiceToken creates page-scoped token', async () => {
       // Arrange

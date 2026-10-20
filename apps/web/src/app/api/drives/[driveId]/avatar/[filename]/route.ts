@@ -1,0 +1,18 @@
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveAccess } from '@/lib/auth';
+import { serveAvatarFile } from '@/lib/avatars/avatar-route';
+
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
+
+/**
+ * GET /api/drives/[driveId]/avatar/[filename] — the drive's avatar image, for whoever can reach the
+ * drive (the same people its drive list shows it to). Anyone else gets a 404, so whether a drive
+ * exists is never told to an outsider.
+ */
+export async function GET(request: Request, context: { params: Promise<{ driveId: string; filename: string }> }) {
+  const { driveId, filename } = await context.params;
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
+  if (!(await getPrincipalDriveAccess(auth, driveId))) return new NextResponse('Not Found', { status: 404 });
+  return serveAvatarFile('drive', driveId, filename);
+}

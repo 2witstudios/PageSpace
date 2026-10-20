@@ -11,6 +11,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 import { loadDriveLeadAuthority } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { callDriveAvatarStorage, mintDriveAvatarToken } from '@/lib/drives/drive-avatar-storage';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -50,6 +51,11 @@ export async function DELETE(
     // Get recipients BEFORE deleting (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(drive.id);
 
+    // Minted while the drive still exists, so its avatar folder can be emptied once it is gone.
+    const avatarToken = drive.avatarUrl
+      ? await mintDriveAvatarToken(drive.id, actorFromAuth(auth)).catch(() => null)
+      : null;
+
     // Permanently delete the drive (cascade will delete all pages).
     //
     // Chat history is NOT covered by that cascade and has to be deleted
@@ -62,6 +68,12 @@ export async function DELETE(
       await deleteConversationsForDrive(tx, drive.id);
       await tx.delete(drives).where(eq(drives.id, drive.id));
     });
+
+    if (avatarToken) {
+      // Best effort: the drive is already gone; a leftover file is logged, never a failed delete.
+      const removed = await callDriveAvatarStorage(drive.id, avatarToken, { method: 'DELETE' }).catch((error: unknown) => error);
+      if (!(removed instanceof Response) || !removed.ok) loggers.api.warn('Drive avatar folder was not removed', { driveId: drive.id });
+    }
 
     // Broadcast drive deletion event (permanent delete)
     await broadcastDriveEvent(

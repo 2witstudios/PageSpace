@@ -118,6 +118,8 @@ const createRawDriveFixture = (overrides: { id: string; name: string; ownerId?: 
   publishFaviconUrl: null,
   orgId: null,
   orgVisibility: 'OPEN' as const,
+  avatarUrl: null,
+  color: null,
 });
 
 // Drive with access info fixture
@@ -141,6 +143,8 @@ const createDriveWithAccessFixture = (
   homePageId: overrides.homePageId ?? null,
   orgId: overrides.orgId ?? null,
   orgVisibility: overrides.orgVisibility ?? 'OPEN',
+  avatarUrl: overrides.avatarUrl ?? null,
+  color: overrides.color ?? null,
   isMember: (overrides as { isMember?: boolean }).isMember ?? false,
 });
 
@@ -588,6 +592,31 @@ describe('PATCH /api/drives/[driveId]', () => {
       expect(body.error).toBe(
         'publishSubdomain cannot be changed via this endpoint. Use PATCH /api/drives/[driveId]/subdomain instead.'
       );
+      expect(updateDrive).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('color', () => {
+    beforeEach(() => {
+      vi.mocked(getDriveById).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+      vi.mocked(getDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, role: 'OWNER' }));
+      vi.mocked(updateDrive).mockResolvedValue(createRawDriveFixture({ id: mockDriveId, name: 'Test' }));
+    });
+    const patch = (body: unknown) =>
+      PATCH(new Request(`https://example.com/api/drives/${mockDriveId}`, { method: 'PATCH', body: JSON.stringify(body) }), createContext(mockDriveId));
+
+    it('stores a mark palette key, or null to clear it, and broadcasts so every member\'s mark follows', async () => {
+      expect((await patch({ color: 'teal' })).status).toBe(200);
+      expect(updateDrive).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ color: 'teal' }));
+      expect(broadcastDriveEvent).toHaveBeenCalledTimes(1);
+      expect((await patch({ color: null })).status).toBe(200);
+      expect(updateDrive).toHaveBeenLastCalledWith(mockDriveId, expect.objectContaining({ color: null }));
+    });
+
+    it('refuses anything outside the palette, such as a raw hex or CSS', async () => {
+      for (const color of ['#ff0000', 'Teal', 'red; background:url(x)']) {
+        expect((await patch({ color })).status).toBe(400);
+      }
       expect(updateDrive).not.toHaveBeenCalled();
     });
   });

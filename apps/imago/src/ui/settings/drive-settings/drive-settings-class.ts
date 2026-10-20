@@ -49,3 +49,24 @@ export const accountListClass = 'm-0 flex list-none flex-col gap-2 p-0';
 /* The account's ways into classic: one quiet row each. */
 export const accountLinkClass =
   'flex items-center gap-3 rounded-md border border-hairline px-4 py-3 text-ink transition-colors duration-120 ease-standard hover:border-border-strong';
+
+/* Appearance: the drive's tile as the spine draws it, beside its controls. */
+export const appearanceRowClass = 'flex items-center gap-4';
+
+export const appearanceControlsClass = 'flex flex-wrap items-center gap-2';
+
+/* The preview tile: the spine's 44px drive tile shape; the mark picks its fill. */
+export const appearancePreviewShapeClass =
+  'flex size-avatar-lg flex-none items-center justify-center rounded-spine-brand text-lg font-bold';
+
+/* A drive that chose no color sits on the spine blue here, where the near-white spine tile would vanish into the sheet. */
+export const appearancePreviewFillClass = 'bg-spine text-spine-on';
+
+export const swatchesClass = 'm-0 flex list-none flex-wrap gap-2 p-0';
+
+/* A color to pick: a small tile of it, ringed when it is the drive's. */
+const swatchBase =
+  'flex size-avatar-sm cursor-pointer items-center justify-center rounded-md border-0 transition-transform duration-120 ease-standard hover:scale-105 disabled:cursor-default disabled:opacity-60';
+
+export const swatchClass = (selected: boolean): string =>
+  `${swatchBase} ${selected ? 'outline-2 outline-offset-2 outline-accent' : 'outline-none'}`;

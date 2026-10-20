@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Drives can have their own look. Drive owners and admins can upload an image (JPEG, PNG, GIF or WebP, up to 5 MB) or pick a color for the drive's tile, in Imago's drive Settings under Appearance or in the classic drive settings under General. The drive shows that image or color at the top left of Imago's rail, in the phone header, in the drive switcher and in the classic header. A drive in an organization with neither shows the organization's avatar. Changes show up for everyone in the drive without a refresh. Like organization avatars, a drive image is stored by PageSpace and only shown to people who can open the drive.
+
 - Imago UI polish:
   - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
   - The Imago orb is larger in the chat header's agent picker and its list.

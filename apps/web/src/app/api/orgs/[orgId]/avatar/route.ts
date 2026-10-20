@@ -3,28 +3,16 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { setOrganizationAvatar, type SetOrganizationAvatarResult } from '@pagespace/lib/organizations/repository';
 import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
-import {
-  ORG_AVATAR_MAX_BYTES,
-  ORG_AVATAR_MIME_TYPES,
-  isOrgAvatarFilename,
-  orgAvatarFilenameFromPath,
-  orgAvatarPath,
-} from '@pagespace/lib/organizations/org-avatar-core';
+import { orgAvatarFilenameFromPath, orgAvatarPath } from '@pagespace/lib/organizations/org-avatar-core';
 import { apiError } from '@/lib/api/api-error';
 import { authorizeOrgRequest, ORG_SESSION_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
 import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
+import type { AvatarStorageCall } from '@/lib/avatars/avatar-storage';
+import { readAvatarUpload, removeAvatarFile, storeAvatarFile } from '@/lib/avatars/avatar-route';
 
 type Context = { params: Promise<{ orgId: string }> };
 
-/**
- * Removes one stored file, best effort: by the time this runs the org no longer points at it, so a
- * file left behind is logged, never shown.
- */
-async function removeFile(orgId: string, token: string, filename: string | null): Promise<void> {
-  if (!filename) return;
-  const removed = await callOrgAvatarStorage(orgId, token, { method: 'DELETE', filename }).catch((error: unknown) => error);
-  if (!(removed instanceof Response) || !removed.ok) loggers.api.warn('Org avatar file was not removed', { orgId, filename });
-}
+const storageFor = (orgId: string, token: string): AvatarStorageCall => (init) => callOrgAvatarStorage(orgId, token, init);
 
 function avatarResponse(organization: { id: string; avatarUrl: string | null }) {
   return NextResponse.json({ organization: { id: organization.id, avatarUrl: organization.avatarUrl } });
@@ -49,34 +37,19 @@ export async function POST(request: Request, context: Context) {
   const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_SESSION_WRITE_AUTH);
   if (!gate.ok) return gate.response;
   try {
-    const form = await request.formData().catch(() => null);
-    const file = form?.get('file');
-    // A FormData entry is a string or a File; anything else (or nothing) is not an upload.
-    if (!file || typeof file === 'string') return apiError(400, 'invalid_request', 'No image provided');
-    if (!ORG_AVATAR_MIME_TYPES.includes(file.type)) {
-      return apiError(400, 'invalid_request', 'Upload a JPEG, PNG, GIF or WebP image');
-    }
-    if (file.size > ORG_AVATAR_MAX_BYTES) return apiError(400, 'invalid_request', 'The image is larger than 5 MB');
-
-    const body = new FormData();
-    body.append('file', file);
+    const upload = await readAvatarUpload(request);
+    if (!upload.ok) return upload.response;
     const token = await mintOrgAvatarToken(orgId, gate.actor);
-    const stored = await callOrgAvatarStorage(orgId, token, { method: 'POST', body });
-    const result: unknown = await stored.json().catch(() => null);
-    const filename = result && typeof result === 'object' && 'filename' in result ? result.filename : null;
-    // Zero trust at this boundary too: only an org avatar filename is ever recorded.
-    if (!stored.ok || typeof filename !== 'string' || !isOrgAvatarFilename(filename)) {
-      loggers.api.error('Org avatar upload rejected by storage', undefined, { orgId, status: stored.status });
-      return apiError(502, 'internal_error', 'Could not store the image');
-    }
+    const filename = await storeAvatarFile('org', orgId, storageFor(orgId, token), upload.file);
+    if (!filename) return apiError(502, 'internal_error', 'Could not store the image');
 
     const saved = await setOrganizationAvatar(orgId, orgAvatarPath(orgId, filename), gate.userId);
     if (!saved.ok) {
       // Nothing points at the new file: remove it.
-      await removeFile(orgId, token, filename);
+      await removeAvatarFile('org', orgId, storageFor(orgId, token), filename);
       return avatarWriteRefusal(saved);
     }
-    await removeFile(orgId, token, saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
+    await removeAvatarFile('org', orgId, storageFor(orgId, token), saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
     auditRequest(request, {
       eventType: 'data.write',
       userId: gate.userId,
@@ -102,7 +75,7 @@ export async function DELETE(request: Request, context: Context) {
     const token = await mintOrgAvatarToken(orgId, gate.actor);
     const saved = await setOrganizationAvatar(orgId, null, gate.userId);
     if (!saved.ok) return avatarWriteRefusal(saved);
-    await removeFile(orgId, token, saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
+    await removeAvatarFile('org', orgId, storageFor(orgId, token), saved.previousAvatarUrl && orgAvatarFilenameFromPath(orgId, saved.previousAvatarUrl));
     auditRequest(request, {
       eventType: 'data.delete',
       userId: gate.userId,

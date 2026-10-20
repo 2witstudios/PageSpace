@@ -43,15 +43,18 @@ const membersBody = {
 const server = (drive: DriveFixture = OWNER, overrides: Record<string, FakeRoute> = {}) => {
   let name = drive.kind === 'HOME' ? 'Home' : 'Launch';
   let enabled = true;
+  let color: string | null = null;
   return {
-    'GET /api/drives/d1': () => Response.json({ id: 'd1', name, ...drive }),
-    'GET /api/drives': () => Response.json([{ id: 'd1', name, kind: drive.kind }]),
+    'GET /api/drives/d1': () => Response.json({ id: 'd1', name, color, avatarUrl: null, ...drive }),
+    'GET /api/drives': () => Response.json([{ id: 'd1', name, kind: drive.kind, color }]),
     'GET /api/drives/d1/members': () => Response.json(membersBody),
     // On by default (IMG-10.10): the switch keeps Imago out when turned off.
     'GET /api/drives/d1/imago-access': () => Response.json({ driveId: 'd1', enabled }),
     'PATCH /api/drives/d1': ({ body }) => {
-      name = (body as { name: string }).name;
-      return Response.json({ id: 'd1', name });
+      const patch = body as { name?: string; color?: string | null };
+      if (patch.name !== undefined) name = patch.name;
+      if (patch.color !== undefined) color = patch.color;
+      return Response.json({ id: 'd1', name, color });
     },
     'PUT /api/drives/d1/imago-access': ({ body }) => {
       enabled = (body as { enabled: boolean }).enabled;
@@ -294,6 +297,46 @@ describe('DriveSettingsObject: a viewer who lost access', () => {
       should: 'roll the switch back and say the server refused',
       actual: { state: imagoSwitch(root)?.getAttribute('aria-checked'), notices: noticeText(root) },
       expected: { state: 'true', notices: ['You can only set Imago access for a drive you can access'] },
+    });
+  });
+});
+
+describe('DriveSettingsObject: appearance', () => {
+  const swatch = (root: ParentNode, label: string) =>
+    root.querySelector<HTMLButtonElement>(`[aria-label="Color"] button[aria-label="${label}"]`);
+
+  test('picking a color', async () => {
+    const { root, web } = await open(server());
+    await settle(() => {
+      if (swatch(root, 'Teal') === null) throw new Error('no swatches');
+    });
+    click(swatch(root, 'Teal') as HTMLButtonElement);
+    await settle(() => {
+      if (swatch(root, 'Teal')?.getAttribute('aria-pressed') !== 'true') throw new Error('not saved yet');
+    });
+    assert({
+      given: 'the owner picking teal',
+      should: "PATCH the drive's color, then show teal as the chosen swatch and the tile in it",
+      actual: {
+        writes: web.writes().map(({ method, url, body }) => ({ method, url, body })),
+        defaultPressed: swatch(root, 'Default')?.getAttribute('aria-pressed'),
+        tileTeal: root.querySelector('[aria-labelledby="appearance-heading"] [data-drive-mark]')?.className.includes('bg-mark-teal'),
+      },
+      expected: {
+        writes: [{ method: 'PATCH', url: '/api/drives/d1', body: { color: 'teal' } }],
+        defaultPressed: 'false',
+        tileTeal: true,
+      },
+    });
+  });
+
+  test('a member', async () => {
+    const { root } = await open(server({ kind: 'STANDARD', isOwned: false, role: 'MEMBER' }));
+    assert({
+      given: 'a viewer who is only a member',
+      should: 'not offer the appearance controls, which are for owners and admins',
+      actual: root.querySelector('[aria-labelledby="appearance-heading"]'),
+      expected: null,
     });
   });
 });

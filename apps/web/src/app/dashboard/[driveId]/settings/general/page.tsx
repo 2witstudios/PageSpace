@@ -18,6 +18,8 @@ import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { OrgDriveCard } from '@/components/drives/OrgDriveCard';
+import { DriveAppearanceCard } from '@/components/drives/DriveAppearanceCard';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 
 interface DriveMember {
   id: string;
@@ -53,6 +55,7 @@ export default function GeneralSettingsPage() {
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const updateDriveInStore = useDriveStore((state) => state.updateDrive);
   const { tree } = usePageTree(driveId);
+  const { orgById } = useMyOrganizations();
 
   const [name, setName] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -204,6 +207,12 @@ export default function GeneralSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <DriveAppearanceCard
+        drive={drive}
+        org={orgById(drive.orgId ?? null)}
+        onChanged={() => void fetchDrives(false, true)}
+      />
 
       {drive && (
         <OrgDriveCard
