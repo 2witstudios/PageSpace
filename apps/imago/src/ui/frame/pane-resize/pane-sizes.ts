@@ -54,6 +54,28 @@ export const maxWidthFor = (column: ResizableColumn, current: number, middle: nu
 export const clampWidth = (column: ResizableColumn, width: number, max: number): number =>
   Math.round(Math.min(max, Math.max(BOUNDS[column].min, width)));
 
+/**
+ * The widths the docked columns can take in a row this wide, so the middle keeps MIDDLE_MIN
+ * however the saved pair was reached (each saved under a different layout, or a window narrowed
+ * since). Imago gives way first, then the left pane, neither below its minimum. A column that is
+ * not docked is null. The saved widths are left alone, so widening the window brings them back.
+ */
+export const fitWidths = (
+  rowWidth: number | null,
+  docked: { readonly left: number | null; readonly imago: number | null },
+): { readonly left: number | null; readonly imago: number | null } => {
+  if (rowWidth === null) return docked;
+  let excess = (docked.left ?? 0) + (docked.imago ?? 0) + MIDDLE_MIN - rowWidth;
+  const give = (column: ResizableColumn, width: number | null): number | null => {
+    if (width === null || excess <= 0) return width;
+    const next = Math.max(Math.min(width, BOUNDS[column].min), width - excess);
+    excess -= width - next;
+    return next;
+  };
+  const imago = give('imago', docked.imago);
+  return { left: give('left', docked.left), imago };
+};
+
 /** The left pane grows as its right edge moves right; Imago grows as its left edge moves left. */
 export const widthFromDrag = (column: ResizableColumn, start: number, deltaX: number): number =>
   column === 'left' ? start + deltaX : start - deltaX;

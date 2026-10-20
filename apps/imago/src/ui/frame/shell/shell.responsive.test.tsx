@@ -530,4 +530,31 @@ describe('Shell resize seams (classic resizable panels)', () => {
       expected: [['300px', '{"left":null,"imago":300}'], ''],
     });
   });
+
+  test('saved widths that no longer fit give way to the middle, and the saved pair is kept', () => {
+    setWidth(1440);
+    localStorage.setItem('imago:pane-sizes', '{"left":480,"imago":720}');
+    // The columns row reports 1000px: 480 + 720 would leave the page nothing.
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback([{ contentRect: { width: 1000 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      render('/drive-1/files/page-1');
+      assert({
+        given: 'a 480px pane and 720px Imago saved, in a 1000px row',
+        should: 'draw both at their minimums so the page keeps 400px, without rewriting what was saved',
+        actual: [slot('list').style.width, slot('chat').style.width, localStorage.getItem('imago:pane-sizes')],
+        expected: ['300px', '300px', '{"left":480,"imago":720}'],
+      });
+    } finally {
+      globalThis.ResizeObserver = original;
+      localStorage.removeItem('imago:pane-sizes');
+    }
+  });
 });

@@ -4,6 +4,7 @@ import {
   BOUNDS,
   NO_SIZES,
   clampWidth,
+  fitWidths,
   maxWidthFor,
   parseSizes,
   serializeSizes,
@@ -105,6 +106,47 @@ describe('widthFromDrag() and widthFromKey()', () => {
         widthFromKey('left', 'Enter', false, 300, 480),
       ],
       expected: [316, 424, BOUNDS.left.min, 600, null],
+    });
+  });
+});
+
+describe('fitWidths()', () => {
+  test('room to spare', () => {
+    assert({
+      given: 'a 300px pane and 360px Imago in a 1400px row',
+      should: 'keep both',
+      actual: fitWidths(1400, { left: 300, imago: 360 }),
+      expected: { left: 300, imago: 360 },
+    });
+  });
+
+  test('a saved pair that would squeeze the middle', () => {
+    assert({
+      given: 'a 480px pane and 720px Imago, saved apart, opened together in a 1208px row',
+      should: 'shrink Imago first, then the pane, until the middle has 400px',
+      actual: [fitWidths(1208, { left: 480, imago: 720 }), fitWidths(1000, { left: 480, imago: 720 })],
+      expected: [
+        { left: 480, imago: 328 },
+        { left: 300, imago: 300 },
+      ],
+    });
+  });
+
+  test('neither goes below its minimum', () => {
+    assert({
+      given: 'a row too narrow for both minimums and the middle',
+      should: 'stop at the minimums',
+      actual: fitWidths(700, { left: 300, imago: 360 }),
+      expected: { left: BOUNDS.left.min, imago: BOUNDS.imago.min },
+    });
+  });
+
+  test('an undocked column and an unmeasured row', () => {
+    assert({
+      given: 'Imago not docked, then no measurement yet',
+      should: 'fit only the pane, then change nothing',
+      actual: [fitWidths(800, { left: 480, imago: null }), fitWidths(null, { left: 480, imago: 720 })],
+      expected: [{ left: 400, imago: null }, { left: 480, imago: 720 }],
     });
   });
 });

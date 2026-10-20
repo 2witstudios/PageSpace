@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import type { Columns } from '../stage/columns';
 import type { PaneLayout, Stage } from '../stage/stage';
 import { Pane } from '../pane/pane';
@@ -48,6 +48,8 @@ export type ShellRenderProps = {
   readonly leftHandle?: ReactNode;
   /** The seam on docked Imago's left edge. */
   readonly imagoHandle?: ReactNode;
+  /** Measures the columns row, so the dragged widths fit what it holds. */
+  readonly columnsRowRef?: Ref<HTMLDivElement>;
   /** Under the Electron desktop app: the frame marks itself so the desktop CSS insets the spine. */
   readonly desktopFrame?: boolean;
 };
@@ -81,7 +83,7 @@ export function renderShell(props: ShellRenderProps): ReactNode {
       <div className={stageSheetClass} data-slot="stage">
         {banner}
         {tabBar}
-        <div className={columnsRowClass}>
+        <div ref={props.columnsRowRef} className={columnsRowClass}>
           {columns.paneSheet ? (
             <button type="button" className={scrimClass} aria-label="Dismiss sidebar" onClick={props.onDismissPane} />
           ) : null}
