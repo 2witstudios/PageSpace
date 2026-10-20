@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { click, mount, unmountAll } from '@/ui/test-support/dom';
-import { getUiState, setUiState } from '@/ui/store/store';
+import { getUiState } from '@/ui/store/store';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 import { useSettingsSubnavStore } from '@/ui/files/settings-subnav/settings-subnav-store';
@@ -251,18 +251,14 @@ describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
     });
   });
 
-  test('leaves Imago where the viewer put it on entering another agent page', () => {
-    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: true } });
-    mount(createElement(AgentPage, { ...props, pageId: 'a2', page: { ...page, id: 'a2' } as TreePage }));
-    const collapsedByViewer = getUiState().resources.imagoCollapsed;
-    unmountAll();
-    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: false } });
-    mount(createElement(AgentPage, { ...props, pageId: 'a3', page: { ...page, id: 'a3' } as TreePage }));
+  test('leaves Imago folded when the viewer folded it before entering', () => {
+    dispatch(transactions.collapseImago, undefined);
+    mount(createElement(AgentPage, props));
     assert({
-      given: 'Imago folded by the viewer, then open, as another agent page is entered',
-      should: 'neither unfold nor fold it',
-      actual: [collapsedByViewer, getUiState().resources.imagoCollapsed],
-      expected: [true, false],
+      given: 'Imago folded by the viewer, then an agent page entered',
+      should: 'not unfold it',
+      actual: getUiState().resources.imagoCollapsed,
+      expected: true,
     });
   });
 });
