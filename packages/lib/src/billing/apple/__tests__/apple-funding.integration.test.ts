@@ -141,13 +141,13 @@ describe('an App Store Pro subscription', () => {
     const first = await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect(first).toEqual({ result: 'applied', kind: 'subscription', subscriptionTier: 'pro' });
     expect(await tierOf(u.id)).toBe('pro');
-    expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 900, monthlyAllowanceCents: 900 });
+    expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 1500, monthlyAllowanceCents: 1500 });
     const [grant] = await ledgerFor(u.id);
-    expect(grant).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 1500, stripeRef: `apple:${original}`, consumeStatus: 'applied' });
+    expect(grant).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500, paidCents: 1500, stripeRef: `apple:${original}`, consumeStatus: 'applied' });
 
     const again = await applyAppleTransaction({ source: 'device', userId: u.id, decoded: txn, priceTier, config });
     expect(again).toEqual({ result: 'duplicate', kind: 'subscription', subscriptionTier: 'pro' });
-    expect((await root(u.id)).monthlyRemainingCents).toBe(900);
+    expect((await root(u.id)).monthlyRemainingCents).toBe(1500);
     expect(await ledgerFor(u.id)).toHaveLength(1);
 
     const [sub] = await db.select().from(appStoreSubscriptions).where(eq(appStoreSubscriptions.originalTransactionId, original));
@@ -174,7 +174,7 @@ describe('an App Store Pro subscription', () => {
     expect(await tierOf(u.id)).toBe('pro');
     const grants = (await ledgerFor(u.id)).filter((r) => r.entryType === 'monthly_grant');
     expect(grants).toHaveLength(2);
-    expect((await root(u.id)).monthlyRemainingCents).toBe(1800);
+    expect((await root(u.id)).monthlyRemainingCents).toBe(3000);
   });
 
   it('an EXPIRED notification drops the tier to free; a missed one cannot hold it open past expiry', async () => {
@@ -218,16 +218,16 @@ describe('an App Store Pro subscription', () => {
       priceTier, config,
     });
     expect(result).toMatchObject({ result: 'applied', kind: 'revoked', subscriptionTier: 'free' });
-    expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 500 });
+    expect(await root(u.id)).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 1100 });
     const rows = (await ledgerFor(u.id)).filter((r) => r.entryType === 'adjustment');
-    expect(rows.map((r) => [r.amountCents, r.appliedCents, r.stripeRef]).sort()).toEqual([[-400, -400, `apple-refund:${original}:${refunded.revocationDate}`], [-500, null, null]].sort());
+    expect(rows.map((r) => [r.amountCents, r.appliedCents, r.stripeRef]).sort()).toEqual([[-400, -400, `apple-refund:${original}:${refunded.revocationDate}`], [-1100, null, null]].sort());
 
     // Redelivered refund: nothing more.
     await applyAppleNotification({
       notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: refunded, renewal: null },
       priceTier, config,
     });
-    expect((await root(u.id)).debtCents).toBe(500);
+    expect((await root(u.id)).debtCents).toBe(1100);
   });
 });
 
@@ -522,7 +522,7 @@ describe('App Store credit packs', () => {
     const t0 = Date.now() + 5;
     await applyAppleNotification({ notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: 5, transaction: { ...sub, revocationDate: t0, signedDate: t0 }, renewal: null }, priceTier, config });
     await applyAppleNotification({ notification: { notificationUUID: createId(), type: 'REFUND', subtype: null, status: null, transaction: { ...pack, revocationDate: t0, signedDate: t0 }, renewal: null }, priceTier, config });
-    expect((await root(u.id)).debtCents).toBe(5900);
+    expect((await root(u.id)).debtCents).toBe(6500);
 
     await applyAppleNotification({ notification: { notificationUUID: createId(), type: 'REFUND_REVERSED', subtype: null, status: 1, transaction: { ...sub, signedDate: t0 + 10 }, renewal: null }, priceTier, config });
     expect(await root(u.id)).toMatchObject({ debtCents: 5000, monthlyRemainingCents: 0, topupRemainingCents: 0 });
