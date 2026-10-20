@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Paid plans now include their full price in credits each month: Pro includes 150 credits (was 90) and Business 500 (was 300), plus 100 for each extra seat (was 60). Plan cards, the comparison table and the pricing page show the new amounts, and the next renewal grants them.
 - Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
   - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.
   - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.

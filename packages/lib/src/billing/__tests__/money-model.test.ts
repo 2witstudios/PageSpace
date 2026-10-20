@@ -63,10 +63,10 @@ describe('MON-1 (partial) one module defines the money model', () => {
     expect(CREDIT_PRICING_MARKUP_BPS).toBe(MARKUP_BPS);
   });
 
-  it('A-11 CREDITS_PER_DOLLAR is 10 and INCLUDED_CREDIT_RATIO_BPS is 60% for pro and business', () => {
+  it('A-11 CREDITS_PER_DOLLAR is 10 and INCLUDED_CREDIT_RATIO_BPS is 100% for pro and business', () => {
     expect(CREDITS_PER_DOLLAR).toBe(10);
-    expect(INCLUDED_CREDIT_RATIO_BPS.pro).toBe(6000);
-    expect(INCLUDED_CREDIT_RATIO_BPS.business).toBe(6000);
+    expect(INCLUDED_CREDIT_RATIO_BPS.pro).toBe(10000);
+    expect(INCLUDED_CREDIT_RATIO_BPS.business).toBe(10000);
   });
 
   it('MON-1 (partial) the ratio table is keyed by the canonical vocabulary; free derives nothing (0)', () => {
@@ -86,9 +86,9 @@ describe('MON-1 (partial) one module defines the money model', () => {
 });
 
 describe('includedCreditRatioBps reads the ratio table', () => {
-  it('pro and business are 60%; the free tier and an unknown tier derive nothing', () => {
-    expect(includedCreditRatioBps('pro')).toBe(6000);
-    expect(includedCreditRatioBps('business')).toBe(6000);
+  it('pro and business are 100%; the free tier and an unknown tier derive nothing', () => {
+    expect(includedCreditRatioBps('pro')).toBe(10000);
+    expect(includedCreditRatioBps('business')).toBe(10000);
     expect(includedCreditRatioBps('free')).toBe(0);
     expect(includedCreditRatioBps('enterprise')).toBe(0);
   });
@@ -104,16 +104,16 @@ describe('MON-2 the monthly allowance is derived from the amount paid, never tab
     }
   });
 
-  it('A-11 Pro $15 → 90 credits; Business $50 + 10 seats × $10 → 900 credits (Northwind Labs)', () => {
-    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(90);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(300);
-    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(900);
-    // One extra seat is $10 → 60 credits, so 6 extra seats add 360.
-    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(60);
+  it('A-11 Pro $15 → 150 credits; Business $50 + 10 seats × $10 → 1500 credits (Northwind Labs)', () => {
+    expect(creditsFromCents(allowanceCentsForPaidCents(1500, 'pro'))).toBe(150);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000, 'business'))).toBe(500);
+    expect(creditsFromCents(allowanceCentsForPaidCents(5000 + 10 * 1000, 'business'))).toBe(1500);
+    // One extra seat is $10 → 100 credits.
+    expect(creditsFromCents(allowanceCentsForPaidCents(1000, 'business'))).toBe(100);
   });
 
-  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants floor(1234 × 0.6) = 740¢', () => {
-    expect(allowanceCentsForPaidCents(1234, 'pro')).toBe(740);
+  it('MON-2 a promo or partial period flows through: a $12.34 invoice grants 1234 × 1 = 1234¢', () => {
+    expect(allowanceCentsForPaidCents(1234, 'pro')).toBe(1234);
     expect(allowanceCentsForPaidCents(0, 'pro')).toBe(0);
   });
 
@@ -134,8 +134,8 @@ describe('MON-2 the monthly allowance is derived from the amount paid, never tab
       expect(tierAllowanceCents(tier), tier).toBe(allowanceCentsForPaidCents(list, tier));
       expect(tierAllowanceCents(tier), tier).toBeGreaterThan(0);
     }
-    // Pro $15 × 60% → 900¢.
-    expect(tierAllowanceCents('pro')).toBe(900);
+    // Pro $15 × 100% → 1500¢.
+    expect(tierAllowanceCents('pro')).toBe(1500);
   });
 });
 
@@ -294,7 +294,7 @@ describe('MON-4 top-ups buy credits at CREDITS_PER_DOLLAR with no ratio; packs a
     const packs = Object.values(CREDIT_PACKS).sort((a, b) => a.credits - b.credits);
     expect(packs.map((p) => p.credits)).toEqual([100, 250, 500]);
     for (const pack of packs) {
-      // $ price = credits / CREDITS_PER_DOLLAR, in cents; the 60% ratio never applies.
+      // $ price = credits / CREDITS_PER_DOLLAR, in cents; the included ratio never applies.
       expect(creditPackPriceCents(pack)).toBe((pack.credits / CREDITS_PER_DOLLAR) * 100);
     }
     expect(creditPackPriceCents(CREDIT_PACKS.pack_10)).toBe(1000);
@@ -365,7 +365,7 @@ describe('D-OW-17 no client-visible mirror, and no env var, of the flag (single 
     const original = process.env.MONEY_MODEL_V2;
     process.env.MONEY_MODEL_V2 = 'false';
     try {
-      expect(tierAllowanceCents('pro')).toBe(900);
+      expect(tierAllowanceCents('pro')).toBe(1500);
     } finally {
       if (original === undefined) delete process.env.MONEY_MODEL_V2;
       else process.env.MONEY_MODEL_V2 = original;
