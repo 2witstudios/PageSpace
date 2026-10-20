@@ -21,7 +21,15 @@ export type ResizeHandleProps = {
 
 const labels: Readonly<Record<ResizableColumn, string>> = { left: 'Resize sidebar', imago: 'Resize Imago' };
 
-type Drag = { readonly pointerId: number; readonly startX: number; readonly start: number; readonly max: number; width: number };
+type Drag = {
+  readonly pointerId: number;
+  readonly startX: number;
+  readonly start: number;
+  readonly max: number;
+  /** The pane's inline width before the drag: React's, which it gets back when the drag ends. */
+  readonly inline: string;
+  width: number;
+};
 
 const asElement = (node: Element | null): HTMLElement | null => (node instanceof HTMLElement ? node : null);
 
@@ -67,12 +75,14 @@ export function ResizeHandle({ column, width, onResize }: ResizeHandleProps): Re
     document.body.classList.remove('select-none');
     const seam = seamRef.current;
     const pane = seam === null ? null : paneOf(seam, column);
+    // The drag's width goes back to being React's: restore what React drew and hand it the
+    // result, then let the width ease again once React has drawn it.
     if (pane !== null) {
-      // A move still waiting on its frame is dropped above, so the pane takes the last width now.
-      pane.style.width = `${active.width}px`;
-      delete pane.dataset.resizing;
+      pane.style.width = active.inline;
+      requestAnimationFrame(() => delete pane.dataset.resizing);
     }
-    onResize(active.width);
+    // A press that never moved (a click, or half of a double-click) keeps the token width.
+    if (active.width !== active.start) onResize(active.width);
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -85,7 +95,14 @@ export function ResizeHandle({ column, width, onResize }: ResizeHandleProps): Re
     event.currentTarget.dataset.active = '';
     pane.dataset.resizing = '';
     document.body.classList.add('select-none');
-    drag.current = { pointerId: event.pointerId, startX: event.clientX, start: current, max, width: current };
+    drag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      start: current,
+      max,
+      inline: pane.style.width,
+      width: current,
+    };
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
