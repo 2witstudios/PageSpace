@@ -98,3 +98,32 @@ export const widthFromKey = (
 
 /** The token widths in px (frame.css, v3.css), for the seam's aria-valuenow before any drag. */
 export const TOKEN_WIDTHS = { listPane: 300, treePane: 260, paneOverlay: 236, chatPane: 360 } as const;
+
+export type DockedColumn = {
+  /** What the column is drawn at, for its seam. */
+  readonly width: number;
+  /** A px width over the column's token class, or undefined while the token itself fits. */
+  readonly size: number | undefined;
+};
+
+/**
+ * The docked columns' widths for this render: each one's saved width, else its token, fitted to
+ * the row. A column that is not docked is null and keeps its class (sheets, Imago on the ground).
+ * A token that still fits stays a class, so the pane keeps sliding on its token.
+ */
+export const dockedColumns = (
+  sizes: PaneSizes,
+  rowWidth: number | null,
+  tokens: { readonly left: number | null; readonly imago: number | null },
+): Readonly<Record<ResizableColumn, DockedColumn | null>> => {
+  const fitted = fitWidths(rowWidth, {
+    left: tokens.left === null ? null : (sizes.left ?? tokens.left),
+    imago: tokens.imago === null ? null : (sizes.imago ?? tokens.imago),
+  });
+  const column = (key: ResizableColumn): DockedColumn | null => {
+    const width = fitted[key];
+    if (width === null) return null;
+    return { width, size: sizes[key] !== null || width !== tokens[key] ? width : undefined };
+  };
+  return { left: column('left'), imago: column('imago') };
+};

@@ -59,8 +59,8 @@ export type ShellRenderProps = {
  * pane, the page, Imago and the empty middle (SPEC v3.3). Every slot is always mounted and
  * only its width follows the state, so a navigation moves the columns rather than replacing
  * them (myimago ADR 0029 decision 2). A docked left pane and docked Imago each carry a seam
- * on their inner edge that drags their width, as classic's resizable panels do. The data attributes name the state for tests and
- * devtools; nothing styles off them.
+ * on their inner edge that drags their width, as classic's resizable panels do. The data
+ * attributes name the state for tests and devtools; nothing styles off them.
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
   const { stage, layout, columns, hydrated, rail, banner, tabBar, list, object, chat, empty, palette } = props;

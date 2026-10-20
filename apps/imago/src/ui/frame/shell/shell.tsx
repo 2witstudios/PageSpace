@@ -44,7 +44,7 @@ import { renderPhoneShell } from '../phone/phone-shell.render';
 import { useViewportTier } from '../viewport/use-viewport-tier';
 import { ResizeHandle } from '../pane-resize/resize-handle';
 import { usePaneSizes } from '../pane-resize/use-pane-sizes';
-import { TOKEN_WIDTHS, fitWidths } from '../pane-resize/pane-sizes';
+import { TOKEN_WIDTHS, dockedColumns } from '../pane-resize/pane-sizes';
 import { useRowWidth } from '../pane-resize/use-row-width';
 import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
@@ -346,28 +346,26 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     })}</HomeDriveProvider>;
   }
   // Only a docked column drags: the narrow pane sheet and the Imago overlay keep their token widths.
-  const leftDocked = columns.pane && !columns.paneSheet && layout.list !== 'closed';
-  const imagoDocked = columns.imago === 'docked';
-  const leftToken = tier === 'overlay' ? TOKEN_WIDTHS.paneOverlay : layout.list === 'list' ? TOKEN_WIDTHS.listPane : TOKEN_WIDTHS.treePane;
-  const fitted = fitWidths(row.width, {
-    left: leftDocked ? (sizes.left ?? leftToken) : null,
-    imago: imagoDocked ? (sizes.imago ?? TOKEN_WIDTHS.chatPane) : null,
+  const docked = dockedColumns(sizes, row.width, {
+    left: !columns.pane || columns.paneSheet || layout.list === 'closed'
+      ? null
+      : tier === 'overlay' ? TOKEN_WIDTHS.paneOverlay : layout.list === 'list' ? TOKEN_WIDTHS.listPane : TOKEN_WIDTHS.treePane,
+    imago: columns.imago === 'docked' ? TOKEN_WIDTHS.chatPane : null,
   });
-  // A token width that still fits stays a class, so the pane keeps sliding on its token.
-  const leftSize = fitted.left !== null && (sizes.left !== null || fitted.left !== leftToken) ? fitted.left : undefined;
-  const imagoSize = fitted.imago !== null && (sizes.imago !== null || fitted.imago !== TOKEN_WIDTHS.chatPane) ? fitted.imago : undefined;
   return <HomeDriveProvider value={homeDriveId}>{renderShell({
     stage,
     layout,
     columns,
     tier,
-    leftSize,
-    imagoSize,
+    leftSize: docked.left?.size,
+    imagoSize: docked.imago?.size,
     columnsRowRef: row.ref,
-    leftHandle: fitted.left !== null ? <ResizeHandle column="left" width={fitted.left} onResize={(width) => setSize('left', width)} /> : null,
-    imagoHandle: fitted.imago !== null ? (
-      <ResizeHandle column="imago" width={fitted.imago} onResize={(width) => setSize('imago', width)} />
-    ) : null,
+    leftHandle: docked.left === null ? null : (
+      <ResizeHandle column="left" width={docked.left.width} onResize={(width) => setSize('left', width)} />
+    ),
+    imagoHandle: docked.imago === null ? null : (
+      <ResizeHandle column="imago" width={docked.imago.width} onResize={(width) => setSize('imago', width)} />
+    ),
     onDismissImago: () => dispatch(transactions.collapseImago, undefined),
     onDismissPane: () => {
       if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);

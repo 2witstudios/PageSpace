@@ -4,6 +4,7 @@ import {
   BOUNDS,
   NO_SIZES,
   clampWidth,
+  dockedColumns,
   fitWidths,
   maxWidthFor,
   parseSizes,
@@ -147,6 +148,40 @@ describe('fitWidths()', () => {
       should: 'fit only the pane, then change nothing',
       actual: [fitWidths(800, { left: 480, imago: null }), fitWidths(null, { left: 480, imago: 720 })],
       expected: [{ left: 400, imago: null }, { left: 480, imago: 720 }],
+    });
+  });
+});
+
+describe('dockedColumns()', () => {
+  const tokens = { left: 260, imago: 360 };
+
+  test('token widths that fit stay classes', () => {
+    assert({
+      given: 'nothing saved in a wide row',
+      should: 'draw both at their tokens with no px width over the class',
+      actual: dockedColumns(NO_SIZES, 1400, tokens),
+      expected: { left: { width: 260, size: undefined }, imago: { width: 360, size: undefined } },
+    });
+  });
+
+  test('saved widths and squeezed tokens are px widths', () => {
+    assert({
+      given: 'a saved sidebar width, then tokens in a row too narrow for them',
+      should: 'draw the saved width, then the fitted widths, over the classes',
+      actual: [dockedColumns({ left: 320, imago: null }, 1400, tokens), dockedColumns(NO_SIZES, 900, tokens)],
+      expected: [
+        { left: { width: 320, size: 320 }, imago: { width: 360, size: undefined } },
+        { left: { width: 200, size: 200 }, imago: { width: 300, size: 300 } },
+      ],
+    });
+  });
+
+  test('a column that is not docked', () => {
+    assert({
+      given: 'Imago not docked',
+      should: 'leave it out, whatever was saved for it',
+      actual: dockedColumns({ left: null, imago: 500 }, 1400, { left: 260, imago: null }).imago,
+      expected: null,
     });
   });
 });
