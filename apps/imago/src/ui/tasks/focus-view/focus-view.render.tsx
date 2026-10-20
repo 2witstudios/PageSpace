@@ -34,8 +34,8 @@ export type FocusViewRenderProps = {
   readonly done: readonly DoneEntry[] | null;
   /** Why an edit was refused: at a task's id, or at the list page for a capture. */
   readonly notice: TaskNotice | null;
-  /** Void action: ticks a task, or unticks it. */
-  readonly toggleComplete: (taskId: string) => void;
+  /** Void action: ticks a task, or unticks it; absent for a viewer who may not, whose boxes are read-only. */
+  readonly toggleComplete?: (taskId: string) => void;
   /** Void action: adds a task with this title to the selected list; absent for a viewer who may not. */
   readonly capture?: (title: string) => void;
   /** The viewer's own day, YYYY-MM-DD; rows show their due dates against it. */
@@ -61,11 +61,16 @@ const noticeFor = (notice: TaskNotice | null, at: string): ReactNode =>
 /** A Focus row is a leaf: the tree's row with an empty lead slot, no caret, and its due date. */
 const row = (props: FocusViewRenderProps, task: Task, done: boolean): ReactNode => {
   const tone = props.today === undefined ? null : dueToneOf(task.dueDate, props.today, done);
+  const { toggleComplete } = props;
   return (
     <li key={task.id} data-task={task.id}>
       <div className={taskRowClass}>
         <span className={taskSlotClass} aria-hidden="true" />
-        <Checkbox checked={done} label={`Complete ${task.title}`} toggle={() => props.toggleComplete(task.id)} />
+        <Checkbox
+          checked={done}
+          label={`Complete ${task.title}`}
+          toggle={toggleComplete === undefined ? undefined : () => toggleComplete(task.id)}
+        />
         {props.taskHref === undefined ? (
           <span className={taskTitleClass(done)} data-title="">
             {task.title}

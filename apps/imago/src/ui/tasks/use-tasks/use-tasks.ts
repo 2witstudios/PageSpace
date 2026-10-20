@@ -37,6 +37,7 @@ import {
   fetchAssignable,
   fetchDriveTaskCount,
   fetchDriveTasks,
+  fetchEveryDriveTask,
   fetchDriveTaskLists,
   fetchPageContent,
   fetchPagePermissions,
@@ -363,15 +364,25 @@ export const useTaskViewCounts = (driveId: string | null) => {
 /** The most rows the ground asks for in one request (the route's limit ceiling). */
 const GROUND_PAGE_SIZE = 100;
 
+/** How much of the route's answer a drive read takes: its first page, or every page up to the cap. */
+export type DriveTaskPages = 'first' | 'every';
+
 /**
- * The viewer's tasks in a drive for the ground: one status group, one due
- * window (or none), the first page of the route's answer.
+ * The viewer's tasks in a drive: one status group, one due window (or
+ * none). The ground reads the first page of the route's answer; Focus's
+ * "All lists" reads every page, since its frontier would otherwise lose the
+ * older (often the most overdue) rows.
  */
-export const useDriveTasks = (driveId: string, statusGroup: StatusGroupFilter, dueDateFilter: DueDateFilter | undefined) => {
+export const useDriveTasks = (
+  driveId: string,
+  statusGroup: StatusGroupFilter,
+  dueDateFilter: DueDateFilter | undefined,
+  pages: DriveTaskPages = 'first',
+) => {
   const client = useApiClient();
   const query = { driveId, statusGroup, dueDateFilter, limit: GROUND_PAGE_SIZE };
-  const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query] as const, ([, q]) =>
-    fetchDriveTasks(client, q),
+  const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query, pages] as const, ([, q, read]) =>
+    read === 'every' ? fetchEveryDriveTask(client, q) : fetchDriveTasks(client, q),
   );
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);

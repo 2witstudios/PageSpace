@@ -2,8 +2,12 @@
 
 // The Focus view bound to its data. "This list" is the open list's frontier,
 // read from the tree the other views share; "All lists" is the viewer's own
-// open leaves across the drive, from GET /api/tasks, grouped by the list
-// each sits in, and ticked off through that list's own statuses.
+// open leaves across the drive, from every page of GET /api/tasks, grouped
+// by the list each sits in, and ticked off through that list's own statuses.
+// Ticking follows the open list's edit permission in "This list". In "All
+// lists" the rows come from lists whose permissions this tab never read (the
+// route carries none), so ticking stays on there: the server decides, and a
+// refusal rolls the row back under the notice.
 
 import { useState, type ReactNode } from 'react';
 import { SegmentedControl } from '../../components/segmented-control/segmented-control';
@@ -76,7 +80,7 @@ type Shared = {
 };
 
 function DriveFocus({ driveId, list, clock, taskHref, shared }: FocusViewProps & { readonly shared: Shared }): ReactNode {
-  const { response, error, retry, toggleComplete } = useDriveTasks(driveId, 'active', undefined);
+  const { response, error, retry, toggleComplete } = useDriveTasks(driveId, 'active', undefined, 'every');
   if (response === undefined) {
     return error === undefined ? (
       <p role="status" className="text-sm text-ink-muted">
@@ -91,7 +95,8 @@ function DriveFocus({ driveId, list, clock, taskHref, shared }: FocusViewProps &
       </p>
     );
   }
-  return renderFocusView({
+  const { hasMore, total } = response.pagination;
+  const focus = renderFocusView({
     title: list.title,
     listPageId: list.pageId,
     groups: driveFrontier(response),
@@ -105,6 +110,17 @@ function DriveFocus({ driveId, list, clock, taskHref, shared }: FocusViewProps &
       void toggleComplete(taskId).then(shared.report(taskId));
     },
   });
+  // Past the read's cap the frontier is the most recently updated rows only; it says so.
+  return hasMore ? (
+    <>
+      <p role="status" data-truncated="" className="text-sm text-ink-muted">
+        {`Showing your ${response.tasks.length} most recently updated tasks of ${total}.`}
+      </p>
+      {focus}
+    </>
+  ) : (
+    focus
+  );
 }
 
 /**
@@ -144,9 +160,11 @@ export function FocusView(props: FocusViewProps): ReactNode {
           toggleGroup: shared.toggleGroup,
           doneOpen,
           toggleDone: () => setDoneOpen((open) => !open),
-          toggleComplete: (taskId) => {
-            void actions.toggleComplete(taskId).then(shared.report(taskId));
-          },
+          toggleComplete: editable
+            ? (taskId) => {
+                void actions.toggleComplete(taskId).then(shared.report(taskId));
+              }
+            : undefined,
           capture: editable
             ? (title) => {
                 void actions.create(list.pageId, { title }).then(shared.report(list.pageId));

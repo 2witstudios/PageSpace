@@ -51,6 +51,7 @@ export const taskPaths = {
     const params = new URLSearchParams({ context: 'drive', driveId: query.driveId, limit: String(query.limit) });
     if (query.statusGroup !== undefined) params.set('statusGroup', query.statusGroup);
     if (query.dueDateFilter !== undefined) params.set('dueDateFilter', query.dueDateFilter);
+    if (query.offset !== undefined && query.offset > 0) params.set('offset', String(query.offset));
     return `/api/tasks?${params.toString()}`;
   },
   /** A task's agent triggers, keyed by the task's id (not its page's). */
@@ -68,6 +69,8 @@ export type DriveTasksQuery = {
   readonly limit: number;
   readonly statusGroup?: StatusGroupFilter;
   readonly dueDateFilter?: DueDateFilter;
+  /** Rows to skip in the route's newest-updated-first order; the first page without it. */
+  readonly offset?: number;
 };
 
 /** One status as PUT /tasks/statuses takes it: the whole row, with its limit. */
@@ -83,6 +86,39 @@ export type StatusUpdate = {
 /** The viewer's tasks in a drive, as GET /api/tasks answers them. */
 export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
   client.apiFetch<DriveTasksResponse>(taskPaths.driveTasks(query));
+
+/** The most rows a drive-wide read takes: ten of the route's 100-row pages. */
+const DRIVE_TASKS_CAP = 1000;
+
+/**
+ * Every one of the viewer's tasks in a drive, paging GET /api/tasks by
+ * offset and joining the rows and each list's statuses. The offset counts
+ * the route's own rows, so it steps by the page size even when the route
+ * drops an orphan from a page. The order is newest-updated first, so a row
+ * touched between two reads can land on both pages: it is kept once. Stops
+ * at 1000 rows, leaving `hasMore` set.
+ */
+export const fetchEveryDriveTask = async (client: ApiClient, query: DriveTasksQuery): Promise<DriveTasksResponse> => {
+  const first = await fetchDriveTasks(client, { ...query, offset: undefined });
+  const tasks = new Map(first.tasks.map((row) => [row.id, row]));
+  let statusConfigsByTaskList = first.statusConfigsByTaskList ?? {};
+  let pagination = first.pagination;
+  let offset = query.limit;
+  let last = first.tasks.length;
+  while (pagination.hasMore && last > 0 && offset < DRIVE_TASKS_CAP) {
+    const next = await fetchDriveTasks(client, { ...query, offset });
+    for (const row of next.tasks) if (!tasks.has(row.id)) tasks.set(row.id, row);
+    statusConfigsByTaskList = { ...statusConfigsByTaskList, ...next.statusConfigsByTaskList };
+    pagination = next.pagination;
+    last = next.tasks.length;
+    offset += query.limit;
+  }
+  return {
+    tasks: [...tasks.values()],
+    statusConfigsByTaskList,
+    pagination: { total: pagination.total, limit: query.limit, offset: 0, hasMore: pagination.hasMore },
+  };
+};
 
 /** How many of the viewer's tasks in a drive fall in a due window (all of them without one): the route's pagination.total. */
 export const fetchDriveTaskCount = async (

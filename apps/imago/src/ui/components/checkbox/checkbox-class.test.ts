@@ -23,4 +23,16 @@ describe('checkboxClass', () => {
       expected: `${base} border-border-strong text-transparent hover:border-ink-muted`,
     });
   });
+
+  test('read-only', () => {
+    assert({
+      given: 'a checkbox the viewer may not change, ticked and open',
+      should: 'drop the pointer and the hover border, keeping the state it shows',
+      actual: [checkboxClass(true, true), checkboxClass(false, true)],
+      expected: [
+        `${base.replace('cursor-pointer', 'cursor-default')} border-accent bg-accent text-accent-ink`,
+        `${base.replace('cursor-pointer', 'cursor-default')} border-border-strong text-transparent`,
+      ],
+    });
+  });
 });
