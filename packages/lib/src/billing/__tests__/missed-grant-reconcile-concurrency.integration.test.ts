@@ -136,7 +136,7 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
     }
   }, 30_000);
 
-  it('MON-2 (partial) WAL-5 (partial) the reconcile threads the money model\'s active flag: a PAID missed grant reconciles at paid × 60%, the ratio actually applied', async () => {
+  it('MON-2 (partial) WAL-5 (partial) the reconcile threads the money model\'s active flag: a PAID missed grant reconciles at paid × 100%, the ratio actually applied', async () => {
     if (!dbAvailable) return;
     const user = await factories.createUser({ subscriptionTier: 'pro' });
     const priceId = `price_mgr_ratio_${createId()}`;
@@ -169,11 +169,11 @@ describe('reconcileMissedGrants concurrency (Postgres)', () => {
       const result = await reconcileMissedGrants({ priceTier });
 
       expect(result.reconciled).toBeGreaterThanOrEqual(1);
-      // 60% of the 1,500¢ paid, never the whole payment.
+      // 100% of the 1,500¢ paid.
       const [balance] = await db.select().from(wallets).where(personalRootWalletOf(user.id));
-      expect(balance.monthlyRemainingCents).toBe(900);
+      expect(balance.monthlyRemainingCents).toBe(1500);
       const [row] = await db.select().from(creditLedger).where(eq(creditLedger.id, ledgerId));
-      expect(row).toMatchObject({ entryType: 'monthly_grant', amountCents: 900 });
+      expect(row).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500 });
     } finally {
       await db.delete(creditLedger).where(eq(creditLedger.userId, user.id));
       await db.delete(wallets).where(eq(wallets.userId, user.id));
