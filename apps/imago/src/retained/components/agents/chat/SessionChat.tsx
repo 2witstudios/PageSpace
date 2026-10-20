@@ -37,6 +37,7 @@ import { SidebarMessagesContent } from '@/retained/components/layout/right-sideb
 import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/retained/lib/ai/shared/hooks/useOpenPagePane';
 import { useChatAttachments } from '@/retained-adapters/chat-attachments';
+import { useImageAttachments } from '@/retained/lib/ai/shared/hooks/useImageAttachments';
 import { useSideQuestion, parseSideQuestionInput } from '@/retained/components/ai/btw/useSideQuestion';
 import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
 import { SideQuestionCard } from '@/retained/components/ai/btw/SideQuestionCard';
@@ -152,11 +153,18 @@ export function SessionChatView({
   isReadOnly = false,
   imagoComposer,
 }: SessionChatViewProps) {
-  const input = useUiState(state => state.resources.chatDraft);
-  const setInput = useCallback((next: string | ((current: string) => string)) => {
+  // Imago's column keeps one draft and one attachment set across navigation; every other
+  // surface (a Console pane, several side by side) owns its own, as classic's composer does.
+  const sharedDraft = useUiState(state => state.resources.chatDraft);
+  const setSharedDraft = useCallback((next: string | ((current: string) => string)) => {
     dispatch(transactions.setChatDraft, typeof next === 'function' ? next(getUiState().resources.chatDraft) : next);
   }, []);
-  const { attachments, addFiles, removeFile, getFilesForSend } = useChatAttachments();
+  const [ownDraft, setOwnDraft] = useState('');
+  const input = imagoComposer ? sharedDraft : ownDraft;
+  const setInput = imagoComposer ? setSharedDraft : setOwnDraft;
+  const sharedAttachments = useChatAttachments();
+  const ownAttachments = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = imagoComposer ? sharedAttachments : ownAttachments;
   const [showError, setShowError] = useState(true);
   const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
   const sideQuestion = useSideQuestion(conversationId);

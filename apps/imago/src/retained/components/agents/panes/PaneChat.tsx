@@ -14,6 +14,7 @@
  */
 
 import { Loader2 } from 'lucide-react';
+import { Button } from '@/retained/components/ui/button';
 import AssistantSessionChat from '../chat/AssistantSessionChat';
 import SessionChat from '../chat/SessionChat';
 import { useResolvedAgent } from '../useResolvedAgent';
@@ -38,7 +39,7 @@ export default function PaneChat({
 }) {
   // Hook order is safe across the branch: the hook itself branches on a null
   // id (null SWR keys), so it runs unconditionally either way.
-  const { agent, isLoading } = useResolvedAgent(agentPageId);
+  const { agent, isLoading, retry } = useResolvedAgent(agentPageId);
 
   if (agentPageId === null) {
     return (
@@ -52,7 +53,20 @@ export default function PaneChat({
     );
   }
 
-  if (isLoading || !agent) {
+  // Loading ended with no agent: the page fetch failed or the page is gone. Say so, and let
+  // the viewer ask again, rather than spin in a pane that will never fill.
+  if (!isLoading && !agent) {
+    return (
+      <div role="alert" className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">
+        <p>Couldn&apos;t open this agent. It may have been deleted, or you may no longer have access.</p>
+        <Button type="button" variant="outline" size="sm" onClick={retry}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!agent) {
     return (
       <div className="flex h-full items-center justify-center">
         <Loader2 className="size-4 animate-spin text-muted-foreground" />

@@ -1,5 +1,5 @@
 import '@/retained/test/setup';
-import { setUiState } from '@/ui/store/store';
+import { getUiState, setUiState } from '@/ui/store/store';
 import { createInitialState } from '@/ui/store/state';
 // @vitest-environment jsdom
 /**
@@ -35,6 +35,8 @@ vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({
 
 const imageState = vi.hoisted(() => ({ attachments: [] as ImageAttachment[], files: [] as FileUIPart[], remove: vi.fn() }));
 vi.mock('@/retained-adapters/chat-attachments', () => ({ useChatAttachments: () => ({ attachments: imageState.attachments, addFiles: vi.fn(), removeFile: imageState.remove, getFilesForSend: () => imageState.files }) }));
+// A pane's own attachments (classic's useImageAttachments) read the same fixture, so the composer wiring holds either way.
+vi.mock('@/retained/lib/ai/shared/hooks/useImageAttachments', () => ({ useImageAttachments: () => ({ attachments: imageState.attachments, addFiles: vi.fn(), removeFile: imageState.remove, getFilesForSend: () => imageState.files }) }));
 vi.mock('@/retained/components/layout/right-sidebar/ai-assistant/SidebarChatTab', () => ({
   SidebarMessagesContent: () => <div data-testid="sidebar-messages-content" />,
 }));
@@ -194,6 +196,18 @@ describe('SessionChat', () => {
     );
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-mention-drive-id', 'drive-1');
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-cross-drive', 'true');
+  });
+
+  it('keeps each pane its own draft, apart from Imago’s', () => {
+    render(
+      <>
+        <SessionChat agent={agentFixture()} conversationId="conv-1" context="console" />
+        <SessionChat agent={agentFixture()} conversationId="conv-2" context="console" />
+      </>,
+    );
+    const [first, second] = screen.getAllByTestId('chat-input') as HTMLInputElement[];
+    fireEvent.change(first, { target: { value: 'for the first agent' } });
+    expect([first.value, second.value, getUiState().resources.chatDraft]).toEqual(['for the first agent', '', '']);
   });
 
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {
