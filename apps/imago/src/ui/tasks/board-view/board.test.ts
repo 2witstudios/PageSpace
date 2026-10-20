@@ -3,6 +3,7 @@ import { assert } from 'riteway/vitest';
 import { list, seededStatuses, task } from '../task-model/fixtures';
 import type { Task, TaskStatus } from '../task-model/task';
 import {
+  laneAssignees,
   boardColumns,
   boardLanes,
   boardRows,
@@ -357,6 +358,21 @@ describe('the viewer’s board choices', () => {
       should: 'add it, then take it off',
       actual: [toggledCollapsed([], 'completed'), toggledCollapsed(['completed'], 'completed')],
       expected: [['completed'], []],
+    });
+  });
+});
+
+describe('laneAssignees', () => {
+  const alice = { type: 'user' as const, id: 'u-a', name: 'Alice' };
+  const bob = { type: 'user' as const, id: 'u-b', name: 'Bob' };
+  const carol = { type: 'user' as const, id: 'u-c', name: 'Carol' };
+  test('swaps only the lane person', () => {
+    const shared = task('t', { assignees: [alice, bob] });
+    assert({
+      given: "a task on Alice and Bob in Alice's lane, dropped into Carol's, Bob's, then Unassigned",
+      should: 'swap Alice for the lane person and keep everyone else, or take everyone off',
+      actual: [laneAssignees(shared, [carol]), laneAssignees(shared, [bob]), laneAssignees(shared, [])],
+      expected: [[carol, bob], [bob], []],
     });
   });
 });

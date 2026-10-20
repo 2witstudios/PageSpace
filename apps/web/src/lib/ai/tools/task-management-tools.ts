@@ -21,8 +21,7 @@ import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/pag
 import { compareByPagePosition } from '@/services/api/task-ordering';
 import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
-import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
-import { isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
+import { isStartAfterDue, parseTaskDateInput, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -108,8 +107,14 @@ Agent Triggers:
       // in it; absolute values are untouched (#2404). The stored due date and
       // the trigger scheduled against it must agree on the instant.
       const taskTimezone = (context as ToolExecutionContext).timezone || 'UTC';
-      const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
-      const parsedStartDate = startDate ? parseDatetimeInTimezone(startDate, taskTimezone) : null;
+      // Read as the REST task routes read them (lib/tasks/task-dates): a value that is not a real
+      // instant is refused here, in words the agent can act on, rather than reaching the database.
+      const dueParse = parseTaskDateInput(dueDate, taskTimezone);
+      if (!dueParse.ok) throw new Error('Invalid due date');
+      const startParse = parseTaskDateInput(startDate, taskTimezone);
+      if (!startParse.ok) throw new Error('Invalid start date');
+      const parsedDueDate = dueParse.value;
+      const parsedStartDate = startParse.value;
 
       if (!taskId) {
         throw new Error('taskId is required to update a task. To create a new task, use create_task.');

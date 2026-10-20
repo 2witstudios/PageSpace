@@ -60,6 +60,8 @@ const addLabels: Readonly<Record<TaskViewName, ((title: string) => string) | nul
 
 type Body = {
   readonly driveId: string;
+  /** The list before the strip's filter. */
+  readonly fullList: TaskList;
   readonly viewerId: string;
   readonly list: TaskList;
   readonly view: TaskViewName;
@@ -70,7 +72,7 @@ type Body = {
   readonly clock: () => Date;
 };
 
-const bodyFor = ({ driveId, list, view, filtering, expandedIds, actions, editable, clock }: Body): ReactNode => {
+const bodyFor = ({ driveId, fullList, list, view, filtering, expandedIds, actions, editable, clock }: Body): ReactNode => {
   const href = (task: Task) => taskHref(driveId, task.pageId);
   const toggleExpanded = (taskId: string) => dispatch(transactions.toggleTaskExpanded, taskId);
   const today = localToday(clock());
@@ -82,6 +84,7 @@ const bodyFor = ({ driveId, list, view, filtering, expandedIds, actions, editabl
       return (
         <BoardView
           list={list}
+          fullList={fullList}
           actions={actions}
           today={today}
           editable={editable}
@@ -214,7 +217,7 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
         body:
           shown === undefined
             ? renderTaskListMessage('Loading tasks…', 'status')
-            : bodyFor({ driveId, viewerId, list: shown, view, filtering, expandedIds, actions, editable, clock }),
+            : bodyFor({ driveId, viewerId, fullList: list ?? shown, list: shown, view, filtering, expandedIds, actions, editable, clock }),
       })}
     </>
   );

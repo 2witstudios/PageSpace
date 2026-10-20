@@ -139,6 +139,18 @@ export type LaneChange =
   | { readonly field: 'priority'; readonly priority: Priority }
   | { readonly field: 'assignees'; readonly assignees: readonly Assignee[] };
 
+/**
+ * Who is on a task once it is dropped into an assignee lane. A card sits in
+ * its first assignee's lane, so the drop swaps that one person for the
+ * lane's and keeps everyone else; Unassigned takes everyone off.
+ */
+export const laneAssignees = (task: Task, lane: readonly Assignee[]): readonly Assignee[] => {
+  const person = lane[0];
+  if (person === undefined) return [];
+  const same = (entry: Assignee) => entry.type === person.type && entry.id === person.id;
+  return [person, ...task.assignees.slice(1).filter((entry) => !same(entry))];
+};
+
 /** One lane across every column; `change` is what a card dropped into it takes on. */
 export type Lane = {
   readonly key: string;

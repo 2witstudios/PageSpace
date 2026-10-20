@@ -159,13 +159,24 @@ export type TaskActions = {
   /** Moves a task to an index among its siblings. */
   readonly move: (taskId: string, toIndex: number) => Promise<ActionResult>;
   /**
-   * Moves a task to a status and an index among its siblings in one gesture:
-   * the Board's drop on a card. The status is saved first; a refused status
-   * leaves the order alone.
+   * One Board drop as one edit: any of a new status, a lane's field
+   * (priority, or who is on the task) and a place among its siblings. Every
+   * part is worked out on the tree first, so a refusal (a parent with open
+   * subtasks dropped into Done) sends nothing; the tree shows the whole move
+   * at once, the parts are saved in that order, and the tree is read back
+   * once at the end.
    */
-  readonly moveTo: (taskId: string, status: string, toIndex: number) => Promise<ActionResult>;
+  readonly moveTo: (taskId: string, move: TaskMove) => Promise<ActionResult>;
   /** Sets (or, with null, clears) a status's work-in-progress limit on the root list. */
   readonly setWipLimit: (slug: string, wipLimit: number | null) => Promise<ActionResult>;
+};
+
+/** What one Board drop changes; any part may be left out. */
+export type TaskMove = {
+  readonly status?: string;
+  readonly patch?: TaskPatch;
+  readonly assignees?: readonly Assignee[];
+  readonly index?: number;
 };
 
 /** A write worked out against the tree: refused, or the new tree and the request that saves it. */
@@ -184,19 +195,31 @@ const createActions = (
 ): TaskActions => {
   let minted = 0;
 
-  const run = async (plan: (tree: TaskList) => Plan): Promise<ActionResult> => {
+  /**
+   * Plans each step on the tree the step before left, so a later step sees
+   * the earlier ones; any refusal sends nothing. The requests then go one
+   * after another, under one optimistic tree and one read-back.
+   */
+  const runAll = async (steps: readonly ((tree: TaskList) => Plan)[]): Promise<ActionResult> => {
     const tree = current();
     if (tree === undefined) return { ok: false, refusal: LOADING };
-    const planned = plan(tree);
-    if ('refusal' in planned) return { ok: false, refusal: planned.refusal };
+    let working = tree;
+    const sends: (() => Promise<unknown>)[] = [];
+    for (const step of steps) {
+      const planned = step(working);
+      if ('refusal' in planned) return { ok: false, refusal: planned.refusal };
+      working = planned.list;
+      sends.push(planned.send);
+    }
+    if (sends.length === 0) return { ok: true };
     let result: ActionResult = { ok: true };
     try {
       await mutate(
         async () => {
-          await planned.send();
+          for (const send of sends) await send();
           return undefined;
         },
-        { optimisticData: planned.list, rollbackOnError: true, populateCache: false, revalidate: false },
+        { optimisticData: working, rollbackOnError: true, populateCache: false, revalidate: false },
       );
     } catch (error) {
       result = { ok: false, refusal: error instanceof ApiError ? error.message : OFFLINE };
@@ -205,6 +228,8 @@ const createActions = (
     await mutate();
     return result;
   };
+
+  const run = (plan: (tree: TaskList) => Plan): Promise<ActionResult> => runAll([plan]);
 
   /** A write to one task, addressed to the list that holds it. */
   const onTask =
@@ -260,33 +285,41 @@ const createActions = (
     remove: (taskId) =>
       run(onTask(taskId, (tree, at) => ({ list: removeTask(tree, taskId), send: () => deleteTask(client, at) }))),
     move: (taskId, toIndex) => run(reorder(taskId, toIndex)),
-    moveTo: async (taskId, slug, toIndex) => {
+    moveTo: (taskId, move) => {
       const tree = current();
-      const found = tree === undefined ? undefined : locate(tree, taskId);
-      if (found !== undefined && found.task.status !== slug) {
-        const moved = await run(status(taskId, slug));
-        if (!moved.ok) return moved;
-      }
-      return run(reorder(taskId, toIndex));
+      const task = tree === undefined ? undefined : locate(tree, taskId)?.task;
+      const { status: slug, patch, assignees: chosen, index } = move;
+      return runAll([
+        // The status goes first: it is the part the server may refuse.
+        ...(slug === undefined || slug === task?.status ? [] : [status(taskId, slug)]),
+        ...(patch === undefined
+          ? []
+          : [onTask(taskId, (edited, at) => outcome(updateTask(edited, taskId, patch), () => patchTask(client, at, patch)))]),
+        ...(chosen === undefined ? [] : [assignees(taskId, () => chosen)]),
+        ...(index === undefined ? [] : [reorder(taskId, index)]),
+      ]);
     },
     setWipLimit: (slug, wipLimit) =>
-      run((tree) => {
-        const edited = setWipLimit(tree, slug, wipLimit);
-        return outcome(edited, () =>
-          updateStatuses(
+      run((tree) =>
+        outcome(setWipLimit(tree, slug, wipLimit), async () => {
+          // PUT writes every field of every row it is sent, so it is sent the
+          // server's rows as they stand now, not this tab's copy: a rename or
+          // reorder made elsewhere since is kept, and only this limit changes.
+          const fresh = await fetchTaskStatuses(client, tree.pageId);
+          return updateStatuses(
             client,
             tree.pageId,
-            edited.list.statuses.map(({ id, name, color, group, position, wipLimit: limit }) => ({
+            fresh.map(({ id, name, color, group, position, wipLimit: limit, slug: rowSlug }) => ({
               id,
               name,
               color,
               group,
               position,
-              wipLimit: limit,
+              wipLimit: rowSlug === slug ? wipLimit : limit,
             })),
-          ),
-        );
-      }),
+          );
+        }),
+      ),
   };
 };
 
@@ -357,7 +390,8 @@ export const useDriveTasks = (driveId: string, statusGroup: StatusGroupFilter, d
       if (response === undefined || row === undefined) return { ok: false, refusal: NOT_FOUND };
       const statuses = statusesFrom(response.statusConfigsByTaskList?.[row.taskListPageId] ?? []);
       const done = row.statusGroup === 'done';
-      const slug = statuses.length === 0 ? (done ? 'pending' : 'completed') : done ? openStatus(statuses) : doneStatus(statuses);
+      // With no statuses of its own, these fall back to PageSpace's 'pending' and 'completed'.
+      const slug = done ? openStatus(statuses) : doneStatus(statuses);
       const next = statuses.find((status) => status.slug === slug);
       const optimistic: DriveTasksResponse = {
         ...response,

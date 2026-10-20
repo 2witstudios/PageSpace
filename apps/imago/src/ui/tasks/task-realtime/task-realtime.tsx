@@ -4,7 +4,7 @@
 // broadcasts each task write (task:task_added, task_updated, task_deleted,
 // tasks_reordered) to the room of the list page the write landed in, and a
 // subtask lands in its parent task's own page, so the tree joins the room of
-// every list it has loaded, not only its root's.
+// every task page it has loaded, not only its root's.
 
 import type { ReactNode } from 'react';
 import { useSWRConfig } from 'swr';
@@ -14,10 +14,14 @@ import type { TaskList } from '../task-model/task';
 /** The task events apps/web's broadcastTaskEvent sends, as `task:${type}`. */
 export const TASK_EVENTS = ['task:task_added', 'task:task_updated', 'task:task_deleted', 'task:tasks_reordered'] as const;
 
-/** Every list page a loaded tree holds: the root and each task's own page that has its subtasks loaded. */
+/**
+ * Every page a write to the tree can land in: the root list and each loaded
+ * task's own page, which is where its subtasks go, so a first subtask added
+ * elsewhere under a leaf still reaches this tab.
+ */
 export const treeRooms = (list: TaskList): readonly string[] => [
   list.pageId,
-  ...list.tasks.flatMap((task) => (task.subtasks === null ? [] : treeRooms(task.subtasks))),
+  ...list.tasks.flatMap((task) => (task.subtasks === null ? [task.pageId] : treeRooms(task.subtasks))),
 ];
 
 type TaskEventPayload = { readonly pageId?: unknown };

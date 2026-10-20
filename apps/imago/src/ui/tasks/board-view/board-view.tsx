@@ -2,10 +2,11 @@
 
 // The Board bound to a list's writes. A card moves by drag (@dnd-kit, pointer
 // or keyboard), within its column or across, or by its "Move to…" menu.
-// A drop on a card lands next to it (useTaskList's moveTo saves the status,
-// then the order); a drop on a column's open space lands at its end. In a
-// lanes board the lane's field is saved first. Every write shows at once, is
-// saved through the imago client and rolls back if the server refuses it.
+// A drop on a card lands next to it; a drop on a column's open space lands at
+// its end; in a lanes board the lane's field changes too. The whole drop is
+// one useTaskList moveTo: worked out on the tree first, so a refusal sends
+// nothing, then shown at once, saved through the imago client and rolled
+// back if the server refuses it after all.
 
 import { useEffect, useMemo, useRef, useState, type FocusEvent, type ReactNode } from 'react';
 import {
@@ -42,6 +43,7 @@ import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
 import type { ActionResult, TaskActions } from '../use-tasks/use-tasks';
 import {
   boardColumns,
+  laneAssignees,
   boardLanes,
   boardRows,
   columnJump,
@@ -96,6 +98,12 @@ export type BoardViewProps = {
   readonly toggleExpanded: (taskId: string) => void;
   /** Where a card's task opens; titles are plain text without it. */
   readonly taskHref?: (task: Task) => string;
+  /**
+   * The list before the strip's filter: a column's count, the number its
+   * work-in-progress limit is held to, is the column's whole, not what a
+   * filter leaves showing. The shown list when absent.
+   */
+  readonly fullList?: TaskList;
 };
 
 /** What the drag knows of each droppable: a cell of a lane, or a card in one. */
@@ -282,6 +290,7 @@ const loadPrefs = (pageId: string): Prefs => ({
  */
 export function BoardView({
   list,
+  fullList,
   actions,
   editable,
   reorderable,
@@ -291,6 +300,9 @@ export function BoardView({
   taskHref,
 }: BoardViewProps) {
   const columns = useMemo(() => boardColumns(list), [list]);
+  const wholeColumns = useMemo(() => (fullList === undefined ? null : boardColumns(fullList)), [fullList]);
+  const wholeCount = (slug: string, shown: number): number =>
+    wholeColumns?.find((column) => column.status.slug === slug)?.tasks.length ?? shown;
   const [stored, setPrefs] = useState<Prefs>(() => loadPrefs(list.pageId));
   // Another list opened in place: its own choices, read once.
   const prefs = stored.pageId === list.pageId ? stored : loadPrefs(list.pageId);
@@ -420,19 +432,15 @@ export function BoardView({
     });
   };
 
-  /** A drop's writes in order: the lane's field, then status and place; a refusal stops the rest. */
-  const applyDrop = async (task: Task, plan: DropPlan): Promise<ActionResult> => {
+  /** A drop as one move: its status, its lane's field and its place, together. */
+  const applyDrop = (task: Task, plan: DropPlan): Promise<ActionResult> => {
     const change = plan.change;
-    if (change !== null) {
-      const changed =
-        change.field === 'priority'
-          ? await actions.update(task.id, { priority: change.priority })
-          : await actions.setAssignees(task.id, change.assignees);
-      if (!changed.ok) return changed;
-    }
-    if (plan.index !== null) return actions.moveTo(task.id, plan.status.slug, plan.index);
-    if (plan.statusChanged) return actions.setStatus(task.id, plan.status.slug);
-    return { ok: true };
+    return actions.moveTo(task.id, {
+      ...(plan.statusChanged ? { status: plan.status.slug } : {}),
+      ...(change?.field === 'priority' ? { patch: { priority: change.priority } } : {}),
+      ...(change?.field === 'assignees' ? { assignees: laneAssignees(task, change.assignees) } : {}),
+      ...(plan.index === null ? {} : { index: plan.index }),
+    });
   };
 
   const moveMenuOf = (task: Task): MoveMenuRenderProps => ({
@@ -538,7 +546,7 @@ export function BoardView({
     const key = `column:${status.slug}`;
     return {
       status,
-      count: column.tasks.length,
+      count: wholeCount(status.slug, column.tasks.length),
       add: editable && first !== undefined ? () => setOpenAdd(`cell|${first.id}`) : null,
       menu: {
         status,
@@ -586,7 +594,7 @@ export function BoardView({
           key={cell.id}
           cell={cell}
           label={cellLabel(cell)}
-          count={mode === 'none' ? column.tasks.length : cell.tasks.length}
+          count={mode === 'none' ? wholeCount(column.status.slug, column.tasks.length) : cell.tasks.length}
           target={target}
           named={mode === 'none'}
           expand={() => toggleCollapsed(cell.status.slug)}
@@ -638,7 +646,7 @@ export function BoardView({
               ? renderHeadCell({
                   collapsed: true,
                   status: column.status,
-                  count: column.tasks.length,
+                  count: wholeCount(column.status.slug, column.tasks.length),
                   expand: () => toggleCollapsed(column.status.slug),
                 })
               : renderHeadCell({ collapsed: false, head: headOf(column, rows[0]?.cells.find((cell) => cell.status.slug === column.status.slug)) }),

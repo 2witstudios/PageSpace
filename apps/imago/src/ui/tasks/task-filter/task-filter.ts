@@ -2,6 +2,7 @@
 // functions over the task tree: a task stays when it matches, or when
 // something under it does, so a match is always shown where it lives.
 
+import { dueDay } from '../task-detail/due-date';
 import type { Task, TaskList } from '../task-model/task';
 import { isDone } from '../task-tree/task-tree';
 
@@ -27,7 +28,8 @@ const isMine = (task: Task, viewerId: string): boolean =>
   task.assignees.some((entry) => entry.type === 'user' && entry.id === viewerId);
 
 const isOverdue = (list: TaskList, task: Task, today: string): boolean =>
-  task.dueDate !== null && task.dueDate.slice(0, 10) < today && !isDone(list, task);
+  // The viewer's own calendar day, as the rows and the detail read it, not the UTC day stored.
+  task.dueDate !== null && dueDay(task.dueDate) < today && !isDone(list, task);
 
 /** Whether one task, judged by the list holding it, passes the chip. */
 export const passesChip = (chip: TaskChip, list: TaskList, task: Task, context: FilterContext): boolean => {

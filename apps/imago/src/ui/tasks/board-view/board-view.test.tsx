@@ -718,6 +718,12 @@ describe('Board view', () => {
     const { web, container } = await open(
       routes({
         [L1]: served,
+        'GET /api/pages/l1/tasks/statuses': () =>
+          Response.json({
+            statusConfigs: seededConfigs.map((config) =>
+              config.slug === 'in_progress' ? { ...config, wipLimit: limit } : config,
+            ),
+          }),
         'PUT /api/pages/l1/tasks/statuses': ({ body }) => {
           limit = (body as { statuses: { slug?: string; id: string; wipLimit: number | null }[] }).statuses.find(
             (entry) => entry.id === 'cfg-in_progress',

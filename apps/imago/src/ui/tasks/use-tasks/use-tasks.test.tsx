@@ -598,12 +598,17 @@ describe('moveTo() and setWipLimit()', () => {
         'PATCH /api/pages/l1/tasks/z': () => Response.json(taskItem('z', { status: 'in_progress' })),
         'PATCH /api/pages/l1/tasks/reorder': () => Response.json({ success: true }),
         'PUT /api/pages/l1/tasks/statuses': () => Response.json({ statusConfigs: seededConfigs }),
+        // The server's rows as they stand: Blocked renamed elsewhere since this tab loaded.
+        'GET /api/pages/l1/tasks/statuses': () =>
+          Response.json({
+            statusConfigs: seededConfigs.map((config) => (config.slug === 'blocked' ? { ...config, name: 'Waiting' } : config)),
+          }),
       }),
     );
     await loaded(seen);
     const results: unknown[] = [];
     await act(async () => {
-      results.push(await seen.actions?.moveTo('z', 'in_progress', 0));
+      results.push(await seen.actions?.moveTo('z', { status: 'in_progress', index: 0 }));
     });
     await act(async () => {
       results.push(await seen.actions?.setWipLimit('in_progress', 3));
@@ -611,12 +616,12 @@ describe('moveTo() and setWipLimit()', () => {
     const [, , put] = web.writes();
     assert({
       given: 'a move to another status at the top, then a limit of 3 on that status',
-      should: 'save the status, then the order, then every status with the one limit changed',
+      should: 'save the status, then the order, then the server’s current statuses with the one limit changed',
       actual: {
         results,
         writes: web.writes().map(({ method, url }) => [method, url]),
-        limits: (put?.body as { statuses: { slug?: string; id: string; wipLimit: number | null }[] }).statuses.map(
-          (status) => [status.id, status.wipLimit],
+        limits: (put?.body as { statuses: { name: string; id: string; wipLimit: number | null }[] }).statuses.map(
+          (status) => [status.id, status.name, status.wipLimit],
         ),
       },
       expected: {
@@ -627,10 +632,10 @@ describe('moveTo() and setWipLimit()', () => {
           ['PUT', '/api/pages/l1/tasks/statuses'],
         ],
         limits: [
-          ['cfg-pending', null],
-          ['cfg-in_progress', 3],
-          ['cfg-blocked', null],
-          ['cfg-completed', null],
+          ['cfg-pending', 'To Do', null],
+          ['cfg-in_progress', 'In Progress', 3],
+          ['cfg-blocked', 'Waiting', null],
+          ['cfg-completed', 'Done', null],
         ],
       },
     });
@@ -641,7 +646,7 @@ describe('moveTo() and setWipLimit()', () => {
     await loaded(seen);
     let result: unknown;
     await act(async () => {
-      result = await seen.actions?.moveTo('p', 'completed', 1);
+      result = await seen.actions?.moveTo('p', { status: 'completed', index: 1 });
     });
     assert({
       given: 'a parent with an open subtask dropped into Done',

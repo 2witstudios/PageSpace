@@ -516,6 +516,12 @@ describe('task-management-tools', () => {
           await expect(run()).rejects.toThrow('Start date must be on or before the due date');
           expect(setCalls).toHaveLength(0);
         });
+
+        it('rejects a startDate that is not a date, before any write', async () => {
+          const { run, setCalls } = await runUpdate({}, { startDate: 'next tuesday' });
+          await expect(run()).rejects.toThrow('Invalid start date');
+          expect(setCalls).toHaveLength(0);
+        });
       });
 
       it('broadcasts page:updated when title changes', async () => {

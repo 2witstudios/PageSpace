@@ -9,9 +9,9 @@ describe('treeRooms', () => {
   test('every loaded list', () => {
     assert({
       given: 'a tree with two loaded levels of subtasks',
-      should: 'name the root and each loaded sub-list, depth first',
+      should: 'name the root and every task page, leaves included, depth first',
       actual: treeRooms(tree),
-      expected: ['root', 'page-p', 'page-q'],
+      expected: ['root', 'page-p', 'page-q', 'page-x', 'page-z'],
     });
   });
 });

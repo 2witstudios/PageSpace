@@ -20,8 +20,7 @@ import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
-import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
-import { isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
+import { isStartAfterDue, parseTaskDateInput, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -377,8 +376,14 @@ export async function createTask(
   // due date ("2026-02-19T19:00:00") is a wall-clock time and is read in it;
   // absolute values are untouched (#2404).
   const taskTimezone = context.timezone || 'UTC';
-  const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
-  const parsedStartDate = startDate ? parseDatetimeInTimezone(startDate, taskTimezone) : null;
+  // Read as the REST task routes read them (lib/tasks/task-dates): a value that is not a real
+  // instant is refused here, in words the agent can act on, rather than reaching the database.
+  const dueParse = parseTaskDateInput(dueDate, taskTimezone);
+  if (!dueParse.ok) throw new Error('Invalid due date');
+  const startParse = parseTaskDateInput(startDate, taskTimezone);
+  if (!startParse.ok) throw new Error('Invalid start date');
+  const parsedDueDate = dueParse.value;
+  const parsedStartDate = startParse.value;
   if (isStartAfterDue(parsedStartDate, parsedDueDate)) {
     throw new Error(START_AFTER_DUE_ERROR);
   }

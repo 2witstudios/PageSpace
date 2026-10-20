@@ -134,28 +134,40 @@ export function useRoom({ join, leave }: RoomEvents, id: string | null): void {
 
 /**
  * useRoom for a set of rooms of one kind: a task tree's lists, whose writes
- * are each broadcast to the page of the list they land in. Joins every id
- * once connected and after each reconnect; leaves the ones that drop out of
- * the set, and all of them on unmount. The set is keyed by its sorted ids,
- * so a re-render with the same rooms joins nothing again.
+ * are each broadcast to the page of the list they land in. When the set
+ * changes only the difference is joined or left, so a room that stays (the
+ * root list) is never dropped and re-entered, which would miss what is sent
+ * while realtime checks the join again. Every room is joined again after a
+ * reconnect, and all are left on unmount.
  */
 export function useRooms({ join, leave }: RoomEvents, ids: readonly string[]): void {
   const realtime = useContext(RealtimeContext);
   if (!realtime) throw new Error('useRooms must be used inside <RealtimeProvider>');
   const key = [...new Set(ids)].sort().join('\n');
+  const joined = useRef<ReadonlySet<string>>(new Set());
 
+  // Entering and leaving as the set changes.
   useEffect(() => {
-    if (key === '') return;
-    const rooms = key.split('\n');
+    const socket = realtime.socket();
+    const next = new Set(key === '' ? [] : key.split('\n'));
+    if (socket.connected) {
+      for (const id of joined.current) if (!next.has(id)) socket.emit(leave, id);
+      for (const id of next) if (!joined.current.has(id)) socket.emit(join, id);
+    }
+    joined.current = next;
+  }, [realtime, join, leave, key]);
+
+  // Every room again after a reconnect, since realtime forgets them; all of them left on unmount.
+  useEffect(() => {
     const socket = realtime.socket();
     const enter = () => {
-      for (const id of rooms) socket.emit(join, id);
+      for (const id of joined.current) socket.emit(join, id);
     };
-    if (socket.connected) enter();
     socket.on('connect', enter);
     return () => {
       socket.off('connect', enter);
-      if (socket.connected) for (const id of rooms) socket.emit(leave, id);
+      if (socket.connected) for (const id of joined.current) socket.emit(leave, id);
+      joined.current = new Set();
     };
-  }, [realtime, join, leave, key]);
+  }, [realtime, join, leave]);
 }
