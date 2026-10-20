@@ -105,7 +105,7 @@ export default function nextConfig(phase: string): NextConfig {
     // place: serverExternalPackages covers pg, and the static assets are
     // copied as this config loads. Builds stay on webpack.
     turbopack: {},
-    webpack:(config, { isServer, nextRuntime }) => {
+    webpack: (config, { isServer, nextRuntime }) => {
       if (!isServer) {
         const outputPath = config.output.path ?? path.join(__dirname, '.next');
         config.plugins.push(new CopyPlugin({ patterns: staticAssetCopies(outputPath) }));

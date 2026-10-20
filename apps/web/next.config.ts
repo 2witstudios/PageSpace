@@ -108,8 +108,7 @@ function copyStaticAssets(outputPath: string): void {
 }
 
 // Set by `next dev --turbopack` before this file is evaluated.
-const isTurbopack = Boolean(process.env.TURBOPACK);
-if (isTurbopack) {
+if (process.env.TURBOPACK) {
   copyStaticAssets(path.join(__dirname, ".next"));
 }
 
