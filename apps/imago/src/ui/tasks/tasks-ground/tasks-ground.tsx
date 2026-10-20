@@ -1,24 +1,14 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import useSWR from 'swr';
+import { useState } from 'react';
 import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, useTaskViewStore, viewFor } from '../task-views/task-views';
 import { useDriveTasks } from '../use-tasks/use-tasks';
-import { DRIVES, drivesFrom } from '../../frame/drives/drives';
 import { useHomeDriveId } from '../../frame/drives/home-drive-context';
+import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
-
-/** Drive names by id from the shell's drive list, for naming each row's drive on Home. */
-const useDriveNames = (enabled: boolean): ReadonlyMap<string, string> | undefined => {
-  const { data } = useSWR<unknown>(enabled ? DRIVES : null);
-  return useMemo(
-    () => (enabled ? new Map((drivesFrom(data, null) ?? []).map((drive) => [drive.id, drive.name])) : undefined),
-    [enabled, data],
-  );
-};
 
 /**
  * The Tasks ground: the viewer's tasks in the drive, for the view picked on

@@ -5,6 +5,7 @@ import { useSearchParams } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
 import type { ActivityActionResult } from '@/retained/types/activity-actions';
+import { useDriveNames } from '@/ui/frame/drives/use-drive-names';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
 import { activityQuery, activityRangeLabel, parseActivityUrl, type ActivityUrlState } from '@/ui/tools/activity/activity-query';
 import { ActivityTimeline } from './ActivityTimeline';
@@ -34,6 +35,7 @@ const fetchPage = async (driveId: string | null, state: ActivityUrlState, offset
  */
 export function DriveActivityTimeline({ driveId }: { driveId: string | null }) {
   const rollbackContext = driveId === null ? 'user_dashboard' : 'drive';
+  const driveNames = useDriveNames(driveId === null);
   const searchParams = useSearchParams();
   const urlKey = searchParams.toString();
   const state = useMemo(() => parseActivityUrl(new URLSearchParams(urlKey)), [urlKey]);
@@ -127,6 +129,7 @@ export function DriveActivityTimeline({ driveId }: { driveId: string | null }) {
           context={rollbackContext}
           onRollback={handleRollback}
           rolledBackIds={rolledBackIds}
+          driveNames={driveNames}
         />
       </div>
     </div>
