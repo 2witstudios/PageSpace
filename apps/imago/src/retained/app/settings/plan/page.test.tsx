@@ -155,7 +155,7 @@ describe('PlanPage (/account/plan)', () => {
       expected: {
         rows: [
           'FeatureFreePro',
-          'Credits50 credits to start90 credits/mo',
+          'Credits50 credits to start150 credits/mo',
           'AI modelsStandardStandard + Pro',
           'Buy more credits100 credits per $10100 credits per $10',
           'Storage500MB10GB',
