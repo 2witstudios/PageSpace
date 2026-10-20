@@ -9,9 +9,10 @@ export const boardClass = 'flex min-h-0 flex-1 flex-col gap-3';
 export const boardToolbarClass = 'flex items-center gap-2 text-xs text-ink-muted';
 
 /* The columns (myimago board-view): fixed-width, side by side, the row
-   scrolling across when they outgrow the object and settling on a
-   column's edge after a swipe, so a phone shows one column at a time. */
-export const boardColumnsClass = 'flex min-h-0 flex-1 snap-x snap-proximity items-start gap-3 overflow-x-auto pb-2';
+   scrolling across when they outgrow the object. No scroll snapping: a
+   keyboard drag scrolls this row to follow the card, and snapping would pull
+   it back under the card. */
+export const boardColumnsClass = 'flex min-h-0 flex-1 items-start gap-3 overflow-x-auto pb-2';
 
 /* With lanes, the column heads, then each lane's row of cells, stacked and
    scrolling across together. */
@@ -29,7 +30,7 @@ const well = (target: boolean): string =>
 
 /** A status's column, or one lane's cell of it. */
 export const boardColumnClass = (target: boolean): string =>
-  cn('flex w-board-column flex-none snap-start flex-col gap-2 rounded-lg border p-2', well(target));
+  cn('flex w-board-column flex-none flex-col gap-2 rounded-lg border p-2', well(target));
 
 /** A column folded to a rail: its name on end, still a place to drop. */
 export const boardRailClass = (target: boolean): string =>
@@ -100,7 +101,11 @@ export const boardCardClass = ({ dragging, done }: { readonly dragging: boolean;
 export const boardPreviewClass =
   'flex flex-col gap-2 rounded-lg border border-border bg-surface-raised p-3 shadow-2';
 
-export const boardCardRowClass = 'flex min-w-0 items-center gap-2';
+export const boardCardRowClass = 'flex min-w-0 items-start gap-2';
+
+/** A card's title: two lines before it ellipses, so a narrow column still names its cards. */
+export const boardCardTitleClass = (done: boolean): string =>
+  cn('line-clamp-2 min-w-0 flex-1 text-sm break-words', done ? 'text-ink-faint line-through' : 'text-ink');
 
 /* The handle takes the checkbox's square, as the tree's caret does. */
 export const boardHandleClass =

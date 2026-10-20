@@ -16,6 +16,7 @@ import {
   boardCardClass,
   boardCardMetaClass,
   boardCardRowClass,
+  boardCardTitleClass,
   boardCardsClass,
   boardClass,
   boardColumnClass,
@@ -658,11 +659,11 @@ export function renderBoardCard({
             </button>
           )}
           {href === undefined ? (
-            <span className={taskTitleClass(done)} data-title="">
+            <span className={boardCardTitleClass(done)} data-title="">
               {task.title}
             </span>
           ) : (
-            <Link href={href} prefetch className={taskTitleClass(done)} data-title="">
+            <Link href={href} prefetch className={boardCardTitleClass(done)} data-title="">
               {task.title}
             </Link>
           )}

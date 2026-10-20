@@ -12,9 +12,8 @@ import { TaskListWorkflowsDialog } from '@/retained/components/layout/middle-con
 import type { TaskStatusConfig } from '@/retained/components/layout/middle-content/page-views/task-list/task-list-types';
 import { canManageDrive } from '@/retained/hooks/usePermissions';
 import { useDriveStore } from '@/retained/hooks/useDrive';
-import { Icon } from '../../components/icon/icon';
+import { IconButton } from '../../components/icon-button/icon-button';
 import type { TaskStatus } from '../task-model/task';
-import { taskStripButtonClass } from './task-list-view-class';
 
 export type TaskListToolsProps = {
   readonly driveId: string;
@@ -53,10 +52,7 @@ export function TaskListTools({ driveId, pageId, title, statuses, editable, reva
       ) : null}
       {workflows ? (
         <>
-          <button type="button" className={taskStripButtonClass} onClick={() => setWorkflowsOpen(true)}>
-            <Icon name="workflow" size={14} />
-            Workflows
-          </button>
+          <IconButton name="workflow" label="Workflows" onClick={() => setWorkflowsOpen(true)} />
           <RetainedSurface fill={false}>
             <TaskListWorkflowsDialog
               open={workflowsOpen}

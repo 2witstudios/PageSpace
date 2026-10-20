@@ -5,16 +5,18 @@ export const taskListViewClass = 'flex h-full min-h-0 flex-col';
 /* A thin rule between the strip's groups, as the page strips draw it. */
 export const taskStripDividerClass = 'mx-1 h-4 w-px flex-none bg-hairline';
 
-/* The strip's text controls (Workflows, + Task): 28px, quiet until hovered. */
-export const taskStripButtonClass =
-  'inline-flex h-head-control flex-none cursor-pointer items-center gap-1 rounded-md px-2 text-sm font-medium text-ink-muted hover:bg-surface-overlay hover:text-ink';
 
 /** + Task: the strip's one filled control. */
 export const taskStripPrimaryClass =
   'inline-flex h-head-control flex-none cursor-pointer items-center gap-1 rounded-md bg-accent px-3 text-sm font-medium text-accent-ink hover:bg-accent-strong';
 
-/* The search field's width in the strip; it gives way first when the strip is short. */
-export const taskStripSearchClass = 'w-popover min-w-0 flex-initial';
+/* The search field's width in the strip; it gives way first when the strip is short, and
+   clips rather than spilling over the controls after it. */
+export const taskStripSearchClass = 'flex w-popover min-w-0 flex-initial overflow-hidden';
+
+/* The strip's controls in one row that scrolls sideways when the middle is narrow (Imago
+   docked beside it, or a phone), so none is ever drawn over another or cut off. */
+export const taskStripRowClass = 'flex h-full min-w-0 flex-1 items-center gap-1 overflow-x-auto';
 
 /**
  * The body under the strip. The outline views read in one centred column;

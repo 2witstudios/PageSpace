@@ -258,17 +258,32 @@ test('a card dragged to another column on the Board stays there across a reload'
 
   // A keyboard drag (@dnd-kit's KeyboardSensor): Space picks the card up by its handle, each
   // ArrowRight carries it a whole column along its lane, Space drops it. Each step waits for
-  // the drag's own live-region announcement, so no key outruns the board.
+  // the drag's own live-region announcement, so no key outruns the board. The live region
+  // holds only the latest line, and picking up is at once replaced by where the card is
+  // over, so the pickup is read from that. The sensor starts listening for keys a moment
+  // after it picks the card up, so a key that lands before then changes nothing: a step
+  // presses again only while the announcement has not moved at all.
   const handle = card(column(page, 'To Do'), 'Order banners').getByRole('button', { name: 'Drag Order banners', exact: true });
-  const announced = (text: string) => expect(page.getByText(text, { exact: true })).toHaveCount(1);
+  const live = page.locator('[id^="DndLiveRegion"]');
+  const announced = (text: string) => expect(live).toHaveText(text);
+  const step = async (key: string, from: string, to: string) => {
+    for (let tries = 0; tries < 5; tries += 1) {
+      await page.keyboard.press(key);
+      try {
+        await expect(live).not.toHaveText(from, { timeout: 1000 });
+        break;
+      } catch {
+        // The key was not heard yet: press it again.
+      }
+    }
+    await announced(to);
+  };
   const moved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
   await handle.focus();
   await page.keyboard.press('Space');
-  await announced('Picked up Order banners.');
-  await page.keyboard.press('ArrowRight');
-  await announced('Order banners is over In Progress.');
-  await page.keyboard.press('ArrowRight');
-  await announced('Order banners is over Blocked.');
+  await announced('Order banners is over To Do.');
+  await step('ArrowRight', 'Order banners is over To Do.', 'Order banners is over In Progress.');
+  await step('ArrowRight', 'Order banners is over In Progress.', 'Order banners is over Blocked.');
   await page.keyboard.press('Space');
   await expectOk(await moved);
   await expect(card(column(page, 'Blocked'), 'Order banners')).toBeVisible();

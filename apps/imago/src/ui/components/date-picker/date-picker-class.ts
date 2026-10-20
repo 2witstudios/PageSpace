@@ -4,10 +4,11 @@ import { cn } from '../../cn';
    Clear and Done. Seven 1fr columns fill the popover's width. */
 export const datePickerClass = 'flex flex-col gap-2 p-1';
 
-export const quickPicksClass = 'grid grid-cols-2 gap-1';
+/* One pick a row: a name and its weekday side by side never fit two abreast in the popover. */
+export const quickPicksClass = 'flex flex-col';
 
 export const quickPickClass =
-  'flex items-center justify-between gap-2 rounded-md px-2 py-1 text-xs text-ink transition-colors duration-120 ease-standard hover:bg-surface-overlay disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent';
+  'flex items-center justify-between gap-2 rounded-md px-2 py-1 text-xs whitespace-nowrap text-ink transition-colors duration-120 ease-standard hover:bg-surface-overlay disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent';
 
 export const quickPickDayClass = 'text-ink-faint';
 

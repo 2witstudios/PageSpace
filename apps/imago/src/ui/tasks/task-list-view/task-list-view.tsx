@@ -131,6 +131,8 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
   const storedExpanded = useUiState(selectExpanded);
   const [chip, setChip] = useState<TaskChip>('all');
   const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const strip = useRef<HTMLDivElement>(null);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const body = useRef<HTMLDivElement>(null);
 
@@ -177,7 +179,7 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
         }
       : undefined;
 
-  const strip = renderTaskListStrip({
+  const stripControls = renderTaskListStrip({
     view,
     switchView,
     chip,
@@ -185,6 +187,13 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
     counts,
     query,
     typeQuery: setQuery,
+    searching: searchOpen || query !== '',
+    openSearch: () => {
+      setSearchOpen(true);
+      // The field mounts on this render; the caret goes in once it is there.
+      requestAnimationFrame(() => strip.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus());
+    },
+    closeSearch: () => setSearchOpen(false),
     progress: list === undefined ? undefined : listProgress(list),
     tools: (
       <TaskListTools
@@ -203,7 +212,7 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
     <>
       {live ? <TaskTreeRealtime rootPageId={pageId} tree={list} /> : null}
       {renderTaskListView({
-        strip,
+        strip: <div ref={strip} className="contents">{stripControls}</div>,
         wide: view === 'board' || view === 'roadmap',
         bodyRef: body,
         description:
