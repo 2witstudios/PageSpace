@@ -212,14 +212,16 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const routeStage = stageFor(pathname);
   // The Console's open session rides the query string; with none open, Imago holds its middle.
   const search = useSearchParams()?.toString() ?? '';
-  const stage = consoleGround(routeStage, parseAgentSelection(search).sessionId !== null);
+  const openSessionId = parseAgentSelection(search).sessionId;
+  const stage = consoleGround(routeStage, openSessionId !== null);
   const tier = useViewportTier();
   const phone = tier === 'phone';
   const paneSheetOpen = useUiState(selectPaneSheetOpen);
   // Navigating from the narrow pane sheet closes it, so the page it opened is not left covered.
+  // A Console session pick changes only the query, so the open session counts as navigation too.
   useEffect(() => {
     dispatch(transactions.closePaneSheet, undefined);
-  }, [pathname]);
+  }, [pathname, openSessionId]);
   // Below 1024px (not phone) the pane is a sheet: hidden until Show sidebar, whatever desktop remembers.
   const sheetSections = (): readonly HideableSection[] =>
     !isHideableSection(stage.section)

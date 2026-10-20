@@ -35,6 +35,13 @@ vi.mock('@/retained/components/ai/shared/chat/ChatMessagesArea', () => ({
 
 const imageState = vi.hoisted(() => ({ attachments: [] as ImageAttachment[], files: [] as FileUIPart[], remove: vi.fn() }));
 vi.mock('@/retained-adapters/chat-attachments', () => ({ useChatAttachments: () => ({ attachments: imageState.attachments, addFiles: vi.fn(), removeFile: imageState.remove, getFilesForSend: () => imageState.files }) }));
+// A pane's draft is classic's useDraft: localStorage here, with the server sync stubbed.
+vi.mock('@/retained/lib/draft/draft.io', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/retained/lib/draft/draft.io')>()),
+  fetchDraft: vi.fn(async () => null),
+  saveDraft: vi.fn(async () => {}),
+  deleteDraft: vi.fn(async () => {}),
+}));
 // A pane's own attachments (classic's useImageAttachments) read the same fixture, so the composer wiring holds either way.
 vi.mock('@/retained/lib/ai/shared/hooks/useImageAttachments', () => ({ useImageAttachments: () => ({ attachments: imageState.attachments, addFiles: vi.fn(), removeFile: imageState.remove, getFilesForSend: () => imageState.files }) }));
 vi.mock('@/retained/components/layout/right-sidebar/ai-assistant/SidebarChatTab', () => ({
@@ -147,6 +154,7 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   imageState.attachments = []; imageState.files = []; imageState.remove.mockClear();
   setUiState(createInitialState());
   chatState.current = baseChatState();
@@ -208,6 +216,14 @@ describe('SessionChat', () => {
     const [first, second] = screen.getAllByTestId('chat-input') as HTMLInputElement[];
     fireEvent.change(first, { target: { value: 'for the first agent' } });
     expect([first.value, second.value, getUiState().resources.chatDraft]).toEqual(['for the first agent', '', '']);
+  });
+
+  it('keeps a pane’s unsent draft when the chat unmounts and comes back (History, Settings, another session)', () => {
+    const first = render(<SessionChat agent={agentFixture()} conversationId="conv-keep" context="console" />);
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'half a thought' } });
+    first.unmount();
+    render(<SessionChat agent={agentFixture()} conversationId="conv-keep" context="console" />);
+    expect((screen.getByTestId('chat-input') as HTMLInputElement).value).toBe('half a thought');
   });
 
   it("renders the full messages area (ChatMessagesArea) in 'page' context", () => {

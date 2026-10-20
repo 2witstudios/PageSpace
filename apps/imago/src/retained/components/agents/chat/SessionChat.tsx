@@ -38,6 +38,8 @@ import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
 import { useOpenPagePane } from '@/retained/lib/ai/shared/hooks/useOpenPagePane';
 import { useChatAttachments } from '@/retained-adapters/chat-attachments';
 import { useImageAttachments } from '@/retained/lib/ai/shared/hooks/useImageAttachments';
+import { useDraft } from '@/retained/hooks/useDraft';
+import { buildDraftKey } from '@/retained/lib/draft/draft';
 import { useSideQuestion, parseSideQuestionInput } from '@/retained/components/ai/btw/useSideQuestion';
 import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
 import { SideQuestionCard } from '@/retained/components/ai/btw/SideQuestionCard';
@@ -159,7 +161,13 @@ export function SessionChatView({
   const setSharedDraft = useCallback((next: string | ((current: string) => string)) => {
     dispatch(transactions.setChatDraft, typeof next === 'function' ? next(getUiState().resources.chatDraft) : next);
   }, []);
-  const [ownDraft, setOwnDraft] = useState('');
+  // Keyed by conversation, so it outlives the pane's History and Settings tabs and a session switch.
+  const { draft: ownDraft, setDraft: saveOwnDraft } = useDraft(imagoComposer ? '' : buildDraftKey('ai', conversationId));
+  const ownDraftRef = useRef(ownDraft);
+  ownDraftRef.current = ownDraft;
+  const setOwnDraft = useCallback((next: string | ((current: string) => string)) => {
+    saveOwnDraft(typeof next === 'function' ? next(ownDraftRef.current) : next);
+  }, [saveOwnDraft]);
   const input = imagoComposer ? sharedDraft : ownDraft;
   const setInput = imagoComposer ? setSharedDraft : setOwnDraft;
   const sharedAttachments = useChatAttachments();
