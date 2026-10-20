@@ -22,6 +22,16 @@ export const driveTools: readonly DriveTool[] = ['calendar', 'agents', 'workflow
 
 const isDriveTool = (segment: string): segment is DriveTool => (driveTools as readonly string[]).includes(segment);
 
+/** Each tool's spine name; the agents route is the Console. */
+const driveToolTitles: Readonly<Record<DriveTool, string>> = {
+  calendar: 'Calendar',
+  agents: 'Console',
+  workflows: 'Workflows',
+  activity: 'Activity',
+  members: 'Members',
+  trash: 'Trash',
+};
+
 /** Which panes are open, derived from the URL and nothing else. */
 export type Stage = {
   /** The drive the URL names; null on the user-level routes (/dm, /account). */
@@ -125,7 +135,7 @@ const driveStage = (driveId: string, rest: readonly string[]): Stage => {
       section: 'settings',
       // Each tool has its 260px pane (C-Drive-Calendar … C-Members; Trash keeps the Files pane).
       list: 'tree',
-      object: { kind: 'settings', title: section.charAt(0).toUpperCase() + section.slice(1), tool: section },
+      object: { kind: 'settings', title: driveToolTitles[section], tool: section },
     };
   }
   if (extra.length > 0) return driveChat(driveId);

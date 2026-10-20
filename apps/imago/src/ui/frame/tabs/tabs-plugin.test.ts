@@ -98,6 +98,18 @@ describe('tabsPlugin (IMC-1.5)', () => {
     });
   });
 
+  test('the browser’s Back to a page another tab shows', () => {
+    const opened = openNewTab(first(), { path: '/d1', id: 'new' });
+    const home = syncTabs(opened, nav(null));
+    const popped = syncTabs(home, nav('/d1/files/pricing', { pop: true, direction: 'back' }));
+    assert({
+      given: 'New tab from a page, then the browser’s Back to that page',
+      should: 'return to the tab showing it rather than loading it into the new tab',
+      actual: [paths(popped), popped.resources.activeTab],
+      expected: [['/d1/files/pricing', '/d1'], 'p'],
+    });
+  });
+
   test('New tab', () => {
     const next = syncTabs(setNewTabPending(first(), true), nav('/d1/files/plan'));
     assert({
