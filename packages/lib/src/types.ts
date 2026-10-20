@@ -106,6 +106,10 @@ export interface Drive {
   // field on zustand-persisted Drive objects; consumers treat undefined as personal.
   orgId?: string | null;
   orgVisibility?: 'OPEN' | 'RESTRICTED' | 'PRIVATE';
+  // The drive's mark: its PageSpace avatar route and the palette key its initial sits on (MARK_COLORS).
+  // Optional: predates the fields on zustand-persisted Drive objects; consumers treat undefined as none.
+  avatarUrl?: string | null;
+  color?: string | null;
   // Server-computed effective permission for root-level page create (the
   // drive-wide canEdit rule, custom-role bounded). Optional: zustand-persisted
   // Drive objects predate this field; the UI fails closed when absent (#2627).

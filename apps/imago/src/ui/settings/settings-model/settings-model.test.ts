@@ -28,7 +28,16 @@ describe('driveOf', () => {
       given: "GET /api/drives/[driveId]'s body for a drive the viewer owns",
       should: 'name it, keep its kind and make the viewer its OWNER',
       actual: driveOf({ id: 'd1', name: 'Launch', kind: 'STANDARD', isOwned: true, role: 'MEMBER' }),
-      expected: { id: 'd1', name: 'Launch', kind: 'STANDARD', role: 'OWNER' },
+      expected: { id: 'd1', name: 'Launch', kind: 'STANDARD', role: 'OWNER', avatarUrl: null, color: null, orgId: null },
+    });
+  });
+
+  test('a drive with a mark', () => {
+    assert({
+      given: 'a drive with an image and a color',
+      should: 'carry both for the Appearance section',
+      actual: driveOf({ id: 'd1', name: 'Launch', kind: 'STANDARD', isOwned: true, avatarUrl: '/api/drives/d1/avatar/avatar-1.png', color: 'teal' }),
+      expected: { id: 'd1', name: 'Launch', kind: 'STANDARD', role: 'OWNER', avatarUrl: '/api/drives/d1/avatar/avatar-1.png', color: 'teal', orgId: null },
     });
   });
 
@@ -70,16 +79,16 @@ describe('driveOf', () => {
 });
 
 describe('driveActions', () => {
-  const standard = { id: 'd1', name: 'Launch', kind: 'STANDARD', role: 'OWNER' } as const;
+  const standard = { id: 'd1', name: 'Launch', kind: 'STANDARD', role: 'OWNER', avatarUrl: null, color: null, orgId: null } as const;
 
   test('owner and admin of a standard drive', () => {
     assert({
       given: 'a standard drive the viewer owns or administers',
-      should: 'offer rename and the Imago access toggle',
+      should: 'offer rename, the Imago access toggle and the drive\'s appearance',
       actual: [driveActions(standard), driveActions({ ...standard, role: 'ADMIN' })],
       expected: [
-        { rename: true, imagoAccess: true },
-        { rename: true, imagoAccess: true },
+        { rename: true, imagoAccess: true, appearance: true },
+        { rename: true, imagoAccess: true, appearance: true },
       ],
     });
   });
@@ -87,18 +96,18 @@ describe('driveActions', () => {
   test('a member', () => {
     assert({
       given: 'a standard drive the viewer is only a member of',
-      should: 'offer only their own Imago switch: renaming is for admins',
+      should: 'offer only their own Imago switch: renaming and appearance are for admins',
       actual: driveActions({ ...standard, role: 'MEMBER' }),
-      expected: { rename: false, imagoAccess: true },
+      expected: { rename: false, imagoAccess: true, appearance: false },
     });
   });
 
   test('the Home drive', () => {
     assert({
       given: "the viewer's own Home drive",
-      should: 'offer neither rename nor the toggle, as the Home drive guards refuse both',
+      should: 'offer neither rename nor the toggle, as the Home drive guards refuse both, but let its owner style it',
       actual: driveActions({ ...standard, kind: 'HOME' }),
-      expected: { rename: false, imagoAccess: false },
+      expected: { rename: false, imagoAccess: false, appearance: true },
     });
   });
 });

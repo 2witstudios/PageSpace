@@ -20,6 +20,9 @@ const apiDrive = (id: string, name: string, kind: 'HOME' | 'STANDARD' = 'STANDAR
   canCreatePages: true,
   lastAccessedAt: null,
   homePageId: null,
+  orgId: null,
+  avatarUrl: null,
+  color: null,
 });
 
 describe('drivesFrom()', () => {
@@ -28,13 +31,13 @@ describe('drivesFrom()', () => {
 
     assert({
       given: '/api/drives listing Home among three other drives',
-      should: 'keep only id, name, kind and last opened, with the Home drive first and the rest by name, ignoring case',
+      should: 'keep only id, name, kind, last opened and the drive mark, with the Home drive first and the rest by name, ignoring case',
       actual: drivesFrom(body, 'home-1'),
       expected: [
-        { id: 'home-1', name: 'Home', kind: 'HOME', lastAccessedAt: null },
-        { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null },
-        { id: 'd-beta', name: 'beta', kind: 'STANDARD', lastAccessedAt: null },
-        { id: 'd-zeta', name: 'zeta', kind: 'STANDARD', lastAccessedAt: null },
+        { id: 'home-1', name: 'Home', kind: 'HOME', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null },
+        { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null },
+        { id: 'd-beta', name: 'beta', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null },
+        { id: 'd-zeta', name: 'zeta', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null },
       ],
     });
   });
@@ -74,7 +77,7 @@ describe('drivesFrom()', () => {
       given: 'trashed and malformed entries beside a drive',
       should: 'drop each instead of inventing a name or kind for it',
       actual: drivesFrom(body, null),
-      expected: [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null }],
+      expected: [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null }],
     });
 
     assert({
@@ -85,8 +88,19 @@ describe('drivesFrom()', () => {
     });
   });
 
+  test('the drive mark', () => {
+    const body = [{ ...apiDrive('d-alpha', 'Alpha'), avatarUrl: '/api/drives/d-alpha/avatar/avatar-1.png', color: 'teal', orgId: 'org-1' }];
+
+    assert({
+      given: 'a drive with an image, a color and an org',
+      should: 'carry all three for the drive tile',
+      actual: drivesFrom(body, null)?.map(({ avatarUrl, color, orgId }) => ({ avatarUrl, color, orgId })),
+      expected: [{ avatarUrl: '/api/drives/d-alpha/avatar/avatar-1.png', color: 'teal', orgId: 'org-1' }],
+    });
+  });
+
   test('the server’s own list', () => {
-    const summaries: DriveSummary[] = [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null }];
+    const summaries: DriveSummary[] = [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null }];
 
     assert({
       given: 'the summaries the shell layout rendered with',
@@ -133,7 +147,7 @@ describe('switchDriveHref()', () => {
 });
 
 describe('driveStatus()', () => {
-  const drives: DriveSummary[] = [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null }];
+  const drives: DriveSummary[] = [{ id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', lastAccessedAt: null, avatarUrl: null, color: null, orgId: null }];
 
   test('each answer', () => {
     assert({

@@ -13,12 +13,11 @@ import { OrgMark } from '@/components/orgs/OrgMark';
 import { OrgSettingsShell, type OrgSettingsContext } from '@/components/orgs/OrgSettingsShell';
 import { isOrgKey, orgKeys, patchOrganization, removeOrgAvatar, uploadOrgAvatar, type OrgMember } from '@/lib/orgs/org-api';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import { ORG_AVATAR_MIME_TYPES } from '@pagespace/lib/organizations/org-avatar-core';
+import { AVATAR_ACCEPT } from '@pagespace/lib/avatars/avatar-core';
 import { orgErrorMessage } from '@/lib/orgs/org-error-copy';
 import { isValidOrgSlug } from '@/lib/orgs/org-slug';
 
 const EDITING_ID = 'org-general';
-const AVATAR_ACCEPT = ORG_AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
 
 /**
  * ORG-1: the org avatar is an image uploaded to PageSpace (JPEG, PNG, GIF or WebP, up to 5 MB) and

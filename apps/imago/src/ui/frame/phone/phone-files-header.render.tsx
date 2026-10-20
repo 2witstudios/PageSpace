@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { renderIcon } from '../../components/icon/icon.render';
+import { renderDriveMark, type DriveMarkDrive } from '../../components/drive-mark/drive-mark.render';
 import {
   phoneHeadClass,
   phoneHeadControlClass,
@@ -10,12 +11,16 @@ import {
   phoneSwitchLabelClass,
   phoneSwitchSubClass,
   phoneSwitchTileClass,
+  phoneSwitchTileFillClass,
+  phoneSwitchTileShapeClass,
   phoneSwitchTitleClass,
 } from './phone-files-header-class';
 
 export type PhoneFilesHeaderRenderProps = {
   /** The open drive's name; null until the API has listed it. */
   readonly driveName: string | null;
+  /** The open drive's mark (image, color, its org's image); its initial alone without one. */
+  readonly mark?: Omit<DriveMarkDrive, 'name'>;
   readonly title: string;
   readonly unread: number;
   readonly notificationsHref: string;
@@ -36,7 +41,7 @@ export type PhoneFilesHeaderRenderProps = {
  * spine that carries them elsewhere is gone.
  */
 export function renderPhoneFilesHeader(props: PhoneFilesHeaderRenderProps): ReactNode {
-  const { driveName, title, unread, notificationsHref, onSwitch, open, onSearch, newPage, switcher } = props;
+  const { driveName, mark, title, unread, notificationsHref, onSwitch, open, onSearch, newPage, switcher } = props;
   return (
     <header className={phoneHeadClass}>
       <button
@@ -47,9 +52,13 @@ export function renderPhoneFilesHeader(props: PhoneFilesHeaderRenderProps): Reac
         aria-expanded={open}
         onClick={onSwitch}
       >
-        <span className={phoneSwitchTileClass} aria-hidden="true">
-          {driveName === null ? renderIcon({ name: 'grid', size: 16 }) : driveName.trim().slice(0, 1).toUpperCase()}
-        </span>
+        {driveName === null ? (
+          <span className={phoneSwitchTileClass} aria-hidden="true">
+            {renderIcon({ name: 'grid', size: 16 })}
+          </span>
+        ) : (
+          renderDriveMark({ drive: { ...mark, name: driveName }, shape: phoneSwitchTileShapeClass, fill: phoneSwitchTileFillClass })
+        )}
         <span className={phoneSwitchLabelClass}>
           <span className={phoneSwitchTitleClass}>{title}</span>
           {driveName === null ? null : <span className={phoneSwitchSubClass}>{driveName}</span>}

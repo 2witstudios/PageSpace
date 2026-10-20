@@ -20,7 +20,7 @@ export default async function ShellLayout({ children }: Readonly<{ children: Rea
     getHomeDrive(viewer.userId),
     listAccessibleDrives(viewer.actor),
   ]);
-  const initialDrives: DriveSummary[] = drives.map(({ id, name, kind }) => ({ id, name, kind }));
+  const initialDrives: DriveSummary[] = drives.map(({ id, name, kind, avatarUrl, color, orgId }) => ({ id, name, kind, avatarUrl, color, orgId }));
   return (
     <RetainedProvider><Shell homeDriveId={home?.id ?? null} initialDrives={initialDrives}>
       {children}

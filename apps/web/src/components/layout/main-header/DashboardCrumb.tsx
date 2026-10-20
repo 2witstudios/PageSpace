@@ -1,6 +1,7 @@
 "use client";
 
 import { OrgMark } from '@/components/orgs/OrgMark';
+import { DriveMark, hasOwnDriveMark } from '@/components/drives/DriveMark';
 import { useMyOrganizations } from '@/hooks/useMyOrganizations';
 import { useState } from "react";
 import Link from "next/link";
@@ -68,6 +69,13 @@ export default function DashboardCrumb() {
   // the org's name is in the tooltip, never a second crumb.
   const driveOrgId = useDriveStore((state) =>
     driveId ? state.drives.find((drive) => drive.id === driveId)?.orgId ?? null : null
+  );
+  // The drive's own mark, when it has one, stands ahead of its org's.
+  const driveAvatarUrl = useDriveStore((state) =>
+    driveId ? state.drives.find((drive) => drive.id === driveId)?.avatarUrl ?? null : null
+  );
+  const driveColor = useDriveStore((state) =>
+    driveId ? state.drives.find((drive) => drive.id === driveId)?.color ?? null : null
   );
   const { orgById } = useMyOrganizations();
   const org = orgById(driveOrgId);
@@ -145,8 +153,8 @@ export default function DashboardCrumb() {
             aria-expanded={pickerOpen}
             className={DRIVE_CRUMB_CLASS}
           >
-            {org ? (
-              <OrgMark name={org.name} avatarUrl={org.avatarUrl} size="sm" />
+            {(org || hasOwnDriveMark({ name: driveName, avatarUrl: driveAvatarUrl, color: driveColor })) ? (
+              <DriveMark drive={{ name: driveName, avatarUrl: driveAvatarUrl, color: driveColor }} org={org} size="sm" />
             ) : (
               <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             )}

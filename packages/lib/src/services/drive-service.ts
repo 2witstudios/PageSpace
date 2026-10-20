@@ -22,6 +22,7 @@ import { checkActorDriveAuthentication, filterDrivesForActor } from '../permissi
 import { isDriveLead } from '../permissions/drive-relationship';
 import type { OpenRoleFloor } from '../organizations/policies-core';
 import { homeDriveActionError, isHomeDrive } from './drive-guards';
+import { isAvatarPath, type MarkColor } from '../avatars/avatar-core';
 
 // ============================================================================
 // Types
@@ -53,6 +54,10 @@ export interface DriveWithAccess {
   orgId: string | null;
   /** Meaningful only when orgId is set (DRV-4). */
   orgVisibility: OrgDriveVisibility;
+  /** The drive's own mark image (its PageSpace avatar route), null without one. */
+  avatarUrl: string | null;
+  /** The mark palette key its initial sits on (MARK_COLORS), null for the default tile. */
+  color: string | null;
 }
 
 export interface ListDrivesOptions {
@@ -74,6 +79,7 @@ export interface UpdateDriveInput {
   publishDefaultOgImageUrl?: string | null;
   notFoundPageId?: string | null;
   publishFaviconUrl?: string | null;
+  color?: MarkColor | null;
 }
 
 export interface DriveAccessInfo {
@@ -562,6 +568,10 @@ export async function updateDrive(
     updateData.publishFaviconUrl = input.publishFaviconUrl;
   }
 
+  if (input.color !== undefined) {
+    updateData.color = input.color;
+  }
+
   // Home drives cannot be renamed; other updates (drivePrompt, homePageId) are allowed.
   const whereClause = input.name !== undefined
     ? and(eq(drives.id, driveId), ne(drives.kind, 'HOME'))
@@ -574,6 +584,29 @@ export async function updateDrive(
     .returning();
 
   return updated || null;
+}
+
+export type SetDriveAvatarResult =
+  /** previousAvatarUrl: the path this call replaced (its file is now the caller's to delete), or null. */
+  | { ok: true; drive: typeof drives.$inferSelect; previousAvatarUrl: string | null }
+  | { ok: false; reason: 'not_found' | 'invalid_avatar' };
+
+/**
+ * Sets (or clears, with null) the drive's avatar. Only this drive's own PageSpace avatar path is
+ * accepted — the file the avatar route stored — never an outside URL; the database refuses anything
+ * else too (drives_avatar_url_chk). The drive row is locked while the old value is read and the new
+ * one written, so concurrent switches each replace a distinct path and the caller deletes exactly the
+ * file it replaced (the same order as setOrganizationAvatar). The caller has already checked the
+ * actor is a drive Owner or Admin.
+ */
+export async function setDriveAvatar(driveId: string, avatarUrl: string | null): Promise<SetDriveAvatarResult> {
+  if (avatarUrl !== null && !isAvatarPath('drive', driveId, avatarUrl)) return { ok: false, reason: 'invalid_avatar' };
+  return db.transaction(async (tx): Promise<SetDriveAvatarResult> => {
+    const [current] = await tx.select({ avatarUrl: drives.avatarUrl }).from(drives).where(eq(drives.id, driveId)).for('update');
+    if (!current) return { ok: false, reason: 'not_found' };
+    const [drive] = await tx.update(drives).set({ avatarUrl, updatedAt: new Date() }).where(eq(drives.id, driveId)).returning();
+    return { ok: true, drive, previousAvatarUrl: current.avatarUrl };
+  });
 }
 
 /**

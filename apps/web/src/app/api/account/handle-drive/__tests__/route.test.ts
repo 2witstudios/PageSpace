@@ -84,6 +84,15 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
+vi.mock('@/lib/auth/request-actor', () => ({ actorFromAuth: vi.fn(() => ({ userId: 'user_123' })) }));
+
+const mockMintDriveAvatarToken = vi.hoisted(() => vi.fn());
+const mockCallDriveAvatarStorage = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/drives/drive-avatar-storage', () => ({
+  mintDriveAvatarToken: (...args: unknown[]) => mockMintDriveAvatarToken(...args),
+  callDriveAvatarStorage: (...args: unknown[]) => mockCallDriveAvatarStorage(...args),
+}));
+
 // Mock activity logger (boundary)
 vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn(),
@@ -128,6 +137,8 @@ const mockDrive = (overrides: { id: string; name: string; ownerId?: string }) =>
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
   orgId: null,
   orgVisibility: 'OPEN' as const,
 });
@@ -164,6 +175,7 @@ describe('POST /api/account/handle-drive', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockMintDriveAvatarToken.mockResolvedValue(null);
 
     // The transfer re-reads the drive row under FOR UPDATE inside its transaction (D-OW-64).
     const lockedSelect = { from: () => ({ where: () => ({ for: () => mockLockedDrive() }) }) };
@@ -561,6 +573,36 @@ describe('POST /api/account/handle-drive', () => {
       expect(loggers.auth.info).toHaveBeenCalledWith(
         `Drive deleted during account deletion preparation: drive_abc by user_123`
       );
+    });
+
+    it('should empty the drive image folder once the drive is gone', async () => {
+      const deleteMock = setupDeleteMock();
+      mockMintDriveAvatarToken.mockResolvedValueOnce('drive-token');
+      mockCallDriveAvatarStorage.mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'delete' }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(mockCallDriveAvatarStorage).toHaveBeenCalledWith(mockDriveId, 'drive-token', { method: 'DELETE' });
+      expect(deleteMock.mock.invocationCallOrder[0]).toBeLessThan(mockCallDriveAvatarStorage.mock.invocationCallOrder[0]);
+    });
+
+    it('should still delete the drive when its image folder cannot be emptied', async () => {
+      const deleteMock = setupDeleteMock();
+      mockMintDriveAvatarToken.mockResolvedValueOnce('drive-token');
+      mockCallDriveAvatarStorage.mockRejectedValueOnce(new Error('processor down'));
+
+      const response = await POST(new Request('https://example.com/api/account/handle-drive', {
+        method: 'POST',
+        body: JSON.stringify({ driveId: mockDriveId, action: 'delete' }),
+      }));
+
+      expect(response.status).toBe(200);
+      expect(deleteMock).toHaveBeenCalledTimes(1);
+      expect(loggers.auth.warn).toHaveBeenCalledWith('Drive avatar folder was not removed', { driveId: mockDriveId });
     });
 
     it('should not require newOwnerId for delete action', async () => {

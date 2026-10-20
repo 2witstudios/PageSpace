@@ -103,6 +103,10 @@ vi.mock('../../api/avatar', () => ({
   deleteUserAvatars: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('../../api/subject-avatar', () => ({
+  deleteSubjectAvatars: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports after mocks
 // ---------------------------------------------------------------------------
@@ -111,6 +115,7 @@ import { runAccountErasureJob } from '../account-erasure-worker';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { deleteUserAvatars } from '../../api/avatar';
+import { deleteSubjectAvatars } from '../../api/subject-avatar';
 import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 
 describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () => {
@@ -197,5 +202,33 @@ describe('runAccountErasureJob — web-recorded steps', () => {
     expect(recordedSteps).toContain('delete-user');
     expect(recordedSteps).not.toContain('revoke-apple-tokens');
     expect(recordedSteps).not.toContain('stripe-customer');
+  });
+});
+
+describe('runAccountErasureJob — drive image folders', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('given a solo drive to delete, should empty its image folder before the drive row goes', async () => {
+    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValueOnce([{ id: 'drive-1', name: 'Work' }]);
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+
+    expect(deleteSubjectAvatars).toHaveBeenCalledWith('drive', 'drive-1');
+    expect(accountRepository.deleteDrive).toHaveBeenCalledWith('drive-1');
+    expect(vi.mocked(deleteSubjectAvatars).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(accountRepository.deleteDrive).mock.invocationCallOrder[0]);
+  });
+
+  it('given storage that cannot empty the folder, should fail the request for a retry and keep the drive for it', async () => {
+    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValueOnce([{ id: 'drive-1', name: 'Work' }]);
+    vi.mocked(deleteSubjectAvatars).mockRejectedValueOnce(new Error('storage down'));
+    await expect(runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' }))
+      .rejects.toThrow('account-erasure failed at step drive-disposition: storage down');
+
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith('dsr-1', 'failed', expect.anything());
   });
 });
