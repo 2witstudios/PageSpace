@@ -99,10 +99,10 @@ const staticAssetCopies = (outputPath: string) => [
   },
 ];
 
-// The config loads in every dev worker, so a copy newer than its source is kept.
+// Always a full copy (13 MB of Monaco, well under 0.2 s): a freshness check on
+// the directory would miss a file changed inside it.
 function copyStaticAssets(outputPath: string): void {
   for (const { from, to } of staticAssetCopies(outputPath)) {
-    if (fs.existsSync(to) && fs.statSync(to).mtimeMs >= fs.statSync(from).mtimeMs) continue;
     fs.cpSync(from, to, { recursive: true, force: true });
   }
 }
