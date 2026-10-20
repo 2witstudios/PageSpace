@@ -24,6 +24,9 @@ const AVATAR_EXTENSIONS: Readonly<Record<string, string>> = {
 /** The accepted upload types: raster images only (an SVG can carry script). */
 export const AVATAR_MIME_TYPES: readonly string[] = Object.keys(AVATAR_EXTENSIONS);
 
+/** The file picker's accept list: each accepted type once ('image/jpg' is an alias of 'image/jpeg'). */
+export const AVATAR_ACCEPT: string = AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
+
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
 
 const NONCE_PATTERN = /^[a-z0-9]{1,32}$/;
@@ -73,3 +76,6 @@ export type MarkColor = (typeof MARK_COLORS)[number];
 
 export const isMarkColor = (value: unknown): value is MarkColor =>
   typeof value === 'string' && (MARK_COLORS as readonly string[]).includes(value);
+
+/** A palette key as people read it: 'teal' is "Teal". */
+export const markColorName = (color: MarkColor): string => color.charAt(0).toUpperCase() + color.slice(1);

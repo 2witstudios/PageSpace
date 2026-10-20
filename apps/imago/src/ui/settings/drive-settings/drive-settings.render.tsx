@@ -1,6 +1,6 @@
 import type { KeyboardEvent, ReactNode } from 'react';
 import { homeDriveActionError } from '@pagespace/lib/services/drive-guards';
-import { AVATAR_MIME_TYPES, MARK_COLORS, isMarkColor, type MarkColor } from '@pagespace/lib/avatars/avatar-core';
+import { AVATAR_ACCEPT, MARK_COLORS, isMarkColor, markColorName, type MarkColor } from '@pagespace/lib/avatars/avatar-core';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderBadge } from '../../components/badge/badge.render';
 import { renderButton } from '../../components/button/button.render';
@@ -67,10 +67,6 @@ export type DriveSettingsRenderProps = {
   /** The owning org's avatar, which the drive's tile shows until it has a mark of its own. */
   readonly orgAvatarUrl?: string | null;
 };
-
-const AVATAR_ACCEPT = AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
-
-const colorName = (color: MarkColor): string => color.charAt(0).toUpperCase() + color.slice(1);
 
 const ROLE_LABELS: Readonly<Record<DriveRole, string>> = { OWNER: 'Owner', ADMIN: 'Admin', MEMBER: 'Member' };
 
@@ -179,7 +175,7 @@ const appearanceSection = ({ drive, appearance, notice, orgAvatarUrl }: DriveSet
       <ul aria-label="Color" className={swatchesClass}>
         {swatch('Default', appearancePreviewFillClass, color === null, appearance, () => color === null || appearance.setColor(null))}
         {MARK_COLORS.map((option) =>
-          swatch(colorName(option), markFillClass[option], color === option, appearance, () => color === option || appearance.setColor(option)),
+          swatch(markColorName(option), markFillClass[option], color === option, appearance, () => color === option || appearance.setColor(option)),
         )}
       </ul>
       {noticeAt(notice, 'appearance')}

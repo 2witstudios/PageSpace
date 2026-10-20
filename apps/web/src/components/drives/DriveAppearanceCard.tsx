@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Check } from 'lucide-react';
-import { AVATAR_MIME_TYPES, MARK_COLORS, isMarkColor, type MarkColor } from '@pagespace/lib/avatars/avatar-core';
+import { AVATAR_ACCEPT, MARK_COLORS, isMarkColor, markColorName, type MarkColor } from '@pagespace/lib/avatars/avatar-core';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DriveMark } from '@/components/drives/DriveMark';
@@ -11,10 +11,6 @@ import { MARK_COLOR_CLASSES } from '@/components/marks/Mark';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { removeDriveAvatar, setDriveColor, uploadDriveAvatar } from '@/lib/drives/drive-avatar-api';
 import { cn } from '@/lib/utils';
-
-const AVATAR_ACCEPT = AVATAR_MIME_TYPES.filter((type) => type !== 'image/jpg').join(',');
-
-const colorName = (color: MarkColor): string => color.charAt(0).toUpperCase() + color.slice(1);
 
 interface DriveAppearanceCardProps {
   drive: { id: string; name: string; avatarUrl?: string | null; color?: string | null };
@@ -103,8 +99,8 @@ export function DriveAppearanceCard({ drive, org, onChanged }: DriveAppearanceCa
                 key={option}
                 type="button"
                 aria-pressed={color === option}
-                aria-label={colorName(option)}
-                title={colorName(option)}
+                aria-label={markColorName(option)}
+                title={markColorName(option)}
                 disabled={busy}
                 onClick={() => pickColor(option)}
                 className={cn(

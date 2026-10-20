@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  AVATAR_ACCEPT,
   avatarFilenameFromPath,
   avatarPath,
   avatarStorageKey,
   isAvatarPath,
   isMarkColor,
   MARK_COLORS,
+  markColorName,
 } from '../avatar-core';
 
 describe('drive avatar paths (the shared avatar rules, for the drive subject)', () => {
@@ -42,5 +44,15 @@ describe('mark colors', () => {
   it('accepts only a palette key', () => {
     for (const color of MARK_COLORS) expect(isMarkColor(color)).toBe(true);
     for (const value of ['#ff0000', 'Teal', '', null, 3, 'red; background:url(x)']) expect(isMarkColor(value)).toBe(false);
+  });
+
+  it('names a key as people read it', () => {
+    expect(markColorName('teal')).toBe('Teal');
+  });
+});
+
+describe('the file picker accept list', () => {
+  it('lists each accepted type once, without the image/jpg alias', () => {
+    expect(AVATAR_ACCEPT).toBe('image/png,image/jpeg,image/gif,image/webp');
   });
 });
