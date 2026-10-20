@@ -10,6 +10,7 @@ vi.mock('@/retained-adapters/retained-provider', () => ({
 vi.mock('@/retained/components/layout/left-sidebar/AgentsSidebar', () => ({ default: () => <div data-agents-sidebar="" /> }));
 
 const { ConsolePane } = await import('./console-pane');
+const { useAgentSurfaceStore } = await import('@/retained/stores/agents/useAgentSurfaceStore');
 
 afterEach(unmountAll);
 
@@ -25,6 +26,19 @@ describe('ConsolePane', () => {
         pane?.querySelector('[data-retained] [data-agents-sidebar]') !== null,
       ],
       expected: ['ConsoleClose sidebar', true],
+    });
+  });
+
+  test('sets the session store’s drive scope itself, every drive on Home', () => {
+    mount(<ConsolePane driveId="d1" close={null} />);
+    const drive = useAgentSurfaceStore.getState().driveId;
+    unmountAll();
+    mount(<ConsolePane driveId="home" close={null} allDrives />);
+    assert({
+      given: 'a drive’s Console pane, then Home’s, with no route surface mounted (a phone)',
+      should: 'scope picks to that drive, then to every drive',
+      actual: [drive, useAgentSurfaceStore.getState().driveId],
+      expected: ['d1', null],
     });
   });
 });

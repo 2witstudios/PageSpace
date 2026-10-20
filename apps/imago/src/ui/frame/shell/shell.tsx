@@ -257,7 +257,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       ) : !missing && isConsole(stage) ? (
         // The open session's bar is the Console's head; it closes the session, not the route.
         <SessionToolbar
-          driveId={stage.driveId ?? undefined}
+          // Home's Console lists every drive's sessions, so its bar reads them all too.
+          driveId={stage.driveId === homeDriveId ? undefined : stage.driveId ?? undefined}
           leading={opener(stage, columns, 'page')}
           trailing={columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
         />
