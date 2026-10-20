@@ -121,7 +121,7 @@ describe('renderRailButton()', () => {
     assert({
       given: 'any rail item',
       should: 'carry its label in a tooltip hidden from assistive technology',
-      actual: /<span class="pointer-events-none[^"]*" aria-hidden="true">Files<\/span>/.test(html),
+      actual: /<span class="pointer-events-none[^"]*" aria-hidden="true" data-rail-tooltip="">Files<\/span>/.test(html),
       expected: true,
     });
   });

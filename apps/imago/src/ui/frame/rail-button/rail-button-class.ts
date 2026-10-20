@@ -36,14 +36,18 @@ export const spineListClass = 'm-0 flex list-none flex-col items-center gap-rail
 
 /**
  * The spine's top and middle: it takes the height the foot leaves and scrolls on a short window.
- * Only this region scrolls; the foot and its More menu sit outside it, so nothing that opens
- * sideways is clipped by an overflow box.
+ * Its tooltips are fixed, so they open beside the tile without being clipped by this box (see
+ * rail-tooltip.ts for where they are placed).
  */
 export const spineScrollClass = 'flex min-h-0 w-full flex-1 flex-col items-center overflow-y-auto';
 
 /** The 28px rule between the sections and the tools. */
 export const spineDividerClass = 'my-2 h-px w-spine-divider flex-none bg-spine-active';
 
-/** The label beside a hovered or focused tile; the tile carries the name. */
+/**
+ * The label beside a hovered or focused tile; the tile carries the name. It is `fixed` so the
+ * spine's scroll box cannot clip it, and rail-tooltip.ts sets its top and left. Hover only
+ * applies to a fine pointer, so a tap on touch does not leave the label up.
+ */
 export const railTooltipClass =
-  'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100';
+  'pointer-events-none invisible fixed top-0 left-0 z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard pointer-fine:group-hover:visible pointer-fine:group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100';

@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { dispatch, transactions } from '../../store/transactions';
 import { isHideableSection, type PaneLayout, type Stage } from '../stage/stage';
 import { useUnreadBadges } from '../../messages/use-messages/use-messages';
@@ -20,6 +20,7 @@ import {
   settingsItem,
 } from './rail-items';
 import { renderRail } from './rail.render';
+import { attachRailTooltips } from './rail-tooltip';
 
 export type RailProps = {
   readonly stage: Stage;
@@ -42,6 +43,8 @@ export function Rail({ stage, layout, homeDriveId, brand, footer }: RailProps) {
   const notifications = useNotificationCount();
   const driveId = railDrive(stage, homeDriveId);
   const { section } = stage;
+
+  useEffect(() => attachRailTooltips(), []);
 
   return renderRail({
     items: railItems(driveId),
