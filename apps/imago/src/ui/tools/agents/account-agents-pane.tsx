@@ -5,10 +5,13 @@ import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useDriveEnvs } from '@/retained/hooks/drive-envs/useDriveEnvs';
 import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
+import { usePageAgents } from '@/retained/hooks/page-agents/usePageAgents';
+import { useSpawnSession } from '@/retained/components/agents/useSpawnSession';
 import { renderIcon } from '../../components/icon/icon.render';
 import { cn } from '../../cn';
 import { renderToolPane } from '../../frame/tool-pane/tool-pane.render';
 import { useAgentSessions, type AgentSessionRow } from './agents-data';
+import { renderSessionAction } from './agents-pane';
 import { agoLabel, filterSessions, groupSessionsByEnv, type SessionGroup } from './agents-pane.model';
 import { envStatusOf, type EnvDotTone } from './account-agents-pane.model';
 
@@ -28,16 +31,22 @@ const sessionRowClass = (selected: boolean): string =>
 
 /**
  * Home's Console pane (C-Account-Agents): the agent sessions of every drive the viewer can
- * reach, grouped drive → environment, each environment with its status dot. The selected session
- * is the shared agent-surface selection, so the middle follows it. A drive's environments load per
- * drive, so each drive is its own component and the list is the drive list the store holds.
+ * reach, grouped drive → environment, each environment with its status dot. Session starts one
+ * in Home, the drive it is opened on, as Home's Tasks creates its lists in Home. The selected
+ * session is the shared agent-surface selection, so the middle follows it. A drive's
+ * environments load per drive, so each drive is its own component and the list is the drive
+ * list the store holds.
  */
-export function AccountAgentsPane({ close }: { readonly close: ReactNode }): ReactNode {
+export function AccountAgentsPane({ driveId, close }: { readonly driveId: string; readonly close: ReactNode }): ReactNode {
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
-  const { sessions, isLoading, error } = useAgentSessions(undefined);
+  const { sessions, isLoading, error, mutate: refreshSessions } = useAgentSessions(undefined);
+  const { agentsByDrive } = usePageAgents(undefined, { enabled: true });
+  const { openSpawn, paletteElement } = useSpawnSession(agentsByDrive, () => {
+    refreshSessions();
+  });
   const [query, setQuery] = useState('');
 
   useEffect(() => {
@@ -53,8 +62,9 @@ export function AccountAgentsPane({ close }: { readonly close: ReactNode }): Rea
     .filter((entry) => query.trim() === '' || entry.sessions.length > 0);
 
   return renderToolPane({
-    title: 'Agents',
-    label: 'Agent sessions',
+    title: 'Console',
+    label: 'Console: agents and sessions',
+    actions: renderSessionAction(() => openSpawn(driveId, drives.find((drive) => drive.id === driveId)?.name ?? null)),
     close,
     children: (
       <>
@@ -83,6 +93,8 @@ export function AccountAgentsPane({ close }: { readonly close: ReactNode }): Rea
             onSelect={onSelect}
           />
         ))}
+
+        {paletteElement}
       </>
     ),
   });

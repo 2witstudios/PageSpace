@@ -7,7 +7,7 @@ import { mount, unmountAll } from '@/ui/test-support/dom';
 vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock('@/retained/components/agents/AgentsSurface', () => ({ default: () => <div data-surface="" /> }));
 vi.mock('@/ui/tools/agents/session-toolbar', () => ({ SessionToolbar: () => <div data-toolbar="" /> }));
-vi.mock('@/ui/tools/agents/account-agents-pane', () => ({ AccountAgentsPane: () => <section aria-label="Agent sessions" /> }));
+vi.mock('@/ui/tools/agents/account-agents-pane', () => ({ AccountAgentsPane: () => <section aria-label="Console: agents and sessions" /> }));
 
 const { AgentsWorkspace } = await import('./agents-workspace');
 
@@ -20,7 +20,7 @@ describe('AgentsWorkspace (IMC-7.29)', () => {
       given: 'no drive (Home, the dashboard)',
       should: 'render the session toolbar and surface, with the every-drive pane left to the shell',
       actual: [
-        root.querySelector('section[aria-label="Agent sessions"]') !== null,
+        root.querySelector('section[aria-label="Console: agents and sessions"]') !== null,
         root.querySelector('[data-toolbar]') !== null,
         root.querySelector('[data-surface]') !== null,
       ],
@@ -33,7 +33,7 @@ describe('AgentsWorkspace (IMC-7.29)', () => {
     assert({
       given: 'a drive',
       should: 'leave the session list to the shell pane and render only the workspace',
-      actual: root.querySelector('section[aria-label="Agent sessions"]'),
+      actual: root.querySelector('section[aria-label="Console: agents and sessions"]'),
       expected: null,
     });
   });

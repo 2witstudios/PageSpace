@@ -25,7 +25,7 @@ export function ToolPane({ tool, driveId, close }: ToolPaneProps & { readonly to
     case 'calendar':
       return <CalendarPane driveId={driveId} close={close} />;
     case 'agents':
-      return allDrives ? <AccountAgentsPane close={close} /> : <AgentsPane driveId={driveId} close={close} />;
+      return allDrives ? <AccountAgentsPane driveId={driveId} close={close} /> : <AgentsPane driveId={driveId} close={close} />;
     case 'workflows':
       return <WorkflowsPane driveId={driveId} close={close} />;
     case 'activity':
