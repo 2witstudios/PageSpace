@@ -264,4 +264,30 @@ describe('TasksPane', () => {
       expected: [[true, `/d1/tasks/${taskItem('a').pageId}`]],
     });
   });
+
+  test('See all opens a view that holds every task the glance draws from', async () => {
+    const overdue = Array.from({ length: 8 }, (_, index) => ({
+      ...taskItem(`o${index}`, { title: `Late ${index}`, dueDate: '2020-01-01T12:00:00.000Z' }),
+      driveId: 'd1',
+      taskListPageId: 'l1',
+      taskListPageTitle: 'Launch',
+      statusGroup: 'todo' as const,
+      statusLabel: 'To Do',
+      statusColor: '',
+    }));
+    const { container } = show({
+      [DRIVE]: lists([]),
+      [ACTIVE]: () => Response.json({ tasks: overdue, pagination: { total: 8, limit: 100, offset: 0, hasMore: false } }),
+    });
+    await settle(() => {
+      if (!container.querySelector('[aria-label="Needs attention"]')) throw new Error('glance not loaded');
+    });
+    const seeAll = [...container.querySelectorAll('[aria-label="Needs attention"] > a')].at(-1);
+    assert({
+      given: 'more overdue tasks than the glance shows',
+      should: 'link See all to Assigned to me, which holds overdue and this week alike, never This week alone',
+      actual: [seeAll?.textContent, seeAll?.getAttribute('href')],
+      expected: ['See all 8', '/d1/tasks/view/assigned'],
+    });
+  });
 });

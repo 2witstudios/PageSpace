@@ -38,7 +38,8 @@ function TaskGlance({ driveId }: { readonly driveId: string }) {
   return renderTaskGlance({
     rows: due?.slice(0, GLANCE_ROWS),
     more: due === undefined ? 0 : Math.max(0, due.length - GLANCE_ROWS),
-    moreHref: taskViewHref(driveId, 'this_week'),
+    // This week and Overdue are separate windows; Assigned to me holds both.
+    moreHref: taskViewHref(driveId, 'assigned'),
   });
 }
 
