@@ -7,8 +7,8 @@
  * the agent drains or while a fresh context hydrates. A refusal names the
  * state that caused it, so the tool can tell the model a human has the page.
  */
-import type { ControlActor } from './control-instruction.js';
-import type { HumanControlMode } from './human-control-state.js';
+import type { ControlActor } from './control-instruction.ts';
+import type { HumanControlMode } from './human-control-state.ts';
 
 export type ActionAdmissionRefusal = 'agent-control' | 'draining' | 'human-control' | 'hydrating' | 'not-holder';
 

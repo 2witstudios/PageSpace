@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's Home drive is now your dashboard, as "All drives" is in the classic interface. On Home, Tasks lists your tasks from every drive with each one's drive named beside its list, Calendar shows every drive's events with your personal and Google ones, Console lists agent sessions from every drive and starts new ones in Home, and Activity shows your own changes across drives, naming the drive each was in. Messages already showed every drive's channels and your DMs. Imago's chat on Home now knows all your drives instead of assuming you mean Home. Every other drive stays scoped to itself, and Home's Files, Members, Workflows and Trash are still Home's own. The cross-drive Tasks, Calendar, Activity, Agents and Messages screens are gone from account settings; old links to them open Home's, keeping any date, view or filters in the link.
+
 - Imago UI polish:
   - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
   - The Imago orb is larger in the chat header's agent picker and its list.
@@ -14,13 +16,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - Tool tabs such as Calendar and Console show their own icon.
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
   - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
-- Opening Calendar, Activity or Console, or any other spot from the rail, no longer folds Imago away. Imago stays open beside the screen until you collapse or close it yourself.
+- Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
 - Imago's Console works like the classic Agents console again:
   - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
   - The Console sidebar is classic's: each environment with its sessions nested under it, sessions with their own sandbox beside them, and each session's conversations, pages and shells listed under it. Every row opens in a pane.
   - With no session open, the Console sidebar sits beside Imago, which keeps the middle. Opening a session puts its panes there under one session bar (name, environment, start time, preview, Add pane, End session and Close).
   - A session whose last pane was closed opens on the pane picker instead of an empty screen, and Add pane works there too.
   - A terminal that can't reach the realtime server now says so instead of staying blank.
+  - On Home, the Console lists every drive's sessions, grouped by drive, as classic's All drives view does.
 
 - Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
 

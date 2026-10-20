@@ -120,6 +120,7 @@ vi.mock('sonner', () => ({
 
 import { within } from '@testing-library/react';
 import { ApiRequestError } from '@/retained/lib/auth/auth-fetch';
+import { ALL_DRIVES } from '@/retained/lib/dashboard/focus';
 import AgentsSidebar, { resolveListNotice } from '../AgentsSidebar';
 import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
 import {
@@ -341,6 +342,17 @@ describe('AgentsSidebar', () => {
     renderSidebar();
     expect(await screen.findByText('api refactor')).toBeDefined();
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
+  });
+
+  test('an All drives focus overrides the route drive, listing every drive', async () => {
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <AgentsSidebar focus={ALL_DRIVES} />
+      </SWRConfig>,
+    );
+    expect(await screen.findByText('api refactor')).toBeDefined();
+    expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces');
+    expect(mockFetchWithAuth).not.toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
   });
 
   test('tints the selected session row with the selected token, not the hover token', async () => {

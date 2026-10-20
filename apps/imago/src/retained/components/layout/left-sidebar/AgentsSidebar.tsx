@@ -67,7 +67,7 @@ import { envDevPreviewPath } from '@/retained/hooks/dev-preview/useDevPreviewSta
 import { useDriveEnvs } from '@/retained/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/retained/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
-import { focusDriveId, useFocus } from '@/retained/lib/dashboard/focus';
+import { focusDriveId, useFocus, type Focus } from '@/retained/lib/dashboard/focus';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → Pane.**
@@ -105,8 +105,10 @@ import { focusDriveId, useFocus } from '@/retained/lib/dashboard/focus';
  * `pushState`. The route never changes, so nothing above or beside this
  * component remounts, so live shells and streaming chats survive every click.
  */
-export default function AgentsSidebar({ className }: { className?: string }) {
-  const driveId = focusDriveId(useFocus());
+/** `focus` overrides the route's: Imago's Home drive lists every drive's sessions, as classic's All drives does. */
+export default function AgentsSidebar({ className, focus }: { className?: string; focus?: Focus }) {
+  const routeFocus = useFocus();
+  const driveId = focusDriveId(focus ?? routeFocus);
 
   const drives = useDriveStore((state) => state.drives);
 

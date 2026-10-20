@@ -5,6 +5,7 @@ import { useSearchParams } from '@/retained-adapters/navigation';
 import { toast } from 'sonner';
 import { fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
 import type { ActivityActionResult } from '@/retained/types/activity-actions';
+import { useDriveNames } from '@/ui/frame/drives/use-drive-names';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
 import { activityQuery, activityRangeLabel, parseActivityUrl, type ActivityUrlState } from '@/ui/tools/activity/activity-query';
 import { ActivityTimeline } from './ActivityTimeline';
@@ -15,7 +16,7 @@ const PAGE_SIZE = 50;
 type ActivityPage = { activities: ActivityLog[]; pagination: Pagination };
 
 /** One page of the drive's activity for a filter state, read against `now`. */
-const fetchPage = async (driveId: string, state: ActivityUrlState, offset: number, now: Date): Promise<ActivityPage> => {
+const fetchPage = async (driveId: string | null, state: ActivityUrlState, offset: number, now: Date): Promise<ActivityPage> => {
   const query = activityQuery(state, driveId, now);
   query.set('limit', String(PAGE_SIZE));
   query.set('offset', String(offset));
@@ -30,8 +31,11 @@ const fetchPage = async (driveId: string, state: ActivityUrlState, offset: numbe
 /**
  * The Activity middle for a drive (C-Drive-Activity): a 44px toolbar with the range and the
  * event total, then the day-grouped timeline. The filters are the pane's; they arrive in the URL.
+ * With no drive (Home, the dashboard) it is the viewer's own activity across every drive.
  */
-export function DriveActivityTimeline({ driveId }: { driveId: string }) {
+export function DriveActivityTimeline({ driveId }: { driveId: string | null }) {
+  const rollbackContext = driveId === null ? 'user_dashboard' : 'drive';
+  const driveNames = useDriveNames(driveId === null);
   const searchParams = useSearchParams();
   const urlKey = searchParams.toString();
   const state = useMemo(() => parseActivityUrl(new URLSearchParams(urlKey)), [urlKey]);
@@ -86,7 +90,7 @@ export function DriveActivityTimeline({ driveId }: { driveId: string }) {
   const handleRollback = async (activityId: string, force: boolean): Promise<ActivityActionResult> => {
     try {
       const result = await post<ActivityActionResult>(`/api/activities/${activityId}/rollback`, {
-        context: 'drive',
+        context: rollbackContext,
         force,
       });
       toast.success(result.message || 'Change undone');
@@ -122,9 +126,10 @@ export function DriveActivityTimeline({ driveId }: { driveId: string }) {
           onLoadMore={handleLoadMore}
           emptyMessage="No activity found"
           emptyDescription="Activity will appear here as you and your team make changes"
-          context="drive"
+          context={rollbackContext}
           onRollback={handleRollback}
           rolledBackIds={rolledBackIds}
+          driveNames={driveNames}
         />
       </div>
     </div>

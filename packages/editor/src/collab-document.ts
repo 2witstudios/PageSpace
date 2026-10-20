@@ -5,7 +5,7 @@ import {
   prosemirrorToYXmlFragment,
   yXmlFragmentToProseMirrorRootNode,
 } from 'y-prosemirror';
-import { collabExtensions } from './collab-schema.js';
+import { collabExtensions } from './collab-schema.ts';
 
 /**
  * The `Y.Doc` field holding the document body.

@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { click, mount, unmountAll } from '@/ui/test-support/dom';
-import { getUiState, setUiState } from '@/ui/store/store';
+import { getUiState } from '@/ui/store/store';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import type { TreePage } from '@/retained/hooks/usePageTree';
 import { useSettingsSubnavStore } from '@/ui/files/settings-subnav/settings-subnav-store';
@@ -218,14 +218,14 @@ describe('AgentPage', () => {
 });
 
 describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
-  test('folds Imago to the Ask pill and selects this agent for the side chat', () => {
+  test('leaves Imago open and selects this agent for the side chat', () => {
     dispatch(transactions.expandImago, undefined);
     mount(createElement(AgentPage, props));
     assert({
       given: 'the viewer entering an agent page with Imago open',
-      should: 'collapse Imago and point the side chat at this agent',
+      should: 'keep Imago docked and point the side chat at this agent',
       actual: { collapsed: getUiState().resources.imagoCollapsed, agent: getUiState().resources.chatAgent },
-      expected: { collapsed: true, agent: { id: 'a1', title: 'Launch Agent' } },
+      expected: { collapsed: false, agent: { id: 'a1', title: 'Launch Agent' } },
     });
   });
 
@@ -251,12 +251,12 @@ describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
     });
   });
 
-  test('folds Imago again on entering a different agent page', () => {
-    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: false } });
-    mount(createElement(AgentPage, { ...props, pageId: 'a2', page: { ...page, id: 'a2' } as TreePage }));
+  test('leaves Imago folded when the viewer folded it before entering', () => {
+    dispatch(transactions.collapseImago, undefined);
+    mount(createElement(AgentPage, props));
     assert({
-      given: 'Imago reopened, then another agent page is entered',
-      should: 'fold it again, since that is a new entry',
+      given: 'Imago folded by the viewer, then an agent page entered',
+      should: 'not unfold it',
       actual: getUiState().resources.imagoCollapsed,
       expected: true,
     });

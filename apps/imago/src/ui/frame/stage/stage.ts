@@ -276,13 +276,6 @@ export const chatContextFor = (
 };
 
 /**
- * Whether Imago starts folded to the Ask pill when a page of this type is entered (IMC-3.11): an
- * agent page keeps its own chat in the middle, so its side chat waits behind Ask. Only the entry
- * decides it; a viewer who reopens Imago is never folded back.
- */
-export const imagoStartsCollapsed = (pageType: string | null | undefined): boolean => pageType === 'AI_CHAT';
-
-/**
  * Imago's context chip (SPEC v3 assistant head): the bare name of what it answers about — the
  * open page (once its name loads), the screen, "Account", the section — and none on the chat
  * home, where the conversation itself is the context.

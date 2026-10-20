@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 
-import { imagoHref } from '@/retained-adapters/navigation';
 import { buildAgentSelectionUrl, parseAgentSelection } from '@/retained/lib/agents/agent-selection';
 import { useLayoutStore } from '@/retained/stores/useLayoutStore';
 import { useTabsStore } from '@/retained/stores/useTabsStore';
 import { fromHref } from '@/retained/lib/tabs/tab-navigation';
+import { agentSelectionAddress } from './agent-selection-address';
 
 /**
  * What is selected on the Agents surface — and nothing else.
@@ -122,12 +122,12 @@ export const useAgentSurfaceStore = create<AgentSurfaceState>()((set, get) => {
     });
 
     if (typeof window === 'undefined') return;
-    const url = "/imago" + imagoHref(buildAgentSelectionUrl({
-      driveId: get().driveId,
-      sessionId: next.sessionId,
-      conversationId: next.conversationId,
-      agentId: next.agentId,
-    }));
+    const driveId = get().driveId;
+    const url = agentSelectionAddress(
+      buildAgentSelectionUrl({ driveId, sessionId: next.sessionId, conversationId: next.conversationId, agentId: next.agentId }),
+      driveId,
+      window.location.pathname,
+    );
     if (url === currentUrl()) return;
     window.history.pushState({}, '', url);
     // Next's own `pushState` patch does eventually fold this into its router

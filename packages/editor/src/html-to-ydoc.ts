@@ -1,9 +1,9 @@
 import { DOMParser as PmDOMParser, type Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { collabSchema, pmDocToYDoc } from './collab-document.js';
-import { withDomWorkspace, type DomWorkspace } from './dom-workspace.js';
-import { pmDocToText } from './y-doc-to-text.js';
-import { UnrepresentableContentError } from './projection-errors.js';
+import { collabSchema, pmDocToYDoc } from './collab-document.ts';
+import { withDomWorkspace, type DomWorkspace } from './dom-workspace.ts';
+import { pmDocToText } from './y-doc-to-text.ts';
+import { UnrepresentableContentError } from './projection-errors.ts';
 
 /**
  * Elements whose content is not text, mapped to the schema node that must

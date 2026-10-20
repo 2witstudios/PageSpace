@@ -56,15 +56,13 @@ export const withActivityFilter = (
 };
 
 /**
- * The drive activity request for a filter state. `now` is passed in so the window is
- * computed where the request is made, not captured on render.
+ * The activity request for a filter state: a drive's, or with no drive the viewer's own across
+ * every drive (Home, the dashboard). `now` is passed in so the window is computed where the
+ * request is made, not captured on render.
  */
-export const activityQuery = (state: ActivityUrlState, driveId: string, now: Date): URLSearchParams => {
-  const query = new URLSearchParams({
-    context: 'drive',
-    driveId,
-    startDate: new Date(now.getTime() - rangeMs[state.range]).toISOString(),
-  });
+export const activityQuery = (state: ActivityUrlState, driveId: string | null, now: Date): URLSearchParams => {
+  const startDate = new Date(now.getTime() - rangeMs[state.range]).toISOString();
+  const query = new URLSearchParams(driveId === null ? { context: 'user', startDate } : { context: 'drive', driveId, startDate });
   if (state.actorId) query.set('actorId', state.actorId);
   if (state.operation) query.set('operation', state.operation);
   if (state.resourceType) query.set('resourceType', state.resourceType);

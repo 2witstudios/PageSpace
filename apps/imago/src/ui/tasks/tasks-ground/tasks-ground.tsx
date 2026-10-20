@@ -5,17 +5,22 @@ import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, useTaskViewStore, viewFor } from '../task-views/task-views';
 import { useDriveTasks } from '../use-tasks/use-tasks';
+import { useIsHome } from '../../frame/drives/home-drive-context';
+import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
 
 /**
  * The Tasks ground: the viewer's tasks in the drive, for the view picked on
- * the pane and the status group picked here (Active by default).
+ * the pane and the status group picked here (Active by default). On Home, the
+ * dashboard, it is the viewer's tasks across every drive, each row naming its drive.
  */
 export function TasksGround({ driveId }: { readonly driveId: string }) {
+  const allDrives = useIsHome(driveId);
   const view = useTaskViewStore((state) => state.view);
   const [status, setStatus] = useState<StatusGroupFilter>('active');
-  const { response, error, retry } = useDriveTasks(driveId, status, viewFor(view).dueDateFilter);
+  const { response, error, retry } = useDriveTasks(allDrives ? null : driveId, status, viewFor(view).dueDateFilter);
+  const driveNames = useDriveNames(allDrives);
   const today = localToday(new Date());
   const tasks = response?.tasks;
   const total = response?.pagination.total;
@@ -32,7 +37,7 @@ export function TasksGround({ driveId }: { readonly driveId: string }) {
     onStatus: setStatus,
     state:
       tasks !== undefined
-        ? { kind: 'ready', driveId, sections: groundSections(tasks, today) }
+        ? { kind: 'ready', sections: groundSections(tasks, today, driveNames) }
         : error !== undefined
           ? { kind: 'error', retry }
           : { kind: 'loading' },

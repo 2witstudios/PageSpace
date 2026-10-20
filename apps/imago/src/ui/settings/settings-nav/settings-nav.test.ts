@@ -68,10 +68,10 @@ describe('accountNav()', () => {
       actual: labels(accountNav({ ...cloud, isDesktop: true, hasOrganizations: true })),
       expected: [
         ['You', ['Overview', 'Profile', 'Display', 'Personalization', 'Notifications', 'Hotkeys', 'Privacy']],
-        ['AI', ['AI providers', 'Agents', 'Agent accounts', 'Commands']],
-        ['Plan & data', ['Plan', 'Billing', 'Usage', 'Wallets', 'Storage', 'Drives', 'Organizations', 'Backups', 'Trash', 'Activity']],
-        ['Connections', ['Connections', 'Integrations', 'Google Calendar', 'MCP', 'Local MCP', 'Calendar']],
-        ['Other', ['Messages', 'Tasks', 'Legal']],
+        ['AI', ['AI providers', 'Agent accounts', 'Commands']],
+        ['Plan & data', ['Plan', 'Billing', 'Usage', 'Wallets', 'Storage', 'Drives', 'Organizations', 'Backups', 'Trash']],
+        ['Connections', ['Connections', 'Integrations', 'Google Calendar', 'MCP', 'Local MCP']],
+        ['Other', ['Legal']],
       ],
     });
   });
@@ -83,8 +83,8 @@ describe('accountNav()', () => {
       should: 'retain Wallets and Create, dropping Plan, Billing, Organizations, Integrations, Google Calendar and Local MCP',
       actual: [groups[2]?.items.map((item) => item.label), groups[3]?.items.map((item) => item.label)],
       expected: [
-        ['Usage', 'Wallets', 'Storage', 'Drives', 'Create organization', 'Backups', 'Trash', 'Activity'],
-        ['Connections', 'MCP', 'Calendar'],
+        ['Usage', 'Wallets', 'Storage', 'Drives', 'Create organization', 'Backups', 'Trash'],
+        ['Connections', 'MCP'],
       ],
     });
   });

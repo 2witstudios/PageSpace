@@ -55,7 +55,7 @@ import { useAgentChannelMultiplayer } from '@/retained/hooks/useAgentChannelMult
 import { useActiveStream, useConversationActiveStream } from '@/retained/hooks/useActiveStream';
 import { useStopStream } from '@/retained/hooks/useStopStream';
 import { useAuth } from '@/retained/hooks/useAuth';
-import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
 import type { PendingStream } from '@/retained/stores/usePendingStreamsStore';
 
@@ -107,7 +107,7 @@ export function useAgentSessionChat({
 }: UseAgentSessionChatOptions): UseAgentSessionChatReturn {
   const pathname = usePathname();
   const { user } = useAuth();
-  const drives = useDriveStore((state) => state.drives);
+  const homeDriveId = useHomeDriveId();
 
   useEffect(() => {
     void loadAgentConversationMessages(agent.id, conversationId);
@@ -190,7 +190,7 @@ export function useAgentSessionChat({
         model: agent.aiModel,
         systemPrompt: agent.systemPrompt,
         enabledTools: agent.enabledTools,
-        contextRef: buildContextRef(pathname, drives),
+        contextRef: buildContextRef(pathname, homeDriveId),
       }),
     [
       agent.id,
@@ -203,7 +203,7 @@ export function useAgentSessionChat({
       webSearchEnabled,
       imageGenEnabled,
       pathname,
-      drives,
+      homeDriveId,
     ],
   );
 

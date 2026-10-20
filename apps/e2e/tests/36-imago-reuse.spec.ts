@@ -113,8 +113,12 @@ test('settings and typed object views stay in Imago', async ({ browser, baseURL 
   await page.goto('/imago/account');
   // The account overview (v3 settings screen): its single h1 is the account's name.
   await expect(page.getByRole('heading', { level: 1, name: user.name, exact: true })).toBeVisible();
-  for (const title of ['Drives', 'Storage', 'Connections', 'Agents', 'AI Providers', 'Personalization']) {
+  for (const title of ['Drives', 'Storage', 'Connections', 'AI Providers', 'Personalization']) {
     await expect(page.getByRole('link').filter({ hasText: title }).first()).toBeVisible();
+  }
+  // The cross-drive Tasks, Calendar, Activity, Agents and Messages are Home's sections now (ADR 0007 D4).
+  for (const section of ['tasks', 'calendar', 'activity', 'agents', 'messages']) {
+    await expect(page.locator(`a[href$="/account/${section}"]`)).toHaveCount(0);
   }
   if (process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'tenant' || process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'onprem') {
     await expect(page.getByRole('link').filter({ hasText: /^Billing/ })).toHaveCount(0);
@@ -373,8 +377,10 @@ test('uploads a file through the retained palette and opens its specialized view
 });
 
 test('the Console multiplexes chats in its panes and drive configuration remains native', async ({ browser, baseURL }) => {
-  const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
-  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
+  // A drive of its own: Home's Console lists every drive's sessions (checked at the end).
+  const drive = await factories.createDrive(user.id, { name: 'Console proof drive' });
+  const support = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
+  const page = await open(browser, baseURL!, imagoPath(drive.id, 'agents'));
   // On a drive the Console's sessions are its left pane (classic's Agents sidebar); with no
   // session open Imago holds the middle beside it.
   const sessions = page.getByRole('region', { name: 'Console: sessions', exact: true });
@@ -413,6 +419,10 @@ test('the Console multiplexes chats in its panes and drive configuration remains
   // Closing the session hands the middle back to Imago and ends nothing.
   await bar.getByRole('button', { name: 'Close session', exact: true }).click();
   await expect(bar).toHaveCount(0);
+  await expect(sessions).toContainText('Native agent session');
+  // Home, the dashboard, lists the same session under its drive.
+  await page.goto(imagoPath(user.homeDriveId, 'agents'));
+  await expect(sessions).toContainText('Console proof drive');
   await expect(sessions).toContainText('Native agent session');
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
   await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
