@@ -20,7 +20,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { connect as netConnect, type Socket } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import type { Duplex } from 'node:stream';
-import { decideNavigation, type NavigationDenyReason, type NavigationVerdict } from './decide-navigation.js';
+import { decideNavigation, type NavigationDenyReason, type NavigationVerdict } from './decide-navigation.ts';
 
 export type EgressRefusal = {
   readonly url: string;

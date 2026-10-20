@@ -19,16 +19,16 @@
  * is ended by that instance or by the substrate's own reaping.
  */
 import { randomBytes } from 'node:crypto';
-import type { BrowserControlResponse, BrowserOperation } from './browser-operation.js';
-import type { BrowserSessionShape, BrowserSubstrate, ProvisionedBrowserSession, WorkerResponse } from './browser-substrate.js';
+import type { BrowserControlResponse, BrowserOperation } from './browser-operation.ts';
+import type { BrowserSessionShape, BrowserSubstrate, ProvisionedBrowserSession, WorkerResponse } from './browser-substrate.ts';
 import {
   CONTROL_INSTRUCTION_AUDIENCE,
   CONTROL_INSTRUCTION_VERSION,
   type ControlActor,
   type ControlCommand,
   type Ed25519Sign,
-} from './control-instruction.js';
-import { encodeControlInstruction } from './encode-control-instruction.js';
+} from './control-instruction.ts';
+import { encodeControlInstruction } from './encode-control-instruction.ts';
 import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
 /**
