@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveAccess } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { serveAvatarFile } from '@/lib/avatars/avatar-route';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -13,6 +14,16 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
   const { driveId, filename } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
-  if (!(await getPrincipalDriveAccess(auth, driveId))) return new NextResponse('Not Found', { status: 404 });
+  if (!(await getPrincipalDriveAccess(auth, driveId))) {
+    // Every refusal is audited; a successful read is not (a row per rendered tile would swamp the log).
+    auditRequest(request, {
+      eventType: 'authz.access.denied',
+      userId: auth.userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { route: 'drive-avatar', operation: 'read' },
+    });
+    return new NextResponse('Not Found', { status: 404 });
+  }
   return serveAvatarFile('drive', driveId, filename);
 }

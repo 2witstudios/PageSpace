@@ -39,6 +39,7 @@ import { authenticateRequestWithOptions, getPrincipalDriveAccess, isPrincipalDri
 import { setDriveAvatar } from '@pagespace/lib/services/drive-service';
 import { createDriveServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { broadcastDriveEvent } from '@/lib/websocket';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const DRIVE = 'drv_1';
 const session: SessionAuthResult = { userId: 'u_priya', tokenVersion: 0, tokenType: 'session', sessionId: 's', role: 'user', adminRoleVersion: 0 };
@@ -143,6 +144,9 @@ describe('serving a drive avatar', () => {
     vi.mocked(getPrincipalDriveAccess).mockResolvedValue(false);
     expect((await GET(new Request('https://example.test'), fileParams('avatar-abc123.webp'))).status).toBe(404);
     expect(s3.send).not.toHaveBeenCalled();
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'authz.access.denied', userId: session.userId, resourceType: 'drive', resourceId: DRIVE,
+    }));
   });
 
   it('any filename other than an avatar file is refused', async () => {
