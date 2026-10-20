@@ -40,6 +40,14 @@ export type ShellRenderProps = {
   readonly onDismissImago?: () => void;
   /** Void action: the scrim behind the pane sheet was pressed. */
   readonly onDismissPane?: () => void;
+  /** The left pane's dragged width in px, while it is docked. */
+  readonly leftSize?: number;
+  /** Imago's dragged width in px, while it is docked beside a page. */
+  readonly imagoSize?: number;
+  /** The seam on the left pane's right edge, while it is docked. */
+  readonly leftHandle?: ReactNode;
+  /** The seam on docked Imago's left edge. */
+  readonly imagoHandle?: ReactNode;
   /** Under the Electron desktop app: the frame marks itself so the desktop CSS insets the spine. */
   readonly desktopFrame?: boolean;
 };
@@ -48,7 +56,8 @@ export type ShellRenderProps = {
  * The spine beside the stage sheet; in the sheet, the tab bar over the columns: the left
  * pane, the page, Imago and the empty middle (SPEC v3.3). Every slot is always mounted and
  * only its width follows the state, so a navigation moves the columns rather than replacing
- * them (myimago ADR 0029 decision 2). The data attributes name the state for tests and
+ * them (myimago ADR 0029 decision 2). A docked left pane and docked Imago each carry a seam
+ * on their inner edge that drags their width, as classic's resizable panels do. The data attributes name the state for tests and
  * devtools; nothing styles off them.
  */
 export function renderShell(props: ShellRenderProps): ReactNode {
@@ -79,15 +88,18 @@ export function renderShell(props: ShellRenderProps): ReactNode {
           {columns.imago === 'overlay' ? (
             <button type="button" className={scrimClass} aria-label="Dismiss Imago overlay" onClick={props.onDismissImago} />
           ) : null}
-          <Pane open={layout.list !== 'closed'} width={listSlotClass(columns, layout.list, tier)} slot="list">
+          <Pane open={layout.list !== 'closed'} width={listSlotClass(columns, layout.list, tier)} size={props.leftSize} slot="list">
             {list}
           </Pane>
+          {props.leftHandle}
           <Pane open={columns.page} width={objectSlotClass(columns)} slot="object">
             {object}
           </Pane>
+          {props.imagoHandle}
           <Pane
             open={columns.imago === 'docked' || columns.imago === 'overlay' || columns.imago === 'ground'}
             width={chatSlotClass(columns, tier)}
+            size={props.imagoSize}
             slot="chat"
           >
             {chat}

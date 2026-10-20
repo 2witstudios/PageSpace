@@ -186,4 +186,21 @@ describe('Pane', () => {
       expected: [true, false, ''],
     });
   });
+
+  test('a dragged width holds while open and drops once closed', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const pane = () => container.firstElementChild as HTMLElement;
+    act(() => root.render(h(Pane, { open: true, width: 'w-list-pane', size: 340, children: null })));
+    const open = pane().style.width;
+    act(() => root.render(h(Pane, { open: false, width: 'w-0', size: 340, children: null })));
+    assert({
+      given: 'a pane with a dragged width, opened then closed',
+      should: 'draw the width while open and slide to its w-0 token when closed',
+      actual: [open, pane().style.width, pane().className.includes('w-0')],
+      expected: ['340px', '', true],
+    });
+  });
 });

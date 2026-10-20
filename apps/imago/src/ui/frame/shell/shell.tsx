@@ -42,6 +42,9 @@ import { PhoneFilesHeader } from '../phone/phone-files-header';
 import { phoneDocBodyClass } from '../phone/phone-doc-class';
 import { renderPhoneShell } from '../phone/phone-shell.render';
 import { useViewportTier } from '../viewport/use-viewport-tier';
+import { ResizeHandle } from '../pane-resize/resize-handle';
+import { usePaneSizes } from '../pane-resize/use-pane-sizes';
+import { TOKEN_WIDTHS } from '../pane-resize/pane-sizes';
 import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
   isHideableSection,
@@ -241,6 +244,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   // Ask on a phone page opens Imago full-screen; it is the page it was asked on, so leaving the page ends it.
   const [askedAt, setAskedAt] = useState<string | null>(null);
   const desktopFrame = useDesktopFrame();
+  const { sizes, setSize } = usePaneSizes();
   const pageTrailing = (
     <span className="flex flex-none items-center gap-1">
       {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
@@ -323,11 +327,22 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
     })}</HomeDriveProvider>;
   }
+  // Only a docked column drags: the narrow pane sheet and the Imago overlay keep their token widths.
+  const leftDocked = columns.pane && !columns.paneSheet && layout.list !== 'closed';
+  const imagoDocked = columns.imago === 'docked';
+  const leftWidth =
+    sizes.left ?? (tier === 'overlay' ? TOKEN_WIDTHS.paneOverlay : layout.list === 'list' ? TOKEN_WIDTHS.listPane : TOKEN_WIDTHS.treePane);
   return <HomeDriveProvider value={homeDriveId}>{renderShell({
     stage,
     layout,
     columns,
     tier,
+    leftSize: leftDocked ? (sizes.left ?? undefined) : undefined,
+    imagoSize: imagoDocked ? (sizes.imago ?? undefined) : undefined,
+    leftHandle: leftDocked ? <ResizeHandle column="left" width={leftWidth} onResize={(width) => setSize('left', width)} /> : null,
+    imagoHandle: imagoDocked ? (
+      <ResizeHandle column="imago" width={sizes.imago ?? TOKEN_WIDTHS.chatPane} onResize={(width) => setSize('imago', width)} />
+    ) : null,
     onDismissImago: () => dispatch(transactions.collapseImago, undefined),
     onDismissPane: () => {
       if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);
