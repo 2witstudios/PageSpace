@@ -6,6 +6,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 ## [Unreleased]
 
 - In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
+- Paid plans now include their full price in credits each month: Pro includes 150 credits (was 90) and Business 500 (was 300), plus 100 for each extra seat (was 60). Plan cards, the comparison table and the pricing page show the new amounts, and the next renewal grants them.
+- Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
+  - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.
+  - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.
+  - **Focus** lists what you can start next, either in the open list or across every list in the drive, with a "Done today" section and a quick-add row.
+  - **Roadmap** puts the list on a timeline in weeks, months or quarters. Drag a bar's ends to change its start or due date, and pick up tasks with no date from the Unscheduled tray.
+  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task. If you can only view the list, the detail shows these fields as plain text instead. A due date set on the same day as a start time is kept rather than refused.
+  - On the Tasks home, you can tick tasks off straight from the list.
+  - Lists update live when someone else changes them.
+
 - Imago's Home drive is now your dashboard, as "All drives" is in the classic interface. On Home, Tasks lists your tasks from every drive with each one's drive named beside its list, Calendar shows every drive's events with your personal and Google ones, Console lists agent sessions from every drive and starts new ones in Home, and Activity shows your own changes across drives, naming the drive each was in. Messages already showed every drive's channels and your DMs. Imago's chat on Home now knows all your drives instead of assuming you mean Home. Every other drive stays scoped to itself, and Home's Files, Members, Workflows and Trash are still Home's own. The cross-drive Tasks, Calendar, Activity, Agents and Messages screens are gone from account settings; old links to them open Home's, keeping any date, view or filters in the link.
 - Drives can have their own look. Drive owners and admins can upload an image (JPEG, PNG, GIF or WebP, up to 5 MB) or pick a color for the drive's tile, in Imago's drive Settings under Appearance or in the classic drive settings under General. The drive shows that image or color at the top left of Imago's rail, in the phone header, in the drive switcher and in the classic header. A drive in an organization with neither shows the organization's avatar. Changes show up for everyone in the drive without a refresh. Like organization avatars, a drive image is stored by PageSpace and only shown to people who can open the drive.
 
@@ -13,13 +23,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
   - The Imago orb is larger in the chat header's agent picker and its list.
   - The credits button no longer shows a sparkle when you are spending your own credits.
-  - Console's Session button matches Calendar's Event button and stays readable in dark mode.
 - Imago tabs:
   - + (New tab) opens a blank tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
   - Tool tabs such as Calendar and Console show their own icon.
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
   - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
+  - Every navigation loads into the tab you're in, as in the classic interface, including the drive's chat and a section's index (Files, Messages, Tasks) from the rail. Before, those left the tab showing the last page you opened.
 - Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
+- Imago's Console works like the classic Agents console again:
+  - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
+  - The Console sidebar is classic's: each environment with its sessions nested under it, sessions with their own sandbox beside them, and each session's conversations, pages and shells listed under it. Every row opens in a pane.
+  - With no session open, the Console sidebar sits beside Imago, which keeps the middle. Opening a session puts its panes there under one session bar (name, environment, start time, preview, Add pane, End session and Close).
+  - A session whose last pane was closed opens on the pane picker instead of an empty screen, and Add pane works there too.
+  - A terminal that can't reach the realtime server now says so instead of staying blank.
+  - On Home, the Console lists every drive's sessions, grouped by drive, as classic's All drives view does.
 
 - Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
 

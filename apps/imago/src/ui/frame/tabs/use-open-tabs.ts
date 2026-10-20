@@ -5,9 +5,9 @@ import { useEffect, useRef } from 'react';
 import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import type { UiState } from '../../store/state';
-import { stageFor, type Stage } from '../stage/stage';
+import type { Stage } from '../stage/stage';
 import { basePathRelative } from '@/lib/auth/sign-in-url';
-import { closeTab, createTabId, popDirection, sectionPath, serializeTabs, tabPathFor, tabsStorageKey, type Tab } from './tabs-model';
+import { closeTab, createTabId, popDirection, sectionPath, serializeTabs, tabsStorageKey, type Tab } from './tabs-model';
 
 const selectTabs = (state: UiState) => state.resources.openTabs;
 const selectActive = (state: UiState) => state.resources.activeTab;
@@ -62,10 +62,10 @@ export type OpenTabs = {
 };
 
 /**
- * The open tabs of a drive, browser-style as in classic: a navigation loads the middle's object
- * into the active tab as a step in that tab's own history (a new tab only when there is none,
- * or one was asked for), and tabs persist per drive under imago's own key. The tab bar and the
- * phone's open-pages sheet both read them.
+ * The open tabs of a drive, browser-style as in classic: a navigation loads the place into the
+ * active tab as a step in that tab's own history (a new tab only when there is none, or one was
+ * asked for), and tabs persist per drive under imago's own key. The tab bar and the phone's
+ * open-pages sheet both read them.
  */
 export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   const pathname = usePathname() ?? '/';
@@ -97,7 +97,7 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
     dispatch(transactions.syncTabs, {
       key,
       stored: storage.read(key),
-      path: tabPathFor(stageFor(pathname), pathname),
+      path: pathname,
       id: createTabId(),
       pop,
       direction,

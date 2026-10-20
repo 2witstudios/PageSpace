@@ -56,10 +56,7 @@ export default function PaneBar({
   isActive,
   identity,
   actions,
-  size = 'compact',
 }: {
-  /** `board` is the 36px C-Drive-Agents pane head; `compact` (30px) is every other surface. */
-  size?: 'compact' | 'board';
   /** The bar tint is the pane's focus indicator — no separate accent line. */
   isActive: boolean;
   /** Left side: who this pane is (bound session, or the picker). */
@@ -72,8 +69,7 @@ export default function PaneBar({
       data-testid="pane-bar"
       data-active={isActive ? 'true' : undefined}
       className={cn(
-        size === 'board' ? 'h-9' : 'h-[30px]',
-        'flex min-w-0 shrink-0 items-center gap-1 border-b border-border/60 pl-2 pr-1 transition-colors',
+        'flex h-[30px] min-w-0 shrink-0 items-center gap-1 border-b border-border/60 pl-2 pr-1 transition-colors',
         isActive && 'border-primary/40 bg-primary/10',
       )}
     >
@@ -127,8 +123,7 @@ export function PaneSplitCloseActions({
   onSplitRight,
   onSplitDown,
   onClose,
-  closeLabel = 'Close pane',
-}: PaneControlProps & { closeLabel?: string }) {
+}: PaneControlProps) {
   return (
     <>
       {canSplit && (
@@ -161,8 +156,8 @@ export function PaneSplitCloseActions({
           size="icon"
           onClick={guarded(onClose)}
           className="size-6 text-muted-foreground hover:text-destructive"
-          title={closeLabel}
-          aria-label={closeLabel}
+          title="Close pane"
+          aria-label="Close pane"
         >
           <X className="size-3.5" aria-hidden="true" />
         </Button>

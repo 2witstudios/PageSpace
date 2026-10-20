@@ -1,6 +1,6 @@
 'use client';
 
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { useUiState } from '../../store/store';
@@ -48,6 +48,8 @@ import { TOKEN_WIDTHS, fitWidths } from '../pane-resize/pane-sizes';
 import { useRowWidth } from '../pane-resize/use-row-width';
 import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
+  consoleGround,
+  isConsole,
   isHideableSection,
   isTasksIndex,
   type HideableSection,
@@ -66,6 +68,8 @@ import { useDesktopFrame } from './desktop-frame';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import { OrgReauthenticationPrompt } from '@/retained/components/auth/OrgReauthenticationPrompt';
 import { OrgSurfaceBanner } from '@/retained/components/orgs/OrgSurfaceBanner';
+import { parseAgentSelection } from '@/retained/lib/agents/agent-selection';
+import { SessionToolbar } from '../../tools/agents/session-toolbar';
 
 export type ShellProps = {
   /** The route's page: it renders only the object's content. */
@@ -209,11 +213,15 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   const { data } = useSWR<unknown>(DRIVES, { fallbackData: initialDrives });
   useLiveDrives();
   const drives = drivesFrom(data, homeDriveId);
-  const stage = stageFor(pathname);
+  const routeStage = stageFor(pathname);
+  // The Console's open session rides the query string; with none open, Imago holds its middle.
+  const search = useSearchParams()?.toString() ?? '';
+  const stage = consoleGround(routeStage, parseAgentSelection(search).sessionId !== null);
   const tier = useViewportTier();
   const phone = tier === 'phone';
   const paneSheetOpen = useUiState(selectPaneSheetOpen);
   // Navigating from the narrow pane sheet closes it, so the page it opened is not left covered.
+  // (A Console pick changes only the query; the Console pane closes the sheet itself.)
   useEffect(() => {
     dispatch(transactions.closePaneSheet, undefined);
   }, [pathname]);
@@ -259,6 +267,14 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         <PageHead pageId={stage.object.pageId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
       ) : !missing && stage.object?.kind === 'conversation' ? (
         <ConversationHead conversationId={stage.object.conversationId} leading={opener(stage, columns, 'page')} trailing={pageTrailing} />
+      ) : !missing && isConsole(stage) ? (
+        // The open session's bar is the Console's head; it closes the session, not the route.
+        <SessionToolbar
+          // Home's Console lists every drive's sessions, so its bar reads them all too.
+          driveId={stage.driveId === homeDriveId ? undefined : stage.driveId ?? undefined}
+          leading={opener(stage, columns, 'page')}
+          trailing={columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
+        />
       ) : (
         renderPaneHeader({ title, leading: opener(stage, columns, 'page'), actions: missing ? null : pageTrailing })
       )}
@@ -306,7 +322,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     );
     // One column (C-Resp-Phone-Tree): the page the URL names; else the section's own screen.
     const onTree = stage.section === 'files' && stage.object === null && stage.driveId !== null && !missing;
-    const listScreen = missing ? null : listFor(stage, layout, onTree ? { name: drive?.name ?? null, mark: drive ?? undefined } : undefined);
+    const listScreen = missing ? null : listFor(routeStage, layout, onTree ? { name: drive?.name ?? null, mark: drive ?? undefined } : undefined);
     const screen =
       asking
         ? phoneChat
@@ -325,8 +341,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         ) : pageObject !== null && !asking ? (
           <PhoneAsk onPress={() => setAskedAt(pathname)} />
         ) : null,
-      bar: asking ? null : <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
-      palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
+      bar: asking ? null : <PhoneBottomBar stage={routeStage} driveId={railDrive(stage, homeDriveId)} />,
+      palette: <><CommandPalette stage={routeStage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
     })}</HomeDriveProvider>;
   }
   // Only a docked column drags: the narrow pane sheet and the Imago overlay keep their token widths.
@@ -360,7 +376,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     desktopFrame,
     rail: (
       <Rail
-        stage={stage}
+        stage={routeStage}
         layout={layout}
         homeDriveId={homeDriveId}
         brand={
@@ -370,11 +386,11 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       />
     ),
     banner: <><AppBanner /><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface></>,
-    tabBar: <TabBar stage={stage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} homeHref={driveHomeHref(railDrive(stage, homeDriveId))} />,
-    list: missing ? null : listFor(stage, layout),
+    tabBar: <TabBar stage={routeStage} driveKey={railDrive(stage, homeDriveId) ?? 'home'} homeHref={driveHomeHref(railDrive(stage, homeDriveId))} />,
+    list: missing ? null : listFor(routeStage, layout),
     object: objectColumn,
     chat: chatColumn,
     empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
-    palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
+    palette: <><CommandPalette stage={routeStage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
   })}</HomeDriveProvider>;
 }

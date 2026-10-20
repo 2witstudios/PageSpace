@@ -80,15 +80,15 @@ export const CREDITS_PER_DOLLAR = 10;
 
 /**
  * Share of a subscription's PAID amount granted as credit value each period, in
- * basis points (A-11: 60% for Pro and Business; free pays nothing and derives
+ * basis points (100% for Pro and Business — a dollar paid is 10 credits; free pays nothing and derives
  * nothing). Keyed by the canonical vocabulary, so removing a tier from TIERS (lane
  * A2 removes Founder, A-9) makes its row a compile error until it is removed too —
  * the two tables cannot drift apart.
  */
 export const INCLUDED_CREDIT_RATIO_BPS: Record<SubscriptionTier, number> = {
   free: 0,
-  pro: 6000,
-  business: 6000,
+  pro: 10000,
+  business: 10000,
 };
 
 /**

@@ -1,7 +1,6 @@
-import { openTaskConfiguration, selectTaskFilter, openTaskActions, newTaskButton } from '../fixtures/retained-tasks.fixture';
 import { browserGet } from '../fixtures/browser-api.fixture';
 import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
-import { test, expect, type BrowserContext } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq, sql } from '@pagespace/db/operators';
@@ -100,7 +99,8 @@ test('settings and typed object views stay in Imago', async ({ browser, baseURL 
     ['CODE', 'example.ts', 'const ported = true;', '.monaco-editor'],
     ['SHEET', 'Numbers', '', '[role="grid"]'],
     ['CANVAS', 'Canvas proof', '<h1>Canvas proof</h1>', 'iframe'],
-    ['TASK_LIST', 'Tasks proof', '', 'text=Tasks proof'],
+    // Imago's native list view: its List controls strip over the Tree.
+    ['TASK_LIST', 'Tasks proof', '', '[role=toolbar][aria-label="List controls"]'],
     ['CHANNEL', 'Channel proof', '', '[role=log]'],
   ] as const;
   for (const [type, title, content, selector] of views) {
@@ -376,15 +376,18 @@ test('uploads a file through the retained palette and opens its specialized view
   await expect(page.getByText('Open in classic', { exact: true })).toHaveCount(0);
 });
 
-test('agent sessions and drive configuration remain native and preserve one chat', async ({ browser, baseURL }) => {
-  const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
-  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
-  // On a drive the sessions are the Agents tool's left pane; its head button starts one.
-  const sessions = page.getByRole('region', { name: 'Console: agents and sessions', exact: true });
-  await expect(sessions.getByRole('button', { name: 'Session', exact: true })).toBeVisible();
+test('the Console multiplexes chats in its panes and drive configuration remains native', async ({ browser, baseURL }) => {
+  // A drive of its own: Home's Console lists every drive's sessions (checked at the end).
+  const drive = await factories.createDrive(user.id, { name: 'Console proof drive' });
+  const support = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
+  const page = await open(browser, baseURL!, imagoPath(drive.id, 'agents'));
+  // On a drive the Console's sessions are its left pane (classic's Agents sidebar); with no
+  // session open Imago holds the middle beside it.
+  const sessions = page.getByRole('region', { name: 'Console: sessions', exact: true });
+  await expect(sessions.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toHaveCount(1);
-  await expect(sessions).toBeVisible();
-  await sessions.getByRole('button', { name: 'Session', exact: true }).click();
+  await expect(page.getByRole('toolbar', { name: 'Session', exact: true })).toHaveCount(0);
+  await sessions.getByRole('button', { name: 'New session', exact: true }).click();
   const palette = page.getByRole('dialog', { name: 'New session', exact: true });
   await palette.getByRole('option').filter({ hasText: 'Support proof' }).first().click();
   const name = page.getByRole('dialog', { name: 'Name your session', exact: true }).getByRole('textbox', { name: 'Session name', exact: true });
@@ -395,11 +398,13 @@ test('agent sessions and drive configuration remain native and preserve one chat
   expect(createdResponse.ok()).toBe(true);
   const workspace = await createdResponse.json() as { conversationId: string };
   await expect(sessions).toContainText('Native agent session');
-  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toBeEditable();
-  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toHaveCount(1);
-  const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
-  await expect(chat.getByLabel('Choose agent: Support proof', { exact: true })).toBeVisible();
-  const sessionInput = chat.getByLabel('Message Support proof', { exact: true });
+  // The session opens under its own bar, and its first conversation is a real chat in a pane
+  // of the grid — not a hand-off to Imago's column.
+  const bar = page.getByRole('toolbar', { name: 'Session', exact: true });
+  await expect(bar).toContainText('Native agent session');
+  const sessionInput = page.locator('[data-slot="object"]').getByLabel('Message Support proof', { exact: true });
+  await expect(sessionInput).toHaveCount(1);
+  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).getByLabel('Message Support proof', { exact: true })).toHaveCount(0);
   await expect(sessionInput).toBeEditable();
   const sent = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
   await sessionInput.fill('A real workspace conversation turn');
@@ -407,15 +412,18 @@ test('agent sessions and drive configuration remain native and preserve one chat
   const admitted = await sent;
   expect(admitted.ok()).toBe(true);
   expect(admitted.request().postDataJSON()).toMatchObject({ conversationId: workspace.conversationId, chatId: support.id });
-  await expect(chat.locator('[data-role="assistant"]')).toContainText('pong');
-  const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
-  const imagoId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
-  expect(imagoId).toBeTruthy();
-  await chat.getByLabel('Choose agent: Support proof', { exact: true }).click();
-  await chat.getByRole('radiogroup', { name: 'Agent', exact: true }).getByRole('radio', { name: /^Imago/ }).click();
-  await expect(chat.getByLabel('Choose agent: Imago', { exact: true })).toBeVisible();
-  await expect(chat.getByLabel('Message Imago', { exact: true })).toBeEditable();
-  await expect(chat).toHaveCount(1);
+  await expect(page.locator('[data-slot="object"]')).toContainText('pong');
+  // Add pane opens the picker beside it, where a second agent's chat can sit side by side.
+  await bar.getByRole('button', { name: 'Add pane', exact: true }).click();
+  await expect(page.locator('[data-slot="object"]').getByText('Open in this pane', { exact: true })).toBeVisible();
+  // Closing the session hands the middle back to Imago and ends nothing.
+  await bar.getByRole('button', { name: 'Close session', exact: true }).click();
+  await expect(bar).toHaveCount(0);
+  await expect(sessions).toContainText('Native agent session');
+  // Home, the dashboard, lists the same session under its drive.
+  await page.goto(imagoPath(user.homeDriveId, 'agents'));
+  await expect(sessions).toContainText('Console proof drive');
+  await expect(sessions).toContainText('Native agent session');
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
   await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
@@ -494,45 +502,55 @@ test('queued text dispatches after the current live stream finishes', async ({ b
   await expect(chat.getByRole('list', { name: 'Queued messages' })).toHaveCount(0);
 });
 
-test('task creation and completion persist through retained task controls', async ({ browser, baseURL }) => {
+/** The native task list's List controls strip, in the object slot. */
+const taskStrip = (page: Page) => page.locator('[data-slot="object"]').getByRole('toolbar', { name: 'List controls', exact: true });
+
+/** Adds a root task from the strip's "+ Task", which opens the Tree's "Add task" field; resolves with what apps/web created. */
+async function addTaskFromStrip(page: Page, listId: string, title: string): Promise<{ id: string; pageId: string }> {
+  const object = page.locator('[data-slot="object"]');
+  await taskStrip(page).getByRole('button', { name: 'Task', exact: true }).click();
+  const input = object.getByRole('textbox', { name: 'Add task', exact: true });
+  await expect(input).toBeFocused();
+  const creation = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${listId}/tasks`);
+  await input.fill(title); await input.press('Enter');
+  const created = await creation;
+  expect(created.status()).toBe(201);
+  await input.press('Escape');
+  const task = await created.json() as { id: string; pageId: string };
+  await expect(object.locator(`[data-task="${task.id}"]`)).toBeVisible();
+  return task;
+}
+
+test('a task list opened from Files is the native view, and its task creation and completion persist', async ({ browser, baseURL }) => {
   const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Interactive tasks' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `files/${list.id}`));
   const object = page.locator('[data-slot="object"]');
-  await newTaskButton(object).click();
-  const input = object.locator('input[placeholder="+ Add a new task..."]:visible');
-  await expect(input).toBeFocused();
-  const creation = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks`);
-  await input.fill('Complete retained task'); await input.press('Enter');
-  expect((await creation).status()).toBe(201);
-  await expect(object.getByText('Complete retained task', { exact: true }).filter({ visible: true })).toBeVisible();
-  const patch = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname.startsWith(`/api/pages/${list.id}/tasks/`));
-  await object.getByRole('checkbox', { name: 'Complete Complete retained task', exact: true }).filter({ visible: true }).click();
+  // Nothing of classic's retained Table/Kanban list is mounted any more.
+  await expect(taskStrip(page).getByRole('radiogroup', { name: 'View', exact: true }).getByRole('radio', { name: 'Tree', exact: true })).toHaveAttribute('aria-checked', 'true');
+  await expect(object.locator('[data-task-id]')).toHaveCount(0);
+  const task = await addTaskFromStrip(page, list.id, 'Complete native task');
+  const patch = page.waitForResponse(response => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks/${task.id}`);
+  await object.getByRole('checkbox', { name: 'Complete Complete native task', exact: true }).click();
   expect((await patch).ok()).toBe(true);
   await page.reload();
-  await selectTaskFilter(page, 'Completed');
-  await expect(object.getByRole('checkbox', { name: 'Reopen Complete retained task', exact: true }).filter({ visible: true })).toBeChecked();
+  await hydrated(page);
+  await expect(object.getByRole('checkbox', { name: 'Complete Complete native task', exact: true })).toHaveAttribute('aria-checked', 'true');
 });
 
-test('task agent triggers save, survive reload and remove through retained controls', async ({ browser, baseURL }) => {
+test('task agent triggers save, survive reload and remove through the retained dialog', async ({ browser, baseURL }) => {
   const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Trigger tasks' });
   const agent = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Trigger proof agent' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
   const object = page.locator('[data-slot="object"]');
-  await newTaskButton(object).click();
-  const input = object.locator('input[placeholder="+ Add a new task..."]:visible');
-  const created = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/pages/${list.id}/tasks`);
-  await input.fill('Task with a trigger');
-  await input.press('Enter');
-  const creation = await created;
-  expect(creation.status()).toBe(201);
-  await input.press('Escape');
-  const task = await creation.json() as { id: string };
-  await expect(object.locator(`[data-task-id="${task.id}"]:visible`)).toBeVisible();
+  const task = await addTaskFromStrip(page, list.id, 'Task with a trigger');
   const triggersPath = `/api/tasks/${task.id}/triggers`;
+  // The native detail's Automations section opens classic's retained trigger dialog.
+  await object.getByRole('link', { name: 'Task with a trigger', exact: true }).click();
+  await page.waitForURL(url => url.pathname === imagoPath(user.homeDriveId, `tasks/${task.pageId}`));
   const openTriggers = async () => {
-    const actions = await openTaskActions(page, task.id, 'Task with a trigger');
-    await actions.getByRole('button', { name: 'Agent triggers', exact: true })
-      .or(actions.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).click();
+    await page.getByRole('article', { name: 'Task with a trigger', exact: true })
+      .getByRole('region', { name: 'Automations', exact: true })
+      .getByRole('button', { name: /^On completion → / }).click();
   };
   await openTriggers();
   const dialog = page.getByRole('dialog', { name: 'Agent triggers', exact: true });
@@ -551,6 +569,7 @@ test('task agent triggers save, survive reload and remove through retained contr
   const stored = JSON.parse((await browserGet(page, triggersPath)).body) as { triggers: { agentPageId: string; triggerType: string; prompt: string; isEnabled: boolean }[] };
   expect(stored.triggers).toEqual([expect.objectContaining({ agentPageId: agent.id, triggerType: 'completion', prompt: 'Summarize the completed task.', isEnabled: true })]);
   await page.reload();
+  await hydrated(page);
   await openTriggers();
   await expect(completion).toBeChecked();
   await expect(prompt).toHaveValue('Summarize the completed task.');
@@ -564,9 +583,12 @@ test('task agent triggers save, survive reload and remove through retained contr
     triggers: [expect.objectContaining({ agentPageId: agent.id, triggerType: 'completion', isEnabled: false, nextRunAt: null, lastFireError: 'Disabled by user' })],
   });
 
+  // A read-only member opens the same task: no Delete while their permission loads or after,
+  // no Automations (the triggers route refuses them), and the route says so itself.
   const reader = await imagoUser('Trigger read-only member'); extraUsers.push(reader.id);
   await factories.createDriveMember(user.homeDriveId, reader.id, { role: 'MEMBER' });
   await factories.createPagePermission(list.id, reader.id);
+  await factories.createPagePermission(task.pageId, reader.id);
   const viewer = await freshBrowser(browser, baseURL!); contexts.push(viewer.context);
   let releasePermission: () => void = () => {};
   let notePermission: () => void = () => {};
@@ -579,24 +601,23 @@ test('task agent triggers save, survive reload and remove through retained contr
     await route.continue();
   });
   try {
-    await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${list.id}`));
+    const refusedTriggers = viewer.page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === triggersPath);
+    await signIn(viewer.page, reader, imagoPath(user.homeDriveId, `tasks/${task.pageId}`));
     await hydrated(viewer.page);
-    const readOnlyActions = await openTaskActions(viewer.page, task.id, 'Task with a trigger');
+    const readOnly = viewer.page.getByRole('article', { name: 'Task with a trigger', exact: true });
+    await expect(readOnly).toBeVisible();
     await permissionSeen;
+    expect((await refusedTriggers).status()).toBe(403);
     const assertReadOnly = async () => {
-      if (await readOnlyActions.getAttribute('role') === 'menu') {
-        await expect(readOnlyActions.getByRole('menuitem', { name: 'Agent triggers…', exact: true })).toBeDisabled();
-      } else {
-        await expect(readOnlyActions.getByRole('button', { name: 'Agent triggers', exact: true })).toHaveCount(0);
-        await expect(readOnlyActions.getByRole('checkbox', { name: 'Complete Task with a trigger', exact: true })).toBeDisabled();
-        await expect(readOnlyActions.getByRole('button', { name: 'Delete task', exact: true })).toBeDisabled();
-      }
+      await expect(readOnly.getByRole('region', { name: 'Automations', exact: true })).toHaveCount(0);
+      await expect(viewer.page.getByRole('button', { name: 'Delete task', exact: true })).toHaveCount(0);
     };
     await assertReadOnly();
     const checked = viewer.page.waitForResponse(response => new URL(response.url()).pathname === permissionPath);
     releasePermission();
     expect((await checked).ok()).toBe(true);
     await assertReadOnly();
+    await expect(viewer.page.getByRole('dialog', { name: 'Agent triggers', exact: true })).toHaveCount(0);
     const refusedRead = await viewer.page.evaluate(async path => (await fetch(path, { credentials: 'same-origin' })).status, triggersPath);
     expect(refusedRead).toBe(403);
   } finally {
@@ -706,7 +727,7 @@ test('task statuses and anchored workflows persist through retained configuratio
   const list = await factories.createPage(user.homeDriveId, { type: 'TASK_LIST', title: 'Configured tasks' });
   await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Workflow proof agent' });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, `tasks/${list.id}`));
-  await openTaskConfiguration(page, 'Statuses');
+  await taskStrip(page).getByRole('button', { name: 'Statuses', exact: true }).click();
   const statuses = page.getByRole('dialog', { name: 'Manage Status Categories', exact: true });
   // The add form is open as the dialog opens; "Add status" only re-opens it after Cancel.
   await statuses.getByLabel('Status name', { exact: true }).fill('Review ready');
@@ -715,10 +736,11 @@ test('task statuses and anchored workflows persist through retained configuratio
   expect((await statusSaved).ok()).toBe(true);
   await expect(statuses.getByText('Review ready', { exact: true })).toBeVisible();
   await page.reload();
-  await openTaskConfiguration(page, 'Statuses');
+  await hydrated(page);
+  await taskStrip(page).getByRole('button', { name: 'Statuses', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Manage Status Categories', exact: true }).getByText('Review ready', { exact: true })).toBeVisible();
   await page.keyboard.press('Escape');
-  await openTaskConfiguration(page, 'Workflows');
+  await taskStrip(page).getByRole('button', { name: 'Workflows', exact: true }).click();
   await page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByRole('button', { name: 'New workflow', exact: true }).click();
   const form = page.getByRole('dialog', { name: 'Create Workflow', exact: true });
   await form.getByLabel('Name', { exact: true }).fill('Retained workflow proof');
@@ -734,6 +756,7 @@ test('task statuses and anchored workflows persist through retained configuratio
   expect((await workflowSaved).status()).toBe(201);
   await expect(page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByText('Retained workflow proof', { exact: true })).toBeVisible();
   await page.reload();
-  await openTaskConfiguration(page, 'Workflows');
+  await hydrated(page);
+  await taskStrip(page).getByRole('button', { name: 'Workflows', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Scheduled workflows', exact: true }).getByText('Retained workflow proof', { exact: true })).toBeVisible();
 });

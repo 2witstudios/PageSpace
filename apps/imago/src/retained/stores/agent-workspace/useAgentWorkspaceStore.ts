@@ -253,6 +253,14 @@ interface AgentWorkspaceState {
   /** Give a pane a sibling by putting a container where it was. */
   splitPane(workspaceId: string, nodeId: string, axis: NodeAxis): void;
   /**
+   * Mint an UNBOUND pane at the end of the root, focused as the picker.
+   *
+   * The way back from an empty grid: closing the last pane leaves the session
+   * standing with nothing to split, so "Add pane" there has to place one
+   * rather than split one.
+   */
+  addPane(workspaceId: string): void;
+  /**
    * Close a pane: the pane GOES.
    *
    * A `destroy`, not a move to nowhere. Closing used to park the node — in the
@@ -989,6 +997,17 @@ export const useAgentWorkspaceStore = createStore<AgentWorkspaceState>()(
         get().runCommand(workspaceId, (nodes) =>
           splitCommand(nodes, { nodeId, axis, newNodeId: mintId('pane'), newSplitId: mintId('split') }),
         );
+      },
+
+      addPane: (workspaceId) => {
+        const nodeId = mintId('pane');
+        const refused = get().runCommand(workspaceId, (nodes) => {
+          const root = rootOf(nodes);
+          if (root === undefined) return { ok: false, code: 'not_a_pane', detail: 'no root to add a pane under' };
+          return create(nodes, { nodeId, target: null, parentId: root.id, index: childrenOf(nodes, root.id).length });
+        });
+        if (refused !== null) return;
+        commit(workspaceId, get().sync[workspaceId] ?? emptySync(), { activeNodeId: nodeId, pendingPickerNodeId: nodeId });
       },
 
       closePane: (workspaceId, nodeId) => {

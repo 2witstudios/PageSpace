@@ -4,6 +4,12 @@ import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
   Activity,
+  ChartGantt,
+  Columns3,
+  Diamond,
+  ListTree,
+  Target,
+  Zap,
   ArrowUpRight,
   Bell,
   Bot,
@@ -124,6 +130,12 @@ describe('icon names', () => {
         wallet: Wallet,
         newChat: SquarePen,
         grip: GripVertical,
+        focus: Target,
+        tree: ListTree,
+        board: Columns3,
+        roadmap: ChartGantt,
+        milestone: Diamond,
+        workflow: Zap,
       },
     });
   });

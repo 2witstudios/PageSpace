@@ -395,7 +395,7 @@ describe('GET /api/subscriptions/status', () => {
   });
 
   describe('MON-2 planCredits', () => {
-    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents (A-11: Pro 900)', async () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents (Pro 1500)', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser()]);
 
       const request = new Request('https://example.com/api/subscriptions/status', {
@@ -409,8 +409,8 @@ describe('GET /api/subscriptions/status', () => {
       expect(body.planCredits).toEqual(
         Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
       );
-      // Pinned: A-11's 60% of list price (free = starter grant).
-      expect(body.planCredits).toEqual({ free: 500, pro: 900, business: 3000 });
+      // Pinned: 100% of list price (free = starter grant).
+      expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
     });
   });
 

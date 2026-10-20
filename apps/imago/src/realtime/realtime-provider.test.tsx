@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { RealtimeClient, RealtimeSocket } from './realtime-client';
-import { CHANNEL_ROOM, DM_ROOM, RealtimeProvider, useDriveRoom, useRoom, useSocketEvent, useSocketId } from './realtime-provider';
+import { CHANNEL_ROOM, DM_ROOM, RealtimeProvider, useDriveRoom, useRoom, useRooms, useSocketEvent, useSocketId } from './realtime-provider';
 
 declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -487,6 +487,58 @@ describe('useSocketId', () => {
       should: 'answer undefined, then the id it has at the time of asking',
       actual: [before, read()],
       expected: [undefined, 'sock-7'],
+    });
+  });
+});
+
+describe('useRooms', () => {
+  function Rooms({ ids }: { ids: readonly string[] }) {
+    useRooms(CHANNEL_ROOM, ids);
+    return null;
+  }
+
+  test('only the difference, then a reconnect and leaving', () => {
+    const fake = fakeClient();
+    let setIds: (ids: readonly string[]) => void = () => {};
+    function Switcher() {
+      const [ids, set] = useState<readonly string[]>(['root', 'a']);
+      setIds = set;
+      return <Rooms ids={ids} />;
+    }
+    const root = mount(
+      <RealtimeProvider client={fake.client}>
+        <Switcher />
+      </RealtimeProvider>,
+    );
+    act(() => setIds(['a', 'root', 'b']));
+    act(() => setIds(['root', 'b']));
+    const changed = [...fake.sent];
+    fake.sent.length = 0;
+    act(() => fake.deliver('connect'));
+    const reconnected = [...fake.sent];
+    fake.sent.length = 0;
+    unmount(root);
+
+    assert({
+      given: 'a tree gaining a list, then losing one, then a reconnect, then closing',
+      should: 'never leave a room it keeps, rejoin what it holds, and leave all on close',
+      actual: { changed, reconnected, closed: fake.sent },
+      expected: {
+        changed: [
+          ['join_channel', 'a'],
+          ['join_channel', 'root'],
+          ['join_channel', 'b'],
+          ['leave_channel', 'a'],
+        ],
+        reconnected: [
+          ['join_channel', 'b'],
+          ['join_channel', 'root'],
+        ],
+        closed: [
+          ['leave_channel', 'b'],
+          ['leave_channel', 'root'],
+        ],
+      },
     });
   });
 });

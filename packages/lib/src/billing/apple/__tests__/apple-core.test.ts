@@ -176,7 +176,7 @@ describe('planAppleTransaction — subscriptions', () => {
       periodStartMs: NOW - DAY,
       periodEndMs: NOW + 29 * DAY,
     });
-    expect(plan.kind === 'subscription_period' && plan.allowanceCents).toBe(900);
+    expect(plan.kind === 'subscription_period' && plan.allowanceCents).toBe(1500);
   });
 
   it('does not let the Apple price inflate the grant', () => {
@@ -193,7 +193,7 @@ describe('planAppleTransaction — subscriptions', () => {
     expect(planAppleTransaction(facts({ revocationDateMs: NOW }), ctx())).toEqual({
       kind: 'revoke_subscription',
       productId: 'ai.pagespace.ios.pro.monthly',
-      clawbackCents: 900,
+      clawbackCents: 1500,
     });
   });
 });

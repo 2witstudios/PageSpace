@@ -2,7 +2,10 @@
 
 import { useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
-import { ToolbarStrip } from '../../frame/toolbar-strip/toolbar-strip';
+import { paneHeaderClass } from '../../frame/pane/pane-class';
+import { headControlClass, headDividerClass } from '../../frame/controls/controls-class';
+import { renderIcon } from '../../components/icon/icon.render';
+import { dispatch, transactions } from '../../store/transactions';
 import EndSessionDialog from '@/retained/components/agents/EndSessionDialog';
 import { useSessionRecord } from '@/retained/components/agents/useSessionRecord';
 import { DevPreviewAffordance } from '@/retained/components/dev-preview/DevPreviewAffordance';
@@ -12,41 +15,45 @@ import { del } from '@/retained/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
 import { useAgentPaneRequestStore } from '@/retained/stores/agent-workspace/useAgentPaneRequestStore';
 import { useAgentWorkspaceStore } from '@/retained/stores/agent-workspace/useAgentWorkspaceStore';
-import { useAgentSessions, useDriveAgents } from './agents-data';
-import { agoLabel } from './agents-pane.model';
+import { useAgentSessions } from './agents-data';
+import { agoLabel } from './session-label';
+
+export type SessionToolbarProps = {
+  readonly driveId?: string;
+  /** Show sidebar, while the Console pane is closed. */
+  readonly leading?: ReactNode;
+  /** The shell's own head controls (the Ask pill while Imago is collapsed). */
+  readonly trailing?: ReactNode;
+};
 
 /**
- * The 44px toolbar over the selected session (C-Drive-Agents, "Session"): the agent, its
- * environment and when it started, the sandbox state, the preview affordance, and End
- * session. Renders nothing until a session is selected.
+ * The Console's one session bar (C-Drive-Agents, "Session"), the head of the middle while a
+ * session is open: its name, the environment it runs in and when it started, the sandbox
+ * state, the dev-server preview, Add pane, End session and Close. Renders nothing until a
+ * session is selected.
  *
- * Add pane asks the pane grid to split the active pane into its picker. Not yet here
- * (needs-api): the sandbox size and the wallet funding line.
+ * Close drops the selection without ending anything, the way classic's "All conversations"
+ * did: the workspace, its panes, its PTYs and any streaming reply are untouched, and Imago
+ * takes the middle back. Add pane asks the pane grid for a new pane with its picker.
  */
-export function SessionToolbar({ driveId }: { readonly driveId?: string }): ReactNode {
+export function SessionToolbar({ driveId, leading, trailing }: SessionToolbarProps): ReactNode {
   const sessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
-  const selectedAgentId = useAgentSurfaceStore((state) => state.selectedAgentId);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
   const { sessions, mutate: refreshSessions } = useAgentSessions(driveId);
   const record = useSessionRecord(sessionId).data;
   const sessionDriveId = record?.session?.driveId ?? driveId ?? null;
   const { envs } = useDriveEnvs(sessionDriveId);
-  const agents = useDriveAgents(sessionDriveId);
   const [confirming, setConfirming] = useState(false);
 
   if (sessionId === null) return null;
 
   const session = sessions.find((entry) => entry.workspaceId === sessionId);
-  const agentTitle = agents.find((agent) => agent.id === selectedAgentId)?.title ?? null;
+  const name = session?.name || record?.session?.name || 'Session';
   const envName = session?.envId ? envs.find((env) => env.id === session.envId)?.name : undefined;
-  const label = [
-    agentTitle ?? session?.name ?? record?.session?.name ?? 'Session',
-    envName ? `env ${envName}` : null,
-    session ? `started ${agoLabel(session.createdAt, new Date())}` : null,
-  ]
+  const meta = [envName ? `in ${envName}` : null, session ? `started ${agoLabel(session.createdAt, new Date())}` : null]
     .filter((part): part is string => part !== null)
     .join(' · ');
-  const running = session?.sandboxStatus === 'running';
+  const running = session?.sandboxStatus === 'running' || session?.sandboxStatus === 'starting';
 
   const endSession = async () => {
     setConfirming(false);
@@ -64,43 +71,57 @@ export function SessionToolbar({ driveId }: { readonly driveId?: string }): Reac
     }
   };
 
+  const close = () => {
+    selectSession(null);
+    dispatch(transactions.openImago, undefined);
+  };
+
   return (
-    <ToolbarStrip label="Session">
-      <span className="min-w-0 truncate text-sm text-ink">{label}</span>
-      {running ? (
-        <span className="ml-2 inline-flex h-6 flex-none items-center gap-2 rounded-full bg-status-success/10 px-3 text-xs font-medium text-status-success">
-          <span className="size-2 rounded-full bg-status-success" aria-hidden="true" />
-          Sandbox running
+    <div role="toolbar" aria-label="Session" className={paneHeaderClass}>
+      {leading === undefined || leading === null ? null : (
+        <span className="flex flex-none" data-leading="">
+          {leading}
         </span>
-      ) : null}
-      <DevPreviewAffordance
-        statusPath={sessionDevPreviewPath(sessionId)}
-        sessionId={sessionId}
-        pauseWhenIdle={false}
-        className="ml-auto"
-      />
+      )}
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <span className="min-w-0 truncate font-semibold" data-session-name="">
+          {name}
+        </span>
+        {running ? (
+          <span role="img" aria-label="Sandbox running" className="size-2 flex-none self-center rounded-full bg-status-success" />
+        ) : null}
+        {meta === '' ? null : <span className="flex-none truncate text-sm text-ink-muted" data-session-meta="">{meta}</span>}
+      </div>
+      <DevPreviewAffordance statusPath={sessionDevPreviewPath(sessionId)} sessionId={sessionId} pauseWhenIdle={false} />
       <button
         type="button"
-        className="ml-2 h-8 flex-none rounded-md border border-hairline px-3 text-sm text-ink"
+        className={headControlClass}
+        aria-label="Add pane"
+        title="Add pane"
         onClick={() => useAgentPaneRequestStore.getState().requestAddPane(sessionId)}
       >
-        Add pane
+        {renderIcon({ name: 'plus', size: 16 })}
       </button>
       {record?.canEndSession === true ? (
         <button
           type="button"
-          className="ml-2 h-8 flex-none rounded-md border border-status-danger/35 px-3 text-sm text-status-danger"
+          className="h-head-control flex-none rounded-md border border-status-danger/35 px-3 text-sm text-status-danger"
           onClick={() => setConfirming(true)}
         >
           End session
         </button>
       ) : null}
+      {trailing}
+      <span className={headDividerClass} aria-hidden="true" />
+      <button type="button" className={headControlClass} aria-label="Close session" title="Close session" onClick={close}>
+        {renderIcon({ name: 'close', size: 12 })}
+      </button>
       <EndSessionDialog
         open={confirming}
         onOpenChange={setConfirming}
         sessionName={session?.name ?? record?.session?.name ?? null}
         onConfirm={() => void endSession()}
       />
-    </ToolbarStrip>
+    </div>
   );
 }

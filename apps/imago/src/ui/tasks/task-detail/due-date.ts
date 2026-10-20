@@ -28,3 +28,17 @@ export const dueDateFor = (day: string): string | null => {
   const real = midnight.getFullYear() === year && midnight.getMonth() === month - 1 && midnight.getDate() === date;
   return real ? midnight.toISOString() : null;
 };
+
+/**
+ * A due date that does not fall before the start it shares a day with. The
+ * date field and the Roadmap send a picked due day as its local midnight,
+ * but a start set over the API may carry a time of day; the server compares
+ * the two instants, so a due picked on the start's own day would be refused.
+ * Such a due takes the start's instant instead. Any other due is kept as it
+ * is: one on an earlier day is still refused, as it should be.
+ */
+export const dueNotBeforeStart = (dueDate: string | null, startDate: string | null): string | null => {
+  if (dueDate === null || startDate === null) return dueDate;
+  const sameDay = dueDay(dueDate) !== '' && dueDay(dueDate) === dueDay(startDate);
+  return sameDay && Date.parse(dueDate) < Date.parse(startDate) ? startDate : dueDate;
+};

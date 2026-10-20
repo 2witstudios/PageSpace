@@ -6,7 +6,9 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import {
   useAssignable,
+  useDriveTasks,
   useDriveTaskLists,
+  usePageEditable,
   usePageTrail,
   useTaskList,
   useTaskStatuses,
@@ -246,6 +248,30 @@ describe('useTaskList()', () => {
       should: 'revalidate the list from the server',
       actual: [web.count(PAGE_P) > before, statusIn(seen.list, 'a')],
       expected: [true, 'in_progress'],
+    });
+  });
+
+  test('a due day picked on a timed start', async () => {
+    // Local times, as the date field picks a day in the viewer's zone.
+    const start = new Date(2026, 9, 25, 9).toISOString();
+    const { web, seen } = mountList(
+      listRoutes({
+        [L1]: () => Response.json(taskListResponse([taskItem('z', { startDate: start })])),
+        'PATCH /api/pages/l1/tasks/z': () => Response.json(taskItem('z', { startDate: start, dueDate: start })),
+      }),
+    );
+    await loaded(seen);
+
+    let result: unknown;
+    await act(async () => {
+      result = await seen.actions?.update('z', { dueDate: new Date(2026, 9, 25).toISOString() });
+    });
+
+    assert({
+      given: 'a start at 09:00 and a due date picked on that same day, as its midnight',
+      should: 'send the due date settled at the start’s instant',
+      actual: [result, web.writes().map((write) => write.body)],
+      expected: [{ ok: true }, [{ dueDate: start }]],
     });
   });
 
@@ -586,6 +612,170 @@ describe('useAssignable() and usePageTrail()', () => {
         none: undefined,
         asked: 2,
       },
+    });
+  });
+});
+
+describe('usePageEditable()', () => {
+  const PERMISSIONS = 'GET /api/pages/l1/permissions/check';
+  const mountEditable = (answer: FakeRoute) => {
+    const web = fakeWeb({ [PERMISSIONS]: answer });
+    const seen: { editable: (boolean | undefined)[] } = { editable: [] };
+    function Probe() {
+      seen.editable.push(usePageEditable('l1'));
+      return null;
+    }
+    render(
+      <ImagoSWRProvider client={web.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    return seen;
+  };
+
+  test('loading, then an answer', async () => {
+    const seen = mountEditable(() => Response.json({ canView: true, canEdit: true }));
+    await settle(() => {
+      if (seen.editable.at(-1) === undefined) throw new Error('not loaded');
+    });
+    assert({
+      given: 'a page whose permissions are still loading, then say the viewer may edit',
+      should: 'be undefined until the answer, then true',
+      actual: [seen.editable[0], seen.editable.at(-1)],
+      expected: [undefined, true],
+    });
+  });
+
+  test('a failed check', async () => {
+    const seen = mountEditable(() => Response.json({ error: 'no' }, { status: 500 }));
+    await settle(() => {
+      if (seen.editable.at(-1) === undefined) throw new Error('not answered');
+    });
+    assert({
+      given: 'a permissions check the server fails',
+      should: 'be false, so nothing that waits for a yes shows',
+      actual: seen.editable.at(-1),
+      expected: false,
+    });
+  });
+});
+
+describe('moveTo() and setWipLimit()', () => {
+  test('a card dropped into another column, then a column limit', async () => {
+    const { web, seen } = mountList(
+      listRoutes({
+        'PATCH /api/pages/l1/tasks/z': () => Response.json(taskItem('z', { status: 'in_progress' })),
+        'PATCH /api/pages/l1/tasks/reorder': () => Response.json({ success: true }),
+        'PUT /api/pages/l1/tasks/statuses': () => Response.json({ statusConfigs: seededConfigs }),
+        // The server's rows as they stand: Blocked renamed elsewhere since this tab loaded.
+        'GET /api/pages/l1/tasks/statuses': () =>
+          Response.json({
+            statusConfigs: seededConfigs.map((config) => (config.slug === 'blocked' ? { ...config, name: 'Waiting' } : config)),
+          }),
+      }),
+    );
+    await loaded(seen);
+    const results: unknown[] = [];
+    await act(async () => {
+      results.push(await seen.actions?.moveTo('z', { status: 'in_progress', index: 0 }));
+    });
+    await act(async () => {
+      results.push(await seen.actions?.setWipLimit('in_progress', 3));
+    });
+    const [, , put] = web.writes();
+    assert({
+      given: 'a move to another status at the top, then a limit of 3 on that status',
+      should: 'save the status, then the order, then the server’s current statuses with the one limit changed',
+      actual: {
+        results,
+        writes: web.writes().map(({ method, url }) => [method, url]),
+        limits: (put?.body as { statuses: { name: string; id: string; wipLimit: number | null }[] }).statuses.map(
+          (status) => [status.id, status.name, status.wipLimit],
+        ),
+      },
+      expected: {
+        results: [{ ok: true }, { ok: true }],
+        writes: [
+          ['PATCH', '/api/pages/l1/tasks/z'],
+          ['PATCH', '/api/pages/l1/tasks/reorder'],
+          ['PUT', '/api/pages/l1/tasks/statuses'],
+        ],
+        limits: [
+          ['cfg-pending', 'To Do', null],
+          ['cfg-in_progress', 'In Progress', 3],
+          ['cfg-blocked', 'Waiting', null],
+          ['cfg-completed', 'Done', null],
+        ],
+      },
+    });
+  });
+
+  test('a refused status leaves the order alone', async () => {
+    const { web, seen } = mountList(listRoutes());
+    await loaded(seen);
+    let result: unknown;
+    await act(async () => {
+      result = await seen.actions?.moveTo('p', { status: 'completed', index: 1 });
+    });
+    assert({
+      given: 'a parent with an open subtask dropped into Done',
+      should: 'refuse in the server’s words and write nothing',
+      actual: { result, writes: web.writes().length },
+      expected: { result: { ok: false, refusal: 'Complete all sub-tasks first (1 of 1 remaining)' }, writes: 0 },
+    });
+  });
+});
+
+describe('useDriveTasks().toggleComplete', () => {
+  test('ticked by the holding list’s statuses', async () => {
+    const ROWS = 'GET /api/tasks?context=drive&driveId=d1&limit=100&statusGroup=active';
+    let served = 'pending';
+    const web = fakeWeb({
+      [ROWS]: () =>
+        Response.json({
+          tasks: [
+            {
+              ...taskItem('z', { status: served }),
+              driveId: 'd1',
+              taskListPageId: 'l1',
+              taskListPageTitle: 'Launch',
+              statusGroup: served === 'completed' ? 'done' : 'todo',
+              statusLabel: 'To Do',
+              statusColor: '',
+            },
+          ],
+          statusConfigsByTaskList: { l1: seededConfigs },
+          pagination: { total: 1, limit: 100, offset: 0, hasMore: false },
+        }),
+      'PATCH /api/pages/l1/tasks/z': ({ body }) => {
+        served = (body as { status: string }).status;
+        return Response.json(taskItem('z', { status: served }));
+      },
+    });
+    const seen: { toggle: ((id: string) => Promise<unknown>) | null; loaded: boolean } = { toggle: null, loaded: false };
+    function Probe() {
+      const { response, toggleComplete } = useDriveTasks('d1', 'active', undefined);
+      seen.toggle = toggleComplete;
+      seen.loaded = response !== undefined;
+      return null;
+    }
+    render(
+      <ImagoSWRProvider client={web.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!seen.loaded) throw new Error('not loaded');
+    });
+    let result: unknown;
+    await act(async () => {
+      result = await seen.toggle?.('z');
+    });
+    assert({
+      given: 'an open row of the drive ticked from the ground',
+      should: 'PATCH it to its own list’s done status, on that list’s page',
+      actual: { result, writes: web.writes().map(({ method, url, body }) => [method, url, body]) },
+      expected: { result: { ok: true }, writes: [['PATCH', '/api/pages/l1/tasks/z', { status: 'completed' }]] },
     });
   });
 });

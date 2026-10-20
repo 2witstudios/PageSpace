@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import useSWR from 'swr';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
@@ -74,5 +75,8 @@ export function useDriveEnvs(
     },
   );
 
-  return { envs: data?.envs ?? [], isLoading, error, mutate: () => void mutate() };
+  // Stable across renders: the enrollment poll re-renders callers, and a dialog that restarts
+  // its request whenever this changes would drop the code it just issued.
+  const refresh = useCallback(() => void mutate(), [mutate]);
+  return { envs: data?.envs ?? [], isLoading, error, mutate: refresh };
 }

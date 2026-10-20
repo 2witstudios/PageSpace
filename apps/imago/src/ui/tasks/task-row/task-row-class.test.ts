@@ -18,7 +18,7 @@ describe('task row classes', () => {
       should: 'be the file tree’s quiet ~32px row, holding controls rather than being one',
       actual: taskRowClass,
       expected:
-        'flex w-full items-center gap-2 rounded-lg px-2 py-row-y text-left text-sm transition-colors duration-120 ease-standard hover:bg-surface-overlay',
+        'group/row flex w-full items-center gap-2 rounded-lg px-2 py-row-y text-left text-sm transition-colors duration-120 ease-standard hover:bg-surface-overlay',
     });
   });
 
