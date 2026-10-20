@@ -1,34 +1,22 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { CalendarView, type EmbeddedCalendarState } from '@/retained/components/calendar/CalendarView';
-import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
 import { formatCalendarDate, stepCalendarDate } from '../calendar/calendar-state';
 import { useCalendarState } from '../calendar/use-calendar-state';
-import { UserCalendarChips, type UserCalendarChip } from './user-calendar-chips';
 import { UserCalendarToolbar } from './user-calendar-toolbar';
-import { userCalendars } from './user-calendars';
 
 /**
- * The user calendar's middle (C-Account-Calendar): the 44px toolbar, the calendar chips and the
- * shared grid for every drive the user sees, in the user context. The visible date and view live
- * in the URL, as they do for the drive calendar; the calendar and event-type filters live in the
- * shared calendar filter store, so the grid and these chips always agree.
+ * The user calendar's middle (C-Account-Calendar): the 44px toolbar and the shared grid for every
+ * drive the user sees, in the user context. The visible date and view live in the URL, as they do
+ * for the drive calendar; the calendar, event-type and tasks filters are the Calendar pane's,
+ * in the shared calendar filter store, so the grid follows the pane.
  */
 export function UserCalendarMiddle(): ReactNode {
   const { state, update } = useCalendarState();
-  const drives = useDriveStore((store) => store.drives);
-  const hiddenCalendars = useCalendarFilterStore((store) => store.hiddenCalendars);
-  const hiddenEventTypes = useCalendarFilterStore((store) => store.hiddenEventTypes);
-  const toggleCalendar = useCalendarFilterStore((store) => store.toggleCalendar);
-  const toggleEventType = useCalendarFilterStore((store) => store.toggleEventType);
-  const [showTasks, setShowTasks] = useState(true);
-
-  const calendars = useMemo<UserCalendarChip[]>(
-    () => userCalendars(drives).map((calendar) => ({ ...calendar, visible: !hiddenCalendars.includes(calendar.key) })),
-    [drives, hiddenCalendars],
-  );
+  const showTasks = useCalendarFilterStore((store) => store.showTasks);
+  const toggleTasks = useCalendarFilterStore((store) => store.toggleTasks);
 
   const embedded: EmbeddedCalendarState = {
     viewMode: state.view,
@@ -36,7 +24,9 @@ export function UserCalendarMiddle(): ReactNode {
     openEventId: state.eventId,
     composing: state.compose,
     showTasks,
-    onShowTasksChange: setShowTasks,
+    onShowTasksChange: (shown) => {
+      if (shown !== showTasks) toggleTasks();
+    },
     onViewModeChange: (view) => update({ view }),
     onDateChange: (date) => update({ date: formatCalendarDate(date) }),
     onOpenEventChange: (eventId) => update({ eventId }),
@@ -52,16 +42,6 @@ export function UserCalendarMiddle(): ReactNode {
         onToday={() => update({ date: formatCalendarDate(new Date()) })}
         onView={(view) => update({ view })}
         onNewEvent={() => update({ compose: '1' })}
-      />
-      <UserCalendarChips
-        calendars={calendars}
-        onToggleCalendar={toggleCalendar}
-        userEventsVisible={!hiddenEventTypes.includes('user')}
-        agentEventsVisible={!hiddenEventTypes.includes('agent')}
-        onToggleUserEvents={() => toggleEventType('user')}
-        onToggleAgentEvents={() => toggleEventType('agent')}
-        showTasks={showTasks}
-        onToggleTasks={() => setShowTasks((shown) => !shown)}
       />
       <div className="min-h-0 flex-1">
         <CalendarView embedded={embedded} context="user" />

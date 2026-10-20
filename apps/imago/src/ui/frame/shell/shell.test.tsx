@@ -605,15 +605,15 @@ describe('Shell', () => {
   });
 
   test('the spine never folds Imago', () => {
-    const places = ['/drive-1/calendar', '/drive-1/activity', '/drive-1/agents', '/drive-1/files/page-1'].map((pathname) => {
+    const places = ['/drive-1/calendar', '/drive-1/calendar/view', '/drive-1/activity', '/drive-1/agents/view', '/drive-1/files/page-1'].map((pathname) => {
       navigate(pathname);
       return [frame().dataset.imago, getUiState().resources.imagoCollapsed];
     });
     assert({
-      given: 'Calendar, Activity, Console and then a page, each opened from the spine',
-      should: 'keep Imago docked beside every one of them',
+      given: 'Calendar from the spine, its screen, Activity from the spine, the Console screen and then a page',
+      should: 'make Imago the ground beside each pane alone and dock it beside each screen, never folding it',
       actual: places,
-      expected: [['docked', false], ['docked', false], ['docked', false], ['docked', false]],
+      expected: [['ground', false], ['docked', false], ['ground', false], ['docked', false], ['docked', false]],
     });
   });
 
@@ -729,19 +729,26 @@ describe('Shell', () => {
   });
 
   test('the settings and account navs', () => {
+    const pane = () => [frame().dataset.list, slot('list').querySelector('nav')?.getAttribute('aria-label'), frame().dataset.imago];
     navigation.pathname = '/drive-1/settings';
     render();
-    const settings = [frame().dataset.list, slot('list').querySelector('nav')?.getAttribute('aria-label'), slot('list').classList.contains('w-tree-pane')];
+    const settings = pane();
+    navigate('/drive-1/settings/general');
+    const general = pane();
     navigate('/account');
-    const account = [frame().dataset.list, slot('list').querySelector('nav')?.getAttribute('aria-label'), slot('list').classList.contains('w-tree-pane')];
+    const account = pane();
+    navigate('/account/display');
+    const display = pane();
 
     assert({
-      given: 'drive settings, then the account',
-      should: 'open each one’s 260px nav pane in the list slot',
-      actual: [settings, account],
+      given: 'drive settings, one of its screens, then the account and one of its screens',
+      should: 'open each nav alone beside Imago as the ground, then narrow it beside the screen with Imago docked',
+      actual: [settings, general, account, display],
       expected: [
-        ['tree', 'Drive settings', true],
-        ['tree', 'Account', true],
+        ['list', 'Drive settings', 'ground'],
+        ['tree', 'Drive settings', 'docked'],
+        ['list', 'Account', 'ground'],
+        ['tree', 'Account', 'docked'],
       ],
     });
   });

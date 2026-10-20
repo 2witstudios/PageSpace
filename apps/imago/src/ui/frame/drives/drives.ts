@@ -69,6 +69,12 @@ export const switchDriveHref = (stage: Stage, driveId: string): string => {
     case 'messages':
     case 'tasks':
     case 'settings':
+    case 'calendar':
+    case 'agents':
+    case 'workflows':
+    case 'activity':
+    case 'members':
+    case 'trash':
       return `${drive}/${stage.section}`;
     case 'chat':
     case 'account':

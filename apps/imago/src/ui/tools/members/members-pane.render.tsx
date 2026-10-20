@@ -13,6 +13,9 @@ export type MembersPaneBodyProps = {
   readonly retry: () => void;
 };
 
+/** The Members screen, where the group rows jump to their sections. */
+const membersScreen = (driveId: string): string => `/${encodeURIComponent(driveId)}/members/all`;
+
 /** Where the Manage rows go: the invite form, and the drive settings' roles screen. */
 export const membersManageHrefs = (driveId: string) => ({
   invite: `/${encodeURIComponent(driveId)}/members/invite`,
@@ -35,7 +38,7 @@ export function renderMembersPaneBody({ driveId, groups, error, retry }: Members
       <ul aria-label="Member groups" className="flex flex-col gap-1">
         {groups.map((group) => (
           <li key={group.id}>
-            <Link href={group.anchor} className={memberGroupRowClass}>
+            <Link href={`${membersScreen(driveId)}${group.anchor}`} className={memberGroupRowClass}>
               <span className="min-w-0 truncate">{group.label}</span>
               <span className={memberGroupCountClass}>{group.count ?? ''}</span>
             </Link>
@@ -92,7 +95,7 @@ export function renderProfilePaneBody({ driveId, currentUserId, ...rest }: PaneD
   const { directory } = rest;
   return (
     <>
-      <Link href={`/${encodeURIComponent(driveId)}/members`} className={backRowClass}>
+      <Link href={membersScreen(driveId)} className={backRowClass}>
         All members
       </Link>
       <h2 className={groupHeadingClass}>People</h2>
@@ -145,7 +148,7 @@ export function renderInvitePaneBody({ driveId, ...rest }: PaneDirectoryProps): 
   const { pendingInvites } = rest.directory;
   return (
     <>
-      <Link href={`/${encodeURIComponent(driveId)}/members`} className={backRowClass}>
+      <Link href={membersScreen(driveId)} className={backRowClass}>
         All members
       </Link>
       <h2 className={groupHeadingClass}>Waiting to join</h2>
@@ -164,7 +167,7 @@ export function renderInvitePaneBody({ driveId, ...rest }: PaneDirectoryProps): 
       <h2 className={groupHeadingClass}>Or share a link</h2>
       <p className={membersPaneMessageClass}>
         Invite links let anyone join with a set role.{' '}
-        <Link href={`/${encodeURIComponent(driveId)}/members#links`} className="text-accent-deep">
+        <Link href={`${membersScreen(driveId)}#links`} className="text-accent-deep">
           Manage links
         </Link>
       </p>

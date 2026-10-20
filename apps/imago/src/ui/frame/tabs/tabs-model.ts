@@ -136,16 +136,19 @@ export const closeTab = (strip: TabStrip, id: string): { readonly tabs: readonly
 };
 
 /**
- * Where Close page goes: the section the page belongs to, so the tabs stay and Imago becomes
- * the ground (SPEC v3.3). Drive tools and settings go to the drive's chat, the account and
- * DMs to their own roots.
+ * Where Close page goes: the section the object was opened from, its sidebar still there and
+ * Imago the ground again (SPEC v3.3). Every drive section, tools and settings alike, comes
+ * back to its own index; DMs and the account to theirs. Only the chat and notifications, which
+ * have no index of their own, go to the drive's chat or the root.
  */
 export const sectionPath = (stage: Stage): string => {
-  if (stage.driveId === null) return stage.section === 'messages' ? '/dm' : '/';
+  if (stage.driveId === null) {
+    if (stage.section === 'messages') return '/dm';
+    if (stage.section === 'account') return '/account';
+    return '/';
+  }
   const drive = `/${encodeURIComponent(stage.driveId)}`;
-  return stage.section === 'files' || stage.section === 'messages' || stage.section === 'tasks'
-    ? `${drive}/${stage.section}`
-    : drive;
+  return stage.section === 'chat' || stage.section === 'notifications' ? drive : `${drive}/${stage.section}`;
 };
 
 const isImagoPath = (value: unknown): value is string =>

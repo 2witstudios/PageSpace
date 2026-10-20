@@ -9,7 +9,9 @@ import { usePageAgents } from '@/retained/hooks/page-agents/usePageAgents';
 import { useSpawnSession } from '@/retained/components/agents/useSpawnSession';
 import { renderIcon } from '../../components/icon/icon.render';
 import { cn } from '../../cn';
-import { renderToolPane } from '../../frame/tool-pane/tool-pane.render';
+import { renderToolPane, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
+import { useToolScreen } from '../../frame/tool-pane/tool-screen';
+import { buildAgentSelectionUrl } from '@/retained/lib/agents/agent-selection';
 import { useAgentSessions, type AgentSessionRow } from './agents-data';
 import { renderSessionAction } from './agents-pane';
 import { agoLabel, filterSessions, groupSessionsByEnv, type SessionGroup } from './agents-pane.model';
@@ -37,7 +39,13 @@ const sessionRowClass = (selected: boolean): string =>
  * environments load per drive, so each drive is its own component and the list is the drive
  * list the store holds.
  */
-export function HomeConsolePane({ driveId, close }: { readonly driveId: string; readonly close: ReactNode }): ReactNode {
+/** The query of an agent selection address. */
+const searchOf = (href: string): string => {
+  const at = href.indexOf('?');
+  return at === -1 ? '' : href.slice(at);
+};
+
+export function HomeConsolePane({ driveId, close, variant }: ToolPaneProps): ReactNode {
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
@@ -55,7 +63,13 @@ export function HomeConsolePane({ driveId, close }: { readonly driveId: string; 
 
   const now = new Date();
   const matching = filterSessions(sessions, query);
-  const onSelect = (workspaceId: string) => selectSession(workspaceId === selectedSessionId ? null : workspaceId);
+  const screen = useToolScreen(driveId, 'agents');
+  // On the Console's screen a pick selects in place; from the pane alone it opens the screen on that session.
+  const onSelect = (workspaceId: string) => {
+    const next = workspaceId === selectedSessionId ? null : workspaceId;
+    if (screen.onScreen) selectSession(next);
+    else if (next !== null) screen.open(searchOf(buildAgentSelectionUrl({ sessionId: next })));
+  };
 
   const driveGroups = drives
     .map((drive) => ({ drive, sessions: matching.filter((session) => session.driveId === drive.id) }))
@@ -66,6 +80,7 @@ export function HomeConsolePane({ driveId, close }: { readonly driveId: string; 
     label: 'Console: agents and sessions',
     actions: renderSessionAction(() => openSpawn(driveId, drives.find((drive) => drive.id === driveId)?.name ?? null)),
     close,
+    variant,
     children: (
       <>
         <label className="mx-px mb-2 flex h-filter flex-none items-center gap-2 rounded-md bg-fill px-3 text-ink-faint">

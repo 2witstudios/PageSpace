@@ -3,6 +3,8 @@
 import Link from 'next/link';
 import { useMemo, useState, type ReactNode } from 'react';
 import { renderToolPane, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
+import { useToolScreen } from '../../frame/tool-pane/tool-screen';
+import { buildAgentSelectionUrl } from '@/retained/lib/agents/agent-selection';
 import { cn } from '../../cn';
 import { renderIcon } from '../../components/icon/icon.render';
 import { fileHref } from '../../files/files-browser/files-browser-model';
@@ -46,13 +48,19 @@ export const renderSessionAction = (onStart: (() => void) | null): ReactNode => 
   </button>
 );
 
+/** The query of an agent selection address. */
+const searchOf = (href: string): string => {
+  const at = href.indexOf('?');
+  return at === -1 ? '' : href.slice(at);
+};
+
 /**
  * The Agents tool's pane (C-Drive-Agents): the head with Session, then search, the sessions
  * grouped by their environment, each environment's published app, and the drive's agents.
  * The selected session is the shared agent-surface selection, mirrored to the URL, so the
  * middle follows it and a reload keeps it.
  */
-export function AgentsPane({ driveId, close }: ToolPaneProps): ReactNode {
+export function AgentsPane({ driveId, close, variant }: ToolPaneProps): ReactNode {
   const drives = useDriveStore((state) => state.drives);
   const drive = drives.find((entry) => entry.id === driveId);
   const driveName = drive?.name ?? null;
@@ -81,12 +89,20 @@ export function AgentsPane({ driveId, close }: ToolPaneProps): ReactNode {
   }, [sessions, envs, query]);
 
   const appEnvIds = new Set(apps.map((app) => app.envId));
+  const screen = useToolScreen(driveId, 'agents');
+  // On the Console's screen a pick selects in place; from the pane alone it opens the screen on that session.
+  const onSelect = (workspaceId: string) => {
+    const next = workspaceId === selectedSessionId ? null : workspaceId;
+    if (screen.onScreen) selectSession(next);
+    else if (next !== null) screen.open(searchOf(buildAgentSelectionUrl({ sessionId: next })));
+  };
 
   return renderToolPane({
     title: 'Console',
     label: 'Console: agents and sessions',
     actions: renderSessionAction(driveId ? () => openSpawn(driveId, driveName) : null),
     close,
+    variant,
     children: (
       <>
         <label className="mx-px mb-2 flex h-filter flex-none items-center gap-2 rounded-md bg-fill px-3 text-ink-faint">
@@ -112,7 +128,7 @@ export function AgentsPane({ driveId, close }: ToolPaneProps): ReactNode {
             group={group}
             selectedSessionId={selectedSessionId}
             now={now}
-            onSelect={(workspaceId) => selectSession(workspaceId === selectedSessionId ? null : workspaceId)}
+            onSelect={onSelect}
             app={
               group.envId !== null && appEnvIds.has(group.envId) && driveId ? (
                 <PublishedAppCard driveId={driveId} envId={group.envId} envName={group.name} canManage={canManage} />

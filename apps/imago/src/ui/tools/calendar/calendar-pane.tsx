@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from 'react';
 import useSWR from 'swr';
 import { differenceInMinutes, format } from 'date-fns';
 import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
 import { isOnPrem } from '@/retained/lib/deployment-mode';
 import { getDriveCalendarColor, getEventColors } from '@/retained/components/calendar/calendar-types';
 import { renderIcon } from '../../components/icon/icon.render';
@@ -33,16 +34,44 @@ export function syncedLabel(lastSyncAt: string | null, now: Date): string {
   return `synced ${format(last, 'MMM d')}`;
 }
 
-const groupHeadingClass = 'px-1.5 pt-3 pb-1 text-2xs font-semibold tracking-wide text-ink-faint';
+const groupHeadingClass = 'flex items-center justify-between px-1.5 pt-3 pb-1 text-2xs font-semibold tracking-wide text-ink-faint';
 const rowClass = 'flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-sm text-ink-muted';
+const toggleRowClass = (on: boolean): string =>
+  `flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-1.5 py-1 text-left text-sm hover:bg-fill ${on ? 'text-ink' : 'text-ink-faint'}`;
+const showAllClass = 'cursor-pointer border-0 bg-transparent p-0 text-2xs font-medium text-ink-faint hover:text-ink';
+
+/** A filter row (classic's calendar sidebar): a checkbox in the row's colour, its name, then anything trailing. */
+function FilterRow({ label, dotClass, on, onToggle, trailing }: {
+  readonly label: string;
+  readonly dotClass: string;
+  readonly on: boolean;
+  readonly onToggle: () => void;
+  readonly trailing?: ReactNode;
+}): ReactNode {
+  return (
+    <li>
+      <button type="button" role="checkbox" aria-checked={on} onClick={onToggle} className={toggleRowClass(on)}>
+        <span
+          aria-hidden="true"
+          className={`flex size-checkbox flex-none items-center justify-center rounded-sm border ${on ? `${dotClass} border-transparent text-spine-on` : 'border-hairline bg-transparent'}`}
+        >
+          {on ? renderIcon({ name: 'check', size: 10 }) : null}
+        </span>
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {trailing}
+      </button>
+    </li>
+  );
+}
 
 /**
- * The Calendar tool's pane (C-Drive-Calendar): the Event button, the October mini month, the
- * CALENDARS group (the drive, or on Home, the dashboard, Personal and every drive as the grid
- * shows them; then Google when it is connected and this is not on-prem) and the EVENT TYPES
- * legend. The visible date is the URL's, so the middle follows the picker.
+ * The Calendar tool's pane (C-Drive-Calendar), the calendar's filter as classic had it: the Event
+ * button and the mini month, then what the grid shows. On Home, the dashboard, each calendar
+ * (Personal and every drive) can be shown or hidden; then Google when it is connected and this is
+ * not on-prem; then user events, agent events and tasks. The filters live in the shared calendar
+ * filter store, so the grid follows the pane. Picking a date or Event opens the calendar's screen.
  */
-export function CalendarPane({ driveId, close, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+export function CalendarPane({ driveId, close, variant, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const { state, update } = useCalendarState();
   const drives = useDriveStore((store) => store.drives);
   const drive = drives.find((entry) => entry.id === driveId);
@@ -71,22 +100,50 @@ export function CalendarPane({ driveId, close, allDrives = false }: ToolPaneProp
     </button>
   );
 
+  const hiddenCalendars = useCalendarFilterStore((store) => store.hiddenCalendars);
+  const hiddenEventTypes = useCalendarFilterStore((store) => store.hiddenEventTypes);
+  const showTasks = useCalendarFilterStore((store) => store.showTasks);
+  const toggleCalendar = useCalendarFilterStore((store) => store.toggleCalendar);
+  const toggleEventType = useCalendarFilterStore((store) => store.toggleEventType);
+  const toggleTasks = useCalendarFilterStore((store) => store.toggleTasks);
+  const showAll = useCalendarFilterStore((store) => store.showAll);
+  const hideAll = useCalendarFilterStore((store) => store.hideAll);
+  const allVisible = calendars.every((calendar) => !hiddenCalendars.includes(calendar.key));
+
   return renderToolPane({
     title: 'Calendar',
     label: 'Calendars',
     actions: eventButton,
     close,
+    variant,
     children: (
       <>
         <MiniMonth date={state.date} onSelect={(date) => update({ date: formatCalendarDate(date) })} />
-        <h3 className={groupHeadingClass}>CALENDARS</h3>
+        <h3 className={groupHeadingClass}>
+          CALENDARS
+          {allDrives && calendars.length > 1 ? (
+            <button type="button" className={showAllClass} onClick={() => (allVisible ? hideAll(calendars.map((calendar) => calendar.key)) : showAll())}>
+              {allVisible ? 'Hide all' : 'Show all'}
+            </button>
+          ) : null}
+        </h3>
         <ul className="flex flex-col gap-px">
-          {calendars.map((calendar) => (
-            <li key={calendar.key} className={rowClass}>
-              <span aria-hidden="true" className={`size-presence-dot flex-none rounded-sm ${calendar.dotClass}`} />
-              <span className="min-w-0 flex-1 truncate">{calendar.name}</span>
-            </li>
-          ))}
+          {calendars.map((calendar) =>
+            allDrives ? (
+              <FilterRow
+                key={calendar.key}
+                label={calendar.name}
+                dotClass={calendar.dotClass}
+                on={!hiddenCalendars.includes(calendar.key)}
+                onToggle={() => toggleCalendar(calendar.key)}
+              />
+            ) : (
+              <li key={calendar.key} className={rowClass}>
+                <span aria-hidden="true" className={`size-presence-dot flex-none rounded-sm ${calendar.dotClass}`} />
+                <span className="min-w-0 flex-1 truncate">{calendar.name}</span>
+              </li>
+            ),
+          )}
           {onPrem || connection === null ? null : (
             <li className={rowClass}>
               <span aria-hidden="true" className="size-presence-dot flex-none rounded-sm bg-accent-deep" />
@@ -94,6 +151,12 @@ export function CalendarPane({ driveId, close, allDrives = false }: ToolPaneProp
               <span className="flex-none text-2xs text-ink-faint">{syncedLabel(connection.lastSyncAt, new Date())}</span>
             </li>
           )}
+        </ul>
+        <h3 className={groupHeadingClass}>SHOW</h3>
+        <ul className="flex flex-col gap-px">
+          <FilterRow label="User events" dotClass="bg-accent" on={!hiddenEventTypes.includes('user')} onToggle={() => toggleEventType('user')} />
+          <FilterRow label="Agent events" dotClass="bg-accent" on={!hiddenEventTypes.includes('agent')} onToggle={() => toggleEventType('agent')} />
+          <FilterRow label="Tasks" dotClass="bg-accent" on={showTasks} onToggle={toggleTasks} />
         </ul>
         <h3 className={groupHeadingClass}>EVENT TYPES</h3>
         <ul className="flex flex-col gap-px">

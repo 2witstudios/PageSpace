@@ -22,8 +22,8 @@ describe('tabLabelFor() (IMC-1.5)', () => {
       given: 'drive tools, drive settings and account screens',
       should: 'title each as its nav row',
       actual: [
-        '/d1/calendar', '/d1/members/u1', '/d1/settings', '/d1/settings/roles', '/d1/settings/danger',
-        '/account', '/account/profile', '/account/account', '/account/ai', '/account/local-mcp', '/account/legal/oss-licenses',
+        '/d1/calendar/view', '/d1/members/u1', '/d1/settings/overview', '/d1/settings/roles', '/d1/settings/danger',
+        '/account/overview', '/account/profile', '/account/account', '/account/ai', '/account/local-mcp', '/account/legal/oss-licenses',
       ].map((path) => {
         const label = tabLabelFor(path);
         return label.kind === 'screen' ? label.title : label.kind;
@@ -39,8 +39,17 @@ describe('tabLabelFor() (IMC-1.5)', () => {
     assert({
       given: 'Console (the drive agents tool) and a drive settings screen',
       should: "give the tool its spine icon and leave settings to the tab's default",
-      actual: [tabLabelFor('/d1/agents'), tabLabelFor('/d1/settings')],
+      actual: [tabLabelFor('/d1/agents/view'), tabLabelFor('/d1/settings/overview')],
       expected: [{ kind: 'screen', title: 'Console', icon: 'console' }, { kind: 'screen', title: 'Overview' }],
+    });
+  });
+
+  test('a Tasks smart view', () => {
+    assert({
+      given: 'a smart view’s path, and one naming no view',
+      should: 'title it as the view with the Tasks icon, never read "view" as a page id',
+      actual: [tabLabelFor('/d1/tasks/view/overdue'), tabLabelFor('/d1/tasks/view/nope')],
+      expected: [{ kind: 'screen', title: 'Overdue', icon: 'tasks' }, { kind: 'screen', title: 'Tasks', icon: 'tasks' }],
     });
   });
 

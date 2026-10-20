@@ -6,15 +6,14 @@ import { ImagoSWRProvider } from '@/api/swr-provider';
 import { mount, unmountAll } from '../../test-support/dom';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
+import type { DriveTaskResponse } from '../task-model/task';
 import { NewTaskListAction, TasksPane } from './tasks-pane';
-import { useTaskViewStore } from '../task-views/task-views';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 afterEach(() => {
   unmountAll();
-  useTaskViewStore.getState().setView('assigned');
 });
 
 const COUNT = (filter = '') => `GET /api/tasks?context=drive&driveId=d1&limit=1${filter}`;
@@ -52,11 +51,14 @@ const lists = (pages: readonly { id: string; title: string; isTaskLinked?: boole
     })),
   });
 
-const show = (routes: Record<string, FakeRoute>, selectedPageId: string | null = null) => {
+/** The viewer's open tasks in the drive, as the Needs attention glance reads them. */
+const ACTIVE = 'GET /api/tasks?context=drive&driveId=d1&limit=100&statusGroup=active';
+
+const show = (routes: Record<string, FakeRoute>, selectedPageId: string | null = null, selectedViewId: string | null = null) => {
   const web = fakeWeb(routes);
   const container = mount(
     <ImagoSWRProvider client={web.client}>
-      <TasksPane driveId="d1" selectedPageId={selectedPageId} />
+      <TasksPane driveId="d1" selectedPageId={selectedPageId} selectedViewId={selectedViewId} />
     </ImagoSWRProvider>,
   );
   return { web, container };
@@ -111,7 +113,7 @@ describe('TasksPane', () => {
       if (container.querySelectorAll('[role="progressbar"]').length < 1) throw new Error('no progress');
       if (!container.textContent?.includes('No tasks')) throw new Error('l2 not loaded');
     });
-    const links = [...container.querySelectorAll('a')];
+    const links = [...container.querySelectorAll('[aria-label="Task lists"] a')];
     assert({
       given: 'a drive with two task lists (and a task’s own page)',
       should: 'list only the lists, each linking to its tasks route with its progress, the open one current',
@@ -194,43 +196,72 @@ describe('TasksPane', () => {
     });
   });
 
-  test('smart views with their counts, and picking one', async () => {
+  test('smart views with their counts, each opening its tasks in the middle', async () => {
     const counted = (total: number) => () => Response.json({ tasks: [], pagination: { total, limit: 1, offset: 0, hasMore: false } });
-    const { container } = show({
-      [DRIVE]: lists([]),
-      [COUNT()]: counted(6),
-      [COUNT('&dueDateFilter=overdue')]: counted(1),
-      [COUNT('&dueDateFilter=today')]: counted(2),
-      [COUNT('&dueDateFilter=this_week')]: counted(4),
-      [COUNT('&dueDateFilter=upcoming')]: counted(1),
-    });
+    const { container } = show(
+      {
+        [DRIVE]: lists([]),
+        [COUNT()]: counted(6),
+        [COUNT('&dueDateFilter=overdue')]: counted(1),
+        [COUNT('&dueDateFilter=today')]: counted(2),
+        [COUNT('&dueDateFilter=this_week')]: counted(4),
+        [COUNT('&dueDateFilter=upcoming')]: counted(1),
+      },
+      null,
+      'overdue',
+    );
     await settle(() => {
       if (!container.textContent?.includes('Upcoming1')) throw new Error('counts not loaded');
     });
-    const views = () => [...container.querySelectorAll<HTMLButtonElement>('[aria-label="Views"] button[aria-pressed]')];
-    const before = views().map((view) => [view.textContent, view.getAttribute('aria-pressed')]);
-    act(() => {
-      views().find((view) => view.textContent?.startsWith('Overdue'))?.click();
+    const views = [...container.querySelectorAll<HTMLAnchorElement>('[aria-label="Views"] a')];
+    assert({
+      given: 'the five views with their counts, with Overdue open in the middle',
+      should: 'link each view to its own address and mark the open one current',
+      actual: views.map((view) => [view.textContent, view.getAttribute('href'), view.getAttribute('aria-current')]),
+      expected: [
+        ['Assigned to me6', '/d1/tasks/view/assigned', null],
+        ['Overdue1', '/d1/tasks/view/overdue', 'page'],
+        ['Due today2', '/d1/tasks/view/today', null],
+        ['This week4', '/d1/tasks/view/this_week', null],
+        ['Upcoming1', '/d1/tasks/view/upcoming', null],
+      ],
+    });
+  });
+
+  test('Needs attention, at a glance beside the chat', async () => {
+    const day = (offset: number): string => {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}T12:00:00.000Z`;
+    };
+    const task = (id: string, title: string, dueDate: string | null): DriveTaskResponse => ({
+      ...taskItem(id, { title, dueDate }),
+      driveId: 'd1',
+      taskListPageId: 'l1',
+      taskListPageTitle: 'Launch',
+      statusGroup: 'todo',
+      statusLabel: 'To Do',
+      statusColor: '',
+    });
+    const { container } = show({
+      [DRIVE]: lists([]),
+      [ACTIVE]: () =>
+        Response.json({
+          tasks: [task('a', 'Ship it', day(-2)), task('b', 'Someday', day(60)), task('c', 'Undated', null)],
+          pagination: { total: 3, limit: 100, offset: 0, hasMore: false },
+        }),
+    });
+    await settle(() => {
+      if (!container.querySelector('[aria-label="Needs attention"]')) throw new Error('glance not loaded');
     });
     assert({
-      given: 'the five views with their counts, then Overdue picked',
-      should: 'show each view with its count, select the one picked, and store it for the ground',
-      actual: {
-        before,
-        after: views().map((view) => view.getAttribute('aria-pressed')),
-        stored: useTaskViewStore.getState().view,
-      },
-      expected: {
-        before: [
-          ['Assigned to me6', 'true'],
-          ['Overdue1', 'false'],
-          ['Due today2', 'false'],
-          ['This week4', 'false'],
-          ['Upcoming1', 'false'],
-        ],
-        after: ['false', 'true', 'false', 'false', 'false'],
-        stored: 'overdue',
-      },
+      given: 'an overdue task, one due in two months and one with no date',
+      should: 'show only the overdue one, linking to its task',
+      actual: [...container.querySelectorAll('[aria-label="Needs attention"] li a')].map((link) => [
+        link.textContent?.startsWith('Ship it'),
+        link.getAttribute('href'),
+      ]),
+      expected: [[true, `/d1/tasks/${taskItem('a').pageId}`]],
     });
   });
 });

@@ -58,9 +58,18 @@ describe('shell slot widths', () => {
   test('the Tasks index', () => {
     assert({
       given: 'a drive’s Tasks index, the list open and no object',
-      should: 'put the tasks in the middle column and dock Imago beside it',
+      should: 'leave the middle to Imago as the ground, as every section index does',
       actual: widths('/drive-1/tasks'),
-      expected: ['w-list-pane', 'grow', 'w-chat-pane', 'w-0'],
+      expected: ['w-list-pane', 'w-0', 'grow', 'w-0'],
+    });
+  });
+
+  test('a Tasks smart view', () => {
+    assert({
+      given: 'a smart view opened from the Tasks pane',
+      should: 'narrow the pane, fill the middle with the view and dock Imago',
+      actual: widths('/drive-1/tasks/view/today'),
+      expected: ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
     });
   });
 
@@ -87,10 +96,12 @@ describe('shell slot widths', () => {
 
   test('settings and the account', () => {
     assert({
-      given: 'drive settings and the account',
-      should: 'open their 260px nav beside the page and docked Imago',
-      actual: [widths('/drive-1/settings'), widths('/account')],
+      given: 'drive settings and the account, alone and then with a screen open',
+      should: 'show the nav beside Imago as the ground, then narrow it beside the screen and dock Imago',
+      actual: [widths('/drive-1/settings'), widths('/account'), widths('/drive-1/settings/general'), widths('/account/display')],
       expected: [
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
+        ['w-list-pane', 'w-0', 'grow', 'w-0'],
         ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
         ['w-tree-pane', 'grow', 'w-chat-pane', 'w-0'],
       ],

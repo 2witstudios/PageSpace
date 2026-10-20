@@ -31,9 +31,9 @@ const TYPE_OPTIONS: readonly { readonly value: TrashFilter; readonly label: stri
   { value: 'files', label: 'Files' },
 ];
 
-/** Where the Type filter sends the view: the drive's trash, with ?type= unless All. */
+/** Where the Type filter sends the view: the drive's trash screen, with ?type= unless All. */
 export const trashFilterHref = (driveId: string, filter: TrashFilter): string => {
-  const path = `/${encodeURIComponent(driveId)}/trash`;
+  const path = `/${encodeURIComponent(driveId)}/trash/view`;
   return filter === 'all' ? path : `${path}?type=${filter}`;
 };
 

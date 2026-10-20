@@ -27,21 +27,21 @@ const ops = newTab('c', '/d1/messages/ops');
 describe('tabPathFor() (IMC-1.5)', () => {
   test('pages, settings and account screens are tabs', () => {
     assert({
-      given: 'a page, a channel, a drive tool, drive settings and an account screen',
+      given: 'a page, a channel, a drive tool’s screen, drive settings and an account screen',
       should: 'treat each as a tab at its path',
-      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display'].map((path) =>
+      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar/view', '/d1/settings/general', '/account/display'].map((path) =>
         tabPathFor(stageFor(path), path),
       ),
-      expected: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display'],
+      expected: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar/view', '/d1/settings/general', '/account/display'],
     });
   });
 
   test('an index or the chat is not a tab', () => {
     assert({
-      given: 'the drive chat and a section index',
+      given: 'the drive chat and each kind of section index',
       should: 'open no tab: nothing is in the middle but Imago',
-      actual: ['/d1', '/d1/files', '/d1/messages'].map((path) => tabPathFor(stageFor(path), path)),
-      expected: [null, null, null],
+      actual: ['/d1', '/d1/files', '/d1/messages', '/d1/tasks', '/d1/calendar', '/d1/settings', '/account'].map((path) => tabPathFor(stageFor(path), path)),
+      expected: [null, null, null, null, null, null, null],
     });
   });
 });
@@ -315,12 +315,19 @@ describe('closeTab()', () => {
 describe('sectionPath()', () => {
   test('where Close page goes', () => {
     assert({
-      given: 'a page, a channel, a drive tool, a setting and an account screen',
-      should: 'go to its section, keeping the tabs',
-      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display', '/dm/c1'].map(
-        (path) => sectionPath(stageFor(path)),
-      ),
-      expected: ['/d1/files', '/d1/messages', '/d1', '/d1', '/', '/dm'],
+      given: 'a page, a channel, a task view, a drive tool, a member, a setting, an account screen and a DM',
+      should: 'go back to the sidebar it was opened from, never the drive’s chat',
+      actual: [
+        '/d1/files/plan',
+        '/d1/messages/ops',
+        '/d1/tasks/view/today',
+        '/d1/calendar/view',
+        '/d1/members/u1',
+        '/d1/settings/general',
+        '/account/display',
+        '/dm/c1',
+      ].map((path) => sectionPath(stageFor(path))),
+      expected: ['/d1/files', '/d1/messages', '/d1/tasks', '/d1/calendar', '/d1/members', '/d1/settings', '/account', '/dm'],
     });
   });
 });

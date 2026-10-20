@@ -41,6 +41,11 @@ const fixtures = vi.hoisted(() => {
   };
 });
 
+const nav = vi.hoisted(() => ({ pathname: '/home/agents', push: vi.fn(), replace: vi.fn() }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: nav.push, replace: nav.replace }),
+  usePathname: () => nav.pathname,
+}));
 vi.mock('@/retained/stores/agents/useAgentSurfaceStore', () => ({
   useAgentSurfaceStore: (select: (state: typeof fixtures.selection) => unknown) => select(fixtures.selection),
 }));
@@ -70,7 +75,12 @@ vi.mock('./agents-data', async (importOriginal) => {
 
 const { HomeConsolePane } = await import('./home-console-pane');
 
-afterEach(unmountAll);
+afterEach(() => {
+  unmountAll();
+  nav.pathname = '/home/agents';
+  nav.push.mockReset();
+  fixtures.selection.selectSession.mockReset();
+});
 
 describe('HomeConsolePane (IMC-7.29)', () => {
   test('Home’s Console starts a session in Home', () => {
@@ -134,6 +144,31 @@ describe('HomeConsolePane (IMC-7.29)', () => {
       should: 'say No environments in this drive under its name',
       actual: emptyDrive?.textContent?.includes('No environments in this drive'),
       expected: true,
+    });
+  });
+
+  test('from the pane alone, a session opens the Console screen on it', () => {
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
+    const row = Array.from(root.querySelectorAll('button')).find((button) => button.textContent?.includes('Docs refresh'));
+    row?.click();
+    assert({
+      given: 'the Console pane beside the chat, with no screen open, and a session picked',
+      should: 'push the Console screen with that session selected, leaving the shared selection to the screen',
+      actual: [nav.push.mock.calls[0]?.[0], fixtures.selection.selectSession.mock.calls.length],
+      expected: ['/home/agents/view?workspace=s1', 0],
+    });
+  });
+
+  test('on the Console screen, a session is selected in place', () => {
+    nav.pathname = '/home/agents/view';
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
+    const row = Array.from(root.querySelectorAll('button')).find((button) => button.textContent?.includes('Docs refresh'));
+    row?.click();
+    assert({
+      given: 'the Console screen open and a session picked in the pane',
+      should: 'select it in the shared selection without navigating',
+      actual: [fixtures.selection.selectSession.mock.calls[0], nav.push.mock.calls.length],
+      expected: [['s1'], 0],
     });
   });
 });

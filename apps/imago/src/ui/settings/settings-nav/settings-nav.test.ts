@@ -27,7 +27,7 @@ describe('driveSettingsNav() (IMC-1.11)', () => {
       should: 'list Overview through Danger zone in the SPEC’s fixed order',
       actual: driveSettingsNav('d1', { ...cloud, hasOrganizations: true }).map((item) => [item.label, item.href]),
       expected: [
-        ['Overview', '/d1/settings'],
+        ['Overview', '/d1/settings/overview'],
         ['General', '/d1/settings/general'],
         ['Members & roles', '/d1/settings/roles'],
         ['Wallet', '/d1/settings/wallet'],
@@ -104,10 +104,15 @@ describe('activeNavHref()', () => {
   test('the longest matching row', () => {
     const items = accountNav({ ...cloud, isDesktop: true }).flatMap((group) => group.items);
     assert({
-      given: 'a nested account path and the account root',
-      should: 'mark Google Calendar for its page and Overview only for /account itself',
-      actual: [activeNavHref(items, '/account/integrations/google-calendar'), activeNavHref(items, '/account'), activeNavHref(items, '/account/backups/b1/snapshot')],
-      expected: ['/account/integrations/google-calendar', '/account', '/account/backups'],
+      given: 'a nested account path, the overview, the bare account nav and a deep backup path',
+      should: 'mark Google Calendar for its page, Overview for its own screen and nothing on the nav alone',
+      actual: [
+        activeNavHref(items, '/account/integrations/google-calendar'),
+        activeNavHref(items, '/account/overview'),
+        activeNavHref(items, '/account'),
+        activeNavHref(items, '/account/backups/b1/snapshot'),
+      ],
+      expected: ['/account/integrations/google-calendar', '/account/overview', null, '/account/backups'],
     });
   });
 });

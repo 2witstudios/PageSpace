@@ -11,6 +11,10 @@ interface CalendarFilterState {
   hiddenEventTypes: Array<'agent' | 'user'>;
   toggleEventType: (type: 'agent' | 'user') => void;
   isEventTypeVisible: (type: 'agent' | 'user') => boolean;
+
+  /** Whether the grid draws tasks with due dates beside the events. */
+  showTasks: boolean;
+  toggleTasks: () => void;
 }
 
 export const useCalendarFilterStore = create<CalendarFilterState>()(
@@ -45,12 +49,17 @@ export const useCalendarFilterStore = create<CalendarFilterState>()(
       },
 
       isEventTypeVisible: (type: 'agent' | 'user') => !get().hiddenEventTypes.includes(type),
+
+      showTasks: true,
+
+      toggleTasks: () => set({ showTasks: !get().showTasks }),
     }),
     {
       name: 'calendar-filter-storage',
       partialize: (state) => ({
         hiddenCalendars: state.hiddenCalendars,
         hiddenEventTypes: state.hiddenEventTypes,
+        showTasks: state.showTasks,
       }),
     }
   )

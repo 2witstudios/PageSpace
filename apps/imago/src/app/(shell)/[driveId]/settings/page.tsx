@@ -1,7 +1,7 @@
 import { getViewer } from '@/lib/auth/get-viewer';
-import { DriveSettingsOverview } from '@/ui/settings/settings-overview/settings-overview';
 
-export default async function Page({ params }: { params: Promise<{ driveId: string }> }) {
-  const [{ driveId }] = await Promise.all([params, getViewer()]);
-  return <DriveSettingsOverview driveId={driveId} />;
+/** The settings nav beside the chat. The shell renders the panes; a row opens its screen as the object. */
+export default async function Page(): Promise<null> {
+  await getViewer();
+  return null;
 }

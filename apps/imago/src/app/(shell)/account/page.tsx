@@ -1,7 +1,7 @@
 import { getViewer } from '@/lib/auth/get-viewer';
-import { AccountOverview } from '@/ui/settings/account-overview/account-overview';
 
-export default async function Page() {
+/** The account nav beside the chat. The shell renders the panes; a row opens its screen as the object. */
+export default async function Page(): Promise<null> {
   await getViewer();
-  return <AccountOverview />;
+  return null;
 }

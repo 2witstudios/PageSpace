@@ -67,7 +67,7 @@ describe('WorkflowsPane', () => {
         html.includes('Weekly pricing check'),
         html.includes('Never run'),
         html.includes('cron · At 08:00 AM, Monday through Friday'),
-        html.includes('href="?id=wf1"'),
+        html.includes('href="/d1/workflows/view?id=wf1"'),
       ],
       expected: [true, true, true, true, true, true, true, true],
     });
@@ -83,7 +83,7 @@ describe('WorkflowsPane', () => {
       should: 'mark only that row as the current page',
       actual: [
         current.length,
-        current.every((anchor) => anchor.includes('href="?id=wf2"')),
+        current.every((anchor) => anchor.includes('href="/d1/workflows/view?id=wf2"')),
       ],
       expected: [1, true],
     });

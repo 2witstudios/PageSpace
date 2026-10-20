@@ -4,26 +4,33 @@
  */
 export type ListPane = 'closed' | 'list' | 'tree';
 
-/** The rail destination a stage belongs to; `account` is reached from the avatar. */
-export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'account' | 'notifications';
-
-/** What the middle pane holds. Pages (documents, channels, task lists) are drive-scoped. */
-export type StageObject =
-  | { readonly kind: 'page'; readonly pageId: string }
-  | { readonly kind: 'conversation'; readonly conversationId: string }
-  | { readonly kind: 'settings'; readonly title?: string; readonly tool?: DriveTool }
-  | { readonly kind: 'account' }
-  | { readonly kind: 'notifications' };
-
 /** The drive tools under the spine's divider (SPEC v3 spine; IMC-1.4). */
 export type DriveTool = 'calendar' | 'agents' | 'workflows' | 'activity' | 'members' | 'trash';
 
 export const driveTools: readonly DriveTool[] = ['calendar', 'agents', 'workflows', 'activity', 'members', 'trash'];
 
-const isDriveTool = (segment: string): segment is DriveTool => (driveTools as readonly string[]).includes(segment);
+export const isDriveTool = (segment: string): segment is DriveTool => (driveTools as readonly string[]).includes(segment);
+
+/** The rail destination a stage belongs to; `account` is reached from the avatar. Each drive tool is a section of its own. */
+export type Section = 'chat' | 'files' | 'messages' | 'tasks' | 'settings' | 'account' | 'notifications' | DriveTool;
+
+/** What the middle pane holds. Pages (documents, channels, task lists) are drive-scoped. */
+export type StageObject =
+  | { readonly kind: 'page'; readonly pageId: string }
+  | { readonly kind: 'conversation'; readonly conversationId: string }
+  /** One of the Tasks pane's smart views, as the middle. */
+  | { readonly kind: 'taskView'; readonly viewId: string }
+  /** A drive tool's own screen, opened from its pane. */
+  | { readonly kind: 'tool' }
+  | { readonly kind: 'settings' }
+  | { readonly kind: 'account' }
+  | { readonly kind: 'notifications' };
+
+/** The stage's drive tool, if it is on one. */
+export const toolOf = (stage: Stage): DriveTool | null => (isDriveTool(stage.section) ? stage.section : null);
 
 /** Each tool's spine name; the agents route is the Console. */
-const driveToolTitles: Readonly<Record<DriveTool, string>> = {
+export const driveToolTitles: Readonly<Record<DriveTool, string>> = {
   calendar: 'Calendar',
   agents: 'Console',
   workflows: 'Workflows',
@@ -70,13 +77,9 @@ export const isListSection = (section: string): section is ListSection =>
  */
 export type HideableSection = Section;
 
-const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account'];
+const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'settings', 'account', ...driveTools];
 
 export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
-
-/** A drive's Tasks index: its ground fills the middle, with Imago docked beside it as it does beside a page. */
-export const isTasksIndex = (stage: Stage): boolean =>
-  stage.section === 'tasks' && stage.driveId !== null && stage.object === null;
 
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'orgs', 'chat', 'settings', 'notifications', ...listSections];
@@ -99,49 +102,61 @@ const driveChat = (driveId: string): Stage => ({
   object: null,
 });
 
-/** Files, messages (channels and DMs) and tasks share one shape. */
-const listStage = (
-  driveId: string | null,
-  section: ListSection,
-  object: StageObject | null,
-): Stage =>
+/**
+ * The one shape every rail destination shares. The section's own address opens its sidebar
+ * alone, with Imago filling the middle; picking something in the sidebar opens it as the
+ * object, the sidebar narrows to the tree and Imago docks beside it. Closing the object
+ * comes back here (sectionIndexPath).
+ */
+const sectionStage = (driveId: string | null, section: Section, object: StageObject | null): Stage =>
   object === null
     ? { driveId, section, list: 'list', object }
     : { driveId, section, list: 'tree', object };
 
+/** The segment under a single-screen tool that opens its screen as the object. */
+export const toolViewSegment = 'view';
+
+/** The segment under Tasks that opens a smart view as the object. */
+export const taskViewSegment = 'view';
+
 const userStage = (first: string, rest: readonly string[]): Stage => {
   const [id, ...extra] = rest;
-  if (first === 'account' || first === 'orgs') {
-    return { driveId: null, section: 'account', list: 'tree', object: { kind: 'account' } };
-  }
+  if (first === 'orgs') return sectionStage(null, 'account', { kind: 'account' });
+  if (first === 'account') return sectionStage(null, 'account', id === undefined ? null : { kind: 'account' });
   if (extra.length > 0) return root;
-  if (id === undefined) return listStage(null, 'messages', null);
-  return isId(id) ? listStage(null, 'messages', { kind: 'conversation', conversationId: id }) : root;
+  if (id === undefined) return sectionStage(null, 'messages', null);
+  return isId(id) ? sectionStage(null, 'messages', { kind: 'conversation', conversationId: id }) : root;
+};
+
+/**
+ * A tool's screen. Members holds one more segment (`all`, `invite` or a member); every other
+ * tool is one screen at `view`, so any other path is one no route holds (stage.test).
+ */
+const toolStage = (driveId: string, tool: DriveTool, rest: readonly string[]): Stage => {
+  const [id, ...extra] = rest;
+  if (id === undefined) return sectionStage(driveId, tool, null);
+  if (extra.length > 0) return driveChat(driveId);
+  if (tool === 'members') return isId(id) ? sectionStage(driveId, tool, { kind: 'tool' }) : driveChat(driveId);
+  return id === toolViewSegment ? sectionStage(driveId, tool, { kind: 'tool' }) : driveChat(driveId);
 };
 
 const driveStage = (driveId: string, rest: readonly string[]): Stage => {
   const [section, id, ...extra] = rest;
   if (section === undefined) return driveChat(driveId);
   if (section === 'settings') {
-    return { driveId, section: 'settings', list: 'tree', object: { kind: 'settings' } };
+    return sectionStage(driveId, 'settings', id === undefined ? null : { kind: 'settings' });
   }
-  if (isDriveTool(section)) {
-    // Only Members has sub-routes (a member profile, the invite form); every other
-    // tool is one screen, so any deeper path is one no route holds (stage.test).
-    if (section !== 'members' && id !== undefined) return driveChat(driveId);
-    if (section === 'members' && extra.length > 0) return driveChat(driveId);
-    return {
-      driveId,
-      section: 'settings',
-      // Each tool has its 260px pane (C-Drive-Calendar … C-Members; Trash keeps the Files pane).
-      list: 'tree',
-      object: { kind: 'settings', title: driveToolTitles[section], tool: section },
-    };
+  if (isDriveTool(section)) return toolStage(driveId, section, rest.slice(1));
+  if (!isListSection(section)) return driveChat(driveId);
+  if (section === 'tasks' && id === taskViewSegment) {
+    const [viewId, ...beyond] = extra;
+    return isId(viewId) && beyond.length === 0
+      ? sectionStage(driveId, 'tasks', { kind: 'taskView', viewId })
+      : driveChat(driveId);
   }
   if (extra.length > 0) return driveChat(driveId);
-  if (!isListSection(section)) return driveChat(driveId);
-  if (id === undefined) return listStage(driveId, section, null);
-  return isId(id) ? listStage(driveId, section, { kind: 'page', pageId: id }) : driveChat(driveId);
+  if (id === undefined) return sectionStage(driveId, section, null);
+  return isId(id) ? sectionStage(driveId, section, { kind: 'page', pageId: id }) : driveChat(driveId);
 };
 
 /**
@@ -216,6 +231,25 @@ const objectName = (section: ListSection, object: StageObject, name: string | un
 };
 
 /**
+ * Whether something is open in the middle. The one test both the columns (where Imago sits) and
+ * the chat's density read, so the chat is roomy exactly when it is the ground.
+ */
+export const hasObject = (stage: Stage): boolean => stage.object !== null;
+
+const densityFor = (stage: Stage): ChatDensity => (hasObject(stage) ? 'dense' : 'roomy');
+
+/** The section's own name, as its pane head and Imago's chip read it. */
+const sectionTitle = (stage: Stage): string | null => {
+  const tool = toolOf(stage);
+  if (tool !== null) return driveToolTitles[tool];
+  if (isListSection(stage.section)) return sectionNames[stage.section];
+  if (stage.section === 'settings') return 'Drive settings';
+  if (stage.section === 'account') return 'Account';
+  if (stage.section === 'notifications') return 'Notifications';
+  return null;
+};
+
+/**
  * What the one continuous chat is answering against, per stage. The URL
  * carries ids, not names, so the drive and object names come from the
  * caller once loaded; until then the label says what kind of thing it is.
@@ -224,39 +258,40 @@ export const chatContextFor = (
   stage: Stage,
   names: { readonly drive?: string; readonly object?: string } = {},
 ): ChatContext => {
+  const density = densityFor(stage);
   const drive = named(names.drive);
   const { object } = stage;
-  if (object?.kind === 'settings') {
-    return {
-      density: 'dense',
-      contextLabel: `${drive ?? 'Drive'} ${(object.title ?? 'settings').toLowerCase()} in context`,
-      placeholder: 'Ask anything…',
-    };
+  const tool = toolOf(stage);
+  if (tool !== null) {
+    return { density, contextLabel: `${drive ?? 'Drive'} ${driveToolTitles[tool].toLowerCase()} in context`, placeholder: 'Ask anything…' };
   }
-  if (object?.kind === 'account') {
-    return { density: 'dense', contextLabel: 'Account in context', placeholder: 'Ask anything…' };
+  if (stage.section === 'settings') {
+    return { density, contextLabel: `${drive ?? 'Drive'} settings in context`, placeholder: 'Ask anything…' };
   }
-  if (object?.kind === 'notifications') {
-    return { density: 'dense', contextLabel: 'Notifications in context', placeholder: 'Ask about your notifications…' };
+  if (stage.section === 'account') {
+    return { density, contextLabel: 'Account in context', placeholder: 'Ask anything…' };
   }
-  // Only the list sections open pages and conversations (stageFor).
-  if (object !== null && isListSection(stage.section)) {
+  if (stage.section === 'notifications') {
+    return { density, contextLabel: 'Notifications in context', placeholder: 'Ask about your notifications…' };
+  }
+  // Only the list sections open pages and conversations (stageFor); a smart view reads as its section.
+  if (object !== null && object.kind !== 'taskView' && isListSection(stage.section)) {
     const name = objectName(stage.section, object, named(names.object));
     return {
-      density: 'dense',
+      density,
       contextLabel: `${capitalise(name)} in context`,
       placeholder: `Ask about ${name}…`,
     };
   }
   if (isListSection(stage.section)) {
     return {
-      density: 'roomy',
+      density,
       contextLabel: `${sectionNames[stage.section]} in context`,
       placeholder: stage.section === 'files' ? 'Ask across Files, or @mention a page' : `Ask about your ${stage.section}…`,
     };
   }
   return {
-    density: 'roomy',
+    density,
     contextLabel: `${drive ?? 'This drive'} in context`,
     placeholder: 'Ask anything…',
   };
@@ -269,9 +304,10 @@ export const chatContextFor = (
  */
 export const chatChipFor = (stage: Stage, names: { readonly object?: string; readonly screen?: string }): string | null => {
   const { object } = stage;
-  if (object?.kind === 'settings') return named(names.screen) ?? object.title ?? 'Drive settings';
-  if (object?.kind === 'account') return named(names.screen) ?? 'Account';
-  if (object?.kind === 'notifications') return 'Notifications';
-  if (object !== null) return named(names.object) ?? null;
-  return isListSection(stage.section) ? sectionNames[stage.section] : null;
+  if (object?.kind === 'page' || object?.kind === 'conversation') return named(names.object) ?? null;
+  if (object !== null && object.kind !== 'taskView') return named(names.screen) ?? sectionTitle(stage);
+  return sectionTitle(stage);
 };
+
+/** The middle's title when it has no head of its own: the section's name. */
+export const stageTitle = (stage: Stage): string => sectionTitle(stage) ?? 'Chat';

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { act } from 'react';
 import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { click, mount, unmountAll } from '../../test-support/dom';
@@ -31,39 +32,39 @@ afterEach(() => {
   unmountAll();
   spies.embedded.length = 0;
   spies.update.mockReset();
-  useCalendarFilterStore.setState({ hiddenCalendars: [], hiddenEventTypes: [] });
+  useCalendarFilterStore.setState({ hiddenCalendars: [], hiddenEventTypes: [], showTasks: true });
 });
 
 const pressButton = (root: HTMLElement, text: string) =>
   click(Array.from(root.querySelectorAll('button')).find((b) => b.textContent === text) as HTMLButtonElement);
 
 describe('UserCalendarMiddle (C-Account-Calendar)', () => {
-  test('draws the toolbar and chips for the user calendars and an embedded grid with tasks shown', () => {
+  test('draws the toolbar and an embedded grid with tasks shown, and no chip row', () => {
     const root = mount(<UserCalendarMiddle />);
     const last = spies.embedded.at(-1)!;
     assert({
       given: 'the user calendar opened with the default filters',
-      should: 'show the Personal and Studio chips and hand the grid its embedded state with tasks shown',
+      should: 'hand the grid its embedded state with tasks shown, leaving the filters to the Calendar pane',
       actual: {
-        chips: Array.from(root.querySelectorAll('[role="group"][aria-label="Calendars"] button')).map((b) => b.textContent),
+        chips: root.querySelector('[role="group"][aria-label="Calendars"]'),
         tasks: last.showTasks,
         view: last.viewMode,
         toolbar: root.querySelector('[role="toolbar"]')?.getAttribute('aria-label'),
       },
-      expected: { chips: ['Personal', 'Studio'], tasks: true, view: 'week', toolbar: 'Calendar' },
+      expected: { chips: null, tasks: true, view: 'week', toolbar: 'Calendar' },
     });
   });
 
-  test('Show tasks and the calendar chips change what the grid is given', () => {
-    const root = mount(<UserCalendarMiddle />);
-    pressButton(root, 'Show tasks');
-    pressButton(root, 'Studio');
-    const last = spies.embedded.at(-1)!;
+  test('the grid follows the pane’s Tasks filter, and its own toggle writes it back', () => {
+    mount(<UserCalendarMiddle />);
+    act(() => useCalendarFilterStore.getState().toggleTasks());
+    const hidden = spies.embedded.at(-1)!;
+    act(() => (hidden.onShowTasksChange as (shown: boolean) => void)(true));
     assert({
-      given: 'Show tasks and the Studio chip pressed',
-      should: 'hide tasks in the grid and hide the Studio calendar in the shared filter store',
-      actual: [last.showTasks, useCalendarFilterStore.getState().hiddenCalendars],
-      expected: [false, ['d1']],
+      given: 'Tasks unchecked in the pane, then the grid asking to show tasks again',
+      should: 'hand the grid tasks hidden, then show them in the shared filter store',
+      actual: [hidden.showTasks, useCalendarFilterStore.getState().showTasks],
+      expected: [false, true],
     });
   });
 

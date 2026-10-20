@@ -5,10 +5,12 @@ import { useApiClient } from '@/api/swr-provider';
 import { createTaskList } from '@/ui/files/create-file/create-file';
 import { localToday } from '../task-meta/task-meta';
 import { listProgress } from '../task-tree/task-tree';
-import { useDriveTaskLists, useTaskList, useTaskViewCounts } from '../use-tasks/use-tasks';
+import { useDriveTaskLists, useDriveTasks, useTaskList, useTaskViewCounts } from '../use-tasks/use-tasks';
 import { useIsHome } from '../../frame/drives/home-drive-context';
-import { taskViews, useTaskViewStore } from '../task-views/task-views';
-import { renderNewListButton, renderTaskListRow, renderTaskViews, renderTasksPane } from './tasks-pane.render';
+import { taskViews, taskViewHref } from '../task-views/task-views';
+import { useDriveNames } from '../../frame/drives/use-drive-names';
+import { groundSections } from '../tasks-ground/ground-rows';
+import { renderNewListButton, renderTaskGlance, renderTaskListRow, renderTaskViews, renderTasksPane } from './tasks-pane.render';
 import { listMeta } from './list-meta';
 import { TaskSiblings, useTaskHolder } from './task-siblings';
 
@@ -16,7 +18,29 @@ export type TasksPaneProps = {
   readonly driveId: string;
   /** The list open as the object, if any. */
   readonly selectedPageId: string | null;
+  /** The smart view open as the object, if any. */
+  readonly selectedViewId: string | null;
 };
+
+/** How many tasks the Needs attention glance shows before See all. */
+const GLANCE_ROWS = 6;
+
+/** Needs attention: the viewer's open tasks that are overdue or due this week, read from the same answer the Assigned view does. */
+function TaskGlance({ driveId }: { readonly driveId: string }) {
+  const allDrives = useIsHome(driveId);
+  const { response } = useDriveTasks(allDrives ? null : driveId, 'active', undefined);
+  const driveNames = useDriveNames(allDrives);
+  const due = response === undefined
+    ? undefined
+    : groundSections(response.tasks, localToday(new Date()), driveNames)
+        .filter((section) => section.name !== 'Later')
+        .flatMap((section) => section.rows);
+  return renderTaskGlance({
+    rows: due?.slice(0, GLANCE_ROWS),
+    more: due === undefined ? 0 : Math.max(0, due.length - GLANCE_ROWS),
+    moreHref: taskViewHref(driveId, 'this_week'),
+  });
+}
 
 /**
  * The Tasks head's New list button. It makes an untitled task list at the drive's top and opens
@@ -57,11 +81,9 @@ function TaskListRow({ driveId, pageId, title, selected }: TaskListRowProps) {
 }
 
 /** The Tasks section's pane: the smart views with counts, then the drive's task lists with their progress. */
-export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
+export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPaneProps) {
   const { lists, error, retry } = useDriveTaskLists(driveId);
   const { counts } = useTaskViewCounts(driveId, useIsHome(driveId));
-  const view = useTaskViewStore((state) => state.view);
-  const setView = useTaskViewStore((state) => state.setView);
   const holder = useTaskHolder(driveId, selectedPageId);
   if (holder !== null && selectedPageId !== null) {
     return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
@@ -73,14 +95,16 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
       dotClass: entry.dotClass,
       warn: entry.warn,
       count: counts?.[entry.id],
-      selected: entry.id === view,
-      onSelect: () => setView(entry.id),
+      selected: entry.id === selectedViewId,
+      href: taskViewHref(driveId, entry.id),
     })),
   });
+  const glance = <TaskGlance driveId={driveId} />;
   if (lists === undefined) {
     return (
       <>
         {views}
+        {glance}
         {renderTasksPane(error === undefined ? { state: 'loading' } : { state: 'error', retry })}
       </>
     );
@@ -88,6 +112,7 @@ export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   return (
     <>
       {views}
+      {glance}
       {renderTasksPane({
         state: 'ready',
         empty: lists.length === 0,
