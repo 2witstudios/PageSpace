@@ -56,7 +56,8 @@ export type SyncTabs = {
  * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it reads
  * that drive's stored tabs first, then loads where the viewer is now (a page, a section, the
  * chat) into the active tab as a step in that tab's own history, as browser tabs do. The
- * browser's Back and Forward move within the active tab's history. New tabs open only when asked for: New
+ * browser's Back and Forward move within the active tab's history, or back to the tab that
+ * shows where they land. New tabs open only when asked for: New
  * tab, ⌘/Ctrl-click or middle-click.
  */
 export const tabsPlugin = {
@@ -68,12 +69,17 @@ export const tabsPlugin = {
       const base: TabStrip = loaded ? stripOf(state) : restoreActive(parseTabs(stored), path);
       const active = activeTabOf(base);
       const rewound = path !== null && pop && active !== null ? rewindTab(active, path, direction) : null;
+      // Back or Forward to a place outside the active tab's history (it was a step in another
+      // tab, as when New tab or a tab click left it): return to the tab that shows it.
+      const showing = path !== null && pop && rewound === null ? base.tabs.find((tab) => tab.path === path) : undefined;
       const strip =
         path === null || (rewound !== null && rewound === active)
           ? base
           : rewound !== null
             ? { tabs: base.tabs.map((tab) => (tab.id === rewound.id ? rewound : tab)), active: base.active }
-            : navigateTabs(base, path, id, resources.newTabPending);
+            : showing !== undefined
+              ? { tabs: base.tabs, active: showing.id }
+              : navigateTabs(base, path, id, resources.newTabPending);
       const newTabPending = path === null ? resources.newTabPending : false;
       const unchanged =
         loaded &&
