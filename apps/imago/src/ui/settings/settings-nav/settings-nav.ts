@@ -78,7 +78,6 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
       items: keep(
         [
           { label: 'AI providers', href: '/account/ai' },
-          { label: 'Agents', href: '/account/agents' },
           { label: 'Agent accounts', href: '/account/agent-accounts' },
           { label: 'Commands', href: '/account/commands' },
         ],
@@ -99,7 +98,6 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
           { label: 'Create organization', href: '/account/organizations?createOrg=1', when: (c) => !c.hasOrganizations && !c.isNative },
           { label: 'Backups', href: '/account/backups' },
           { label: 'Trash', href: '/account/trash' },
-          { label: 'Activity', href: '/account/activity' },
         ],
         ctx,
       ),
@@ -113,7 +111,6 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
           { label: 'Google Calendar', href: '/account/integrations/google-calendar', when: integrations },
           { label: 'MCP', href: '/account/mcp' },
           { label: 'Local MCP', href: '/account/local-mcp', when: (c) => c.isDesktop },
-          { label: 'Calendar', href: '/account/calendar' },
         ],
         ctx,
       ),
@@ -122,8 +119,6 @@ export const accountNav = (ctx: NavContext): readonly NavGroup[] =>
       label: 'Other',
       items: keep(
         [
-          { label: 'Messages', href: '/account/messages' },
-          { label: 'Tasks', href: '/account/tasks' },
           { label: 'Legal', href: '/account/legal' },
         ],
         ctx,

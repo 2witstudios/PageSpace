@@ -4,10 +4,10 @@ import {
 } from 'prosemirror-markdown';
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { collabSchema, yDocToPmDoc } from './collab-document.js';
-import { mentionLabelText } from './page-mention-node.js';
-import { stringAttr } from './pm-attrs.js';
-import { assertProjectable } from './projection-errors.js';
+import { collabSchema, yDocToPmDoc } from './collab-document.ts';
+import { mentionLabelText } from './page-mention-node.ts';
+import { stringAttr } from './pm-attrs.ts';
+import { assertProjectable } from './projection-errors.ts';
 
 /**
  * The markdown projection — the AI-context format.

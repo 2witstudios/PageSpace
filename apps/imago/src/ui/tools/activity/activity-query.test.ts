@@ -54,6 +54,19 @@ describe('activityQuery', () => {
       }).toString(),
     });
   });
+
+  test('no drive: the viewer’s own activity across every drive', () => {
+    assert({
+      given: 'no drive, as on Home (the dashboard)',
+      should: 'ask for the user context with no drive',
+      actual: activityQuery({ range: '24h', operation: 'create' }, null, NOW).toString(),
+      expected: new URLSearchParams({
+        context: 'user',
+        startDate: '2026-10-11T12:00:00.000Z',
+        operation: 'create',
+      }).toString(),
+    });
+  });
 });
 
 describe('withActivityFilter', () => {

@@ -1,4 +1,4 @@
-import { HTML_ELEMENT_NAMES, UNESCAPED_ANGLE_BRACKET_KEY } from './html-element-names.js';
+import { HTML_ELEMENT_NAMES, UNESCAPED_ANGLE_BRACKET_KEY } from './html-element-names.ts';
 
 /**
  * The seed-fidelity vocabulary: markup constructs as comparable keys, and the

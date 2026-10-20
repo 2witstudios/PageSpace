@@ -86,6 +86,17 @@ describe('groundSections()', () => {
     });
   });
 
+  test('a row names its drive on Home', () => {
+    const rows = (names?: ReadonlyMap<string, string>) =>
+      groundSections([drive('a'), drive('b', { driveId: 'd2' })], TODAY, names).flatMap((section) => section.rows.map((row) => row.drive));
+    assert({
+      given: 'tasks from two drives, read with the drive names (Home) and without (a drive’s own ground)',
+      should: 'name each known drive on Home, leave an unknown one unnamed, and name none on a drive',
+      actual: [rows(new Map([['d1', 'Launch']])), rows()],
+      expected: [['Launch', null], [null, null]],
+    });
+  });
+
   test('listCount()', () => {
     assert({
       given: 'three tasks in two lists',
@@ -97,15 +108,17 @@ describe('groundSections()', () => {
 
   test('the requests the pane and the ground make', () => {
     assert({
-      given: 'a view count, and the ground’s active tasks due overdue',
-      should: 'ask GET /api/tasks for the drive with one row, and with the status group and due window',
+      given: 'a view count, the ground’s active tasks due overdue, and Home’s active tasks',
+      should: 'ask GET /api/tasks for the drive with one row, with the status group and due window, and across every drive on Home',
       actual: [
         taskPaths.driveTasks({ driveId: 'd1', limit: 1 }),
         taskPaths.driveTasks({ driveId: 'd1', limit: 100, statusGroup: 'active', dueDateFilter: 'overdue' }),
+        taskPaths.driveTasks({ driveId: null, limit: 100, statusGroup: 'active' }),
       ],
       expected: [
         '/api/tasks?context=drive&driveId=d1&limit=1',
         '/api/tasks?context=drive&driveId=d1&limit=100&statusGroup=active&dueDateFilter=overdue',
+        '/api/tasks?context=user&limit=100&statusGroup=active',
       ],
     });
   });

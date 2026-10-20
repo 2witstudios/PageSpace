@@ -113,8 +113,12 @@ test('settings and typed object views stay in Imago', async ({ browser, baseURL 
   await page.goto('/imago/account');
   // The account overview (v3 settings screen): its single h1 is the account's name.
   await expect(page.getByRole('heading', { level: 1, name: user.name, exact: true })).toBeVisible();
-  for (const title of ['Drives', 'Storage', 'Connections', 'Agents', 'AI Providers', 'Personalization']) {
+  for (const title of ['Drives', 'Storage', 'Connections', 'AI Providers', 'Personalization']) {
     await expect(page.getByRole('link').filter({ hasText: title }).first()).toBeVisible();
+  }
+  // The cross-drive Tasks, Calendar, Activity, Agents and Messages are Home's sections now (ADR 0007 D4).
+  for (const section of ['tasks', 'calendar', 'activity', 'agents', 'messages']) {
+    await expect(page.locator(`a[href$="/account/${section}"]`)).toHaveCount(0);
   }
   if (process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'tenant' || process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === 'onprem') {
     await expect(page.getByRole('link').filter({ hasText: /^Billing/ })).toHaveCount(0);

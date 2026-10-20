@@ -26,8 +26,10 @@ const fixtures = vi.hoisted(() => {
     status,
   });
   return {
+    openSpawn: vi.fn(),
     selection: { selectedSessionId: 's2' as string | null, selectSession: vi.fn() },
     drives: [
+      { id: 'home', name: 'Home' },
       { id: 'd1', name: 'Studio' },
       { id: 'd2', name: 'Ops' },
     ],
@@ -54,6 +56,10 @@ vi.mock('@/retained/hooks/drive-envs/useDriveEnvs', () => ({
     mutate: vi.fn(),
   }),
 }));
+vi.mock('@/retained/hooks/page-agents/usePageAgents', () => ({ usePageAgents: () => ({ agentsByDrive: [] }) }));
+vi.mock('@/retained/components/agents/useSpawnSession', () => ({
+  useSpawnSession: () => ({ openSpawn: fixtures.openSpawn, paletteElement: null }),
+}));
 vi.mock('./agents-data', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./agents-data')>();
   return {
@@ -62,18 +68,31 @@ vi.mock('./agents-data', async (importOriginal) => {
   };
 });
 
-const { AccountAgentsPane } = await import('./account-agents-pane');
+const { HomeConsolePane } = await import('./home-console-pane');
 
 afterEach(unmountAll);
 
-describe('AccountAgentsPane (IMC-7.29)', () => {
-  test('a pane headed Agents with a search field, sessions grouped drive then environment', () => {
-    const root = mount(<AccountAgentsPane />);
+describe('HomeConsolePane (IMC-7.29)', () => {
+  test('Home’s Console starts a session in Home', () => {
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
+    const pane = root.querySelector('[aria-label="Console: agents and sessions"]');
+    const start = Array.from(root.querySelectorAll('button')).find((button) => button.textContent === 'Session');
+    start?.click();
+    assert({
+      given: 'the every-drive Console on Home',
+      should: 'head it Console, as on a drive, and open the new-session palette for Home',
+      actual: [pane?.textContent?.startsWith('Console'), fixtures.openSpawn.mock.calls[0]],
+      expected: [true, ['home', 'Home']],
+    });
+  });
+
+  test('a pane with a search field, sessions grouped drive then environment', () => {
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const drive = root.querySelector('section[aria-label="Studio"]');
     const env = drive?.querySelector('section[aria-label="studio-web"]');
     assert({
       given: 'sessions across drives and their environments',
-      should: 'head the pane Agents, search "Search sessions…", and nest each environment under its drive',
+      should: 'search "Search sessions…", and nest each environment under its drive',
       actual: [
         root.querySelector('input[aria-label="Search sessions"]')?.getAttribute('placeholder'),
         drive !== null && drive !== undefined,
@@ -84,7 +103,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('environments carry status dots labelled for their state', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     assert({
       given: 'a running and a stopped environment',
       should: 'label the dots Environment running and Environment stopped',
@@ -97,7 +116,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('the selected session is marked and an environment with no sessions says so', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const current = root.querySelector('[aria-current="true"]');
     assert({
       given: 'the shared selection and an environment with no session',
@@ -108,7 +127,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('a drive with no environments reads "No environments in this drive"', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<HomeConsolePane driveId="home" close={null} />);
     const emptyDrive = root.querySelector('section[aria-label="Ops"]');
     assert({
       given: 'a drive whose environment listing is empty',

@@ -2,13 +2,13 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import { CalendarView, type EmbeddedCalendarState } from '@/retained/components/calendar/CalendarView';
-import { getDriveCalendarColor } from '@/retained/components/calendar/calendar-types';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
 import { formatCalendarDate, stepCalendarDate } from '../calendar/calendar-state';
 import { useCalendarState } from '../calendar/use-calendar-state';
 import { UserCalendarChips, type UserCalendarChip } from './user-calendar-chips';
 import { UserCalendarToolbar } from './user-calendar-toolbar';
+import { userCalendars } from './user-calendars';
 
 /**
  * The user calendar's middle (C-Account-Calendar): the 44px toolbar, the calendar chips and the
@@ -25,19 +25,10 @@ export function UserCalendarMiddle(): ReactNode {
   const toggleEventType = useCalendarFilterStore((store) => store.toggleEventType);
   const [showTasks, setShowTasks] = useState(true);
 
-  const calendars = useMemo<UserCalendarChip[]>(() => {
-    const driveIds = drives.map((drive) => drive.id);
-    const personal = { key: 'personal', name: 'Personal', dotClass: getDriveCalendarColor(null, driveIds).dot };
-    const perDrive = drives.map((drive) => ({
-      key: drive.id,
-      name: drive.name,
-      dotClass: getDriveCalendarColor(drive.id, driveIds).dot,
-    }));
-    return [personal, ...perDrive].map((calendar) => ({
-      ...calendar,
-      visible: !hiddenCalendars.includes(calendar.key),
-    }));
-  }, [drives, hiddenCalendars]);
+  const calendars = useMemo<UserCalendarChip[]>(
+    () => userCalendars(drives).map((calendar) => ({ ...calendar, visible: !hiddenCalendars.includes(calendar.key) })),
+    [drives, hiddenCalendars],
+  );
 
   const embedded: EmbeddedCalendarState = {
     viewMode: state.view,

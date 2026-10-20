@@ -53,7 +53,7 @@ export type TasksGroundRenderProps = {
   readonly state:
     | { readonly kind: 'loading' }
     | { readonly kind: 'error'; readonly retry: () => void }
-    | { readonly kind: 'ready'; readonly sections: readonly GroundSection[]; readonly driveId: string };
+    | { readonly kind: 'ready'; readonly sections: readonly GroundSection[] };
 };
 
 /** The three priority bars, shortest first: their heights as the theme's h-1, h-2 and h-3. */
@@ -64,11 +64,12 @@ const initials = (name: string): string => {
   return letters === '' ? '?' : letters;
 };
 
-type RowContext = Pick<TasksGroundRenderProps, 'toggleComplete' | 'notice'> & { readonly driveId: string };
+type RowContext = Pick<TasksGroundRenderProps, 'toggleComplete' | 'notice'>;
 
 /** One row: its checkbox, the title and list, its status, priority, people and due date; a refusal under it. */
-function renderRow(row: GroundRow, { driveId, toggleComplete, notice }: RowContext): ReactNode {
-  const href = `/${encodeURIComponent(driveId)}/tasks/${encodeURIComponent(row.pageId)}`;
+function renderRow(row: GroundRow, { toggleComplete, notice }: RowContext): ReactNode {
+  // The task's own drive: on Home the ground holds every drive's tasks.
+  const href = `/${encodeURIComponent(row.driveId)}/tasks/${encodeURIComponent(row.pageId)}`;
   const priorityLevel = row.priority === 'high' ? 3 : row.priority === 'medium' ? 2 : 1;
   return (
     <div key={row.id} className={rowWrapClass}>
@@ -78,7 +79,7 @@ function renderRow(row: GroundRow, { driveId, toggleComplete, notice }: RowConte
           <Link href={href} prefetch className={rowTitleClass(row.done)}>
             {row.title}
           </Link>
-          <span className={rowMetaClass}>{row.list}</span>
+          <span className={rowMetaClass}>{row.drive === null ? row.list : `${row.list} · ${row.drive}`}</span>
         </span>
         <span className={statusPillClass}>
           <span aria-hidden="true" className={statusDotClass(row.statusGroup)} />
@@ -164,7 +165,7 @@ export function renderTasksGround({
                   {section.name}
                   <span className={sectionCountClass}>{section.rows.length}</span>
                 </h3>
-                {section.rows.map((row) => renderRow(row, { driveId: state.driveId, toggleComplete, notice }))}
+                {section.rows.map((row) => renderRow(row, { toggleComplete, notice }))}
               </section>
             ))
         )}

@@ -39,7 +39,6 @@ describe('renderTasksGround()', () => {
     const markup = html({
       state: {
         kind: 'ready',
-        driveId: 'd1',
         sections: groundSections(
           [row('over', { dueDate: '2020-01-01T12:00:00' }), row('later', { statusGroup: 'done', statusLabel: 'Done' })],
           '2026-10-12',
@@ -76,6 +75,18 @@ describe('renderTasksGround()', () => {
     });
   });
 
+  test('a row from another drive on Home', () => {
+    const markup = html({
+      state: { kind: 'ready', sections: groundSections([row('x', { driveId: 'd2' })], '2026-10-12', new Map([['d2', 'Launch']])) },
+    });
+    assert({
+      given: 'a task in another drive, on Home’s ground',
+      should: 'link it in its own drive and name that drive beside its list',
+      actual: [markup.includes('href="/d2/tasks/page-x"'), markup.includes('Launch Tasks · Launch')],
+      expected: [true, true],
+    });
+  });
+
   test('the notices: loading, failing, and an empty status', () => {
     assert({
       given: 'rows still loading, a failed load, and no completed rows',
@@ -85,7 +96,7 @@ describe('renderTasksGround()', () => {
         failed: html({ state: { kind: 'error', retry: noop } }).includes('Could not load tasks'),
         empty: html({
           status: 'completed',
-          state: { kind: 'ready', driveId: 'd1', sections: groundSections([], '2026-10-12') },
+          state: { kind: 'ready', sections: groundSections([], '2026-10-12') },
         }).includes('No completed tasks in this view.'),
       },
       expected: { loading: true, failed: true, empty: true },
@@ -95,7 +106,7 @@ describe('renderTasksGround()', () => {
   test('a refused tick', () => {
     const markup = html({
       notice: { at: 'over', message: 'Complete all sub-tasks first' },
-      state: { kind: 'ready', driveId: 'd1', sections: groundSections([row('over'), row('other')], '2026-10-12') },
+      state: { kind: 'ready', sections: groundSections([row('over'), row('other')], '2026-10-12') },
     });
     assert({
       given: 'a refusal on one row',

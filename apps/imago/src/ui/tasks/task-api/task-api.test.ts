@@ -46,6 +46,21 @@ describe('taskPaths', () => {
       expected: '/api/pages/a%2Fb/tasks/c%3Fd',
     });
   });
+
+  test('a drive’s tasks and every drive’s', () => {
+    assert({
+      given: 'a drive, then no drive (Home, the dashboard)',
+      should: 'ask for that drive’s tasks, then the viewer’s across every drive',
+      actual: [
+        taskPaths.driveTasks({ driveId: 'd1', limit: 20, statusGroup: 'active' }),
+        taskPaths.driveTasks({ driveId: null, limit: 20, statusGroup: 'active' }),
+      ],
+      expected: [
+        '/api/tasks?context=drive&driveId=d1&limit=20&statusGroup=active',
+        '/api/tasks?context=user&limit=20&statusGroup=active',
+      ],
+    });
+  });
 });
 
 describe('fetchDriveTaskLists()', () => {

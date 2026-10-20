@@ -356,11 +356,12 @@ export const useTaskList = (pageId: string | null, title: string) => {
 
 /**
  * How many of the viewer's tasks each smart view holds, read from each view's
- * pagination.total. Undefined until every count has loaded.
+ * pagination.total. Undefined until every count has loaded. `allDrives` (Home,
+ * the dashboard) counts across every drive rather than this one.
  */
-export const useTaskViewCounts = (driveId: string | null) => {
+export const useTaskViewCounts = (driveId: string | null, allDrives = false) => {
   const client = useApiClient();
-  const { data, error } = useSWR(driveId === null ? null : (['imago:task-view-counts', driveId] as const), ([, id]) =>
+  const { data, error } = useSWR(driveId === null ? null : (['imago:task-view-counts', allDrives ? null : driveId] as const), ([, id]) =>
     Promise.all(
       taskViews.map(async (view) => [view.id, await fetchDriveTaskCount(client, id, view.dueDateFilter)] as const),
     ).then((counts) => Object.fromEntries(counts) as Record<TaskViewId, number>),
@@ -375,13 +376,14 @@ const GROUND_PAGE_SIZE = 100;
 export type DriveTaskPages = 'first' | 'every';
 
 /**
- * The viewer's tasks in a drive: one status group, one due window (or
- * none). The ground reads the first page of the route's answer; Focus's
- * "All lists" reads every page, since its frontier would otherwise lose the
- * older (often the most overdue) rows.
+ * The viewer's tasks in a drive, or with no drive across every drive (Home,
+ * the dashboard): one status group, one due window (or none). The ground
+ * reads the first page of the route's answer; Focus's "All lists" reads
+ * every page, since its frontier would otherwise lose the older (often the
+ * most overdue) rows.
  */
 export const useDriveTasks = (
-  driveId: string,
+  driveId: string | null,
   statusGroup: StatusGroupFilter,
   dueDateFilter: DueDateFilter | undefined,
   pages: DriveTaskPages = 'first',

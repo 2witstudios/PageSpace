@@ -5,6 +5,8 @@ import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, useTaskViewStore, viewFor } from '../task-views/task-views';
 import { useDriveTasks } from '../use-tasks/use-tasks';
+import { useIsHome } from '../../frame/drives/home-drive-context';
+import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
 
@@ -35,15 +37,19 @@ const keepStatus = (status: StatusGroupFilter): void => {
 /**
  * The Tasks ground: the viewer's tasks in the drive, for the view picked on
  * the pane and the status group picked here (Active until the viewer picks
- * another, which is then remembered). Each row ticks done in place.
+ * another, which is then remembered). On Home, the dashboard, it is the
+ * viewer's tasks across every drive, each row naming its drive. Each row
+ * ticks done in place.
  */
 export function TasksGround({ driveId }: { readonly driveId: string }) {
+  const allDrives = useIsHome(driveId);
   const view = useTaskViewStore((state) => state.view);
   const [status, setStatus] = useState<StatusGroupFilter>('active');
   const [notice, setNotice] = useState<{ readonly at: string; readonly message: string } | null>(null);
   // Read after mount, so the server's render and the first client render agree.
   useEffect(() => setStatus(storedStatus()), []);
-  const { response, error, retry, toggleComplete } = useDriveTasks(driveId, status, viewFor(view).dueDateFilter);
+  const { response, error, retry, toggleComplete } = useDriveTasks(allDrives ? null : driveId, status, viewFor(view).dueDateFilter);
+  const driveNames = useDriveNames(allDrives);
   const today = localToday(new Date());
   const tasks = response?.tasks;
   const total = response?.pagination.total;
@@ -69,7 +75,7 @@ export function TasksGround({ driveId }: { readonly driveId: string }) {
     notice,
     state:
       tasks !== undefined
-        ? { kind: 'ready', driveId, sections: groundSections(tasks, today) }
+        ? { kind: 'ready', sections: groundSections(tasks, today, driveNames) }
         : error !== undefined
           ? { kind: 'error', retry }
           : { kind: 'loading' },
