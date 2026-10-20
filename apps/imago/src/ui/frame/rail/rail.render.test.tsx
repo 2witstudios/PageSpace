@@ -29,7 +29,7 @@ const markup = (overrides: Partial<RailRenderProps> = {}): string =>
 const names = (html: string): string[] =>
   [...html.matchAll(/<(?:a|button|summary)\b[^>]*?aria-label="([^"]+)"/g)].map((match) => match[1] ?? '');
 
-const tools = ['Calendar', 'Agents'];
+const tools = ['Calendar', 'Console'];
 
 describe('renderRail()', () => {
   test('the destinations, in order', () => {
@@ -37,7 +37,7 @@ describe('renderRail()', () => {
       given: 'the spine for a drive',
       should: 'list Search, Chat, Files, Messages (with its count), Tasks, Calendar and Agents, More, the bell and Drive settings',
       actual: names(markup()),
-      expected: ['Search', 'Chat', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'More', 'Notifications', 'Drive settings'],
+      expected: ['Search', 'Home', 'Files', 'Messages, 4 unread', 'Tasks', ...tools, 'More', 'Notifications', 'Drive settings'],
     });
   });
 
@@ -49,8 +49,8 @@ describe('renderRail()', () => {
       given: 'nothing active',
       should: 'draw the four sections as 48px tiles and Search, the tools and Drive settings as small ones',
       actual: [
-        ['Chat', 'Files', 'Tasks'].map(classOf),
-        ['Calendar', 'Agents', 'Drive settings'].map(classOf),
+        ['Home', 'Files', 'Tasks'].map(classOf),
+        ['Calendar', 'Console', 'Drive settings'].map(classOf),
         classOf('Search'),
       ],
       expected: [
@@ -214,7 +214,7 @@ describe('renderRail() drive tool badges', () => {
     assert({
       given: 'two pending calendar invites',
       should: 'label Calendar with its unread count and leave the other tools unbadged',
-      actual: [names(html).includes('Calendar, 2 unread'), names(html).includes('Agents')],
+      actual: [names(html).includes('Calendar, 2 unread'), names(html).includes('Console')],
       expected: [true, true],
     });
   });

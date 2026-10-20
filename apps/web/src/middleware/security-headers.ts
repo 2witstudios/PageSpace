@@ -144,6 +144,10 @@ export const buildCSPPolicy = (nonce: string): string => {
     `'nonce-${nonce}'`,
     "'strict-dynamic'",
     "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+    // React's development build rebuilds server component stacks with eval, and
+    // without it hydration fails under `next dev` (apps/imago does the same).
+    // A production build never gets it.
+    ...(process.env.NODE_ENV === 'development' ? ["'unsafe-eval'"] : []),
   ];
   // fonts.googleapis.com: in-app canvas pages render via an iframe srcDoc, which
   // inherits this outer CSP in addition to their own baked-in <meta> CSP

@@ -263,17 +263,6 @@ describe('Shell', () => {
     });
   });
 
-  test('screens that open Imago folded fold it on entry', () => {
-    render();
-    navigate('/drive-1/calendar');
-    assert({
-      given: 'entering a folded screen',
-      should: 'collapse Imago in the store',
-      actual: getUiState().resources.imagoCollapsed,
-      expected: true,
-    });
-  });
-
   test('without a Home drive the not-found page offers no way home, and the account stage still renders', () => {
     render(null);
     navigate('/drive-9', null);
@@ -470,7 +459,7 @@ describe('Shell', () => {
     navigate('/drive-1/files/page-1');
     const files = frame().dataset.list;
     navigate('/drive-1');
-    click('[data-slot="rail"] a[aria-label="Chat"]');
+    click('[data-slot="rail"] a[aria-label="Home"]');
 
     assert({
       given: 'the history hidden, a visit to an open page, then Chat clicked on the rail',
@@ -615,6 +604,19 @@ describe('Shell', () => {
     });
   });
 
+  test('the spine never folds Imago', () => {
+    const places = ['/drive-1/calendar', '/drive-1/activity', '/drive-1/agents', '/drive-1/files/page-1'].map((pathname) => {
+      navigate(pathname);
+      return [frame().dataset.imago, getUiState().resources.imagoCollapsed];
+    });
+    assert({
+      given: 'Calendar, Activity, Console and then a page, each opened from the spine',
+      should: 'keep Imago docked beside every one of them',
+      actual: places,
+      expected: [['docked', false], ['docked', false], ['docked', false], ['docked', false]],
+    });
+  });
+
   test('Imago on the ground', () => {
     render();
     const ground = [
@@ -693,12 +695,12 @@ describe('Shell', () => {
         [
           'Switch drive: Alpha',
           'Search',
-          'Chat',
+          'Home',
           'Files',
           'Messages',
           'Tasks',
           'Calendar',
-          'Agents',
+          'Console',
           'More',
           'Notifications',
           'Drive settings',

@@ -95,6 +95,11 @@ export const tabsPlugin = {
         : withTabs(state, { activeTab: id }),
     openBackgroundTab: (state: UiState, { path, id }: { readonly path: string; readonly id: string }): UiState =>
       withTabs(state, { openTabs: openTabInBackground(stripOf(state), path, id).tabs }),
+    /** New tab, as in a browser: a tab beside the active one, on the drive's home, made active. */
+    openNewTab: (state: UiState, { path, id }: { readonly path: string; readonly id: string }): UiState => {
+      const strip = navigateTabs(stripOf(state), path, id, true);
+      return withTabs(state, { openTabs: strip.tabs, activeTab: strip.active, newTabPending: false });
+    },
     setNewTabPending: (state: UiState, newTabPending: boolean): UiState =>
       state.resources.newTabPending === newTabPending ? state : withTabs(state, { newTabPending }),
     stepBack: (state: UiState, _: void): UiState => step(state, 'back'),

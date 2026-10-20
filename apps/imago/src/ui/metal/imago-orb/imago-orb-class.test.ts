@@ -5,14 +5,15 @@ import { imagoOrbClass, orbSizes } from './imago-orb-class';
 describe('imagoOrbClass()', () => {
   test('each size', () => {
     assert({
-      given: 'the hero, a post author, the head tile, a picker row and the glyph',
-      should: 'size a block canvas from the orb and agent tokens',
+      given: 'the hero, a post author, the rail tile, the head tile, a picker row and the glyph',
+      should: 'size a block canvas from the orb tokens',
       actual: orbSizes.map((size) => imagoOrbClass(size, false)),
       expected: [
         'block flex-none size-orb-hero',
         'block flex-none size-avatar-sm',
-        'block flex-none size-agent-tile',
-        'block flex-none size-agent-row-tile',
+        'block flex-none size-orb-rail',
+        'block flex-none size-orb-tile',
+        'block flex-none size-orb-row -m-orb-row-overhang',
         'block flex-none size-orb-glyph',
       ],
     });

@@ -5,7 +5,7 @@ import type { UiState } from '../../store/state';
 import { newTab, serializeTabs } from './tabs-model';
 import { tabsPlugin, type SyncTabs } from './tabs-plugin';
 
-const { syncTabs, setTabs, activateTab, openBackgroundTab, setNewTabPending, stepBack, stepForward } = tabsPlugin.transactions;
+const { syncTabs, setTabs, activateTab, openBackgroundTab, openNewTab, setNewTabPending, stepBack, stepForward } = tabsPlugin.transactions;
 const key = 'imago:tabs:d1';
 const stored = serializeTabs({ tabs: [newTab('p', '/d1/files/pricing')], active: 'p' });
 const nav = (path: string | null, extra: Partial<SyncTabs> = {}): SyncTabs => ({ key, stored: null, path, id: `id-${path}`, pop: false, ...extra });
@@ -105,6 +105,18 @@ describe('tabsPlugin (IMC-1.5)', () => {
       should: 'open it as a new active tab and clear the request',
       actual: [paths(next), next.resources.activeTab, next.resources.newTabPending],
       expected: [['/d1/files/pricing', '/d1/files/plan'], 'id-/d1/files/plan', false],
+    });
+  });
+
+  test('openNewTab', () => {
+    const opened = openNewTab(first(), { path: '/d1', id: 'new' });
+    const filled = syncTabs(opened, nav('/d1/files/plan'));
+    const home = syncTabs(opened, nav(null));
+    assert({
+      given: "New tab on the drive's home, then a page opened from it, or the home itself synced",
+      should: 'open an active tab beside the current one, load the page into it, and leave it be on the home',
+      actual: [paths(opened), opened.resources.activeTab, paths(filled), filled.resources.openTabs[1]?.back, paths(home)],
+      expected: [['/d1/files/pricing', '/d1'], 'new', ['/d1/files/pricing', '/d1/files/plan'], ['/d1'], ['/d1/files/pricing', '/d1']],
     });
   });
 

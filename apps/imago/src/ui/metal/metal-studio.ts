@@ -35,10 +35,14 @@ export const studioGains = (dark: boolean): Pick<Studio, 'keyGain' | 'pageGain' 
 
 const TOKENS = ['--metal-sky', '--metal-room', '--metal-warm', '--metal-flag', '--metal-rim', '--metal-key', '--background'] as const;
 
-/** Reads the studio from the document's current theme. */
-export const readStudio = (doc: Document): Studio => {
+/**
+ * Reads the studio from the document's current theme, or, given a `color-scheme`, from that
+ * scheme's tokens: an orb on a surface darker than its page (the spine) is lit as on a dark page.
+ */
+export const readStudio = (doc: Document, colorScheme?: string): Studio => {
   const probe = doc.createElement('span');
   probe.style.display = 'none';
+  if (colorScheme !== undefined) probe.style.colorScheme = colorScheme;
   doc.body.appendChild(probe);
   const pixel = doc.createElement('canvas');
   pixel.width = 1;

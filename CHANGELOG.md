@@ -5,6 +5,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago UI polish:
+  - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
+  - The Imago orb is larger in the chat header's agent picker and its list.
+  - The credits button no longer shows a sparkle when you are spending your own credits.
+  - Console's Session button matches Calendar's Event button and stays readable in dark mode.
+- Imago tabs:
+  - + (New tab) opens a blank tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
+  - Tool tabs such as Calendar and Console show their own icon.
+  - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
+- Opening Calendar, Activity or Console, or any other spot from the rail, no longer folds Imago away. Imago stays open beside the screen until you collapse or close it yourself.
+
 - Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
 
 - You can now subscribe to Pro and buy credit packs inside the PageSpace iPhone and iPad app, paid through your Apple ID. Pro bought in the app includes exactly what Pro on the web does (the same monthly credits, storage and models) and shows up on every device you sign in on. App Store prices are set a little higher to cover Apple's fee. Manage or cancel an App Store subscription from the app's Plan page or your Apple ID settings, and use Restore Purchases after reinstalling. A plan bought on the web is still managed on the web, and organization (Business) plans are still managed by the organization's admin. Credit packs can be bought either way, whichever store your plan is on.
