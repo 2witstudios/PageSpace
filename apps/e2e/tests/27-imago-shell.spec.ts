@@ -114,6 +114,36 @@ test.describe('signed in', () => {
     expect(await probeOf(shell(page))).toBeNull();
   });
 
+  test('every rail stop: the sidebar alone beside Imago, a pick opens the middle, × comes back to the sidebar', async ({
+    page,
+  }) => {
+    // Drive settings and Tasks, the two stops that used to open their middle straight from the
+    // rail, follow the one rule: the rail opens the sidebar alone and Imago fills the middle; a
+    // row opens the object and Imago docks beside it; Close page returns to that same sidebar.
+    const stops = [
+      { link: 'Drive settings', section: 'settings', index: 'settings', row: 'General', object: 'settings/general' },
+      { link: 'Tasks', section: 'tasks', index: 'tasks', row: 'Due today', object: 'tasks/view/today' },
+    ];
+    await page.goto(imagoPath(homeDriveId));
+    await whenHydrated(page, railLink(page, 'Files'));
+    for (const stop of stops) {
+      await railLink(page, stop.link).click();
+      await page.waitForURL(pathnameIs(imagoPath(homeDriveId, stop.index)));
+      await expect(shell(page)).toHaveAttribute('data-section', stop.section);
+      await expect(shell(page)).toHaveAttribute('data-imago', 'ground');
+      await expect(shell(page)).not.toHaveAttribute('data-object', /.+/);
+
+      await listPane(page).getByRole('link', { name: stop.row }).first().click();
+      await page.waitForURL(pathnameIs(imagoPath(homeDriveId, stop.object)));
+      await expect(shell(page)).toHaveAttribute('data-imago', 'docked');
+
+      await pageColumn(page).getByRole('link', { name: 'Close page', exact: true }).click();
+      await page.waitForURL(pathnameIs(imagoPath(homeDriveId, stop.index)));
+      await expect(shell(page)).toHaveAttribute('data-section', stop.section);
+      await expect(shell(page)).toHaveAttribute('data-imago', 'ground');
+    }
+  });
+
   test('Close sidebar on the files list hides it in place; Show sidebar in the Imago head brings it back', async ({
     page,
   }) => {

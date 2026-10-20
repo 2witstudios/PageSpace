@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { differenceInMinutes, format } from 'date-fns';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useCalendarFilterStore } from '@/retained/stores/useCalendarFilterStore';
+import { useHydrated } from '../../frame/shell/use-hydrated';
 import { isOnPrem } from '@/retained/lib/deployment-mode';
 import { getDriveCalendarColor, getEventColors } from '@/retained/components/calendar/calendar-types';
 import { renderIcon } from '../../components/icon/icon.render';
@@ -34,7 +35,8 @@ export function syncedLabel(lastSyncAt: string | null, now: Date): string {
   return `synced ${format(last, 'MMM d')}`;
 }
 
-const groupHeadingClass = 'flex items-center justify-between px-1.5 pt-3 pb-1 text-2xs font-semibold tracking-wide text-ink-faint';
+const groupHeadingClass = 'px-1.5 pt-3 pb-1 text-2xs font-semibold tracking-wide text-ink-faint';
+const groupHeadRowClass = 'flex items-center justify-between pr-1.5';
 const rowClass = 'flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-sm text-ink-muted';
 const toggleRowClass = (on: boolean): string =>
   `flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-1.5 py-1 text-left text-sm hover:bg-fill ${on ? 'text-ink' : 'text-ink-faint'}`;
@@ -100,9 +102,15 @@ export function CalendarPane({ driveId, close, variant, allDrives = false }: Too
     </button>
   );
 
-  const hiddenCalendars = useCalendarFilterStore((store) => store.hiddenCalendars);
-  const hiddenEventTypes = useCalendarFilterStore((store) => store.hiddenEventTypes);
-  const showTasks = useCalendarFilterStore((store) => store.showTasks);
+  // The filters persist in this browser, which the server cannot read: until hydration the rows
+  // draw the store's defaults, as the server did, so a saved filter never leaves a box mismatched.
+  const hydrated = useHydrated();
+  const storedHiddenCalendars = useCalendarFilterStore((store) => store.hiddenCalendars);
+  const storedHiddenEventTypes = useCalendarFilterStore((store) => store.hiddenEventTypes);
+  const storedShowTasks = useCalendarFilterStore((store) => store.showTasks);
+  const hiddenCalendars = hydrated ? storedHiddenCalendars : [];
+  const hiddenEventTypes = hydrated ? storedHiddenEventTypes : [];
+  const showTasks = hydrated ? storedShowTasks : true;
   const toggleCalendar = useCalendarFilterStore((store) => store.toggleCalendar);
   const toggleEventType = useCalendarFilterStore((store) => store.toggleEventType);
   const toggleTasks = useCalendarFilterStore((store) => store.toggleTasks);
@@ -119,14 +127,15 @@ export function CalendarPane({ driveId, close, variant, allDrives = false }: Too
     children: (
       <>
         <MiniMonth date={state.date} onSelect={(date) => update({ date: formatCalendarDate(date) })} />
-        <h3 className={groupHeadingClass}>
-          CALENDARS
+        {/* Show/Hide all sits beside the heading, not in it, so the heading reads "CALENDARS" alone. */}
+        <div className={groupHeadRowClass}>
+          <h3 className={groupHeadingClass}>CALENDARS</h3>
           {allDrives && calendars.length > 1 ? (
             <button type="button" className={showAllClass} onClick={() => (allVisible ? hideAll(calendars.map((calendar) => calendar.key)) : showAll())}>
               {allVisible ? 'Hide all' : 'Show all'}
             </button>
           ) : null}
-        </h3>
+        </div>
         <ul className="flex flex-col gap-px">
           {calendars.map((calendar) =>
             allDrives ? (

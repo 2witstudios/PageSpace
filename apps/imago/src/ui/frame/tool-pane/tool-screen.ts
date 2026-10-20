@@ -4,11 +4,14 @@ import { useCallback } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { stageFor, toolViewSegment, type DriveTool } from '../stage/stage';
 
+/** The tools whose screen is an address of its own; the Console opens a session by its query instead (consoleStage). */
+export type ScreenTool = Exclude<DriveTool, 'agents'>;
+
 /**
  * A tool's own screen, the object its pane opens (stage.ts): `/view`, or Members' `/all`.
  * The tool's bare address is its pane beside the chat.
  */
-export const toolScreenHref = (driveId: string, tool: DriveTool, search = ''): string =>
+export const toolScreenHref = (driveId: string, tool: ScreenTool, search = ''): string =>
   `/${encodeURIComponent(driveId)}/${tool}/${tool === 'members' ? 'all' : toolViewSegment}${search}`;
 
 export type ToolScreen = {
@@ -21,7 +24,7 @@ export type ToolScreen = {
   readonly open: (search: string) => void;
 };
 
-export function useToolScreen(driveId: string, tool: DriveTool): ToolScreen {
+export function useToolScreen(driveId: string, tool: ScreenTool): ToolScreen {
   const pathname = usePathname() ?? '/';
   const router = useRouter();
   const onScreen = stageFor(pathname).object !== null;

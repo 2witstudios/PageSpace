@@ -287,7 +287,7 @@ describe('TasksPane', () => {
       given: 'more overdue tasks than the glance shows',
       should: 'link See all to Assigned to me, which holds overdue and this week alike, never This week alone',
       actual: [seeAll?.textContent, seeAll?.getAttribute('href')],
-      expected: ['See all 8', '/d1/tasks/view/assigned'],
+      expected: ['See all', '/d1/tasks/view/assigned'],
     });
   });
 });

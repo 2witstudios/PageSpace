@@ -89,7 +89,7 @@ export function renderTaskViews({ views }: { readonly views: readonly TaskViewRe
 export type TaskGlanceRenderProps = {
   /** The overdue and due-this-week tasks to show; undefined while they load. */
   readonly rows: readonly GroundRow[] | undefined;
-  /** How many more there are than the rows shown. */
+  /** How many more are due than the rows shown; See all shows only when there are some. */
   readonly more: number;
   /** Where See all goes: the view that holds every one of them. */
   readonly moreHref: string;
@@ -121,7 +121,7 @@ export function renderTaskGlance({ rows, more, moreHref }: TaskGlanceRenderProps
       </ul>
       {more > 0 ? (
         <Link href={moreHref} prefetch className={taskGlanceMoreClass}>
-          {`See all ${rows.length + more}`}
+          See all
         </Link>
       ) : null}
     </section>

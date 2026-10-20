@@ -2,8 +2,9 @@
 
 // The trash middle (C-Drive-Trash): the drive's trashed pages as a tree, with
 // Restore on each top-level row and an inline confirm before Delete forever.
-// The Files pane beside it is the shell's; the Type filter lives in the URL
-// (?type=pages|files), so a reload keeps it.
+// The Trash pane beside it is the shell's; the Type filter lives in the URL
+// (?type=pages|files), so a reload keeps it, and the pane and the view's own
+// Type control both write it.
 
 import { useState, type ReactNode } from 'react';
 import useSWR from 'swr';

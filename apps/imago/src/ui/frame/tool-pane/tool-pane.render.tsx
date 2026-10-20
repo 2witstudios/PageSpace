@@ -36,7 +36,7 @@ const screenRowClass = (current: boolean): string =>
     current ? 'bg-accent-soft font-medium text-accent-deep' : 'text-ink hover:bg-fill',
   );
 
-/** A pane row that opens the tool's whole screen in the middle (All activity, Trashed pages). */
+/** A pane row that opens the tool's whole screen in the middle (All activity, Everything in trash). */
 export function renderToolScreenRow({ href, label, selected }: { readonly href: string; readonly label: string; readonly selected: boolean }): ReactNode {
   return (
     <Link href={href} prefetch={true} className={screenRowClass(selected)} aria-current={selected ? 'page' : undefined}>

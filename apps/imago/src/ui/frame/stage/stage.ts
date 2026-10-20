@@ -118,7 +118,7 @@ const driveChat = (driveId: string): Stage => ({
  * The one shape every rail destination shares. The section's own address opens its sidebar
  * alone, with Imago filling the middle; picking something in the sidebar opens it as the
  * object, the sidebar narrows to the tree and Imago docks beside it. Closing the object
- * comes back here (sectionIndexPath).
+ * comes back here (tabs-model's sectionPath).
  */
 const sectionStage = (driveId: string | null, section: Section, object: StageObject | null): Stage =>
   object === null
