@@ -33,7 +33,7 @@ export type RailButtonRenderProps = {
 
 /** The label beside the control on hover and focus; the control carries the name. */
 export const renderRailTooltip = (label: string): ReactNode => (
-  <span className={railTooltipClass} aria-hidden="true">
+  <span className={railTooltipClass} aria-hidden="true" data-rail-tooltip="">
     {label}
   </span>
 );

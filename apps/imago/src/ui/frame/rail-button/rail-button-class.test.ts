@@ -69,7 +69,7 @@ describe('the spine’s fixed classes', () => {
         'absolute top-1 right-1 flex h-spine-count min-w-spine-count items-center justify-center rounded-round bg-notice px-1 text-badge leading-none font-bold text-notice-ink',
         'm-0 flex list-none flex-col items-center gap-rail-gap p-0',
         'my-2 h-px w-spine-divider flex-none bg-spine-active',
-        'pointer-events-none invisible absolute top-1/2 left-rail-tooltip-x z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard group-hover:visible group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100',
+        'pointer-events-none invisible fixed top-0 left-0 z-popover -translate-y-1/2 rounded-md border border-hairline bg-surface-raised px-2 py-1 text-2xs whitespace-nowrap text-ink opacity-0 shadow-2 transition-opacity duration-120 ease-standard pointer-fine:group-hover:visible pointer-fine:group-hover:opacity-100 group-focus-visible:visible group-focus-visible:opacity-100',
       ],
     });
   });
