@@ -508,36 +508,38 @@ describe('updateTask dates', () => {
   test('a due day picked on a start with a time of day', () => {
     // Local times, as the date field picks a day in the viewer's zone.
     const start = new Date(2026, 9, 25, 9).toISOString();
-    const root = list('root', [task('a', { startDate: start })]);
+    const a = task('a', { startDate: start });
+    const root = list('root', [a]);
     const pickedSameDay = new Date(2026, 9, 25).toISOString();
-    const outcome = updateTask(root, 'a', { dueDate: pickedSameDay });
+    const settled = settledPatch(a, { dueDate: pickedSameDay });
+    const outcome = updateTask(root, 'a', settled);
     assert({
       given: 'a start at 09:00 and a due date picked on that same day, as its midnight',
       should: 'keep the edit, the due date moved up to the start’s instant',
-      actual: [outcome.refusal, find(outcome.list, 'a')?.dueDate, settledPatch(find(root, 'a'), { dueDate: pickedSameDay })],
-      expected: [undefined, start, { dueDate: start }],
+      actual: [settled, outcome.refusal, find(outcome.list, 'a')?.dueDate],
+      expected: [{ dueDate: start }, undefined, start],
     });
   });
 
   test('a due day before the start’s day', () => {
-    const root = list('root', [task('a', { startDate: new Date(2026, 9, 25, 9).toISOString() })]);
+    const a = task('a', { startDate: new Date(2026, 9, 25, 9).toISOString() });
+    const root = list('root', [a]);
     const dayBefore = new Date(2026, 9, 23).toISOString();
     assert({
       given: 'a due date picked on a day before the start',
       should: 'refuse it as the server does, and settle nothing',
-      actual: [updateTask(root, 'a', { dueDate: dayBefore }).refusal, settledPatch(find(root, 'a'), { dueDate: dayBefore })],
+      actual: [updateTask(root, 'a', { dueDate: dayBefore }).refusal, settledPatch(a, { dueDate: dayBefore })],
       expected: ['Start date must be on or before the due date', { dueDate: dayBefore }],
     });
   });
 
   test('start and due sent together', () => {
-    const root = list('root', [task('a')]);
     const startDate = new Date(2026, 9, 25, 15).toISOString();
     const dueDate = new Date(2026, 9, 25).toISOString();
     assert({
       given: 'a patch setting a 15:00 start and that day’s midnight due together',
       should: 'settle the due date against the patch’s own start',
-      actual: settledPatch(find(root, 'a'), { startDate, dueDate }),
+      actual: settledPatch(task('a'), { startDate, dueDate }),
       expected: { startDate, dueDate: startDate },
     });
   });

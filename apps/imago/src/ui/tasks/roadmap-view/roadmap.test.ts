@@ -396,14 +396,14 @@ describe('dragging', () => {
   test('a due edge dragged onto a start with a time of day', () => {
     // A start set over the API at 09:00 local on the 12th; the bar's due edge goes back to that day.
     const startDate = new Date(2026, 9, 12, 9).toISOString();
-    const root = list('root', [task('a', { startDate, dueDate: at('2026-10-23') })]);
+    const a = task('a', { startDate, dueDate: at('2026-10-23') });
     const bar = { kind: 'bar', ...span } as const;
-    const patch = dragPatch(bar, span, draggedDates(span, 'due', -20), 'due') ?? {};
-    const saved = updateTask(root, 'a', patch);
+    const settled = settledPatch(a, dragPatch(bar, span, draggedDates(span, 'due', -20), 'due') ?? {});
+    const saved = updateTask(list('root', [a]), 'a', settled);
     assert({
       given: 'the due edge clamped onto the start’s own day, sent as that day’s midnight',
       should: 'save the due date at the start’s instant rather than refuse it',
-      actual: [settledPatch(root.tasks[0], patch), saved.refusal, saved.list.tasks[0]?.dueDate],
+      actual: [settled, saved.refusal, saved.list.tasks[0]?.dueDate],
       expected: [{ dueDate: startDate }, undefined, startDate],
     });
   });

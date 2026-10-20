@@ -82,19 +82,12 @@ export function TaskTreeRealtime({ rootPageId, tree }: { readonly rootPageId: st
   const { mutate } = useSWRConfig();
   const rooms = tree === undefined ? [rootPageId] : treeRooms(tree);
   useRooms(CHANNEL_ROOM, rooms);
-  const revalidate = useRef(() => {});
-  useEffect(() => {
-    revalidate.current = () => void mutate(['imago:task-tree', rootPageId]);
-  });
   const coalescer = useRef<Coalescer | null>(null);
   useEffect(() => {
-    const created = createCoalescer(() => revalidate.current(), COALESCE_MS);
+    const created = createCoalescer(() => void mutate(['imago:task-tree', rootPageId]), COALESCE_MS);
     coalescer.current = created;
-    return () => {
-      created.cancel();
-      coalescer.current = null;
-    };
-  }, []);
+    return created.cancel;
+  }, [mutate, rootPageId]);
   const onEvent = (payload: unknown) => {
     if (concernsTree(payload, rooms)) coalescer.current?.schedule();
   };

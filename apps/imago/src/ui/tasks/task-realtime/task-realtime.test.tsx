@@ -1,7 +1,19 @@
+// @vitest-environment jsdom
+import { act, useState } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import useSWR, { SWRConfig } from 'swr';
 import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
+import { RealtimeProvider } from '@/realtime/realtime-provider';
+import { fakeRealtime } from '@/ui/test-support/fake-realtime';
 import { list, parent, task } from '../task-model/fixtures';
-import { createCoalescer, concernsTree, treeRooms } from './task-realtime';
+import { COALESCE_MS, TaskTreeRealtime, createCoalescer, concernsTree, treeRooms } from './task-realtime';
+
+declare global {
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const tree = list('root', [parent('p', [parent('q', [task('x')])]), task('z')]);
 
@@ -110,6 +122,83 @@ describe('createCoalescer', () => {
       given: 'a pending run cancelled, as on unmount',
       should: 'not run',
       actual: runs,
+      expected: 0,
+    });
+  });
+});
+
+describe('TaskTreeRealtime', () => {
+  let root: Root | null = null;
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    if (root !== null) act(() => root?.unmount());
+    root = null;
+    vi.useRealTimers();
+  });
+
+  /** The tree's SWR entry, read by a probe that counts its fetches, beside the realtime that may be taken away. */
+  const mountTree = () => {
+    const rt = fakeRealtime();
+    const seen = { fetches: 0, hide: () => {} };
+    function Probe() {
+      useSWR(['imago:task-tree', 'root'], () => {
+        seen.fetches += 1;
+        return seen.fetches;
+      });
+      const [shown, setShown] = useState(true);
+      seen.hide = () => setShown(false);
+      return shown ? <TaskTreeRealtime rootPageId="root" tree={undefined} /> : null;
+    }
+    const created = createRoot(document.createElement('div'));
+    root = created;
+    act(() => {
+      created.render(
+        <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+          <RealtimeProvider client={rt.client}>
+            <Probe />
+          </RealtimeProvider>
+        </SWRConfig>,
+      );
+    });
+    return { rt, seen };
+  };
+
+  const wait = (ms: number) =>
+    act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+
+  test('a burst of events', async () => {
+    const { rt, seen } = mountTree();
+    await wait(0);
+    const before = seen.fetches;
+    rt.emit('task:task_updated', { pageId: 'root' });
+    rt.emit('task:task_updated', { pageId: 'root' });
+    rt.emit('task:tasks_reordered', { pageId: 'root' });
+    await wait(COALESCE_MS - 1);
+    const early = seen.fetches - before;
+    await wait(1);
+    assert({
+      given: 'a write and its echoes arriving together',
+      should: 'refetch the tree once, at the end of the window',
+      actual: [early, seen.fetches - before],
+      expected: [0, 1],
+    });
+  });
+
+  test('unmounted inside the window', async () => {
+    const { rt, seen } = mountTree();
+    await wait(0);
+    const before = seen.fetches;
+    rt.emit('task:task_added', { pageId: 'root' });
+    act(() => seen.hide());
+    await wait(COALESCE_MS);
+    assert({
+      given: 'the tree closed before a burst’s window ends',
+      should: 'not refetch',
+      actual: seen.fetches - before,
       expected: 0,
     });
   });

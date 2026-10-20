@@ -127,18 +127,17 @@ export type TaskPatch = {
  * start with a time of day does not refuse it. Apply and send this, not the
  * raw patch, so the tree and the server see the same dates.
  */
-export const settledPatch = (task: Task | undefined, patch: TaskPatch): TaskPatch => {
+export const settledPatch = (task: Task, patch: TaskPatch): TaskPatch => {
   if (patch.dueDate === undefined || patch.dueDate === null) return patch;
-  const start = patch.startDate === undefined ? (task?.startDate ?? null) : patch.startDate;
+  const start = patch.startDate === undefined ? task.startDate : patch.startDate;
   const dueDate = dueNotBeforeStart(patch.dueDate, start);
   return dueDate === patch.dueDate ? patch : { ...patch, dueDate };
 };
 
-/** Edits a task's own fields, validated as PATCH validates them; send `settledPatch` of the same patch. */
-export const updateTask = (root: TaskList, id: string, raw: TaskPatch): Outcome => {
+/** Edits a task's own fields, validated as PATCH validates them. */
+export const updateTask = (root: TaskList, id: string, patch: TaskPatch): Outcome => {
   const current = locate(root, id)?.task;
   if (current === undefined) return refuse(root, NOT_FOUND);
-  const patch = settledPatch(current, raw);
   if (patch.title !== undefined && patch.title.trim() === '') return refuse(root, 'Title cannot be empty');
   if (patch.priority !== undefined && !PRIORITIES.includes(patch.priority)) return refuse(root, 'Invalid priority');
   const start = patch.startDate === undefined ? current.startDate : patch.startDate;
