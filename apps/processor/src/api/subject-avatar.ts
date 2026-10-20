@@ -37,6 +37,18 @@ function s3() {
   return _s3;
 }
 
+/**
+ * Empties a subject's whole avatar folder: when the org or drive itself is gone (DELETE /:id), or
+ * from inside the processor when account erasure deletes a drive (no token: the worker is trusted).
+ */
+export async function deleteSubjectAvatars(subject: AvatarSubject, id: string): Promise<void> {
+  const bucket = getS3Bucket();
+  const listed = await s3().send(new ListObjectsV2Command({ Bucket: bucket, Prefix: avatarStorageKey(subject, id, '') }));
+  const objects = (listed.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+  if (objects.length === 0) return;
+  await s3().send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } }));
+}
+
 export function createAvatarRouter(subject: AvatarSubject): Router {
   const { binding: bindingType, label, a, Label } = SUBJECTS[subject];
   const router: Router = Router();
@@ -56,14 +68,6 @@ export function createAvatarRouter(subject: AvatarSubject): Router {
   function isBoundTo(req: Request, id: string): boolean {
     const binding = req.auth?.resourceBinding;
     return binding?.type === bindingType && binding.id === id;
-  }
-
-  async function deleteAll(id: string): Promise<void> {
-    const bucket = getS3Bucket();
-    const listed = await s3().send(new ListObjectsV2Command({ Bucket: bucket, Prefix: avatarStorageKey(subject, id, '') }));
-    const objects = (listed.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
-    if (objects.length === 0) return;
-    await s3().send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } }));
   }
 
   function refuseUnbound(req: Request<{ id: string }>, res: Response): boolean {
@@ -120,7 +124,7 @@ export function createAvatarRouter(subject: AvatarSubject): Router {
   router.delete('/:id', async (req: Request<{ id: string }>, res: Response) => {
     if (refuseUnbound(req, res)) return;
     try {
-      await deleteAll(req.params.id);
+      await deleteSubjectAvatars(subject, req.params.id);
       return res.json({ success: true });
     } catch (error) {
       processorLogger.error(`${Label} avatar deletion error`, error instanceof Error ? error : null);
