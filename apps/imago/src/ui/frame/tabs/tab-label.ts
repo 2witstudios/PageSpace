@@ -20,9 +20,10 @@ const TOOLS: Readonly<Record<string, { readonly title: string; readonly icon: Ic
 };
 
 /** A section's own index, read as the spine names it. */
+const FILES: TabLabel = { kind: 'screen', title: 'Files', icon: 'files' };
 const MESSAGES: TabLabel = { kind: 'screen', title: 'Messages', icon: 'messages' };
 const SECTIONS: Readonly<Record<string, TabLabel>> = {
-  files: { kind: 'screen', title: 'Files', icon: 'files' },
+  files: FILES,
   messages: MESSAGES,
   tasks: { kind: 'screen', title: 'Tasks', icon: 'tasks' },
 };
@@ -91,13 +92,16 @@ const decode = (segment: string): string => {
 
 /** A tab's label source, from its path alone. */
 export const tabLabelFor = (path: string): TabLabel => {
-  const [first = '', second = '', third = '', fourth = ''] = path.split('/').filter(Boolean).map(decode);
+  const segments = path.split('/').filter(Boolean).map(decode);
+  const [first = '', second = '', third = '', fourth = ''] = segments;
   if (first === 'p') return { kind: 'page', pageId: second };
   if (first === 'dm') return second === '' ? MESSAGES : { kind: 'conversation', conversationId: second };
   if (first === 'orgs') return screen(third === 'drives' ? 'Drives' : ({ general: 'General', members: 'Members & seats', drives: 'Drives', policies: 'Policies', security: 'Security', billing: 'Plan & seats', audit: 'Audit log', attention: 'Needs your attention', danger: 'Danger zone' } as Readonly<Record<string, string>>)[fourth], 'Organization settings');
   if (first === 'account') return screen(ACCOUNT[second], 'Account');
   if (first === 'notifications') return screen('Notifications', 'Notifications');
   if (second === '') return { kind: 'home' };
+  // The folder browser shows its last folder, a page; at the drive's top it is Files.
+  if (second === 'files' && third === 'browse') return segments.length > 3 ? { kind: 'page', pageId: segments.at(-1) ?? '' } : FILES;
   const section = SECTIONS[second];
   if (section !== undefined) return third === '' ? section : { kind: 'page', pageId: third };
   if (second === 'settings') return screen(DRIVE_SETTINGS[third], 'Drive settings');

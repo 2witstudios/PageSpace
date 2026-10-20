@@ -9,6 +9,7 @@ import { setUiState } from '../../store/store';
 import { mount, unmountAll } from '../../test-support/dom';
 import { stageFor } from '../stage/stage';
 import { tabsStorageKey } from '../tabs/tabs-model';
+import { TabSync } from '../tabs/use-open-tabs';
 
 const navigation = vi.hoisted(() => ({ pathname: '/d1/files/plan', pushed: [] as string[] }));
 vi.mock('next/navigation', () => ({
@@ -52,7 +53,8 @@ const client = createApiClient({
 const render = () =>
   mount(
     <ImagoSWRProvider client={client}>
-      <PhoneDocHead stage={stageFor(navigation.pathname)} pageId="plan" driveKey="d1" />
+      <TabSync driveKey="d1" />
+      <PhoneDocHead stage={stageFor(navigation.pathname)} pageId="plan" />
     </ImagoSWRProvider>,
   );
 

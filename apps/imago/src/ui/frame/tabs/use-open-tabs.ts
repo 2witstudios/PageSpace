@@ -60,8 +60,8 @@ export type OpenTabs = {
 
 /**
  * Closes one tab. Closing the one on screen moves to its neighbour; with none left it goes to
- * the section ('section': the tab bar, Close page) or stays put ('stay': the phone's open-pages
- * sheet). Reads the tabs without syncing them, so any control can close one.
+ * the section in a tab of its own ('section': the tab bar, Close page) or stays put ('stay':
+ * the phone's open-pages sheet). Reads the tabs without syncing them, so any control can close one.
  */
 export function useCloseTab(stage: Stage): (id: string, whenLast?: 'section' | 'stay') => void {
   const pathname = usePathname() ?? '/';
@@ -77,18 +77,24 @@ export function useCloseTab(stage: Stage): (id: string, whenLast?: 'section' | '
     // than opening a tab.
     if (result.next !== null) dispatch(transactions.activateTab, result.next.id);
     if (!onScreen) return;
-    if (result.next !== null) router.push(result.next.path);
-    else if (whenLast === 'section') router.push(sectionPath(stage));
+    if (result.next !== null) return router.push(result.next.path);
+    if (whenLast === 'stay') return;
+    // As in classic, closing the last tab leaves one, here on the section, even when the
+    // viewer is already there (no navigation then syncs one in).
+    const section = sectionPath(stage);
+    dispatch(transactions.openNewTab, { path: section, id: createTabId() });
+    if (section !== pathname) router.push(section);
   };
 }
 
 /**
- * The open tabs of a drive, browser-style as in classic: every navigation loads into the
- * active tab as a step in that tab's own history (a new tab only when there is none, or one
- * was asked for), and tabs persist per drive under imago's own key. The tab bar and the
- * phone's open-pages sheet both read them.
+ * Keeps a drive's tabs in step with the URL, browser-style as in classic: every navigation
+ * loads into the active tab as a step in that tab's own history (a new tab only when there is
+ * none, or one was asked for), the browser's Back and Forward move within it, and tabs persist
+ * per drive under imago's own key. Mount it once per layout, wherever the viewer goes: the tab
+ * bar on desktop, TabSync in the phone shell.
  */
-export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
+export function useTabSync(driveKey: string): void {
   const pathname = usePathname() ?? '/';
   const tabs = useUiState(selectTabs);
   const activeId = useUiState(selectActive);
@@ -127,6 +133,22 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   useEffect(() => {
     if (loadedKey === key) storage.write(key, serializeTabs({ tabs, active: activeId }));
   }, [tabs, activeId, loadedKey, key]);
+}
+
+/** useTabSync as a component, for the phone shell, which has no tab bar to carry it. */
+export function TabSync({ driveKey }: { readonly driveKey: string }): null {
+  useTabSync(driveKey);
+  return null;
+}
+
+/**
+ * The open tabs of the loaded drive (useTabSync keeps them current). The tab bar and the
+ * phone's open-pages sheet both read them.
+ */
+export function useOpenTabs(stage: Stage): OpenTabs {
+  const pathname = usePathname() ?? '/';
+  const tabs = useUiState(selectTabs);
+  const activeId = useUiState(selectActive);
 
   const isCurrent = (tab: Tab) => tab.id === activeId && tab.path === pathname;
   const close = useCloseTab(stage);

@@ -352,6 +352,19 @@ describe('Shell on a phone (C-Resp-Phone-Tree)', () => {
     });
   });
 
+  test('the tabs follow every screen, with no tab bar to carry them', () => {
+    window.localStorage.clear();
+    render('/drive-1/files/page-1');
+    render('/drive-1/files');
+    const { openTabs, activeTab } = getUiState().resources;
+    assert({
+      given: 'a page on a phone, then the Files section from the bottom bar',
+      should: 'load Files into the page’s tab, with the page on its Back',
+      actual: [openTabs.map((tab) => [tab.path, tab.back]), openTabs[0]?.id === activeTab],
+      expected: [[['/drive-1/files', ['/drive-1/files/page-1']]], true],
+    });
+  });
+
   test('the Files tree fills the screen under the phone head, with a floating Ask', () => {
     render('/drive-1/files');
     assert({

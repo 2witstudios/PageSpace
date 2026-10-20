@@ -11,8 +11,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - The credits button no longer shows a sparkle when you are spending your own credits.
   - Console's Session button matches Calendar's Event button and stays readable in dark mode.
 - Imago tabs:
-  - Tabs follow you everywhere, as in classic. Going to Home, Files, Tasks or Messages from the rail loads into the tab you're in, which stays highlighted and takes that section's name, instead of leaving the tab behind on the last page. Back in the tab bar walks back through all of it.
-  - Close page (the × in a page's header) now closes that page's tab, as the tab's own × does, and moves you to the next tab. Closing the last one takes you to the page's section.
+  - Tabs follow you everywhere, as in classic. Going to Home, Files, Tasks or Messages from the rail loads into the tab you're in, which stays highlighted and takes that section's name, instead of leaving the tab behind on the last page. Back in the tab bar walks back through all of it. The same holds on a phone, where the open-pages sheet keeps count.
+  - Close page (the × in a page's header) now closes that page's tab, as the tab's own × does, and moves you to the next tab. Closing the last tab leaves one tab open on the page's section, as classic does.
   - + (New tab) opens a tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
   - Tool tabs such as Calendar and Console show their own icon.
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.

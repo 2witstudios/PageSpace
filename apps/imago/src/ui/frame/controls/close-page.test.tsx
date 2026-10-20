@@ -51,9 +51,9 @@ describe('ClosePage', () => {
     close();
     assert({
       given: 'Close page on the only tab',
-      should: 'close it and go to the page’s section',
-      actual: [getUiState().resources.openTabs, navigation.pushed],
-      expected: [[], ['/d1/files']],
+      should: 'go to the page’s section in a tab of its own',
+      actual: [getUiState().resources.openTabs.map((tab) => tab.path), navigation.pushed],
+      expected: [['/d1/files'], ['/d1/files']],
     });
   });
 });

@@ -89,8 +89,9 @@ export function ClosePage({ stage }: { readonly stage: Stage }): ReactNode {
         aria-label="Close page"
         title="Close page"
         onClick={(event) => {
+          if (isNewTabClick(event)) return;
           dispatch(transactions.openImago, undefined);
-          if (tab === null || isNewTabClick(event)) return;
+          if (tab === null) return;
           event.preventDefault();
           closeTab(tab.id);
         }}

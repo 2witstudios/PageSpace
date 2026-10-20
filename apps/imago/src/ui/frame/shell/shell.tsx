@@ -28,6 +28,7 @@ import { PageHead } from '../../files/page-head/page-head';
 import { ConversationHead } from '../../messages/dm-head/conversation-head';
 import { AppBanner } from '../banners/app-banner';
 import { TabBar } from '../tabs/tab-bar';
+import { TabSync } from '../tabs/use-open-tabs';
 import { columnsFor, type Columns } from '../stage/columns';
 import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-nav/settings-nav-pane';
 import { Rail } from '../rail/rail';
@@ -276,7 +277,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         objectColumn
       ) : (
         <section className={columnClass} aria-label={title}>
-          <PhoneDocHead stage={stage} pageId={pageObject.pageId} driveKey={railDrive(stage, homeDriveId) ?? 'home'} />
+          <PhoneDocHead stage={stage} pageId={pageObject.pageId} />
           <div className={`${phoneDocBodyClass} overflow-y-auto`}>{children}</div>
         </section>
       );
@@ -304,7 +305,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     return renderPhoneShell({
       stage,
       hydrated,
-      screen: <><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface>{screen}</>,
+      // No tab bar on a phone: the tabs follow every screen from here (the open-pages sheet reads them).
+      screen: <><TabSync driveKey={railDrive(stage, homeDriveId) ?? 'home'} /><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface>{screen}</>,
       ask:
         onTree && stage.driveId !== null ? (
           <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} />

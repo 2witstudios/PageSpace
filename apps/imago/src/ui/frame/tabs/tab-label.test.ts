@@ -67,6 +67,15 @@ describe('tabLabelFor() (IMC-1.5)', () => {
     });
   });
 
+  test('the folder browser', () => {
+    assert({
+      given: "the folder browser at the drive's top and two folders down",
+      should: 'read as Files, then as the folder it shows',
+      actual: ['/d1/files/browse', '/d1/files/browse/f1/f2'].map(tabLabelFor),
+      expected: [{ kind: 'screen', title: 'Files', icon: 'files' }, { kind: 'page', pageId: 'f2' }],
+    });
+  });
+
   test('a direct message', () => {
     assert({
       given: 'a DM conversation',

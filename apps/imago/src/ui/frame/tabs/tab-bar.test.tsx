@@ -92,7 +92,7 @@ describe('TabBar (IMC-1.5)', () => {
     });
   });
 
-  test('closing the last tab closes the middle', async () => {
+  test('closing the last tab leaves one on the section', async () => {
     window.localStorage.setItem(tabsStorageKey('d1'), JSON.stringify([{ path: '/d1/files/plan' }]));
     const root = render();
     await settle(() => {
@@ -101,9 +101,25 @@ describe('TabBar (IMC-1.5)', () => {
     act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Q4 Launch Plan"]')?.click());
     assert({
       given: 'the only tab closed',
-      should: 'leave no tab and go to the Files section, where Imago is the ground',
-      actual: [tabs(root).length, navigation.pushed],
-      expected: [0, ['/d1/files']],
+      should: 'go to the Files section, where Imago is the ground, in a tab of its own, as in classic',
+      actual: [titles(root), navigation.pushed],
+      expected: [['Files'], ['/d1/files']],
+    });
+  });
+
+  test('closing the last tab on its own section', async () => {
+    window.localStorage.setItem(tabsStorageKey('d1'), JSON.stringify([{ path: '/d1/files' }]));
+    navigation.pathname = '/d1/files';
+    const root = render();
+    await settle(() => {
+      if (tabs(root).length !== 1) throw new Error('tab not loaded');
+    });
+    act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Files"]')?.click());
+    assert({
+      given: 'the only tab closed while it shows its section',
+      should: 'leave a fresh tab there, without navigating',
+      actual: [titles(root), getUiState().resources.openTabs[0]?.back, navigation.pushed],
+      expected: [['Files'], [], []],
     });
   });
 

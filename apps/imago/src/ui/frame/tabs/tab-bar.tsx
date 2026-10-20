@@ -8,7 +8,7 @@ import { dispatch, transactions } from '../../store/transactions';
 import { pageKey } from '../../files/page-object/page-object';
 import type { Stage } from '../stage/stage';
 import { activeTabOf, createTabId, stepTab } from './tabs-model';
-import { useOpenTabs } from './use-open-tabs';
+import { useOpenTabs, useTabSync } from './use-open-tabs';
 import { requestNewTab, useNewTabClicks } from './use-new-tab-clicks';
 import { pageTabOf, tabLabelFor } from './tab-label';
 import { renderTab, renderTabBar } from './tab-bar.render';
@@ -54,7 +54,8 @@ export type TabBarProps = {
  */
 export function TabBar({ stage, driveKey, homeHref }: TabBarProps) {
   const router = useRouter();
-  const open = useOpenTabs(stage, driveKey);
+  useTabSync(driveKey);
+  const open = useOpenTabs(stage);
   useNewTabClicks(stage);
 
   const active = activeTabOf({ tabs: open.tabs, active: open.activeId });
