@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, imagoStartsCollapsed, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, consoleGround, imagoStartsCollapsed, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -630,6 +630,38 @@ describe('stageFor() notifications (IMC-9.14)', () => {
       should: 'name Imago’s context and chip Notifications',
       actual: [chatContextFor(stage).contextLabel, chatChipFor(stage, {})],
       expected: ['Notifications in context', 'Notifications'],
+    });
+  });
+});
+
+describe('consoleGround()', () => {
+  const consoleStage = stageFor('/drive-1/agents');
+
+  test('the Console with no session open', () => {
+    assert({
+      given: 'the Console route and no selected session',
+      should: 'widen its pane to the list and leave the middle to Imago',
+      actual: consoleGround(consoleStage, false),
+      expected: { driveId: 'drive-1', section: 'settings', list: 'list', object: null },
+    });
+  });
+
+  test('the Console with a session open', () => {
+    assert({
+      given: 'the Console route and a selected session',
+      should: 'keep the session grid in the middle beside the narrowed pane',
+      actual: consoleGround(consoleStage, true),
+      expected: consoleStage,
+    });
+  });
+
+  test('every other stage', () => {
+    const calendar = stageFor('/drive-1/calendar');
+    assert({
+      given: 'another drive tool with nothing "selected"',
+      should: 'leave the stage as the route made it',
+      actual: [consoleGround(calendar, false), isConsole(calendar), isConsole(consoleStage)],
+      expected: [calendar, false, true],
     });
   });
 });

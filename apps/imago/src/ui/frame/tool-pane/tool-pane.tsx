@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import type { DriveTool } from '../stage/stage';
 import { CalendarPane } from '../../tools/calendar/calendar-pane';
-import { AgentsPane } from '../../tools/agents/agents-pane';
+import { ConsolePane } from '../../tools/agents/console-pane';
 import { WorkflowsPane } from '../../tools/workflows/workflows-pane';
 import { ActivityPane } from '../../tools/activity/activity-pane';
 import { MembersPane } from '../../tools/members/members-pane';
@@ -20,7 +20,7 @@ export function ToolPane({ tool, driveId, close }: ToolPaneProps & { readonly to
     case 'calendar':
       return <CalendarPane driveId={driveId} close={close} />;
     case 'agents':
-      return <AgentsPane driveId={driveId} close={close} />;
+      return <ConsolePane driveId={driveId} close={close} />;
     case 'workflows':
       return <WorkflowsPane driveId={driveId} close={close} />;
     case 'activity':

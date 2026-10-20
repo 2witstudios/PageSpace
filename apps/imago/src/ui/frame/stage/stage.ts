@@ -78,6 +78,19 @@ export const isHideableSection = (section: string): section is HideableSection =
 export const isTasksIndex = (stage: Stage): boolean =>
   stage.section === 'tasks' && stage.driveId !== null && stage.object === null;
 
+/** A drive's Console (the agents tool), whose middle is the selected session's pane grid. */
+export const isConsole = (stage: Stage): boolean =>
+  stage.driveId !== null && stage.object?.kind === 'settings' && stage.object.tool === 'agents';
+
+/**
+ * The stage the shell lays out. The Console with no session open has no middle of its own:
+ * its pane widens to the list beside Imago, which holds the middle as it does on a drive's
+ * chat. Which session is open rides the query string (`?workspace=`), so the route alone
+ * cannot say, and the caller passes it.
+ */
+export const consoleGround = (stage: Stage, sessionOpen: boolean): Stage =>
+  isConsole(stage) && !sessionOpen ? { ...stage, list: 'list', object: null } : stage;
+
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'orgs', 'chat', 'settings', 'notifications', ...listSections];
 
