@@ -1,5 +1,5 @@
 {
-  "id": "d644b028-0e34-4ac2-b442-f6d90a8a4807",
+  "id": "1ba61c66-bae5-4d10-9748-c8b7f469ea2b",
   "prevId": "58994763-442d-4552-9f81-0d7ed04edab7",
   "version": "7",
   "dialect": "postgresql",
@@ -1616,6 +1616,18 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "avatarUrl": {
+          "name": "avatarUrl",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "color": {
+          "name": "color",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -1763,6 +1775,14 @@
         "drives_home_never_org_check": {
           "name": "drives_home_never_org_check",
           "value": "\"drives\".\"kind\" <> 'HOME' OR \"drives\".\"orgId\" IS NULL"
+        },
+        "drives_avatar_url_chk": {
+          "name": "drives_avatar_url_chk",
+          "value": "\"drives\".\"avatarUrl\" IS NULL OR \"drives\".\"avatarUrl\" ~ ('^/api/drives/' || \"drives\".\"id\" || '/avatar/avatar-[a-z0-9]{1,32}\\.(png|jpg|gif|webp)$')"
+        },
+        "drives_color_chk": {
+          "name": "drives_color_chk",
+          "value": "\"drives\".\"color\" IS NULL OR \"drives\".\"color\" IN ('slate', 'red', 'orange', 'amber', 'green', 'teal', 'blue', 'indigo', 'violet', 'pink')"
         }
       },
       "isRLSEnabled": false
@@ -11697,12 +11717,6 @@
           "notNull": true,
           "default": "'medium'"
         },
-        "startDate": {
-          "name": "startDate",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "dueDate": {
           "name": "dueDate",
           "type": "timestamp",
@@ -12061,12 +12075,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "wipLimit": {
-          "name": "wipLimit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
         },
         "createdAt": {
           "name": "createdAt",

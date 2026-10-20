@@ -17,6 +17,12 @@ export const phoneSwitchClass =
 export const phoneSwitchTileClass =
   'grid size-spine-avatar flex-none place-items-center rounded-lg bg-spine text-sm font-bold text-spine-on';
 
+/* The tile split for the drive mark, which picks the fill: its shape, and the
+   spine blue a drive that chose no color keeps. */
+export const phoneSwitchTileShapeClass = 'grid size-spine-avatar flex-none place-items-center rounded-lg text-sm font-bold';
+
+export const phoneSwitchTileFillClass = 'bg-spine text-spine-on';
+
 export const phoneSwitchLabelClass = 'flex flex-col text-left leading-tight';
 
 export const phoneSwitchTitleClass = 'text-base font-semibold';

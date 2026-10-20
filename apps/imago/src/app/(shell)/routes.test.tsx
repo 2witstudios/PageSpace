@@ -78,6 +78,10 @@ const driveRow = (id: string, name: string, kind: 'HOME' | 'STANDARD') => ({
   canCreatePages: true,
   lastAccessedAt: null,
   homePageId: null,
+  orgId: null,
+  orgVisibility: 'OPEN',
+  avatarUrl: null,
+  color: null,
 });
 
 const loadTaskPage = () => import('./[driveId]/tasks/[pageId]/page');
@@ -131,11 +135,11 @@ describe('the (shell) layout', () => {
 
     assert({
       given: 'the viewer’s drive rows',
-      should: 'hand the shell only each drive’s id, name and kind',
+      should: 'hand the shell only each drive’s id, name, kind and mark, never its prompt',
       actual: element.props.initialDrives,
       expected: [
-        { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD' },
-        { id: 'home-1', name: 'Home', kind: 'HOME' },
+        { id: 'd-alpha', name: 'Alpha', kind: 'STANDARD', avatarUrl: null, color: null, orgId: null },
+        { id: 'home-1', name: 'Home', kind: 'HOME', avatarUrl: null, color: null, orgId: null },
       ],
     });
   });

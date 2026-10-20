@@ -109,6 +109,8 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
 });
 
 // ============================================================================

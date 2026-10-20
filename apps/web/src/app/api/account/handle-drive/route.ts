@@ -12,6 +12,8 @@ import { getActorInfo, logDriveActivity } from '@pagespace/lib/monitoring/activi
 import { deleteConversationsForDrive } from '@pagespace/lib/repositories/conversation-cleanup';
 import { reattributeDriveOwnerStorageInTx } from '@pagespace/lib/services/storage-limits';
 import { transferDriveOwnership } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { callDriveAvatarStorage, mintDriveAvatarToken } from '@/lib/drives/drive-avatar-storage';
 
 const handleDriveBodySchema = z.object({
   driveId: z.string().optional(),
@@ -151,10 +153,17 @@ export async function POST(req: Request) {
       // still exist to be traced through. This route is account-deletion prep,
       // which makes it an Article 17 path: leaving conversations behind would
       // strand their messages and `ai_stream_sessions.parts` content.
+      // Minted while the drive still exists, so its image folder can be emptied once it is gone.
+      const avatarToken = await mintDriveAvatarToken(driveId, actorFromAuth(auth)).catch(() => null);
       await db.transaction(async (tx) => {
         await deleteConversationsForDrive(tx, driveId);
         await tx.delete(drives).where(eq(drives.id, driveId));
       });
+      if (avatarToken) {
+        // Best effort: the drive is already gone; a leftover file is logged, never a failed delete.
+        const removed = await callDriveAvatarStorage(driveId, avatarToken, { method: 'DELETE' }).catch((error: unknown) => error);
+        if (!(removed instanceof Response) || !removed.ok) loggers.auth.warn('Drive avatar folder was not removed', { driveId });
+      }
 
       loggers.auth.info(`Drive deleted during account deletion preparation: ${driveId} by ${userId}`);
 

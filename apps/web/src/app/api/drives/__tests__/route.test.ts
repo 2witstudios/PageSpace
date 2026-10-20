@@ -128,6 +128,8 @@ const createDriveFixture = (overrides: Partial<DriveWithAccess> & { id: string; 
   homePageId: overrides.homePageId ?? null,
   orgId: overrides.orgId ?? null,
   orgVisibility: overrides.orgVisibility ?? 'OPEN',
+  avatarUrl: overrides.avatarUrl ?? null,
+  color: overrides.color ?? null,
   canCreatePages: overrides.canCreatePages ?? true,
 });
 
@@ -446,6 +448,8 @@ describe('POST /api/drives', () => {
       publishDefaultOgImageUrl: null,
       notFoundPageId: null,
       publishFaviconUrl: null,
+      avatarUrl: null,
+      color: null,
     };
 
     const post = (body: unknown) =>
