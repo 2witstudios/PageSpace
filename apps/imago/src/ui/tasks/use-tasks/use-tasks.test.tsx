@@ -8,6 +8,7 @@ import {
   useAssignable,
   useDriveTasks,
   useDriveTaskLists,
+  usePageEditable,
   usePageTrail,
   useTaskList,
   useTaskStatuses,
@@ -247,6 +248,30 @@ describe('useTaskList()', () => {
       should: 'revalidate the list from the server',
       actual: [web.count(PAGE_P) > before, statusIn(seen.list, 'a')],
       expected: [true, 'in_progress'],
+    });
+  });
+
+  test('a due day picked on a timed start', async () => {
+    // Local times, as the date field picks a day in the viewer's zone.
+    const start = new Date(2026, 9, 25, 9).toISOString();
+    const { web, seen } = mountList(
+      listRoutes({
+        [L1]: () => Response.json(taskListResponse([taskItem('z', { startDate: start })])),
+        'PATCH /api/pages/l1/tasks/z': () => Response.json(taskItem('z', { startDate: start, dueDate: start })),
+      }),
+    );
+    await loaded(seen);
+
+    let result: unknown;
+    await act(async () => {
+      result = await seen.actions?.update('z', { dueDate: new Date(2026, 9, 25).toISOString() });
+    });
+
+    assert({
+      given: 'a start at 09:00 and a due date picked on that same day, as its midnight',
+      should: 'send the due date settled at the start’s instant',
+      actual: [result, web.writes().map((write) => write.body)],
+      expected: [{ ok: true }, [{ dueDate: start }]],
     });
   });
 
@@ -587,6 +612,50 @@ describe('useAssignable() and usePageTrail()', () => {
         none: undefined,
         asked: 2,
       },
+    });
+  });
+});
+
+describe('usePageEditable()', () => {
+  const PERMISSIONS = 'GET /api/pages/l1/permissions/check';
+  const mountEditable = (answer: FakeRoute) => {
+    const web = fakeWeb({ [PERMISSIONS]: answer });
+    const seen: { editable: (boolean | undefined)[] } = { editable: [] };
+    function Probe() {
+      seen.editable.push(usePageEditable('l1'));
+      return null;
+    }
+    render(
+      <ImagoSWRProvider client={web.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    return seen;
+  };
+
+  test('loading, then an answer', async () => {
+    const seen = mountEditable(() => Response.json({ canView: true, canEdit: true }));
+    await settle(() => {
+      if (seen.editable.at(-1) === undefined) throw new Error('not loaded');
+    });
+    assert({
+      given: 'a page whose permissions are still loading, then say the viewer may edit',
+      should: 'be undefined until the answer, then true',
+      actual: [seen.editable[0], seen.editable.at(-1)],
+      expected: [undefined, true],
+    });
+  });
+
+  test('a failed check', async () => {
+    const seen = mountEditable(() => Response.json({ error: 'no' }, { status: 500 }));
+    await settle(() => {
+      if (seen.editable.at(-1) === undefined) throw new Error('not answered');
+    });
+    assert({
+      given: 'a permissions check the server fails',
+      should: 'be false, so nothing that waits for a yes shows',
+      actual: seen.editable.at(-1),
+      expected: false,
     });
   });
 });

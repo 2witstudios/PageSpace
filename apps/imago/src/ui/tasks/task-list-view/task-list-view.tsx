@@ -126,7 +126,8 @@ export function TaskListView({ driveId, pageId, viewerId, title: pageTitle, cloc
   const entry = lists?.find((candidate) => candidate.pageId === pageId);
   const title = entry?.title ?? pageTitle ?? '';
   const { list, error, actions, retry } = useTaskList(pageId, title);
-  const editable = usePageEditable(pageId);
+  // Capture, add rows, menus and drags wait for a definite yes.
+  const editable = usePageEditable(pageId) === true;
   const [view, switchView] = useTaskView(viewerId);
   const storedExpanded = useUiState(selectExpanded);
   const [chip, setChip] = useState<TaskChip>('all');

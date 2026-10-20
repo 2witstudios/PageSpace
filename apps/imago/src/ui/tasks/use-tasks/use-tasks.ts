@@ -69,14 +69,16 @@ export const useDriveTaskLists = (driveId: string | null) => {
 };
 
 /**
- * Whether the viewer may edit a page: true only on a definite yes. Read
- * before anything that saves on its own, so nothing is typed into a field
- * the server would refuse.
+ * Whether the viewer may edit a page: undefined until the server says, and
+ * false if it cannot be asked. Anything that saves on its own, deletes or
+ * adds waits for a definite true, so nothing is typed into a field the
+ * server would refuse; a field edited one click at a time may show while it
+ * is undefined, the server refusing (and the edit rolling back) if it must.
  */
-export const usePageEditable = (pageId: string) => {
+export const usePageEditable = (pageId: string): boolean | undefined => {
   const client = useApiClient();
-  const { data } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
-  return data?.canEdit === true;
+  const { data, error } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
+  return error === undefined ? data?.canEdit : false;
 };
 
 /** Who can be put on the drive's tasks, for the assignee picker. */

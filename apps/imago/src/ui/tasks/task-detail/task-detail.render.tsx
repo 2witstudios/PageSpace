@@ -82,8 +82,13 @@ export type TaskDetailRenderProps = {
   readonly dueSetByImago: boolean;
   /** The viewer's own day, YYYY-MM-DD: what the date chips and pickers read against. */
   readonly today: string;
-  /** Whether the viewer may edit the list: without it every field reads as text, and nothing writes. */
-  readonly canEdit: boolean;
+  /**
+   * Whether the viewer may edit the list, undefined while that loads. A
+   * definite no reads every field as text and writes nothing; while it is
+   * unknown the fields stay editable (the server refuses, and the edit rolls
+   * back, if it must), but Delete and adding subtasks wait for a yes.
+   */
+  readonly canEdit: boolean | undefined;
   /** Which subtasks have their own subtasks open. */
   readonly expandedIds: readonly string[];
   /** Where a task's detail opens, and where a list's view does. */
@@ -208,16 +213,16 @@ const deleteButton = (remove: () => void): ReactNode => (
   </Popover>
 );
 
-/** The 44px strip: the task before and after in list order, and whether the last edit was saved. */
+/** The 44px strip: the task before and after in list order, and whether the last edit was saved (for a viewer who may make one). */
 const strip = (props: TaskDetailRenderProps): ReactNode => (
   <ToolbarStrip label="Task">
     <TaskStep href={props.previousHref} label="Previous task" icon="chevronLeft" />
     <TaskStep href={props.nextHref} label="Next task" icon="chevronRight" />
     <div className="flex-1" />
-    <span className={taskSavedClass}>
-      {props.notice === null ? 'Saved' : 'Not saved'}
-    </span>
-    {props.canEdit ? deleteButton(props.actions.remove) : null}
+    {props.canEdit === false ? null : (
+      <span className={taskSavedClass}>{props.notice === null ? 'Saved' : 'Not saved'}</span>
+    )}
+    {props.canEdit === true ? deleteButton(props.actions.remove) : null}
   </ToolbarStrip>
 );
 
@@ -315,12 +320,13 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
   const priority = priorities.find((entry) => entry.value === task.priority);
   const priorityLabel = priority?.label ?? task.priority;
   const dueTone = dueToneOf(task.dueDate, today, isDone(list, task));
-  if (!props.canEdit) {
+  if (props.canEdit === false) {
     const agents = task.assignees.filter((entry) => entry.type === 'agent').map((entry) => entry.name);
     return (
       <div role="group" aria-label="Fields" className={taskFieldsClass}>
         <span className={taskStatusPillClass(status.group, false)}>
           {statusDot(status)}
+          <span className="sr-only">Status: </span>
           {status.name}
         </span>
         {dateField({ name: 'Due', value: task.dueDate, today, className: taskDueChipClass(dueTone, false) })}
@@ -334,6 +340,7 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
         </span>
         <span className={taskChipReadOnlyClass}>
           {priorityGlyph(task.priority)}
+          <span className="sr-only">Priority: </span>
           {priorityLabel}
         </span>
         <Link href={props.hrefFor(props.holder.pageId)} prefetch className={taskChipClass}>
@@ -416,9 +423,9 @@ const subtasks = (task: Task, props: TaskDetailRenderProps): ReactNode => {
         expandedIds: props.expandedIds,
         notice: props.notice,
         toggleExpanded: props.actions.toggleExpanded,
-        toggleComplete: props.canEdit ? props.actions.toggleComplete : undefined,
+        toggleComplete: props.canEdit === false ? undefined : props.actions.toggleComplete,
         addTask: props.actions.addTask,
-        editable: props.canEdit,
+        editable: props.canEdit === true,
         taskHref: (entry) => props.hrefFor(entry.pageId),
         addLabel: 'Add subtask',
         addPlaceholder: 'Subtask title',
@@ -445,9 +452,9 @@ export function renderTaskDetail(props: TaskDetailRenderProps): ReactNode {
           <Checkbox
             checked={isDone(list, task)}
             label={`Mark ${task.title} complete`}
-            toggle={props.canEdit ? () => actions.toggleComplete(task.id) : undefined}
+            toggle={props.canEdit === false ? undefined : () => actions.toggleComplete(task.id)}
           />
-          {titleInput(task, actions.rename, props.canEdit)}
+          {titleInput(task, actions.rename, props.canEdit !== false)}
         </div>
         {notice?.at === task.id ? (
           <p role="status" className={taskDetailNoticeClass}>

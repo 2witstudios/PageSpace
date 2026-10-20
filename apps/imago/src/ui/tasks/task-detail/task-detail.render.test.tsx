@@ -20,7 +20,7 @@ const open = parent('a', [task('s', { title: 'Book venue' })], {
   assignees: [{ type: 'user', id: 'u1', name: 'Ada Lovelace' }],
 });
 
-const setup = (canEdit: boolean, shown: Task = open) => {
+const setup = (canEdit: boolean | undefined, shown: Task = open) => {
   const calls: string[] = [];
   const record =
     (name: string) =>
@@ -112,6 +112,7 @@ describe('renderTaskDetail()', () => {
         titleInput: container.querySelector('input[aria-label="Title"]') !== null,
         heading: container.querySelector('h2')?.textContent,
         delete: container.querySelector('[aria-label="Delete task"]') !== null,
+        saved: container.textContent?.includes('Saved'),
         add: container.textContent?.includes('Add subtask'),
         boxes: checkboxes(container),
         calls,
@@ -119,17 +120,43 @@ describe('renderTaskDetail()', () => {
       expected: {
         fields: {
           buttons: 0,
-          text: ['In Progress', 'Due · Fri 23', 'Start · Wed 21', 'AAda Lovelace', 'High', 'Launch'],
+          text: ['Status: In Progress', 'Due · Fri 23', 'Start · Wed 21', 'AAda Lovelace', 'Priority: High', 'Launch'],
         },
         titleInput: false,
         heading: 'Plan launch',
         delete: false,
+        saved: false,
         add: false,
         boxes: [
           { label: 'Mark Plan launch complete', disabled: true },
           { label: 'Complete Book venue', disabled: true },
         ],
         calls: [],
+      },
+    });
+  });
+
+  test('before the viewer’s permission loads', () => {
+    const { container } = setup(undefined);
+    assert({
+      given: 'a task opened before the server has said whether the viewer may edit',
+      should: 'offer the fields, title and ticks as controls, and keep Delete and Add subtask back until it does',
+      actual: {
+        buttons: fieldsOf(container).buttons,
+        title: container.querySelector<HTMLInputElement>('input[aria-label="Title"]')?.value,
+        delete: container.querySelector('[aria-label="Delete task"]') !== null,
+        add: container.textContent?.includes('Add subtask'),
+        boxes: checkboxes(container),
+      },
+      expected: {
+        buttons: 5,
+        title: 'Plan launch',
+        delete: false,
+        add: false,
+        boxes: [
+          { label: 'Mark Plan launch complete', disabled: false },
+          { label: 'Complete Book venue', disabled: false },
+        ],
       },
     });
   });
