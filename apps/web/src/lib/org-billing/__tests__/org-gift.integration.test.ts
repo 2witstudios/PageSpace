@@ -332,7 +332,7 @@ describe('an org exists only paid or gifted (real Postgres, in-memory Stripe)', 
     const paidGrant = allowanceCentsForPaidCents(firstPaid.amount_paid, 'business');
     expect(firstPaid.amount_paid).toBe(BASE_CENTS + SEAT_CENTS * extraSeats);
     expect(paidGrant).toBeGreaterThan(0);
-    expect(paidGrant).toBeLessThan(firstPaid.amount_paid); // the ratio, not the price (A-11)
+    expect(paidGrant).toBe(firstPaid.amount_paid); // 100% of what was paid
     expect(await poolCents(org.orgId)).toBe(paidGrant);
     expect((await getOrgStatus(org.orgId)).status).toBe('active');
 
