@@ -128,6 +128,52 @@ describe('fetchEveryDriveTask()', () => {
     });
   });
 
+  test('a page the route left empty', async () => {
+    const web = fakeWeb({
+      [driveRows(0)]: () => drivePage(0, 100, 'l1', 250),
+      // Every row on the middle page was an orphan the route dropped.
+      [driveRows(100)]: () =>
+        Response.json({
+          tasks: [],
+          statusConfigsByTaskList: {},
+          pagination: { total: 250, limit: 100, offset: 100, hasMore: true },
+        }),
+      [driveRows(200)]: () => drivePage(200, 50, 'l2', 250),
+    });
+    const every = await fetchEveryDriveTask(web.client, { driveId: 'd1', statusGroup: 'active', limit: 100 });
+    assert({
+      given: 'a middle page with no rows the viewer can see, the route still saying there are more',
+      should: 'read on past it to the last page',
+      actual: [every.tasks.length, every.tasks.at(-1)?.id, every.pagination.hasMore, web.requests.length],
+      expected: [150, 't249', false, 3],
+    });
+  });
+
+  test('the pages after the first', async () => {
+    let open = 0;
+    let most = 0;
+    const later = (from: number, length: number) => async () => {
+      open += 1;
+      most = Math.max(most, open);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      open -= 1;
+      return drivePage(from, length, 'l1', 350);
+    };
+    const web = fakeWeb({
+      [driveRows(0)]: () => drivePage(0, 100, 'l1', 350),
+      [driveRows(100)]: later(100, 100),
+      [driveRows(200)]: later(200, 100),
+      [driveRows(300)]: later(300, 50),
+    });
+    const every = await fetchEveryDriveTask(web.client, { driveId: 'd1', statusGroup: 'active', limit: 100 });
+    assert({
+      given: 'a first page whose total says three more follow',
+      should: 'ask for all three at once and join them in offset order',
+      actual: [most, every.tasks.length, every.tasks[100]?.id, every.tasks.at(-1)?.id],
+      expected: [3, 350, 't100', 't349'],
+    });
+  });
+
   test('the cap', async () => {
     const routes = Object.fromEntries(
       Array.from({ length: 12 }, (_, page) => [driveRows(page * 100), () => drivePage(page * 100, 100, 'l1', 5000)]),

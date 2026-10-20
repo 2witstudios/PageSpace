@@ -91,32 +91,32 @@ export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
 const DRIVE_TASKS_CAP = 1000;
 
 /**
- * Every one of the viewer's tasks in a drive, paging GET /api/tasks by
- * offset and joining the rows and each list's statuses. The offset counts
- * the route's own rows, so it steps by the page size even when the route
- * drops an orphan from a page. The order is newest-updated first, so a row
- * touched between two reads can land on both pages: it is kept once. Stops
- * at 1000 rows, leaving `hasMore` set.
+ * Every one of the viewer's tasks in a drive: the first page of GET
+ * /api/tasks, then every further page at once, by offset, joining the rows
+ * and each list's statuses in page order. The offsets come from the first
+ * page's total and count the route's own rows, so a page the route left
+ * short or empty (orphans it dropped) never ends the read early. The order is
+ * newest-updated first, so a row touched during the read can land on two
+ * pages (it is kept once) or slide onto a page already read and be missed
+ * until the next read. Stops at 1000 rows, leaving `hasMore` set.
  */
 export const fetchEveryDriveTask = async (client: ApiClient, query: DriveTasksQuery): Promise<DriveTasksResponse> => {
   const first = await fetchDriveTasks(client, { ...query, offset: undefined });
-  const tasks = new Map(first.tasks.map((row) => [row.id, row]));
-  let statusConfigsByTaskList = first.statusConfigsByTaskList ?? {};
-  let pagination = first.pagination;
-  let offset = query.limit;
-  let last = first.tasks.length;
-  while (pagination.hasMore && last > 0 && offset < DRIVE_TASKS_CAP) {
-    const next = await fetchDriveTasks(client, { ...query, offset });
-    for (const row of next.tasks) if (!tasks.has(row.id)) tasks.set(row.id, row);
-    statusConfigsByTaskList = { ...statusConfigsByTaskList, ...next.statusConfigsByTaskList };
-    pagination = next.pagination;
-    last = next.tasks.length;
-    offset += query.limit;
-  }
+  const { total } = first.pagination;
+  const end = Math.min(total, DRIVE_TASKS_CAP);
+  const offsets: number[] = [];
+  for (let offset = query.limit; query.limit > 0 && offset < end; offset += query.limit) offsets.push(offset);
+  const rest = await Promise.all(offsets.map((offset) => fetchDriveTasks(client, { ...query, offset })));
+  const pages = [first, ...rest];
+  const tasks = new Map<string, DriveTasksResponse['tasks'][number]>();
+  for (const row of pages.flatMap((page) => page.tasks)) if (!tasks.has(row.id)) tasks.set(row.id, row);
   return {
     tasks: [...tasks.values()],
-    statusConfigsByTaskList,
-    pagination: { total: pagination.total, limit: query.limit, offset: 0, hasMore: pagination.hasMore },
+    statusConfigsByTaskList: pages.reduce<NonNullable<DriveTasksResponse['statusConfigsByTaskList']>>(
+      (configs, page) => ({ ...configs, ...page.statusConfigsByTaskList }),
+      {},
+    ),
+    pagination: { total, limit: query.limit, offset: 0, hasMore: total > DRIVE_TASKS_CAP },
   };
 };
 
