@@ -1129,6 +1129,7 @@ function SessionRow({
   const [expanded, setExpanded] = useState(false);
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const isTouchDevice = useTouchDevice();
   const isSelected = selectedSessionId === session.workspaceId;
   const isRunning = session.sandboxStatus === 'running' || session.sandboxStatus === 'starting';
 
@@ -1492,7 +1493,11 @@ function SessionRow({
         <button
           type="button"
           aria-label="End session"
-          className="shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus:opacity-100 group-hover:opacity-100"
+          className={cn(
+            'shrink-0 text-muted-foreground transition-opacity hover:text-destructive',
+            // No hover on touch: an invisible X would still take the tap.
+            isTouchDevice ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100',
+          )}
           onClick={() => setConfirmingEnd(true)}
         >
           <X className="size-3.5" />

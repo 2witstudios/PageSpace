@@ -1187,6 +1187,19 @@ describe('AgentsSidebar', () => {
       expect(screen.getByLabelText('Session actions').className).toContain('opacity-100');
     });
 
+    test('the inline End session X is shown on a touch device, and hover-revealed otherwise', async () => {
+      mockUseTouchDevice.mockReturnValue(true);
+      const touch = renderSidebar();
+      await screen.findByText('api refactor');
+      const onTouch = screen.getByLabelText('End session').className;
+      touch.unmount();
+      mockUseTouchDevice.mockReturnValue(false);
+      renderSidebar();
+      await screen.findByText('api refactor');
+      const onPointer = screen.getByLabelText('End session').className;
+      expect([onTouch.includes('opacity-100') && !onTouch.includes('opacity-0'), onPointer.includes('opacity-0')]).toEqual([true, true]);
+    });
+
     test('the 3-dots button is hover-revealed (opacity-0 at rest) on a non-touch device', async () => {
       renderSidebar();
 
