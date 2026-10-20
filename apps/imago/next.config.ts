@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import fs from "fs";
 import path from "path";
 import CopyPlugin from 'copy-webpack-plugin';
 
@@ -61,6 +62,22 @@ const prefetchDocument = () => ({
   destination: "/api/prefetch-document",
 });
 
+// Monaco's AMD loader and pdf.js's worker are served as files, not bundled.
+// webpack() copies them with CopyPlugin; Turbopack never runs webpack(), so a
+// `next dev --turbopack` session copies them as the config loads instead.
+const staticAssetCopies = (outputPath: string) => [
+  { from: path.dirname(require.resolve('monaco-editor/min/vs/loader.js')), to: path.join(outputPath, 'static', 'monaco', 'vs') },
+  { from: require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), to: path.join(__dirname, 'public', 'pdf.worker.min.mjs') },
+];
+
+// The config loads in every dev worker, so a copy newer than its source is kept.
+function copyStaticAssets(outputPath: string): void {
+  for (const { from, to } of staticAssetCopies(outputPath)) {
+    if (fs.existsSync(to) && fs.statSync(to).mtimeMs >= fs.statSync(from).mtimeMs) continue;
+    fs.cpSync(from, to, { recursive: true, force: true });
+  }
+}
+
 const apiProxy = (origin: string) => ({
   source: "/api/:path*",
   destination: `${origin}/api/:path*`,
@@ -68,6 +85,10 @@ const apiProxy = (origin: string) => ({
 });
 
 export default function nextConfig(phase: string): NextConfig {
+  // Set by `next dev --turbopack` before this file is evaluated.
+  if (process.env.TURBOPACK) {
+    copyStaticAssets(path.join(__dirname, ".next"));
+  }
   return {
     basePath: "/imago",
     output: "standalone",
@@ -77,21 +98,17 @@ export default function nextConfig(phase: string): NextConfig {
     // Compiled from source so the build never depends on a prebuilt dist/.
     transpilePackages: ["@pagespace/db", "@pagespace/lib", "@pagespace/editor"],
     serverExternalPackages: ["pg"],
-    webpack: (config, { isServer, nextRuntime }) => {
-      // @pagespace/editor is compiled from source through the tsconfig paths,
-      // and its ESM source imports siblings as `./x.js`: those must resolve to
-      // the `.ts` file, as apps/web resolves them. `.js` stays first so a real
-      // `.js` under node_modules resolves on the first try.
-      config.resolve.extensionAlias = {
-        ...(config.resolve.extensionAlias ?? {}),
-        ".js": [".js", ".ts", ".tsx"],
-      };
+    // @pagespace/editor is compiled from source through the tsconfig paths;
+    // its ESM source imports siblings as `./x.ts`, which webpack and
+    // Turbopack both resolve as written, so neither needs an extensionAlias.
+    // `next dev --turbopack` skips webpack() below and needs nothing in its
+    // place: serverExternalPackages covers pg, and the static assets are
+    // copied as this config loads. Builds stay on webpack.
+    turbopack: {},
+    webpack:(config, { isServer, nextRuntime }) => {
       if (!isServer) {
         const outputPath = config.output.path ?? path.join(__dirname, '.next');
-        config.plugins.push(new CopyPlugin({ patterns: [
-          { from: path.dirname(require.resolve('monaco-editor/min/vs/loader.js')), to: path.join(outputPath, 'static', 'monaco', 'vs') },
-          { from: require.resolve('pdfjs-dist/build/pdf.worker.min.mjs'), to: path.join(__dirname, 'public', 'pdf.worker.min.mjs') },
-        ] }));
+        config.plugins.push(new CopyPlugin({ patterns: staticAssetCopies(outputPath) }));
       }
       // The edge (middleware) compile has no require(), so it is left alone:
       // middleware imports only the dependency-free sign-in-url module.

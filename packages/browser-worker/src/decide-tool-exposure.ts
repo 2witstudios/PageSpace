@@ -14,7 +14,7 @@
  * again for the agent's allowlist only — the kill switch, tier and quota are
  * re-checked there by the sandbox call-time gate instead.
  */
-import { BROWSER_MUTATING_TOOL_NAMES, BROWSER_TOOL_NAMES, type BrowserToolName } from './browser-tool-name.js';
+import { BROWSER_MUTATING_TOOL_NAMES, BROWSER_TOOL_NAMES, type BrowserToolName } from './browser-tool-name.ts';
 
 export type DecideToolExposureOptions = {
   /** A substrate and the control signing key are configured on this server. */

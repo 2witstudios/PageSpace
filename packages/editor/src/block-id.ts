@@ -1,5 +1,5 @@
 import { Extension } from '@tiptap/core';
-import { simpleDataAttr } from './simple-data-attr.js';
+import { simpleDataAttr } from './simple-data-attr.ts';
 
 /**
  * Every top-level block node type `blockId` and the tracked-change attributes

@@ -22,8 +22,8 @@
  */
 import { rm } from 'node:fs/promises';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
-import type { BrowserControlResponse, BrowserOperation, BrowserOperationResult, PageSummary } from './browser-operation.js';
-import type { HumanInput } from './control-instruction.js';
+import type { BrowserControlResponse, BrowserOperation, BrowserOperationResult, PageSummary } from './browser-operation.ts';
+import type { HumanInput } from './control-instruction.ts';
 
 export type BrowserDriverOptions = {
   readonly profileDir: string;

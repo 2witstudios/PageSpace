@@ -23,9 +23,9 @@
  * the `installWorker` step: that it works at all in a Sprite is S3's
  * unverified premise (G6a probe #1), gated behind real-substrate approval.
  */
-import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.js';
-import { browserSpriteName } from './browser-sprite-name.js';
-import { planBrowserNetworkPolicy, type BrowserNetworkPolicy } from './plan-browser-network-policy.js';
+import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.ts';
+import { browserSpriteName } from './browser-sprite-name.ts';
+import { planBrowserNetworkPolicy, type BrowserNetworkPolicy } from './plan-browser-network-policy.ts';
 
 export type SpriteHandle = {
   readonly name: string;

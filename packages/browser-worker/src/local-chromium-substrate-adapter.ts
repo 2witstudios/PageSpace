@@ -13,9 +13,10 @@
  * server secret reaches the process that renders untrusted pages.
  */
 import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.js';
+import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.ts';
 
 export type LocalWorkerProcess = {
   readonly url: string;
@@ -92,7 +93,10 @@ const sendTo = async (baseUrl: string, request: WorkerRequest): Promise<WorkerRe
 
 export const createLocalChromiumSubstrate = ({
   launch,
-  entryPath = fileURLToPath(new URL('./standalone-browser-worker.js', import.meta.url)),
+  // Joined at runtime, not `new URL('./…', import.meta.url)`: bundlers treat
+  // that form as an asset to resolve and emit, and only the Node-run dist has
+  // the compiled worker beside this file. A bundled caller passes entryPath.
+  entryPath = join(dirname(fileURLToPath(import.meta.url)), 'standalone-browser-worker.js'),
   executablePath,
   shape = { cpus: 1, memoryGB: 1 },
   clock = Date.now,
