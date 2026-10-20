@@ -219,7 +219,7 @@ test('a typed draft survives chat → files → chat, with the caret back in the
   // The rail link took focus with the click: nothing has put it back yet.
   await expect(composer(page)).not.toBeFocused();
 
-  await railLink(page, 'Chat').click();
+  await railLink(page, 'Home').click();
   await page.waitForURL(pathnameIs(home));
   await expect(page.locator('[data-section]')).toHaveAttribute('data-section', 'chat');
   await expect(composer(page)).toBeFocused();
