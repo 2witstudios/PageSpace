@@ -6,7 +6,7 @@
 // subtask lands in its parent task's own page, so the tree joins the room of
 // every task page it has loaded, not only its root's.
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useSWRConfig } from 'swr';
 import { CHANNEL_ROOM, useRooms, useSocketEvent } from '@/realtime/realtime-provider';
 import type { TaskList } from '../task-model/task';
@@ -33,6 +33,38 @@ export const concernsTree = (payload: unknown, rooms: readonly string[]): boolea
   return typeof pageId !== 'string' || rooms.includes(pageId);
 };
 
+/** How long a burst of task events is gathered before the tree refetches once. */
+export const COALESCE_MS = 300;
+
+export type Coalescer = {
+  /** Asks for a run; every ask inside one window shares the run at its end. */
+  readonly schedule: () => void;
+  /** Drops a pending run, for unmount. */
+  readonly cancel: () => void;
+};
+
+/**
+ * One trailing `run` per `waitMs` window however many times it is scheduled.
+ * The window opens at the first ask and is not pushed back by later ones, so
+ * a steady stream of events still refetches every `waitMs`.
+ */
+export const createCoalescer = (run: () => void, waitMs: number): Coalescer => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return {
+    schedule: () => {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        run();
+      }, waitMs);
+    },
+    cancel: () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    },
+  };
+};
+
 function TaskEvent({ event, onEvent }: { readonly event: string; readonly onEvent: (payload: unknown) => void }) {
   useSocketEvent<[unknown]>(event, onEvent);
   return null;
@@ -40,15 +72,31 @@ function TaskEvent({ event, onEvent }: { readonly event: string; readonly onEven
 
 /**
  * Joins the rooms of `tree`'s lists and revalidates the tree's SWR entry
- * when one of them changes. Our own writes echo back too; SWR's dedupe
- * folds that refetch into the one the write already made.
+ * when one of them changes. Each write arrives more than once: apps/web
+ * sends it to the writer's own tasks channel, which every one of their
+ * sockets is in, and to the list's room, and our own writes echo back too.
+ * SWR's `mutate(key)` does not dedupe, so the events of a burst are
+ * gathered into one trailing refetch per COALESCE_MS.
  */
 export function TaskTreeRealtime({ rootPageId, tree }: { readonly rootPageId: string; readonly tree: TaskList | undefined }): ReactNode {
   const { mutate } = useSWRConfig();
   const rooms = tree === undefined ? [rootPageId] : treeRooms(tree);
   useRooms(CHANNEL_ROOM, rooms);
+  const revalidate = useRef(() => {});
+  useEffect(() => {
+    revalidate.current = () => void mutate(['imago:task-tree', rootPageId]);
+  });
+  const coalescer = useRef<Coalescer | null>(null);
+  useEffect(() => {
+    const created = createCoalescer(() => revalidate.current(), COALESCE_MS);
+    coalescer.current = created;
+    return () => {
+      created.cancel();
+      coalescer.current = null;
+    };
+  }, []);
   const onEvent = (payload: unknown) => {
-    if (concernsTree(payload, rooms)) void mutate(['imago:task-tree', rootPageId]);
+    if (concernsTree(payload, rooms)) coalescer.current?.schedule();
   };
   return (
     <>

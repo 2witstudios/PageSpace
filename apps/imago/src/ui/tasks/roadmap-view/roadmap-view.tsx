@@ -161,7 +161,9 @@ export function RoadmapView({ list, actions, today, editable, taskHref }: Roadma
       window.removeEventListener('pointercancel', cancel);
       window.removeEventListener('keydown', key);
     };
-    // commit reads only the drag it is handed and the latest actions.
+    // commit reads the drag it is handed plus the save/actions of the render
+    // the drag started in; that is safe because actions is memoized, so the
+    // captured one stays current for the drag's life.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragging, dayWidth]);
 

@@ -27,11 +27,12 @@ export type TaskListToolsProps = {
 };
 
 /**
- * The status rows as the classic manager edits them. The limit rides along
- * so its PUT, which sends each row back whole, keeps every column's limit.
+ * The status rows as the classic manager edits them. Its PUT sends each row
+ * back whole, so the limit is left off: the server keeps a row's stored limit
+ * when none is sent, where echoing ours could wipe one set since we loaded.
  */
-const configsOf = (pageId: string, statuses: readonly TaskStatus[]): TaskStatusConfig[] =>
-  statuses.map((status) => ({ ...status, taskListId: pageId }));
+export const configsOf = (pageId: string, statuses: readonly TaskStatus[]): TaskStatusConfig[] =>
+  statuses.map(({ wipLimit: _wipLimit, ...status }) => ({ ...status, taskListId: pageId }));
 
 export function TaskListTools({ driveId, pageId, title, statuses, editable, revalidate }: TaskListToolsProps): ReactNode {
   const drive = useDriveStore((state) => state.drives.find((entry) => entry.id === driveId));

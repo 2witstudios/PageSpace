@@ -152,16 +152,6 @@
 
 /* Imago's orb without WebGL2 (or before the engine's first frame): a still chrome ball from the
    same metal tokens, so it is honest and theme-correct but does not move. */
-/* The Roadmap's late span: diagonal stripes of the live tone, so the days
-   past a due date read as time owed rather than more bar. */
-@utility roadmap-hatch {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    var(--live-soft) 0 4px,
-    color-mix(in oklch, var(--live) 28%, transparent) 4px 8px
-  );
-}
-
 @utility orb-chrome {
   border-radius: 999px;
   background: radial-gradient(
@@ -221,6 +211,16 @@
   &::-moz-progress-bar {
     background-color: var(--color-accent);
   }
+}
+
+/* The Roadmap's late span: diagonal stripes of the live tone, so the days
+   past a due date read as time owed rather than more bar. */
+@utility roadmap-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--live-soft) 0 4px,
+    color-mix(in oklch, var(--live) 28%, transparent) 4px 8px
+  );
 }
 
 /* A <details> summary used as a control: no disclosure triangle in any
