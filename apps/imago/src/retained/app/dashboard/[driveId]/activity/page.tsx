@@ -4,11 +4,13 @@ import { Suspense } from 'react';
 import { useParams } from '@/retained-adapters/navigation';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { DriveActivityTimeline } from '@/retained/components/activity/DriveActivityTimeline';
+import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
 
+/** A drive's activity; on Home, the dashboard, the viewer's own across every drive. */
 function DriveActivityContent() {
   const params = useParams();
   const driveId = params.driveId as string;
-  return <DriveActivityTimeline driveId={driveId} />;
+  return <DriveActivityTimeline driveId={driveId === useHomeDriveId() ? null : driveId} />;
 }
 
 export default function DriveActivityPage() {

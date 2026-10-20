@@ -68,7 +68,7 @@ afterEach(unmountAll);
 
 describe('AccountAgentsPane (IMC-7.29)', () => {
   test('a pane headed Agents with a search field, sessions grouped drive then environment', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<AccountAgentsPane close={null} />);
     const drive = root.querySelector('section[aria-label="Studio"]');
     const env = drive?.querySelector('section[aria-label="studio-web"]');
     assert({
@@ -84,7 +84,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('environments carry status dots labelled for their state', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<AccountAgentsPane close={null} />);
     assert({
       given: 'a running and a stopped environment',
       should: 'label the dots Environment running and Environment stopped',
@@ -97,7 +97,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('the selected session is marked and an environment with no sessions says so', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<AccountAgentsPane close={null} />);
     const current = root.querySelector('[aria-current="true"]');
     assert({
       given: 'the shared selection and an environment with no session',
@@ -108,7 +108,7 @@ describe('AccountAgentsPane (IMC-7.29)', () => {
   });
 
   test('a drive with no environments reads "No environments in this drive"', () => {
-    const root = mount(<AccountAgentsPane />);
+    const root = mount(<AccountAgentsPane close={null} />);
     const emptyDrive = root.querySelector('section[aria-label="Ops"]');
     assert({
       given: 'a drive whose environment listing is empty',

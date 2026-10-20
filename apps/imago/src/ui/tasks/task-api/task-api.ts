@@ -46,9 +46,12 @@ export const taskPaths = {
   permissions: (pageId: string) => `/api/pages/${segment(pageId)}/permissions/check`,
   /** A page itself: a task's description is its own page's content. */
   page: (pageId: string) => `/api/pages/${segment(pageId)}`,
-  /** The viewer's own tasks in a drive, filtered by status group and due window. */
+  /** The viewer's own tasks in a drive, or with no drive across every drive, filtered by status group and due window. */
   driveTasks: (query: DriveTasksQuery) => {
-    const params = new URLSearchParams({ context: 'drive', driveId: query.driveId, limit: String(query.limit) });
+    const limit = String(query.limit);
+    const params = new URLSearchParams(
+      query.driveId === null ? { context: 'user', limit } : { context: 'drive', driveId: query.driveId, limit },
+    );
     if (query.statusGroup !== undefined) params.set('statusGroup', query.statusGroup);
     if (query.dueDateFilter !== undefined) params.set('dueDateFilter', query.dueDateFilter);
     return `/api/tasks?${params.toString()}`;
@@ -62,9 +65,12 @@ export const taskPaths = {
 /** How many of a page's activities the detail lists. */
 const ACTIVITY_LIMIT = 20;
 
-/** What GET /api/tasks?context=drive is asked for. Without assignee params the route answers for the viewer. */
+/**
+ * What GET /api/tasks is asked for. Without assignee params the route answers for the viewer. A
+ * null drive is every drive the viewer can reach (context=user): Home, the dashboard.
+ */
 export type DriveTasksQuery = {
-  readonly driveId: string;
+  readonly driveId: string | null;
   readonly limit: number;
   readonly statusGroup?: StatusGroupFilter;
   readonly dueDateFilter?: DueDateFilter;
@@ -77,7 +83,7 @@ export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
 /** How many of the viewer's tasks in a drive fall in a due window (all of them without one): the route's pagination.total. */
 export const fetchDriveTaskCount = async (
   client: ApiClient,
-  driveId: string,
+  driveId: string | null,
   dueDateFilter?: DueDateFilter,
 ): Promise<number> =>
   (await fetchDriveTasks(client, { driveId, limit: 1, dueDateFilter })).pagination.total;

@@ -14,17 +14,17 @@ const { AgentsWorkspace } = await import('./agents-workspace');
 afterEach(unmountAll);
 
 describe('AgentsWorkspace (IMC-7.29)', () => {
-  test('the account route carries its own Agents pane beside the session workspace', () => {
+  test('Home leaves the session list to the shell pane', () => {
     const root = mount(<AgentsWorkspace />);
     assert({
-      given: 'no drive (the account route)',
-      should: 'render the account Agents pane, the session toolbar and the pane surface',
+      given: 'no drive (Home, the dashboard)',
+      should: 'render the session toolbar and surface, with the every-drive pane left to the shell',
       actual: [
         root.querySelector('section[aria-label="Agent sessions"]') !== null,
         root.querySelector('[data-toolbar]') !== null,
         root.querySelector('[data-surface]') !== null,
       ],
-      expected: [true, true, true],
+      expected: [false, true, true],
     });
   });
 

@@ -27,12 +27,12 @@ const sessionRowClass = (selected: boolean): string =>
   );
 
 /**
- * The account's Agents pane (C-Account-Agents): the agent sessions of every drive the viewer can
+ * Home's Console pane (C-Account-Agents): the agent sessions of every drive the viewer can
  * reach, grouped drive → environment, each environment with its status dot. The selected session
  * is the shared agent-surface selection, so the middle follows it. A drive's environments load per
  * drive, so each drive is its own component and the list is the drive list the store holds.
  */
-export function AccountAgentsPane(): ReactNode {
+export function AccountAgentsPane({ close }: { readonly close: ReactNode }): ReactNode {
   const drives = useDriveStore((state) => state.drives);
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
   const selectedSessionId = useAgentSurfaceStore((state) => state.selectedSessionId);
@@ -55,7 +55,7 @@ export function AccountAgentsPane(): ReactNode {
   return renderToolPane({
     title: 'Agents',
     label: 'Agent sessions',
-    close: null,
+    close,
     children: (
       <>
         <label className="mx-px mb-2 flex h-filter flex-none items-center gap-2 rounded-md bg-fill px-3 text-ink-faint">

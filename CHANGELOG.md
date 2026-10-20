@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's Home drive is now your dashboard, as "All drives" is in the classic interface. On Home, Tasks lists your tasks from every drive with each one's drive named beside its list, Calendar shows every drive's events with your personal and Google ones, Console lists agent sessions from every drive, and Activity shows your own changes across drives. Messages already showed every drive's channels and your DMs. Imago's chat on Home now knows all your drives instead of assuming you mean Home. Every other drive stays scoped to itself, and Home's Files, Members, Workflows and Trash are still Home's own. The cross-drive Tasks, Calendar, Activity, Agents and Messages screens are gone from account settings; old links to them open Home's.
+
 - Imago UI polish:
   - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
   - The Imago orb is larger in the chat header's agent picker and its list.

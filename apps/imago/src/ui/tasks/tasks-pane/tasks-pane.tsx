@@ -6,6 +6,7 @@ import { createTaskList } from '@/ui/files/create-file/create-file';
 import { localToday } from '../task-meta/task-meta';
 import { listProgress } from '../task-tree/task-tree';
 import { useDriveTaskLists, useTaskList, useTaskViewCounts } from '../use-tasks/use-tasks';
+import { useHomeDriveId } from '../../frame/drives/home-drive-context';
 import { taskViews, useTaskViewStore } from '../task-views/task-views';
 import { renderNewListButton, renderTaskListRow, renderTaskViews, renderTasksPane } from './tasks-pane.render';
 import { listMeta } from './list-meta';
@@ -58,7 +59,7 @@ function TaskListRow({ driveId, pageId, title, selected }: TaskListRowProps) {
 /** The Tasks section's pane: the smart views with counts, then the drive's task lists with their progress. */
 export function TasksPane({ driveId, selectedPageId }: TasksPaneProps) {
   const { lists, error, retry } = useDriveTaskLists(driveId);
-  const { counts } = useTaskViewCounts(driveId);
+  const { counts } = useTaskViewCounts(driveId, driveId === useHomeDriveId());
   const view = useTaskViewStore((state) => state.view);
   const setView = useTaskViewStore((state) => state.setView);
   const holder = useTaskHolder(driveId, selectedPageId);

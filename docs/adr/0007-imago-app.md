@@ -25,7 +25,7 @@ From the decision record (2026-09-20 … 2026-09-29):
 | D1 | The brand keeps the existing blue `--primary` (`oklch(0.50 0.16 235)`); the violet→cyan gradient is retired. |
 | D2 | "Imago" is the assistant family. The chat-header selector picks an **agent**, not a model: Imago Planner, Imago Researcher, plus the user's own `AI_CHAT` agents. (Planner and Researcher retired by the owner on 2026-10-06 — see §5.) |
 | D3 | Chat replaces Home as a rail destination. |
-| D4 | No global/dashboard level. Everything is drive-scoped; there is a Home drive. |
+| D4 | No global/dashboard level above the drives: Home is the dashboard. Every drive is scoped to itself except Home, whose chat, Messages, Tasks, Calendar, Console and Activity read across every drive the viewer can reach (amended 2026-10; `apps/imago/src/ui/frame/drives/home-scope.ts`). |
 | D5 | A `⋯` overflow in the rail below Plugins holds Workflows, Activity, Connections and similar. (Departed from by DEC-6, §6.) |
 | D6 | Rewrite the app layer, not the platform; web + native rather than web only. |
 
@@ -96,7 +96,7 @@ D5's intent — secondary destinations behind one overflow — stands; only its 
 ## 9. What this ADR defers
 
 - **Global pipeline deletion** — `global-chat-turn.ts`, `/api/ai/global/*`, the `'global'` conversation type and `global_assistant_config` stay, because classic and the frozen desktop/mobile/MCP/CLI wire contract still use them (DEC-3). Imago never calls them; deletion moves to a cutover epic.
-- **Classic's driveless layer** — `/dashboard/*` driveless routes, `lib/dashboard/focus.ts` and the `context: 'user'` aggregate APIs are retired at cutover, not edited now. Imago has no aggregate "my tasks across drives" view (DEC-11, per D4).
+- **Classic's driveless layer** — `/dashboard/*` driveless routes and `lib/dashboard/focus.ts` are retired at cutover, not edited now. The `context: 'user'` aggregate APIs stay: Home reads them as the dashboard (D4, amended). DEC-11 (no aggregate "my tasks across drives" view) is withdrawn; the account's `/account/{tasks,calendar,activity,agents,messages}` screens are gone and redirect to Home's sections.
 - **Unified messaging tables** — new drive-scoped tables for one messaging model, triggers and preferences (decision record §7) belong to a separate data-model epic.
 - **Native clients** — SwiftUI clients and a generated cross-platform token source (decision record §8).
 - **Mobile** — Imago is desktop-first; native wrappers keep loading `/dashboard` (DEC-4).
