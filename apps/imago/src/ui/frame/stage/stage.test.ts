@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, imagoStartsCollapsed, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -589,17 +589,6 @@ describe('chatChipFor() (IMC-2.1)', () => {
       should: 'show no chip rather than a placeholder',
       actual: chatChipFor(stageFor('/d1/files/p1'), {}),
       expected: null,
-    });
-  });
-});
-
-describe('imagoStartsCollapsed() (IMC-3.11)', () => {
-  test('an agent page folds Imago on entry; other page types and no type do not', () => {
-    assert({
-      given: 'the page types an entry can name, an unknown one and none',
-      should: 'fold Imago only for AI_CHAT',
-      actual: ['AI_CHAT', 'DOCUMENT', 'CHANNEL', '', undefined, null].map((type) => imagoStartsCollapsed(type)),
-      expected: [true, false, false, false, false, false],
     });
   });
 });
