@@ -20,7 +20,7 @@ import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
-import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isStartAfterDue, parseTaskDateInput, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -220,6 +220,7 @@ export function serializeTaskItem(t: EnrichedTaskItem) {
     priority: t.priority,
     assigneeId: t.assigneeId,
     assigneeAgentId: t.assigneeAgentId,
+    startDate: t.startDate,
     dueDate: t.dueDate,
     // Sourced from the linked page — the single ordering rail (#2143).
     position: t.page?.position ?? 0,
@@ -282,7 +283,7 @@ export function serializeTaskList(
 
 type TaskResponseTask = Pick<
   typeof taskItems.$inferSelect,
-  'id' | 'status' | 'priority' | 'assigneeId' | 'assigneeAgentId' | 'dueDate' | 'completedAt' | 'pageId'
+  'id' | 'status' | 'priority' | 'assigneeId' | 'assigneeAgentId' | 'startDate' | 'dueDate' | 'completedAt' | 'pageId'
 > & {
   /** The linked page's position — task rows carry no position of their own (#2143). */
   position: number;
@@ -331,6 +332,7 @@ export async function buildTaskListResponse(params: {
       priority: resultTask.priority,
       assigneeId: resultTask.assigneeId,
       assigneeAgentId: resultTask.assigneeAgentId,
+      startDate: resultTask.startDate,
       dueDate: resultTask.dueDate,
       position: resultTask.position,
       completedAt: resultTask.completedAt,
@@ -351,6 +353,7 @@ export interface CreateTaskParams {
   assigneeAgentId?: string | null;
   assigneeIds?: { type: 'user' | 'agent'; id: string }[];
   dueDate?: string | null;
+  startDate?: string | null;
   note?: string;
   position?: number;
   agentTrigger?: AgentTriggerInput;
@@ -367,13 +370,23 @@ export async function createTask(
   userId: string,
   params: CreateTaskParams,
 ) {
-  const { pageId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, position, agentTrigger } = params;
+  const { pageId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, startDate, note, position, agentTrigger } = params;
 
   // The caller's timezone, resolved upstream onto the execution context. A naive
   // due date ("2026-02-19T19:00:00") is a wall-clock time and is read in it;
   // absolute values are untouched (#2404).
   const taskTimezone = context.timezone || 'UTC';
-  const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
+  // Read as the REST task routes read them (lib/tasks/task-dates): a value that is not a real
+  // instant is refused here, in words the agent can act on, rather than reaching the database.
+  const dueParse = parseTaskDateInput(dueDate, taskTimezone);
+  if (!dueParse.ok) throw new Error('Invalid due date');
+  const startParse = parseTaskDateInput(startDate, taskTimezone);
+  if (!startParse.ok) throw new Error('Invalid start date');
+  const parsedDueDate = dueParse.value;
+  const parsedStartDate = startParse.value;
+  if (isStartAfterDue(parsedStartDate, parsedDueDate)) {
+    throw new Error(START_AFTER_DUE_ERROR);
+  }
 
   // Reject blank/whitespace titles, matching the update path and REST task route.
   const trimmedTitle = title.trim();
@@ -527,6 +540,7 @@ export async function createTask(
       priority: priority || 'medium',
       assigneeId: primaryUserId,
       assigneeAgentId: primaryAgentId,
+      startDate: parsedStartDate,
       dueDate: parsedDueDate,
       metadata: {
         createdAt: new Date().toISOString(),

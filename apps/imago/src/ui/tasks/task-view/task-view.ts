@@ -7,8 +7,8 @@
 
 import type { Segment } from '../../components/segmented-control/segmented-control.render';
 
-/** The canvases' three views of an open list. */
-export type TaskViewName = 'focus' | 'tree' | 'board';
+/** The four views of an open list: the canvases' three, and the Roadmap. */
+export type TaskViewName = 'focus' | 'tree' | 'board' | 'roadmap';
 
 /** The view a viewer who never chose sees. */
 export const defaultTaskView: TaskViewName = 'tree';
@@ -17,6 +17,7 @@ export const taskViews: readonly Segment<TaskViewName>[] = [
   { value: 'focus', label: 'Focus' },
   { value: 'tree', label: 'Tree' },
   { value: 'board', label: 'Board' },
+  { value: 'roadmap', label: 'Roadmap' },
 ];
 
 const names: readonly string[] = taskViews.map((view) => view.value);

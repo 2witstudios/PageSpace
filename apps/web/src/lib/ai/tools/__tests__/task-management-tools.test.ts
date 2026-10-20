@@ -460,6 +460,70 @@ describe('task-management-tools', () => {
         expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
       });
 
+      describe('startDate', () => {
+        const runUpdate = async (existing: Record<string, unknown>, params: Record<string, unknown>) => {
+          const setCalls: Record<string, unknown>[] = [];
+          mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+            id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium',
+            assigneeId: null, assigneeAgentId: null, startDate: null, dueDate: null,
+            completedAt: null, metadata: null,
+            page: { title: 'My Task', parentId: 'task-list-page-1' },
+            ...existing,
+          });
+          mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+            id: 'list-1', pageId: 'task-list-page-1', userId: 'user-123', title: 'My Tasks', description: null, status: 'pending',
+          });
+          mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+          mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+          mockCanUserEditPage.mockResolvedValue(true);
+          mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({
+            update: vi.fn(() => ({
+              set: vi.fn((values: Record<string, unknown>) => {
+                setCalls.push(values);
+                return {
+                  where: vi.fn(() => ({
+                    returning: vi.fn().mockResolvedValue([
+                      { id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium', position: 0, startDate: values.startDate ?? null, dueDate: null, assigneeId: null, assigneeAgentId: null, completedAt: null },
+                    ]),
+                  })),
+                };
+              }),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          })) as unknown as typeof mockDb.transaction;
+
+          const context = {
+            toolCallId: '1', messages: [],
+            experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), timezone: 'UTC' } as ToolExecutionContext,
+          };
+          const run = () => taskManagementTools.update_task.execute!({ taskId: 'task-1', ...params }, context);
+          return { run, setCalls };
+        };
+
+        it('writes startDate when provided', async () => {
+          const { run, setCalls } = await runUpdate({}, { startDate: '2026-03-01T00:00:00Z' });
+          await run();
+          expect(setCalls[0]).toMatchObject({ startDate: new Date('2026-03-01T00:00:00Z') });
+        });
+
+        it('rejects a startDate after the stored due date', async () => {
+          const { run, setCalls } = await runUpdate(
+            { dueDate: new Date('2026-03-01T00:00:00Z') },
+            { startDate: '2026-03-05T00:00:00Z' },
+          );
+          await expect(run()).rejects.toThrow('Start date must be on or before the due date');
+          expect(setCalls).toHaveLength(0);
+        });
+
+        it('rejects a startDate that is not a date, before any write', async () => {
+          const { run, setCalls } = await runUpdate({}, { startDate: 'next tuesday' });
+          await expect(run()).rejects.toThrow('Invalid start date');
+          expect(setCalls).toHaveLength(0);
+        });
+      });
+
       it('broadcasts page:updated when title changes', async () => {
         mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
           id: 'task-1',

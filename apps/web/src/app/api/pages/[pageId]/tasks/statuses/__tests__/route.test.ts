@@ -877,3 +877,117 @@ describe('DELETE /api/pages/[pageId]/tasks/statuses', () => {
     expect(body.error).toContain('Migration target status "nonexistent" not found');
   });
 });
+
+describe('wipLimit (advisory per-status WIP limit)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    setupAuth();
+    vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+  });
+
+  /** Capture every `.set(...)` the PUT transaction issues, one per status. */
+  const captureTxSets = () => {
+    const sets: Record<string, unknown>[] = [];
+    vi.mocked(db.transaction).mockImplementationOnce((async (callback: (tx: unknown) => unknown) => callback({
+      update: vi.fn(() => ({
+        set: vi.fn((values: Record<string, unknown>) => {
+          sets.push(values);
+          return { where: vi.fn().mockResolvedValue(undefined) };
+        }),
+      })),
+    })) as never);
+    return sets;
+  };
+
+  const mockInsertReturning = () => {
+    const values = vi.fn((row: Record<string, unknown>) => ({
+      returning: vi.fn().mockResolvedValue([{ id: 'cfg-new', ...row }]),
+    }));
+    vi.mocked(db.insert).mockReturnValue({ values } as never);
+    return values;
+  };
+
+  describe('POST', () => {
+    beforeEach(() => {
+      vi.mocked(db.query.taskStatusConfigs.findFirst).mockResolvedValue(null as never);
+    });
+
+    it('stores a provided positive integer wipLimit and returns it', async () => {
+      const values = mockInsertReturning();
+      const response = await POST(createPostRequest({ name: 'Doing', group: 'in_progress', color: '#fff', wipLimit: 3 }), context);
+      expect(response.status).toBe(201);
+      expect(values).toHaveBeenCalledWith(expect.objectContaining({ wipLimit: 3 }));
+      expect((await response.json()).wipLimit).toBe(3);
+    });
+
+    it('defaults wipLimit to null when absent', async () => {
+      const values = mockInsertReturning();
+      const response = await POST(createPostRequest({ name: 'Doing', group: 'in_progress', color: '#fff' }), context);
+      expect(response.status).toBe(201);
+      expect(values).toHaveBeenCalledWith(expect.objectContaining({ wipLimit: null }));
+    });
+
+    it.each([0, -1, 2.5, 1000, '3'])('rejects wipLimit %p with 400', async (wipLimit) => {
+      const values = mockInsertReturning();
+      const response = await POST(createPostRequest({ name: 'Doing', group: 'in_progress', color: '#fff', wipLimit }), context);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toMatch(/wipLimit/);
+      expect(values).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PUT', () => {
+    const base = { id: 'cfg-1', name: 'Doing', color: '#fff', group: 'in_progress' };
+
+    it('writes a positive integer wipLimit', async () => {
+      const sets = captureTxSets();
+      const response = await PUT(createPutRequest({ statuses: [{ ...base, wipLimit: 999 }] }), context);
+      expect(response.status).toBe(200);
+      expect(sets[0]).toMatchObject({ wipLimit: 999 });
+    });
+
+    it('clears the limit with an explicit null', async () => {
+      const sets = captureTxSets();
+      const response = await PUT(createPutRequest({ statuses: [{ ...base, wipLimit: null }] }), context);
+      expect(response.status).toBe(200);
+      expect(sets[0]).toHaveProperty('wipLimit', null);
+    });
+
+    it('leaves the stored limit untouched when wipLimit is absent (classic StatusConfigManager)', async () => {
+      const sets = captureTxSets();
+      const response = await PUT(createPutRequest({ statuses: [base] }), context);
+      expect(response.status).toBe(200);
+      expect(sets).toHaveLength(1);
+      expect(sets[0]).not.toHaveProperty('wipLimit');
+    });
+
+    it.each([0, -2, 1.5, 1000, '5'])('rejects wipLimit %p with 400 before any write', async (wipLimit) => {
+      const response = await PUT(createPutRequest({ statuses: [{ ...base, wipLimit }] }), context);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error).toMatch(/wipLimit/);
+      expect(db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('returns wipLimit on the re-fetched configs', async () => {
+      captureTxSets();
+      vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+        { ...base, slug: 'doing', position: 0, wipLimit: 2 },
+      ] as never);
+      const response = await PUT(createPutRequest({ statuses: [{ ...base, wipLimit: 2 }] }), context);
+      expect((await response.json()).statusConfigs[0].wipLimit).toBe(2);
+    });
+  });
+
+  it('GET preview of an uninitialised list reports wipLimit: null', async () => {
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(undefined as never);
+    vi.mocked(db.select).mockImplementation((() => makeWalkChain([])) as never);
+    const response = await GET(createGetRequest(), context);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.statusConfigs.length).toBeGreaterThan(0);
+    for (const c of body.statusConfigs) expect(c.wipLimit).toBeNull();
+  });
+});
