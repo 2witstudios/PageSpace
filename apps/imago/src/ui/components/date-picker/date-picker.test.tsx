@@ -107,4 +107,50 @@ describe('DatePicker', () => {
       },
     });
   });
+
+  test('the keyboard at a window’s ends', () => {
+    const { button, container } = picker({ value: '2026-10-29', min: '2026-10-21', max: '2026-10-30' });
+    const focus = () => document.activeElement?.getAttribute('aria-label');
+    const tabbable = () =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="grid"] button[tabindex="0"]')].map((day) => [
+        day.getAttribute('aria-label'),
+        day.disabled,
+      ]);
+    press(button('Thursday, October 29, 2026'), 'ArrowDown');
+    const clamped = { focus: focus(), tabbable: tabbable() };
+    press(button('Friday, October 30, 2026'), 'ArrowRight');
+    const held = { focus: focus(), tabbable: tabbable() };
+    assert({
+      given: 'ArrowDown from the 29th past a window ending the 30th, then ArrowRight from the 30th',
+      should: 'stop on the last allowed day and stay there, keeping an enabled day tabbable',
+      actual: { clamped, held },
+      expected: {
+        clamped: { focus: 'Friday, October 30, 2026', tabbable: [['Friday, October 30, 2026', false]] },
+        held: { focus: 'Friday, October 30, 2026', tabbable: [['Friday, October 30, 2026', false]] },
+      },
+    });
+  });
+
+  test('a first focus outside the window', () => {
+    const { container, button } = picker({ min: '2026-10-21', max: '2026-11-10' });
+    const tabbable = () =>
+      [...container.querySelectorAll<HTMLButtonElement>('[role="grid"] button[tabindex="0"]')].map((day) => [
+        day.getAttribute('aria-label'),
+        day.disabled,
+      ]);
+    const first = tabbable();
+    click(button('Next month'));
+    click(button('Next month'));
+    click(button('Previous month'));
+    const paged = tabbable();
+    assert({
+      given: 'no value with today before the window, then paging to December and back to November',
+      should: 'make the window’s first day tabbable, and keep the tabbable day within the window as the months page',
+      actual: { first, paged },
+      expected: {
+        first: [['Wednesday, October 21, 2026', false]],
+        paged: [['Tuesday, November 10, 2026', false]],
+      },
+    });
+  });
 });

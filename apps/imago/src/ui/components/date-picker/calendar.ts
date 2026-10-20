@@ -124,6 +124,13 @@ export const inMonth = (day: string, { year, month }: Month): boolean => {
 export const allowed = (day: string, min: string | undefined, max: string | undefined): boolean =>
   (min === undefined || min === '' || day >= min) && (max === undefined || max === '' || day <= max);
 
+/** `day` pulled into the window: `min` when before it, `max` when after it, else `day` itself. */
+export const clampDay = (day: string, min: string | undefined, max: string | undefined): string => {
+  if (min !== undefined && min !== '' && day < min) return min;
+  if (max !== undefined && max !== '' && day > max) return max;
+  return day;
+};
+
 export type QuickPick = { readonly label: string; readonly day: string };
 
 /** The picks offered above the calendar: today, tomorrow, a week and two weeks out. */

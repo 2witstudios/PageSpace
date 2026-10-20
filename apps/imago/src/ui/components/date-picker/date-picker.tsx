@@ -5,6 +5,7 @@ import { renderIcon } from '../icon/icon.render';
 import {
   addMonths,
   allowed,
+  clampDay,
   dayForKey,
   dayName,
   inMonth,
@@ -56,7 +57,7 @@ export type DatePickerProps = {
  * ends, Page Up and Down by a month, and Enter or Space chooses.
  */
 export function DatePicker({ label, value, today, min, max, pick, done }: DatePickerProps): ReactNode {
-  const start = isDay(value) ? value : today;
+  const start = clampDay(isDay(value) ? value : today, min, max);
   const [focused, setFocused] = useState(start);
   const [month, setMonth] = useState<Month>(monthOf(start));
   const grid = useRef<HTMLDivElement>(null);
@@ -70,13 +71,15 @@ export function DatePicker({ label, value, today, min, max, pick, done }: DatePi
 
   const showMonth = (next: Month) => {
     setMonth(next);
-    if (!inMonth(focused, next)) setFocused(`${next.year}-${String(next.month + 1).padStart(2, '0')}-01`);
+    if (!inMonth(focused, next)) setFocused(clampDay(`${next.year}-${String(next.month + 1).padStart(2, '0')}-01`, min, max));
   };
 
   const onKey = (event: KeyboardEvent<HTMLButtonElement>, day: string) => {
-    const next = dayForKey(day, event.key);
-    if (next === null) return;
+    const key = dayForKey(day, event.key);
+    if (key === null) return;
     event.preventDefault();
+    const next = clampDay(key, min, max);
+    if (next === day) return;
     moved.current = true;
     setFocused(next);
     if (!inMonth(next, month)) setMonth(monthOf(next));

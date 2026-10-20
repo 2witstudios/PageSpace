@@ -4,6 +4,7 @@ import {
   addDays,
   addMonths,
   allowed,
+  clampDay,
   dayForKey,
   dayName,
   inMonth,
@@ -104,6 +105,23 @@ describe('calendar arithmetic', () => {
         dayForKey('2027-03-31', key),
       ),
       expected: ['2027-03-30', '2027-04-01', '2027-03-24', '2027-04-07', '2027-03-29', '2027-04-04', '2027-02-28', '2027-04-30', null],
+    });
+  });
+
+  test('clampDay()', () => {
+    assert({
+      given: 'days before, inside and after a window from the 20th to the 26th, and days with no window',
+      should: 'pull the outside days to the nearest end and leave the rest as they are',
+      actual: {
+        window: ['2026-10-19', '2026-10-22', '2026-10-27'].map((day) => clampDay(day, '2026-10-20', '2026-10-26')),
+        open: [clampDay('2026-10-19', undefined, undefined), clampDay('2026-10-19', '', '')],
+        oneSided: [clampDay('2026-10-01', '2026-10-20', undefined), clampDay('2026-11-01', undefined, '2026-10-26')],
+      },
+      expected: {
+        window: ['2026-10-20', '2026-10-22', '2026-10-26'],
+        open: ['2026-10-19', '2026-10-19'],
+        oneSided: ['2026-10-20', '2026-10-26'],
+      },
     });
   });
 });
