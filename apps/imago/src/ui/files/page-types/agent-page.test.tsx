@@ -218,14 +218,14 @@ describe('AgentPage', () => {
 });
 
 describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
-  test('folds Imago to the Ask pill and selects this agent for the side chat', () => {
+  test('leaves Imago open and selects this agent for the side chat', () => {
     dispatch(transactions.expandImago, undefined);
     mount(createElement(AgentPage, props));
     assert({
       given: 'the viewer entering an agent page with Imago open',
-      should: 'collapse Imago and point the side chat at this agent',
+      should: 'keep Imago docked and point the side chat at this agent',
       actual: { collapsed: getUiState().resources.imagoCollapsed, agent: getUiState().resources.chatAgent },
-      expected: { collapsed: true, agent: { id: 'a1', title: 'Launch Agent' } },
+      expected: { collapsed: false, agent: { id: 'a1', title: 'Launch Agent' } },
     });
   });
 
@@ -251,14 +251,18 @@ describe('AgentPage entry and the Imago column (IMC-3.11)', () => {
     });
   });
 
-  test('folds Imago again on entering a different agent page', () => {
-    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: false } });
+  test('leaves Imago where the viewer put it on entering another agent page', () => {
+    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: true } });
     mount(createElement(AgentPage, { ...props, pageId: 'a2', page: { ...page, id: 'a2' } as TreePage }));
+    const collapsedByViewer = getUiState().resources.imagoCollapsed;
+    unmountAll();
+    setUiState({ ...getUiState(), resources: { ...getUiState().resources, imagoCollapsed: false } });
+    mount(createElement(AgentPage, { ...props, pageId: 'a3', page: { ...page, id: 'a3' } as TreePage }));
     assert({
-      given: 'Imago reopened, then another agent page is entered',
-      should: 'fold it again, since that is a new entry',
-      actual: getUiState().resources.imagoCollapsed,
-      expected: true,
+      given: 'Imago folded by the viewer, then open, as another agent page is entered',
+      should: 'neither unfold nor fold it',
+      actual: [collapsedByViewer, getUiState().resources.imagoCollapsed],
+      expected: [true, false],
     });
   });
 });
