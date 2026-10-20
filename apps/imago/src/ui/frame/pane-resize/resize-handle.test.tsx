@@ -33,23 +33,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const sized = (width: number, grow: boolean) => ({
-  'data-width': width,
-  style: { flexGrow: grow ? 1 : 0 },
-});
-
-/** A row as the shell lays it out: the pane and the seam, with a growing middle beside them. */
-const mount = (column: ResizableColumn, onResize: (width: number | null) => void) => {
-  const handle = h(ResizeHandle, { column, width: 300, onResize });
-  const pane = h('div', { 'data-pane': '', ...sized(300, false) });
-  const middle = h('div', sized(800, true));
-  act(() => {
-    root?.render(h('div', null, ...(column === 'left' ? [pane, handle, middle] : [middle, handle, pane])));
-  });
-  for (const element of Array.from(container.querySelectorAll<HTMLElement>('[data-width]'))) {
-    const width = Number(element.dataset.width);
-    element.getBoundingClientRect = () => ({ width }) as DOMRect;
-  }
+/** A row as the shell lays it out: the pane and its seam (the handle no longer measures the row). */
+const mount = (column: ResizableColumn, onResize: (width: number | null) => void, max = 480) => {
+  const render = (docked: boolean) =>
+    act(() => {
+      const pane = h('div', { key: 'pane', 'data-pane': '' });
+      const handle = docked ? h(ResizeHandle, { key: 'seam', column, width: 300, size: undefined, max, onResize }) : null;
+      root?.render(h('div', null, ...(column === 'left' ? [pane, handle] : [handle, pane])));
+    });
+  render(true);
   const seam = container.querySelector('[role="separator"]');
   const paneElement = container.querySelector('[data-pane]');
   if (!(seam instanceof HTMLElement) || !(paneElement instanceof HTMLElement)) throw new Error('no seam');
@@ -57,7 +49,7 @@ const mount = (column: ResizableColumn, onResize: (width: number | null) => void
     act(() => {
       seam.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, button: 0 }));
     });
-  return { seam, pane: paneElement, pointer };
+  return { seam, pane: paneElement, pointer, undock: () => render(false) };
 };
 
 describe('ResizeHandle', () => {
@@ -79,13 +71,13 @@ describe('ResizeHandle', () => {
 
   test('Imago grows leftward and stops where the middle keeps 400px', () => {
     const onResize = vi.fn();
-    const { pointer } = mount('imago', onResize);
+    const { pointer } = mount('imago', onResize, 700);
     pointer('pointerdown', 900);
     pointer('pointermove', 300);
     pointer('pointerup', 300);
     assert({
-      given: 'the Imago seam dragged 600px left beside an 800px middle',
-      should: 'stop at 700px, leaving the middle 400px',
+      given: 'the Imago seam dragged 600px left with 700px the most the middle can spare',
+      should: 'stop at 700px',
       actual: onResize.mock.calls,
       expected: [[700]],
     });
@@ -123,8 +115,38 @@ describe('ResizeHandle', () => {
     });
   });
 
+  test('the seam going mid-drag leaves nothing behind', () => {
+    const onResize = vi.fn();
+    const { pane, pointer, undock } = mount('left', onResize);
+    pointer('pointerdown', 100);
+    pointer('pointermove', 160);
+    undock();
+    assert({
+      given: 'the sidebar undocked while its seam was being dragged',
+      should: 'drop the inline width, the held transition and the page-wide select-none, and save nothing',
+      actual: [pane.style.width, pane.hasAttribute('data-resizing'), document.body.classList.contains('select-none'), onResize.mock.calls],
+      expected: ['', false, false, []],
+    });
+  });
+
+  test('a second pointer during a drag is ignored', () => {
+    const onResize = vi.fn();
+    const { pointer } = mount('left', onResize);
+    pointer('pointerdown', 100);
+    pointer('pointermove', 140);
+    pointer('pointerdown', 500);
+    pointer('pointermove', 160);
+    pointer('pointerup', 160);
+    assert({
+      given: 'a second press while the seam is held',
+      should: 'keep the first drag and its origin',
+      actual: onResize.mock.calls,
+      expected: [[360]],
+    });
+  });
+
   test('the seam names itself and its range', () => {
-    mount('imago', () => {});
+    mount('imago', () => {}, 640);
     const seam = container.querySelector('[role="separator"]');
     assert({
       given: 'the Imago seam',
@@ -132,7 +154,7 @@ describe('ResizeHandle', () => {
       actual: ['aria-label', 'aria-orientation', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow', 'tabindex'].map((name) =>
         seam?.getAttribute(name),
       ),
-      expected: ['Resize Imago', 'vertical', '300', '720', '300', '0'],
+      expected: ['Resize Imago', 'vertical', '300', '640', '300', '0'],
     });
   });
 });

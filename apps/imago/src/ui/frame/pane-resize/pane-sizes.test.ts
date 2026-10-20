@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import {
   BOUNDS,
   NO_SIZES,
+  TOKEN_WIDTHS,
   clampWidth,
   dockedColumns,
   fitWidths,
@@ -160,18 +163,18 @@ describe('dockedColumns()', () => {
       given: 'nothing saved in a wide row',
       should: 'draw both at their tokens with no px width over the class',
       actual: dockedColumns(NO_SIZES, 1400, tokens),
-      expected: { left: { width: 260, size: undefined }, imago: { width: 360, size: undefined } },
+      expected: { left: { width: 260, size: undefined, max: 480 }, imago: { width: 360, size: undefined, max: 720 } },
     });
   });
 
   test('saved widths and squeezed tokens are px widths', () => {
     assert({
       given: 'a saved sidebar width, then tokens in a row too narrow for them',
-      should: 'draw the saved width, then the fitted widths, over the classes',
+      should: 'draw the saved width, then the fitted widths, over the classes, each seam capped by what the middle can spare',
       actual: [dockedColumns({ left: 320, imago: null }, 1400, tokens), dockedColumns(NO_SIZES, 900, tokens)],
       expected: [
-        { left: { width: 320, size: 320 }, imago: { width: 360, size: undefined } },
-        { left: { width: 200, size: 200 }, imago: { width: 300, size: 300 } },
+        { left: { width: 320, size: 320, max: 480 }, imago: { width: 360, size: undefined, max: 680 } },
+        { left: { width: 200, size: 200, max: 200 }, imago: { width: 300, size: 300, max: 300 } },
       ],
     });
   });
@@ -182,6 +185,24 @@ describe('dockedColumns()', () => {
       should: 'leave it out, whatever was saved for it',
       actual: dockedColumns({ left: null, imago: 500 }, 1400, { left: 260, imago: null }).imago,
       expected: null,
+    });
+  });
+});
+
+describe('TOKEN_WIDTHS', () => {
+  test('mirrors the theme', () => {
+    const theme = ['frame.css', 'v3.css'].map((file) => readFileSync(join(__dirname, '../../../app/theme', file), 'utf8')).join('\n');
+    const token = (name: string) => Number(new RegExp(`--spacing-${name}:\\s*(\\d+)px`).exec(theme)?.[1]);
+    assert({
+      given: 'the px widths the seams start from',
+      should: 'equal the pane width tokens in frame.css and v3.css',
+      actual: TOKEN_WIDTHS,
+      expected: {
+        listPane: token('list-pane'),
+        treePane: token('tree-pane'),
+        paneOverlay: token('pane-overlay'),
+        chatPane: token('chat-pane'),
+      },
     });
   });
 });

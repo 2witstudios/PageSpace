@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { NO_SIZES, PANE_SIZES_KEY, parseSizes, serializeSizes, type PaneSizes, type ResizableColumn } from './pane-sizes';
 
 /** localStorage, which can throw (private windows, blocked site data): sizes then live for the session. */
@@ -33,16 +33,16 @@ export type PaneSizesControl = {
  */
 export function usePaneSizes(): PaneSizesControl {
   const [sizes, setSizes] = useState<PaneSizes>(NO_SIZES);
+  const latest = useRef(sizes);
   useEffect(() => {
-    setSizes(parseSizes(storage.read()));
+    latest.current = parseSizes(storage.read());
+    setSizes(latest.current);
   }, []);
   const setSize = useCallback((column: ResizableColumn, width: number | null) => {
-    setSizes((current) => {
-      if (current[column] === width) return current;
-      const next = { ...current, [column]: width };
-      storage.write(serializeSizes(next));
-      return next;
-    });
+    if (latest.current[column] === width) return;
+    latest.current = { ...latest.current, [column]: width };
+    storage.write(serializeSizes(latest.current));
+    setSizes(latest.current);
   }, []);
   return { sizes, setSize };
 }

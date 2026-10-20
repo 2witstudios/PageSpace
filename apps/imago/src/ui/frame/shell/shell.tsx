@@ -361,10 +361,10 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     imagoSize: docked.imago?.size,
     columnsRowRef: row.ref,
     leftHandle: docked.left === null ? null : (
-      <ResizeHandle column="left" width={docked.left.width} onResize={(width) => setSize('left', width)} />
+      <ResizeHandle column="left" {...docked.left} onResize={(width) => setSize('left', width)} />
     ),
     imagoHandle: docked.imago === null ? null : (
-      <ResizeHandle column="imago" width={docked.imago.width} onResize={(width) => setSize('imago', width)} />
+      <ResizeHandle column="imago" {...docked.imago} onResize={(width) => setSize('imago', width)} />
     ),
     onDismissImago: () => dispatch(transactions.collapseImago, undefined),
     onDismissPane: () => {

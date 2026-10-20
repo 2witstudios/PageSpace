@@ -1,20 +1,17 @@
 'use client';
 
-import { useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
-import {
-  BOUNDS,
-  clampWidth,
-  maxWidthFor,
-  widthFromDrag,
-  widthFromKey,
-  type ResizableColumn,
-} from './pane-sizes';
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { BOUNDS, clampWidth, widthFromDrag, widthFromKey, type ResizableColumn } from './pane-sizes';
 import { resizeHitClass, resizeLineClass, resizeSeamClass } from './resize-handle-class';
 
 export type ResizeHandleProps = {
   readonly column: ResizableColumn;
   /** The column's width as React draws it: the stored width, else the token's. */
   readonly width: number;
+  /** The px width React puts over the pane's token class, if any (the Pane's `size`). */
+  readonly size: number | undefined;
+  /** The widest the column may be now, so the middle keeps its minimum (dockedColumns). */
+  readonly max: number;
   /** Void action: the drag or key settled on a width; null puts the token width back. */
   readonly onResize: (width: number | null) => void;
 };
@@ -24,34 +21,16 @@ const labels: Readonly<Record<ResizableColumn, string>> = { left: 'Resize sideba
 type Drag = {
   readonly pointerId: number;
   readonly startX: number;
-  readonly start: number;
-  readonly max: number;
-  /** The pane's inline width before the drag: React's, which it gets back when the drag ends. */
-  readonly inline: string;
+  /** Held for the drag: by an unmount's cleanup the seam's ref is already gone. */
+  readonly pane: HTMLElement;
+  readonly hit: HTMLElement;
   width: number;
 };
 
-const asElement = (node: Element | null): HTMLElement | null => (node instanceof HTMLElement ? node : null);
-
 /** The column the seam resizes: the pane before it for the left pane, after it for Imago. */
-const paneOf = (seam: HTMLElement, column: ResizableColumn): HTMLElement | null =>
-  asElement(column === 'left' ? seam.previousElementSibling : seam.nextElementSibling);
-
-/** What the middle holds now: every growing column in the row (the page, Imago on the ground, the empty middle). */
-const middleWidth = (seam: HTMLElement): number => {
-  const row = seam.parentElement;
-  if (row === null) return 0;
-  let width = 0;
-  for (const child of Array.from(row.children)) {
-    if (child instanceof HTMLElement && getComputedStyle(child).flexGrow !== '0') width += child.getBoundingClientRect().width;
-  }
-  return width;
-};
-
-const measure = (seam: HTMLElement, column: ResizableColumn) => {
-  const pane = paneOf(seam, column);
-  const current = pane?.getBoundingClientRect().width ?? 0;
-  return { pane, current, max: maxWidthFor(column, current, middleWidth(seam)) };
+const paneOf = (seam: HTMLElement | null, column: ResizableColumn): HTMLElement | null => {
+  const pane = seam === null ? null : column === 'left' ? seam.previousElementSibling : seam.nextElementSibling;
+  return pane instanceof HTMLElement ? pane : null;
 };
 
 /**
@@ -60,74 +39,72 @@ const measure = (seam: HTMLElement, column: ResizableColumn) => {
  * not re-render on every move; the width reaches React once, when the pointer lifts. Arrow keys
  * step it and double-click puts the token width back.
  */
-export function ResizeHandle({ column, width, onResize }: ResizeHandleProps): ReactNode {
+export function ResizeHandle({ column, width, size, max, onResize }: ResizeHandleProps): ReactNode {
   const seamRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const frame = useRef<number | null>(null);
+  // What React draws over the pane now, so a drag hands back the current width, not a stale one.
+  const drawn = useRef(size);
+  drawn.current = size;
 
-  const end = (target: HTMLElement) => {
+  /**
+   * Undo everything the drag did to the page, putting back the width React draws (`restore`).
+   * The width eases again once React has drawn the result.
+   */
+  const release = (restore: number | undefined): Drag | null => {
     const active = drag.current;
-    if (active === null) return;
+    if (active === null) return null;
     drag.current = null;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
-    delete target.dataset.active;
     document.body.classList.remove('select-none');
-    const seam = seamRef.current;
-    const pane = seam === null ? null : paneOf(seam, column);
-    // The drag's width goes back to being React's: restore what React drew and hand it the
-    // result, then let the width ease again once React has drawn it.
-    if (pane !== null) {
-      pane.style.width = active.inline;
-      requestAnimationFrame(() => delete pane.dataset.resizing);
-    }
+    delete active.hit.dataset.active;
+    active.pane.style.width = restore === undefined ? '' : `${restore}px`;
+    requestAnimationFrame(() => delete active.pane.dataset.resizing);
+    return active;
+  };
+
+  // The seam goes when its column stops docking (collapsed, or a tier crossed), maybe mid-drag;
+  // the Pane has then dropped its own width, so none is put back.
+  const releaseRef = useRef(release);
+  releaseRef.current = release;
+  useEffect(() => () => void releaseRef.current(undefined), []);
+
+  const end = () => {
+    const active = release(drawn.current);
     // A press that never moved (a click, or half of a double-click) keeps the token width.
-    if (active.width !== active.start) onResize(active.width);
+    if (active !== null && active.width !== width) onResize(active.width);
   };
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    const seam = seamRef.current;
-    if (event.button !== 0 || seam === null) return;
-    const { pane, current, max } = measure(seam, column);
-    if (pane === null) return;
+    const pane = paneOf(seamRef.current, column);
+    if (event.button !== 0 || drag.current !== null || pane === null) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     event.currentTarget.dataset.active = '';
     pane.dataset.resizing = '';
     document.body.classList.add('select-none');
-    drag.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      start: current,
-      max,
-      inline: pane.style.width,
-      width: current,
-    };
+    drag.current = { pointerId: event.pointerId, startX: event.clientX, pane, hit: event.currentTarget, width };
   };
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     const active = drag.current;
-    const seam = seamRef.current;
-    if (active === null || seam === null || event.pointerId !== active.pointerId) return;
-    active.width = clampWidth(column, widthFromDrag(column, active.start, event.clientX - active.startX), active.max);
+    if (active === null || event.pointerId !== active.pointerId) return;
+    active.width = clampWidth(column, widthFromDrag(column, width, event.clientX - active.startX), max);
     if (frame.current !== null) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
-      const pane = paneOf(seam, column);
-      const settled = drag.current;
-      if (pane !== null && settled !== null) pane.style.width = `${settled.width}px`;
+      if (drag.current !== null) drag.current.pane.style.width = `${drag.current.width}px`;
     });
   };
 
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
-    if (drag.current?.pointerId === event.pointerId) end(event.currentTarget);
+    if (drag.current?.pointerId === event.pointerId) end();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const seam = seamRef.current;
-    if (seam === null) return;
-    const { current, max } = measure(seam, column);
-    const next = widthFromKey(column, event.key, event.shiftKey, current, max);
+    // From React's width, not the element's: the last step may still be easing.
+    const next = widthFromKey(column, event.key, event.shiftKey, width, max);
     if (next === null) return;
     event.preventDefault();
     onResize(clampWidth(column, next, max));
@@ -140,7 +117,7 @@ export function ResizeHandle({ column, width, onResize }: ResizeHandleProps): Re
         aria-orientation="vertical"
         aria-label={labels[column]}
         aria-valuemin={BOUNDS[column].min}
-        aria-valuemax={BOUNDS[column].max}
+        aria-valuemax={max}
         aria-valuenow={Math.round(width)}
         tabIndex={0}
         className={resizeHitClass}
@@ -148,7 +125,7 @@ export function ResizeHandle({ column, width, onResize }: ResizeHandleProps): Re
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        onLostPointerCapture={(event) => end(event.currentTarget)}
+        onLostPointerCapture={end}
         onDoubleClick={() => onResize(null)}
         onKeyDown={onKeyDown}
       >

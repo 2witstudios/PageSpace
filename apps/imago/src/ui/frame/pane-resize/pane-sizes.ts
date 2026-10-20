@@ -104,6 +104,8 @@ export type DockedColumn = {
   readonly width: number;
   /** A px width over the column's token class, or undefined while the token itself fits. */
   readonly size: number | undefined;
+  /** The widest the seam may take it now: its bound, less what the middle must keep. */
+  readonly max: number;
 };
 
 /**
@@ -123,7 +125,12 @@ export const dockedColumns = (
   const column = (key: ResizableColumn): DockedColumn | null => {
     const width = fitted[key];
     if (width === null) return null;
-    return { width, size: sizes[key] !== null || width !== tokens[key] ? width : undefined };
+    const other = fitted[key === 'left' ? 'imago' : 'left'] ?? 0;
+    return {
+      width,
+      size: sizes[key] !== null || width !== tokens[key] ? width : undefined,
+      max: rowWidth === null ? BOUNDS[key].max : maxWidthFor(key, width, rowWidth - other - width),
+    };
   };
   return { left: column('left'), imago: column('imago') };
 };
