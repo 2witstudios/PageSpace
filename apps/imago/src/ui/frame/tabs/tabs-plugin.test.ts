@@ -8,7 +8,7 @@ import { tabsPlugin, type SyncTabs } from './tabs-plugin';
 const { syncTabs, setTabs, activateTab, openBackgroundTab, openNewTab, setNewTabPending, stepBack, stepForward } = tabsPlugin.transactions;
 const key = 'imago:tabs:d1';
 const stored = serializeTabs({ tabs: [newTab('p', '/d1/files/pricing')], active: 'p' });
-const nav = (path: string | null, extra: Partial<SyncTabs> = {}): SyncTabs => ({ key, stored: null, path, id: `id-${path}`, pop: false, ...extra });
+const nav = (path: string, extra: Partial<SyncTabs> = {}): SyncTabs => ({ key, stored: null, path, id: `id-${path}`, pop: false, ...extra });
 const paths = (state: UiState) => state.resources.openTabs.map((tab) => tab.path);
 const first = () => syncTabs(createInitialState(), nav('/d1/files/pricing', { stored }));
 
@@ -45,13 +45,33 @@ describe('tabsPlugin (IMC-1.5)', () => {
     });
   });
 
-  test('a section index is not a step', () => {
-    const next = syncTabs(first(), nav(null));
+  test('a section index loads into the active tab as a step', () => {
+    const next = syncTabs(first(), nav('/d1/files'));
     assert({
-      given: 'the page closed (the section index, which is not a tab)',
-      should: 'keep every tab and the active one',
+      given: 'the viewer goes to the Files section from a page in the active tab',
+      should: 'load the section into that tab, with the page as its Back',
+      actual: [paths(next), next.resources.activeTab, next.resources.openTabs[0]?.back],
+      expected: [['/d1/files'], 'p', ['/d1/files/pricing']],
+    });
+  });
+
+  test('a section index with no tab active opens nothing', () => {
+    const next = syncTabs(createInitialState(), nav('/d1/files'));
+    assert({
+      given: 'the viewer on a section index with no tab active (nothing open, or the page just closed)',
+      should: 'open no tab, leaving Imago as the middle’s ground',
       actual: [paths(next), next.resources.activeTab],
-      expected: [['/d1/files/pricing'], 'p'],
+      expected: [[], null],
+    });
+  });
+
+  test('the chat loads into the active tab too', () => {
+    const next = syncTabs(first(), nav('/d1'));
+    assert({
+      given: 'the viewer goes to the drive chat from a page in the active tab',
+      should: 'load the chat into that tab',
+      actual: [paths(next), next.resources.activeTab],
+      expected: [['/d1'], 'p'],
     });
   });
 
@@ -100,7 +120,7 @@ describe('tabsPlugin (IMC-1.5)', () => {
 
   test('the browser’s Back to a page another tab shows', () => {
     const opened = openNewTab(first(), { path: '/d1', id: 'new' });
-    const home = syncTabs(opened, nav(null));
+    const home = syncTabs(opened, nav('/d1'));
     const popped = syncTabs(home, nav('/d1/files/pricing', { pop: true, direction: 'back' }));
     assert({
       given: 'New tab from a page, then the browser’s Back to that page',
@@ -123,7 +143,7 @@ describe('tabsPlugin (IMC-1.5)', () => {
   test('openNewTab', () => {
     const opened = openNewTab(first(), { path: '/d1', id: 'new' });
     const filled = syncTabs(opened, nav('/d1/files/plan'));
-    const home = syncTabs(opened, nav(null));
+    const home = syncTabs(opened, nav('/d1'));
     assert({
       given: "New tab on the drive's home, then a page opened from it, or the home itself synced",
       should: 'open an active tab beside the current one, load the page into it, and leave it be on the home',

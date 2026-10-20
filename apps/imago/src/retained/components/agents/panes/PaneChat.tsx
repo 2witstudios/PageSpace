@@ -1,20 +1,86 @@
- 'use client';
-import { useEffect } from 'react';
-import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
-import { useResolvedAgent } from '../useResolvedAgent';
+'use client';
+
+/**
+ * One chat pane: a conversation rendered inside its session's grid.
+ *
+ * Exists because `SessionChat` takes a resolved `AgentInfo` and hooks cannot
+ * run inside a render-prop map — each pane resolves its OWN agent identity
+ * here, which is also what lets one grid hold conversations with different
+ * agents side by side.
+ *
+ * A null `agentPageId` is the GLOBAL ASSISTANT: no page to resolve, so no
+ * resolution step — `AssistantSessionChat` reads its identity from the
+ * assistant settings store and rides the global chat pipeline.
+ */
+
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
-import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
-export default function PaneChat({ sessionId, conversationId, agentPageId, driveId, isReadOnly = false }: {
-  sessionId: string; conversationId: string; agentPageId: string | null; driveId: string | null;
-  context?: 'page' | 'console'; isReadOnly?: boolean;
+import AssistantSessionChat from '../chat/AssistantSessionChat';
+import SessionChat from '../chat/SessionChat';
+import { useResolvedAgent } from '../useResolvedAgent';
+
+export default function PaneChat({
+  sessionId,
+  conversationId,
+  agentPageId,
+  driveId,
+  context = 'console',
+  isReadOnly = false,
+}: {
+  /** This pane's session — threaded through so the chat surface can react to `open_page_pane` tool calls by opening a pane in THIS session's grid. */
+  sessionId: string;
+  conversationId: string;
+  agentPageId: string | null;
+  /** This pane's session's own drive — `null` for a global-assistant session. Only the assistant branch needs it (an agent already carries its own `driveId`). */
+  driveId: string | null;
+  /** Which message renderer to use — the page grid hosts the full one. */
+  context?: 'page' | 'console';
+  isReadOnly?: boolean;
 }) {
-  const { agent } = useResolvedAgent(agentPageId);
-  const selectedConversation = useAgentSurfaceStore(state => state.selectedConversationId);
-  const select = useRetainedChatSelection(state => state.select);
-  useEffect(() => { if (selectedConversation !== conversationId) return; select({ sessionId, conversationId, agentId: agentPageId, driveId, isReadOnly, agentTitle: agent?.title }); },
-    [selectedConversation, select, sessionId, conversationId, agentPageId, driveId, isReadOnly, agent?.title]);
-  return <div className="flex h-full items-center justify-center p-4"><Button variant="outline"
-    onClick={() => select({ sessionId, conversationId, agentId: agentPageId, driveId, isReadOnly, agentTitle: agent?.title })}>
-    Open {agent?.title ?? 'Global Assistant'} in chat
-  </Button></div>;
+  // Hook order is safe across the branch: the hook itself branches on a null
+  // id (null SWR keys), so it runs unconditionally either way.
+  const { agent, isLoading, retry } = useResolvedAgent(agentPageId);
+
+  if (agentPageId === null) {
+    return (
+      <AssistantSessionChat
+        sessionId={sessionId}
+        conversationId={conversationId}
+        driveId={driveId}
+        context={context}
+        isReadOnly={isReadOnly}
+      />
+    );
+  }
+
+  // Loading ended with no agent: the page fetch failed or the page is gone. Say so, and let
+  // the viewer ask again, rather than spin in a pane that will never fill.
+  if (!isLoading && !agent) {
+    return (
+      <div role="alert" className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">
+        <p>Couldn&apos;t open this agent. It may have been deleted, or you may no longer have access.</p>
+        <Button type="button" variant="outline" size="sm" onClick={retry}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!agent) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <SessionChat
+      sessionId={sessionId}
+      agent={agent}
+      conversationId={conversationId}
+      context={context}
+      isReadOnly={isReadOnly}
+    />
+  );
 }

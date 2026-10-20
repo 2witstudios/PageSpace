@@ -5,8 +5,8 @@ import { IMAGO_BASE_PATH, signInOrigin } from '@/lib/auth/sign-in-url';
 import { useRouter as useNextRouter, usePathname as useNextPathname } from 'next/navigation';
 export { useParams, useSearchParams, notFound, redirect, useSelectedLayoutSegment, useSelectedLayoutSegments } from 'next/navigation';
 
-/** The single-screen drive tools, whose screen lives at /<drive>/<tool>/view. */
-const screenTools = ['calendar', 'agents', 'workflows', 'activity', 'trash'];
+/** The single-screen drive tools, whose screen lives at /<drive>/<tool>/view. The Console opens a session by its query instead. */
+const screenTools = ['calendar', 'workflows', 'activity', 'trash'];
 
 /** Translate retained UI destinations, leaving API, preview and public URLs alone. */
 export function imagoHref(href: string): string {

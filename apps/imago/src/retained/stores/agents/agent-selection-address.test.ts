@@ -7,8 +7,8 @@ describe('agentSelectionAddress()', () => {
     assert({
       given: 'a selection on a drive’s Console',
       should: 'address that drive’s Console screen under /imago',
-      actual: agentSelectionAddress('/dashboard/d1/agents?workspace=w1&c=c1', 'd1', '/imago/d1/agents/view'),
-      expected: '/imago/d1/agents/view?workspace=w1&c=c1',
+      actual: agentSelectionAddress('/dashboard/d1/agents?workspace=w1&c=c1', 'd1', '/imago/d1/agents'),
+      expected: '/imago/d1/agents?workspace=w1&c=c1',
     });
   });
 

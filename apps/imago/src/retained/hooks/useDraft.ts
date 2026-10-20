@@ -17,25 +17,40 @@ export const useDraft = (contextKey: string) => {
   const [value, setValue] = useState<string>(() =>
     contextKey ? readLocal(contextKey) : '',
   );
+  // The latest draft, for updaters and the server merge. Written only in effects and handlers.
+  const valueRef = useRef(value);
+  // Set once the user types or clears under the current key: a server read that lands after
+  // that is stale and must not put sent text back.
+  const editedRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // On mount (or key change): fetch from server for cross-device restore.
   // localStorage value wins if already present; server fills the gap otherwise.
-  // Capture the key at effect time to guard against stale closures if the
-  // contextKey changes before the async fetch resolves.
+  // A read for a key this hook has moved off, or one that lands after an edit, is dropped.
   useEffect(() => {
+    editedRef.current = false;
     if (!contextKey) return;
-    const activeKey = contextKey;
-    setValue(readLocal(activeKey));
-    fetchDraft(activeKey).then((server) => {
-      if (server && activeKey === contextKey)
-        setValue((local: string) => mergeDrafts(local, server));
+    const local = readLocal(contextKey);
+    valueRef.current = local;
+    setValue(local);
+    let current = true;
+    fetchDraft(contextKey).then((server) => {
+      if (!server || !current || editedRef.current) return;
+      const merged = mergeDrafts(valueRef.current, server);
+      valueRef.current = merged;
+      setValue(merged);
     });
+    return () => {
+      current = false;
+    };
   }, [contextKey]);
 
   const setDraft = useCallback(
-    (v: string) => {
+    (next: string | ((current: string) => string)) => {
       if (!contextKey) return;
+      const v = typeof next === 'function' ? next(valueRef.current) : next;
+      editedRef.current = true;
+      valueRef.current = v;
       setValue(v);
       writeLocal(contextKey, v);
       clearTimeout(debounceRef.current);
@@ -51,6 +66,8 @@ export const useDraft = (contextKey: string) => {
   const clearDraft = useCallback(() => {
     if (!contextKey) return;
     clearTimeout(debounceRef.current);
+    editedRef.current = true;
+    valueRef.current = '';
     setValue('');
     removeLocal(contextKey);
     deleteDraft(contextKey);

@@ -1,4 +1,4 @@
-import type { Stage } from '../stage/stage';
+import { isConsole, stageFor, type Stage } from '../stage/stage';
 
 /**
  * One open tab (SPEC v3.3 tab bar), browser-style as in classic: whatever fills the middle,
@@ -19,8 +19,16 @@ export const TAB_HISTORY_LIMIT = 50;
 
 export const newTab = (id: string, path: string): Tab => ({ id, path, back: [], forward: [] });
 
-/** The middle's object is a tab; the chat, a section index or the empty middle are not. */
-export const tabPathFor = (stage: Stage, pathname: string): string | null => (stage.object === null ? null : pathname);
+/**
+ * Whether a place opens a tab of its own: the middle's object does. The chat and a section
+ * index load into the active tab like any other place, but with no tab to load into they
+ * open none, so Imago can fill the middle with nothing open.
+ */
+export const opensTab = (path: string): boolean => {
+  const stage = stageFor(path);
+  // The Console's session rides its query, so its one address opens a tab its sessions share.
+  return stage.object !== null || isConsole(stage);
+};
 
 /** The open tabs and the one the viewer is in (its id). */
 export type TabStrip = { readonly tabs: readonly Tab[]; readonly active: string | null };
@@ -40,10 +48,11 @@ export const visitInTab = (tab: Tab, path: string): Tab =>
   path === tab.path ? tab : { ...tab, path, back: [...tab.back, tab.path].slice(-TAB_HISTORY_LIMIT), forward: [] };
 
 /**
- * A navigation to a tab's object, as browser tabs (and classic) work: it loads into the active
+ * A navigation, as browser tabs (and classic) work: wherever it goes, it loads into the active
  * tab as a new step in that tab's history. With no active tab (first load, or after it closed)
- * the viewer's tab for that page is picked up again, else one opens; New tab always opens one,
- * beside the active tab. `id` names the tab if one opens.
+ * the viewer's tab for that place is picked up again, else one opens, but only for a place that
+ * opens a tab (see opensTab). New tab always opens one, beside the active tab. `id` names the
+ * tab if one opens.
  */
 export const navigateTabs = (strip: TabStrip, path: string, id: string, inNewTab = false): TabStrip => {
   const active = activeTabOf(strip);
@@ -54,6 +63,7 @@ export const navigateTabs = (strip: TabStrip, path: string, id: string, inNewTab
   if (active === null && !inNewTab) {
     const open = strip.tabs.find((tab) => tab.path === path);
     if (open !== undefined) return { tabs: strip.tabs, active: open.id };
+    if (!opensTab(path)) return strip;
   }
   return { tabs: insertBeside(strip, newTab(id, path)), active: id };
 };

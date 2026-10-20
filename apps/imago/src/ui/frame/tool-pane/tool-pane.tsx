@@ -3,12 +3,11 @@
 import type { ReactNode } from 'react';
 import type { DriveTool } from '../stage/stage';
 import { CalendarPane } from '../../tools/calendar/calendar-pane';
-import { AgentsPane } from '../../tools/agents/agents-pane';
+import { ConsolePane } from '../../tools/agents/console-pane';
 import { WorkflowsPane } from '../../tools/workflows/workflows-pane';
 import { ActivityPane } from '../../tools/activity/activity-pane';
 import { MembersPane } from '../../tools/members/members-pane';
 import { TrashPane } from '../../tools/trash/trash-pane';
-import { HomeConsolePane } from '../../tools/agents/home-console-pane';
 import { useIsHome } from '../drives/home-drive-context';
 import { isDashboardTool } from '../drives/home-scope';
 
@@ -26,7 +25,7 @@ export function ToolPane({ tool, driveId, close, variant }: ToolPaneProps & { re
     case 'calendar':
       return <CalendarPane driveId={driveId} close={close} variant={variant} allDrives={allDrives} />;
     case 'agents':
-      return allDrives ? <HomeConsolePane driveId={driveId} close={close} variant={variant} /> : <AgentsPane driveId={driveId} close={close} variant={variant} />;
+      return <ConsolePane driveId={driveId} close={close} variant={variant} allDrives={allDrives} />;
     case 'workflows':
       return <WorkflowsPane driveId={driveId} close={close} variant={variant} />;
     case 'activity':

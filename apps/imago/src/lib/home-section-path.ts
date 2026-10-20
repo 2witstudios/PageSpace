@@ -11,7 +11,8 @@ export const homeSectionPath = (homeDriveId: string, section: HomeSection, searc
     for (const each of typeof value === 'string' ? [value] : value ?? []) query.append(key, each);
   }
   const search = query.toString();
-  // A tool's screen is the object it opens (stage.ts toolViewSegment); Tasks and Messages land on their pane.
-  const screen = section === 'tasks' || section === 'messages' ? section : `${section}/view`;
+  // A tool's screen is the object it opens (stage.ts toolViewSegment); Tasks and Messages land on
+  // their pane, and the Console on its own address, where a ?workspace= opens the session.
+  const screen = section === 'tasks' || section === 'messages' || section === 'agents' ? section : `${section}/view`;
   return `/${encodeURIComponent(homeDriveId)}/${screen}${search ? `?${search}` : ''}`;
 };

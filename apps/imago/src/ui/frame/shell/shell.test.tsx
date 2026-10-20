@@ -22,9 +22,10 @@ vi.mock('@/retained/components/orgs/OrgSurfaceBanner', () => ({ OrgSurfaceBanner
 
 // The URL is the shell's only input besides the store. Next's router is the
 // seam: a navigation is a new pathname with the same layout still mounted.
-const navigation = vi.hoisted(() => ({ pathname: '/drive-1' as string | null }));
+const navigation = vi.hoisted(() => ({ pathname: '/drive-1' as string | null, search: '' }));
 vi.mock('next/navigation', () => ({
   usePathname: () => navigation.pathname,
+  useSearchParams: () => new URLSearchParams(navigation.search),
   // The palette navigates through the router; its own suite proves where.
   useRouter: () => ({ push: () => {} }),
 }));
@@ -174,6 +175,11 @@ vi.mock('@/ui/frame/tool-pane/tool-pane', () => ({
   ToolPane: ({ tool, driveId }: { tool: string; driveId: string }) => h('div', { 'data-tool-pane': `${tool}:${driveId}` }),
 }));
 
+// The Console's session bar reads the retained agent stores; its own suite proves it.
+vi.mock('@/ui/tools/agents/session-toolbar', () => ({
+  SessionToolbar: ({ driveId }: { driveId?: string }) => h('div', { role: 'toolbar', 'aria-label': 'Session', 'data-drive': driveId ?? 'all' }),
+}));
+
 const { Shell } = await import('./shell');
 
 let root: Root | null = null;
@@ -238,6 +244,7 @@ beforeEach(() => {
   chatMounts.count = 0;
   historyMounts.count = 0;
   navigation.pathname = '/drive-1';
+  navigation.search = '';
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
@@ -260,6 +267,52 @@ describe('Shell', () => {
         slot('object').querySelector('section')?.getAttribute('aria-label') ?? container.querySelector('section[aria-label="Members"]')?.getAttribute('aria-label'),
       ],
       expected: ['members:drive-1', 'Members'],
+    });
+  });
+
+  test('the Console with no session open hands the middle to Imago', () => {
+    navigate('/drive-1/agents');
+    assert({
+      given: 'the Console route with no ?workspace=',
+      should: 'show the Console pane as the wide list beside Imago on the ground, with no object column',
+      actual: [
+        slot('list').querySelector<HTMLElement>('[data-tool-pane]')?.dataset.toolPane,
+        frame().dataset.list,
+        frame().dataset.imago,
+        slot('object').getAttribute('aria-hidden'),
+      ],
+      expected: ['agents:drive-1', 'list', 'ground', 'true'],
+    });
+  });
+
+  test('the Console with a session open shows its grid under the session bar, Imago docked beside it', () => {
+    navigation.search = 'workspace=s1';
+    navigate('/drive-1/agents');
+    assert({
+      given: 'the Console route with ?workspace=s1',
+      should: 'open the object column headed by the session bar, the pane narrowed to the tree, Imago docked',
+      actual: [
+        frame().dataset.list,
+        frame().dataset.imago,
+        slot('object').getAttribute('aria-hidden'),
+        slot('object').querySelector('[role="toolbar"][aria-label="Session"]') !== null,
+        slot('list').querySelector<HTMLElement>('[data-tool-pane]')?.dataset.toolPane,
+      ],
+      expected: ['tree', 'docked', null, true, 'agents:drive-1'],
+    });
+  });
+
+  test("Home's session bar reads every drive's sessions, a drive's only its own", () => {
+    navigation.search = 'workspace=s1';
+    navigate('/home-1/agents');
+    const home = slot('object').querySelector<HTMLElement>('[aria-label="Session"]')?.dataset.drive;
+    navigate('/drive-1/agents');
+    const drive = slot('object').querySelector<HTMLElement>('[aria-label="Session"]')?.dataset.drive;
+    assert({
+      given: 'a session open on the Home drive’s Console, then on another drive’s',
+      should: 'scope the bar to every drive on Home and to that drive elsewhere',
+      actual: [home, drive],
+      expected: ['all', 'drive-1'],
     });
   });
 
@@ -605,15 +658,15 @@ describe('Shell', () => {
   });
 
   test('the spine never folds Imago', () => {
-    const places = ['/drive-1/calendar', '/drive-1/calendar/view', '/drive-1/activity', '/drive-1/agents/view', '/drive-1/files/page-1'].map((pathname) => {
+    const places = ['/drive-1/calendar', '/drive-1/calendar/view', '/drive-1/activity', '/drive-1/agents', '/drive-1/files/page-1'].map((pathname) => {
       navigate(pathname);
       return [frame().dataset.imago, getUiState().resources.imagoCollapsed];
     });
     assert({
-      given: 'Calendar from the spine, its screen, Activity from the spine, the Console screen and then a page',
+      given: 'Calendar from the spine, its screen, Activity from the spine, the Console with no session open and then a page',
       should: 'make Imago the ground beside each pane alone and dock it beside each screen, never folding it',
       actual: places,
-      expected: [['ground', false], ['docked', false], ['ground', false], ['docked', false], ['docked', false]],
+      expected: [['ground', false], ['docked', false], ['ground', false], ['ground', false], ['docked', false]],
     });
   });
 

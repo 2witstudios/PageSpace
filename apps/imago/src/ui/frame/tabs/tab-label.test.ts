@@ -17,6 +17,19 @@ describe('tabLabelFor() (IMC-1.5)', () => {
     });
   });
 
+  test('a section index names its section, not a page', () => {
+    assert({
+      given: 'the Files, Messages and Tasks indexes of a drive',
+      should: 'label each with its section and icon, asking for no page',
+      actual: ['/d1/files', '/d1/messages', '/d1/tasks'].map(tabLabelFor),
+      expected: [
+        { kind: 'screen', title: 'Files', icon: 'files' },
+        { kind: 'screen', title: 'Messages', icon: 'messages' },
+        { kind: 'screen', title: 'Tasks', icon: 'tasks' },
+      ],
+    });
+  });
+
   test('screens carry their nav names (SPEC settings navs)', () => {
     assert({
       given: 'drive tools, drive settings and account screens',

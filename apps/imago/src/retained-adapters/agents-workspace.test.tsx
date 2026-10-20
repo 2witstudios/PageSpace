@@ -4,54 +4,25 @@ import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { mount, unmountAll } from '@/ui/test-support/dom';
 
-const viewport = vi.hoisted(() => ({ phone: false }));
-vi.mock('@/ui/frame/viewport/use-viewport-tier', () => ({ usePhone: () => viewport.phone }));
-vi.mock('@/ui/frame/drives/home-drive-context', () => ({ useHomeDriveId: () => 'home' }));
-vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <>{children}</> }));
-vi.mock('@/retained/components/agents/AgentsSurface', () => ({ default: () => <div data-surface="" /> }));
-vi.mock('@/ui/tools/agents/session-toolbar', () => ({ SessionToolbar: () => <div data-toolbar="" /> }));
-vi.mock('@/ui/tools/agents/home-console-pane', () => ({ HomeConsolePane: () => <section aria-label="Console: agents and sessions" /> }));
+vi.mock('./retained-provider', () => ({ RetainedSurface: ({ children }: { children: ReactNode }) => <div data-retained="">{children}</div> }));
+vi.mock('@/retained/components/agents/AgentsSurface', () => ({
+  default: ({ driveId }: { driveId?: string }) => <div data-surface={driveId ?? 'all'} />,
+}));
 
 const { AgentsWorkspace } = await import('./agents-workspace');
 
-afterEach(() => {
-  unmountAll();
-  viewport.phone = false;
-});
+afterEach(unmountAll);
 
 describe('AgentsWorkspace (IMC-7.29)', () => {
-  test('Home leaves the session list to the shell pane', () => {
-    const root = mount(<AgentsWorkspace />);
+  test('is the pane surface alone, leaving the session list and bar to the shell', () => {
     assert({
-      given: 'no drive (Home, the dashboard)',
-      should: 'render the session toolbar and surface, with the every-drive pane left to the shell',
+      given: 'a drive, then Home (no drive)',
+      should: 'render only the retained pane surface, scoped to that drive or to every drive',
       actual: [
-        root.querySelector('section[aria-label="Console: agents and sessions"]') !== null,
-        root.querySelector('[data-toolbar]') !== null,
-        root.querySelector('[data-surface]') !== null,
+        mount(<AgentsWorkspace driveId="d1" />).innerHTML,
+        mount(<AgentsWorkspace />).innerHTML,
       ],
-      expected: [false, true, true],
-    });
-  });
-
-  test('a drive route keeps its own Agents pane in the shell and renders no account pane', () => {
-    const root = mount(<AgentsWorkspace driveId="d1" />);
-    assert({
-      given: 'a drive',
-      should: 'leave the session list to the shell pane and render only the workspace',
-      actual: root.querySelector('section[aria-label="Console: agents and sessions"]'),
-      expected: null,
-    });
-  });
-
-  test('Home on a phone carries the every-drive pane itself', () => {
-    viewport.phone = true;
-    const root = mount(<AgentsWorkspace />);
-    assert({
-      given: 'Home on a phone, where the shell shows no tool pane',
-      should: 'render the every-drive session list beside the surface',
-      actual: root.querySelector('section[aria-label="Console: agents and sessions"]') !== null,
-      expected: true,
+      expected: ['<div data-retained=""><div data-surface="d1"></div></div>', '<div data-retained=""><div data-surface="all"></div></div>'],
     });
   });
 });

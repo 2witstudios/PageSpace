@@ -50,7 +50,8 @@ export function PageView({ driveId, pageId }: PageViewProps): ReactNode {
     case 'CANVAS': content = <CanvasPage {...props} />; break;
     case 'FILE': content = <FilePage {...props} />; break;
     case 'CHANNEL': content = <ChannelPage {...props} />; break;
-    case 'TASK_LIST': content = <TaskListPage {...props} />; break;
+    // Native: drawn on imago's own tokens, outside the classic surface.
+    case 'TASK_LIST': return <div className="h-full min-h-0"><TaskListPage {...props} /></div>;
     case 'AI_CHAT': content = <AgentPage {...props} />; break;
     default: return renderObjectPlaceholder('Page');
   }

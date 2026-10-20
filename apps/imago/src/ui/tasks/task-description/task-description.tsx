@@ -21,7 +21,8 @@ type DescriptionEditorProps = { readonly pageId: string; readonly initial: strin
 /** The editor, made once per task with the content it opened with. */
 function DescriptionEditor({ pageId, initial }: DescriptionEditorProps): ReactNode {
   const client = useApiClient();
-  const editable = usePageEditable(pageId);
+  // It saves as it is typed: editable only on a definite yes.
+  const editable = usePageEditable(pageId) === true;
   const [refusal, setRefusal] = useState<string | null>(null);
   const saver = useMemo(
     () =>

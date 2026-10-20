@@ -1,7 +1,9 @@
+import { AgentsWorkspace } from '@/retained-adapters/agents-workspace';
 import { getViewer } from '@/lib/auth/get-viewer';
+import { HomeScoped } from '@/ui/frame/drives/home-scoped';
 
-/** The tool's pane beside the chat. The shell renders the panes; the pane opens the tool's screen as the object. */
-export default async function Page(): Promise<null> {
+export default async function AgentsPage({ params }: { params: Promise<{ driveId: string }> }) {
   await getViewer();
-  return null;
+  const { driveId } = await params;
+  return <HomeScoped driveId={driveId} home={<AgentsWorkspace />} drive={<AgentsWorkspace driveId={driveId} />} />;
 }

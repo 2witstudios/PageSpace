@@ -1634,6 +1634,70 @@ beforeEach(() => {
       expect(stored).toEqual(new Date(epoch));
     });
 
+    describe('startDate', () => {
+      const createTaskWithBody = async (body: Record<string, unknown>) => {
+        const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
+        transactionPageResult = [{ id: 'new-page', title: 'Task' }];
+        transactionTaskResult = [mockNewTask];
+        capturedInserts.length = 0;
+
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+        vi.mocked(canUserEditPage).mockResolvedValue(true);
+        // Earlier cases (and early-400 cases here) can leave Once values queued.
+        vi.mocked(db.query.pages.findFirst).mockReset();
+        vi.mocked(db.query.taskItems.findFirst).mockReset();
+        vi.mocked(db.query.pages.findFirst)
+          .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+          .mockResolvedValueOnce(null as never);
+        vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+        vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+        // The only taskItems.findFirst in POST is the post-create relations fetch.
+        vi.mocked(db.query.taskItems.findFirst)
+          .mockResolvedValueOnce({ ...mockNewTask, startDate: body.startDate ?? null, assignee: null, user: null, assignees: [] } as never);
+
+        return POST(createRequest({ title: 'Task', ...body }), { params: mockParams });
+      };
+      const insertedTaskRow = () => capturedInserts.find(values => 'startDate' in values);
+
+      it('stores an ISO startDate on the new task and returns it', async () => {
+        const response = await createTaskWithBody({ startDate: '2026-03-01T00:00:00Z', dueDate: '2026-03-10T00:00:00Z' });
+
+        expect(response.status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toEqual(new Date('2026-03-01T00:00:00Z'));
+        expect((await response.json()).startDate).toBe('2026-03-01T00:00:00Z');
+      });
+
+      it('stores null when startDate is null or absent', async () => {
+        expect((await createTaskWithBody({ startDate: null })).status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toBeNull();
+        expect((await createTaskWithBody({})).status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toBeNull();
+      });
+
+      it('returns 400 for an invalid startDate without creating anything', async () => {
+        const response = await createTaskWithBody({ startDate: 'not-a-date' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Invalid start date');
+        expect(insertedTaskRow()).toBeUndefined();
+      });
+
+      it('returns 400 when startDate is after dueDate', async () => {
+        const response = await createTaskWithBody({ startDate: '2026-03-10T00:00:00Z', dueDate: '2026-03-01T00:00:00Z' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Start date must be on or before the due date');
+        expect(insertedTaskRow()).toBeUndefined();
+      });
+
+      it('returns 400 for an invalid dueDate', async () => {
+        const response = await createTaskWithBody({ dueDate: 'garbage' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Invalid due date');
+      });
+    });
+
     it('creates task page as TASK_LIST type with empty content', async () => {
       const mockTaskList = { id: mockTaskListId };
       const mockNewTask = { id: 'new-task', title: 'New Task', status: 'pending', priority: 'medium', position: 0 };

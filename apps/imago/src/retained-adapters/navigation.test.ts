@@ -13,7 +13,7 @@ describe('retained destinations stay inside the persistent shell', () => {
     ['/dashboard/drive123/channels/page456', '/drive123/messages/page456'],
     ['/dashboard/channels/page456', '/p/page456'],
     ['/dashboard/dms/new', '/dm/new'],
-    ['/dashboard/drive123/agents?workspace=w&c=c', '/drive123/agents/view?workspace=w&c=c'],
+    ['/dashboard/drive123/agents?workspace=w&c=c', '/drive123/agents?workspace=w&c=c'],
     ['/dashboard/drive123/calendar?date=2026-10-20', '/drive123/calendar/view?date=2026-10-20'],
     ['/dashboard/drive123/trash', '/drive123/trash/view'],
     ['/dashboard/drive123/members', '/drive123/members/all'],
@@ -84,7 +84,7 @@ it('a pathname unavailable during hydration does not claim a drive or throw', ()
 describe('a tool’s screen reads as classic’s tool route', () => {
   it.each([
     ['/drive123/calendar/view', '/dashboard/drive123/calendar'],
-    ['/drive123/agents/view', '/dashboard/drive123/agents'],
+    ['/drive123/calendar/view', '/dashboard/drive123/calendar'],
     ['/drive123/members/all', '/dashboard/drive123/members'],
     ['/drive123/members/u1', '/dashboard/drive123/members/u1'],
     ['/drive123/calendar', '/dashboard/drive123/calendar'],

@@ -20,6 +20,13 @@ const TOOLS: Readonly<Record<string, { readonly title: string; readonly icon: Ic
   trash: { title: 'Trash', icon: 'trash' },
 };
 
+/** A section's index, which a tab shows when the viewer is on the section itself. */
+const SECTIONS: Readonly<Record<'files' | 'messages' | 'tasks', { readonly title: string; readonly icon: IconName }>> = {
+  files: { title: 'Files', icon: 'files' },
+  messages: { title: 'Messages', icon: 'messages' },
+  tasks: { title: 'Tasks', icon: 'tasks' },
+};
+
 /** Drive settings, in the SPEC's nav names. */
 const DRIVE_SETTINGS: Readonly<Record<string, string>> = {
   overview: 'Overview',
@@ -93,7 +100,9 @@ export const tabLabelFor = (path: string): TabLabel => {
   if (second === '') return { kind: 'home' };
   // A smart view is a screen of Tasks; every other Tasks object is a task list page.
   if (second === 'tasks' && third === 'view') return { kind: 'screen', title: isTaskViewId(fourth) ? viewFor(fourth).label : 'Tasks', icon: 'tasks' };
-  if (second === 'files' || second === 'messages' || second === 'tasks') return { kind: 'page', pageId: third };
+  if (second === 'files' || second === 'messages' || second === 'tasks') {
+    return third === '' ? { kind: 'screen', ...SECTIONS[second] } : { kind: 'page', pageId: third };
+  }
   if (second === 'settings') return screen(DRIVE_SETTINGS[third], 'Drive settings');
   const tool = TOOLS[second];
   return tool === undefined ? screen(undefined, 'Drive') : { kind: 'screen', title: tool.title, icon: tool.icon };

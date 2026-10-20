@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatChipFor, chatContextFor, consoleStage, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -107,10 +107,10 @@ describe('stageFor() settings and account', () => {
     assert({
       given: 'a drive tool path, then its screen',
       should: 'open the tool’s pane alone as its own section, then its screen as the object',
-      actual: [stageFor('/drive-1/calendar'), stageFor('/drive-1/agents/view')],
+      actual: [stageFor('/drive-1/calendar'), stageFor('/drive-1/workflows/view')],
       expected: [
         { driveId: 'drive-1', section: 'calendar', list: 'list', object: null },
-        { driveId: 'drive-1', section: 'agents', list: 'tree', object: { kind: 'tool' } },
+        { driveId: 'drive-1', section: 'workflows', list: 'tree', object: { kind: 'tool' } },
       ],
     });
   });
@@ -130,12 +130,12 @@ describe('stageFor() settings and account', () => {
 
 describe('stageFor() one shape for every rail destination', () => {
   const indexes = ['files', 'messages', 'tasks', 'calendar', 'agents', 'workflows', 'activity', 'members', 'trash', 'settings'];
+  // The Console's session rides its query (consoleStage), so its index is checked here and its open session there.
   const selections = [
     '/d1/files/p1',
     '/d1/messages/c1',
     '/d1/tasks/view/today',
     '/d1/calendar/view',
-    '/d1/agents/view',
     '/d1/workflows/view',
     '/d1/activity/view',
     '/d1/members/all',
@@ -163,7 +163,7 @@ describe('stageFor() one shape for every rail destination', () => {
         const stage = stageFor(path);
         return [stage.section, stage.list, stage.object !== null];
       }),
-      expected: indexes.map((section) => [section, 'tree', true]),
+      expected: indexes.filter((section) => section !== 'agents').map((section) => [section, 'tree', true]),
     });
   });
 
@@ -685,3 +685,36 @@ describe('stageFor() notifications (IMC-9.14)', () => {
     });
   });
 });
+
+describe('consoleStage()', () => {
+  const console = stageFor('/drive-1/agents');
+
+  test('the Console with no session open', () => {
+    assert({
+      given: 'the Console route and no selected session',
+      should: 'leave its pane alone beside Imago, as every section index does',
+      actual: consoleStage(console, false),
+      expected: { driveId: 'drive-1', section: 'agents', list: 'list', object: null },
+    });
+  });
+
+  test('the Console with a session open', () => {
+    assert({
+      given: 'the Console route and a selected session',
+      should: 'open the session grid as the object beside the narrowed pane',
+      actual: consoleStage(console, true),
+      expected: { driveId: 'drive-1', section: 'agents', list: 'tree', object: { kind: 'tool' } },
+    });
+  });
+
+  test('every other stage', () => {
+    const calendar = stageFor('/drive-1/calendar');
+    assert({
+      given: 'another drive tool with a session "open", and a Console sub-route',
+      should: 'leave the other tool as the route made it, and claim no Console sub-route',
+      actual: [consoleStage(calendar, true), isConsole(calendar), isConsole(console), stageFor('/drive-1/agents/view')],
+      expected: [calendar, false, true, stageFor('/drive-1')],
+    });
+  });
+});
+

@@ -81,6 +81,18 @@ const sections: readonly string[] = ['chat', 'files', 'messages', 'tasks', 'sett
 
 export const isHideableSection = (section: string): section is HideableSection => sections.includes(section);
 
+/** A drive's Console (the agents tool), whose middle is the selected session's pane grid. */
+export const isConsole = (stage: Stage): boolean => stage.driveId !== null && stage.section === 'agents';
+
+/**
+ * The stage the shell lays out. The Console follows the one rule like every section, but which
+ * session is open rides the query string (`?workspace=`) so its live shells survive every pick,
+ * and the route alone cannot say; the caller passes it. With none open the pane sits alone
+ * beside Imago; with one open, its pane grid is the object and Imago docks beside it.
+ */
+export const consoleStage = (stage: Stage, sessionOpen: boolean): Stage =>
+  isConsole(stage) && sessionOpen ? sectionStage(stage.driveId, stage.section, { kind: 'tool' }) : stage;
+
 /** First segments that name a route, never a drive. */
 const reserved: readonly string[] = ['dm', 'account', 'orgs', 'chat', 'settings', 'notifications', ...listSections];
 
@@ -129,14 +141,17 @@ const userStage = (first: string, rest: readonly string[]): Stage => {
 };
 
 /**
- * A tool's screen. Members holds one more segment (`all`, `invite` or a member); every other
- * tool is one screen at `view`, so any other path is one no route holds (stage.test).
+ * A tool's screen. Members holds one more segment (`all`, `invite` or a member); the Console's
+ * session rides its query (consoleStage); every other tool is one screen at `view`, so any other
+ * path is one no route holds (stage.test).
  */
 const toolStage = (driveId: string, tool: DriveTool, rest: readonly string[]): Stage => {
   const [id, ...extra] = rest;
   if (id === undefined) return sectionStage(driveId, tool, null);
   if (extra.length > 0) return driveChat(driveId);
   if (tool === 'members') return isId(id) ? sectionStage(driveId, tool, { kind: 'tool' }) : driveChat(driveId);
+  // The Console opens a session through its query string (consoleStage), never a sub-route.
+  if (tool === 'agents') return driveChat(driveId);
   return id === toolViewSegment ? sectionStage(driveId, tool, { kind: 'tool' }) : driveChat(driveId);
 };
 

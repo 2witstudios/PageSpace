@@ -455,7 +455,7 @@ import {
 import { tierAllowanceCents, allowanceCentsForPaidCents } from '../money-model';
 
 // The allowances the flow grants when no invoice sizes them (MON-2 derivation
-// from the list price at A-11's ratio).
+// from the list price at the included ratio).
 const TIER_MONTHLY_ALLOWANCE_CENTS = {
   free: tierAllowanceCents('free'),
   pro: tierAllowanceCents('pro'),
@@ -523,8 +523,8 @@ const REAL_SUBSCRIPTION_PARENT = { subscription_details: { subscription: 'sub_te
 
 // A-11: what an invoice must pay for the ratio to grant a round figure the flow
 // arithmetic below is written in.
-const PAID_FOR_500_GRANT = 834; // floor(834 × 60%) = 500
-const PAID_FOR_1500_GRANT = 2500; // 2500 × 60% = 1500
+const PAID_FOR_500_GRANT = 500; // 500 × 100% = 500
+const PAID_FOR_1500_GRANT = 1500; // 1500 × 100% = 1500
 
 const invoicePaid = (id: string, customer: string, periodStart: number, periodEnd: number, amountPaid = 1500) => ({
   id: `evt_${id}`,
@@ -570,8 +570,8 @@ describe('credits flow — grants sized from the invoice paid', () => {
     const grant = ledgerOf('u1').find((r) => r.entryType === 'monthly_grant' && r.stripeRef === 'in_full')!;
     expect(grant.paidCents).toBe(1500);
     expect(grant.amountCents).toBe(allowanceCentsForPaidCents(1500, 'pro'));
-    expect(grant.amountCents).toBe(900);
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(grant.amountCents).toBe(1500);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
   });
 
   it('MON-2 a 50%-off invoice grants half', async () => {
@@ -596,7 +596,7 @@ describe('credits flow — grants sized from the invoice paid', () => {
     await applyStripeFunding(evt, { tier: 'pro' });
     await applyStripeFunding(evt, { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
     expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
 
@@ -611,8 +611,8 @@ describe('credits flow — grants sized from the invoice paid', () => {
     seedLiveSubscription('u1', 'active', true);
     await applyStripeFunding(withReason(invoicePaid('in_gift', 'cus_1', PERIOD_START, PERIOD_END, 0), 1500, 'subscription_cycle'), { tier: 'pro' });
 
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(900);
-    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 900, paidCents: 0 });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(1500);
+    expect(ledgerOf('u1').find((r) => r.stripeRef === 'in_gift')).toMatchObject({ entryType: 'monthly_grant', amountCents: 1500, paidCents: 0 });
   });
 
   it('D-OW-30 a $0 subscription_create invoice (subtotal 0) on a non-gifted subscription grants nothing: no trial is funded', async () => {
@@ -983,7 +983,7 @@ describe('credits flow — missed-grant reconcile review fixes (#2645 threads)',
 
 describe('credits flow — happy path (fund → gate → consume → top-up → drained)', () => {
   it('funds $5/mo, draws monthly-first, accepts a top-up, then blocks at out_of_credits', async () => {
-    seedUser('u1', 'cus_1', 'pro'); // an $8.34 promo-priced Pro invoice → 500¢ (A-11: floor(834 × 60%))
+    seedUser('u1', 'cus_1', 'pro'); // an $5 promo-priced Pro invoice → 500¢ (100% of what it paid)
 
     // ── FUND: invoice.paid grants the ratio of what the invoice paid and sets the period ──
     expect(allowanceCentsForPaidCents(PAID_FOR_500_GRANT, 'pro')).toBe(500);
