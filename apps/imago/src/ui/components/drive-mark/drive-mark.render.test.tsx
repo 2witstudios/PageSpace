@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
@@ -64,5 +66,30 @@ describe('renderDriveMark()', () => {
       actual: [driveInitial('  élan'), driveInitial('🚀 Rocket'), driveInitial('   ')],
       expected: ['É', '🚀', '?'],
     });
+  });
+});
+
+describe('renderDriveMark() in the browser', () => {
+  test('an image that failed, then a new one', () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    const draw = (avatarUrl: string) =>
+      act(() => root.render(renderDriveMark({ drive: { name: 'Alpha', avatarUrl }, shape: SHAPE, fill: FILL })));
+    draw('/api/drives/d/avatar/avatar-bad.png');
+    act(() => {
+      container.querySelector('img')?.dispatchEvent(new Event('error'));
+    });
+    const failedHidden = container.querySelector('img')?.hidden;
+    draw('/api/drives/d/avatar/avatar-good.png');
+    const replacement = container.querySelector('img');
+    assert({
+      given: 'an image that failed to load, then the drive\'s new image',
+      should: 'hide the failed one but show the new one',
+      actual: { failedHidden, newHidden: replacement?.hidden, src: replacement?.getAttribute('src') },
+      expected: { failedHidden: true, newHidden: false, src: '/api/drives/d/avatar/avatar-good.png' },
+    });
+    act(() => root.unmount());
+    container.remove();
   });
 });

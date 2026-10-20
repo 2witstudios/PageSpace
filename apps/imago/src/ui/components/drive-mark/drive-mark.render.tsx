@@ -42,8 +42,10 @@ export function renderDriveMark({ drive, shape, fill }: DriveMarkProps): ReactNo
     <span className={`${shape} ${tile} ${driveMarkClass}`} aria-hidden="true" data-drive-mark="">
       {driveInitial(drive.name)}
       {src === null ? null : (
+        // Keyed by src: a new image gets a new element, never one an earlier failure hid.
         // eslint-disable-next-line @next/next/no-img-element -- a PageSpace avatar route, drawn at the tile's own token size.
         <img
+          key={src}
           src={src}
           alt=""
           className={`${driveMarkImageClass} ${tile}`}
