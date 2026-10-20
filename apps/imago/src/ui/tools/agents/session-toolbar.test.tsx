@@ -7,10 +7,9 @@ import { useAgentPaneRequestStore } from '@/retained/stores/agent-workspace/useA
 
 type Session = { workspaceId: string; driveId: string; envId: string | null; name: string; sandboxStatus: string; createdAt: string; lastActiveAt: null; conversations: never[]; rev: number; nodes: never[]; targets: never[] };
 const fixtures = vi.hoisted(() => ({
-  selection: { selectedSessionId: null as string | null, selectedAgentId: 'a1' as string | null, selectSession: vi.fn() },
+  selection: { selectedSessionId: null as string | null, selectSession: vi.fn() },
   record: { session: { driveId: 'd1', name: 'Ship status page' } as { driveId: string; name: string } | null, canEndSession: false },
   sessions: [] as Session[],
-  agents: [{ id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5' }] as { id: string; title: string; aiModel: string }[],
   refresh: vi.fn(),
   forget: vi.fn(),
   del: vi.fn(),
@@ -42,7 +41,6 @@ vi.mock('@/retained/components/agents/useSessionRecord', () => ({
 }));
 vi.mock('./agents-data', () => ({
   useAgentSessions: () => ({ sessions: fixtures.sessions, isLoading: false, error: null, mutate: fixtures.refresh }),
-  useDriveAgents: () => fixtures.agents,
 }));
 
 const { SessionToolbar } = await import('./session-toolbar');
@@ -64,8 +62,6 @@ const running: Session = {
 beforeEach(() => {
   fixtures.sessions = [running];
   fixtures.record = { session: { driveId: 'd1', name: 'Ship status page' }, canEndSession: false };
-  fixtures.agents = [{ id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5' }];
-  fixtures.selection.selectedAgentId = 'a1';
   fixtures.dialog.props = null;
   fixtures.envDrive = undefined;
   vi.clearAllMocks();
@@ -76,29 +72,49 @@ afterEach(() => {
   fixtures.selection.selectedSessionId = null;
 });
 
-describe('SessionToolbar (IMC-6.4)', () => {
+describe('SessionToolbar (C-Drive-Agents session bar)', () => {
+  const toolbar = (root: HTMLElement) => root.querySelector('[role="toolbar"][aria-label="Session"]');
+  const nameOf = (root: HTMLElement) => root.querySelector('[data-session-name]')?.textContent;
+  const metaOf = (root: HTMLElement) => root.querySelector('[data-session-meta]')?.textContent;
+  const buttonNamed = (root: HTMLElement, label: string) =>
+    Array.from(root.querySelectorAll('button')).find((b) => b.getAttribute('aria-label') === label || b.textContent === label);
+
   test('renders nothing until a session is selected', () => {
     const root = mount(<SessionToolbar driveId="d1" />);
     assert({
       given: 'no selected session',
-      should: 'render no toolbar',
-      actual: root.querySelector('[role="toolbar"]'),
+      should: 'render no session bar',
+      actual: toolbar(root),
       expected: null,
     });
   });
 
-  test('reads the agent, environment, start and sandbox state of the selected session', () => {
+  test('names the session, where it runs and when it started, beside its sandbox state', () => {
     fixtures.selection.selectedSessionId = 's2';
     const root = mount(<SessionToolbar driveId="d1" />);
-    const toolbar = root.querySelector('[role="toolbar"][aria-label="Session"]');
     assert({
-      given: 'a running session with an agent selected',
-      should: 'name it "<agent> · env <name> · started <ago>" beside a Sandbox running pill',
+      given: 'a running session in an environment',
+      should: 'read "<name>", "in <env> · started <ago>" and mark the sandbox running',
       actual: [
-        toolbar?.textContent?.includes('Launch Agent · env studio-web · started 42 min ago'),
-        toolbar?.textContent?.includes('Sandbox running'),
+        nameOf(root),
+        metaOf(root),
+        root.querySelector('[role="img"][aria-label="Sandbox running"]') !== null,
       ],
-      expected: [true, true],
+      expected: ['Ship status page', 'in studio-web · started 42 min ago', true],
+    });
+  });
+
+  test('carries the shell controls it is handed: Show sidebar first, the Ask pill before Close', () => {
+    fixtures.selection.selectedSessionId = 's2';
+    const root = mount(
+      <SessionToolbar driveId="d1" leading={<button type="button">Show sidebar</button>} trailing={<button type="button">Ask</button>} />,
+    );
+    const labels = Array.from(toolbar(root)?.querySelectorAll('button') ?? []).map((b) => b.getAttribute('aria-label') ?? b.textContent);
+    assert({
+      given: 'a leading and a trailing control',
+      should: 'put the leading one first and the trailing one just before Close session',
+      actual: [labels[0], labels.at(-2), labels.at(-1)],
+      expected: ['Show sidebar', 'Ask', 'Close session'],
     });
   });
 
@@ -108,8 +124,8 @@ describe('SessionToolbar (IMC-6.4)', () => {
     assert({
       given: 'a viewer the server does not allow to end the session',
       should: 'not offer End session',
-      actual: Array.from(root.querySelectorAll('button')).some((button) => button.textContent === 'End session'),
-      expected: false,
+      actual: buttonNamed(root, 'End session'),
+      expected: undefined,
     });
   });
 
@@ -117,8 +133,7 @@ describe('SessionToolbar (IMC-6.4)', () => {
     fixtures.selection.selectedSessionId = 's2';
     const before = useAgentPaneRequestStore.getState().addPane.s2 ?? 0;
     const root = mount(<SessionToolbar driveId="d1" />);
-    const button = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'Add pane');
-    act(() => button?.click());
+    act(() => buttonNamed(root, 'Add pane')?.click());
     assert({
       given: 'a click on Add pane',
       should: 'raise one add-pane request for the selected session',
@@ -126,40 +141,37 @@ describe('SessionToolbar (IMC-6.4)', () => {
       expected: 1,
     });
   });
-  test('falls back through the session name, the record name and "Session" when the agent is unknown', () => {
-    fixtures.selection.selectedSessionId = 's2';
-    fixtures.selection.selectedAgentId = 'gone';
-    const named = mount(<SessionToolbar driveId="d1" />).querySelector('[role="toolbar"] span')?.textContent;
-    unmountAll();
 
-    fixtures.sessions = [{ ...running, envId: null, sandboxStatus: 'stopped' }];
+  test('Close session drops the selection without ending anything', () => {
+    fixtures.selection.selectedSessionId = 's2';
+    const root = mount(<SessionToolbar driveId="d1" />);
+    act(() => buttonNamed(root, 'Close session')?.click());
+    assert({
+      given: 'a click on Close session',
+      should: 'deselect the session and DELETE nothing',
+      actual: [fixtures.selection.selectSession.mock.calls, fixtures.del.mock.calls.length],
+      expected: [[[null]], 0],
+    });
+  });
+
+  test('falls back through the session name, the record name and "Session"', () => {
+    fixtures.selection.selectedSessionId = 's2';
+    fixtures.sessions = [{ ...running, envId: null, sandboxStatus: 'none' }];
     const bare = mount(<SessionToolbar driveId="d1" />);
-    const noEnv = bare.querySelector('[role="toolbar"]')?.textContent;
+    const noEnv = [nameOf(bare), metaOf(bare), bare.querySelector('[aria-label="Sandbox running"]')];
     unmountAll();
 
     fixtures.sessions = [];
-    const fromRecord = mount(<SessionToolbar driveId="d1" />).querySelector('[role="toolbar"] span')?.textContent;
+    const fromRecord = nameOf(mount(<SessionToolbar driveId="d1" />));
     unmountAll();
 
     fixtures.record = { session: null, canEndSession: false };
-    const bareLabel = mount(<SessionToolbar />).querySelector('[role="toolbar"] span')?.textContent;
+    const bareLabel = nameOf(mount(<SessionToolbar />));
     assert({
-      given: 'an agent that is no longer listed, then a session with no environment, then no session row, then no record',
-      should: 'name the session, drop the env and the Sandbox pill, then the record name, then plain "Session"',
-      actual: [
-        named,
-        noEnv?.includes('env '),
-        noEnv?.includes('Sandbox running'),
-        fromRecord,
-        bareLabel,
-      ],
-      expected: [
-        'Ship status page · env studio-web · started 42 min ago',
-        false,
-        false,
-        'Ship status page',
-        'Session',
-      ],
+      given: 'a session with no environment, then no session row, then no record',
+      should: 'drop the environment and the sandbox mark, then use the record name, then plain "Session"',
+      actual: [noEnv, fromRecord, bareLabel],
+      expected: [['Ship status page', 'started 42 min ago', null], 'Ship status page', 'Session'],
     });
   });
 
@@ -169,13 +181,13 @@ describe('SessionToolbar (IMC-6.4)', () => {
     const root = mount(<SessionToolbar driveId="d1" />);
     assert({
       given: 'a session whose environment is not in the drive list',
-      should: 'show the agent and start only',
-      actual: root.querySelector('[role="toolbar"] span')?.textContent,
-      expected: 'Launch Agent · started 42 min ago',
+      should: 'show the start only',
+      actual: metaOf(root),
+      expected: 'started 42 min ago',
     });
   });
 
-  test('looks up environments in the record\'s drive, else the pane\'s drive', () => {
+  test("looks up environments in the record's drive, else the pane's drive", () => {
     fixtures.selection.selectedSessionId = 's2';
     fixtures.record = { session: { driveId: 'd9', name: 'x' }, canEndSession: false };
     mount(<SessionToolbar driveId="d1" />);
@@ -185,7 +197,7 @@ describe('SessionToolbar (IMC-6.4)', () => {
     mount(<SessionToolbar />);
     assert({
       given: 'a record with its own drive, then no record and no pane drive',
-      should: 'ask for the record\'s drive first and for none when neither is known',
+      should: "ask for the record's drive first and for none when neither is known",
       actual: [fromRecord, fixtures.envDrive],
       expected: ['d9', null],
     });
@@ -196,8 +208,7 @@ describe('SessionToolbar (IMC-6.4)', () => {
     fixtures.record = { session: { driveId: 'd1', name: 'Ship status page' }, canEndSession: true };
     fixtures.del.mockResolvedValue(undefined);
     const root = mount(<SessionToolbar driveId="d1" />);
-    const button = Array.from(root.querySelectorAll('button')).find((b) => b.textContent === 'End session');
-    act(() => button?.click());
+    act(() => buttonNamed(root, 'End session')?.click());
     const opened = fixtures.dialog.props?.open;
     await act(async () => fixtures.dialog.props?.onConfirm());
     assert({

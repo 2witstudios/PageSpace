@@ -21,13 +21,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - The rail's first button is now Home, with a house icon, and the Agents tool is now Console, with a terminal icon.
   - The Imago orb is larger in the chat header's agent picker and its list.
   - The credits button no longer shows a sparkle when you are spending your own credits.
-  - Console's Session button matches Calendar's Event button and stays readable in dark mode.
 - Imago tabs:
   - + (New tab) opens a blank tab on the drive's home right away, as in a browser, instead of asking you to create a page. What you open next loads into it.
   - Tool tabs such as Calendar and Console show their own icon.
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
   - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
 - Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
+- Imago's Console works like the classic Agents console again:
+  - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
+  - The Console sidebar is classic's: each environment with its sessions nested under it, sessions with their own sandbox beside them, and each session's conversations, pages and shells listed under it. Every row opens in a pane.
+  - With no session open, the Console sidebar sits beside Imago, which keeps the middle. Opening a session puts its panes there under one session bar (name, environment, start time, preview, Add pane, End session and Close).
+  - A session whose last pane was closed opens on the pane picker instead of an empty screen, and Add pane works there too.
+  - A terminal that can't reach the realtime server now says so instead of staying blank.
+  - On Home, the Console lists every drive's sessions, grouped by drive, as classic's All drives view does.
 
 - Sign-in, sign-up, invitations, share links and the other signed-out pages are back to the classic look on pagespace.ai, and finishing email verification or passkey setup lands you on your dashboard again instead of Imago. The Imago-styled versions now sit behind their own build flag (`NEXT_PUBLIC_IMAGO_V3_AUTH`), off by default, so trying Imago no longer changes how you sign in. Imago itself and the "Try Imago" link are unchanged.
 

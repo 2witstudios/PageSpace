@@ -376,15 +376,18 @@ test('uploads a file through the retained palette and opens its specialized view
   await expect(page.getByText('Open in classic', { exact: true })).toHaveCount(0);
 });
 
-test('agent sessions and drive configuration remain native and preserve one chat', async ({ browser, baseURL }) => {
-  const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
-  const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
-  // On a drive the sessions are the Agents tool's left pane; its head button starts one.
-  const sessions = page.getByRole('region', { name: 'Console: agents and sessions', exact: true });
-  await expect(sessions.getByRole('button', { name: 'Session', exact: true })).toBeVisible();
+test('the Console multiplexes chats in its panes and drive configuration remains native', async ({ browser, baseURL }) => {
+  // A drive of its own: Home's Console lists every drive's sessions (checked at the end).
+  const drive = await factories.createDrive(user.id, { name: 'Console proof drive' });
+  const support = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
+  const page = await open(browser, baseURL!, imagoPath(drive.id, 'agents'));
+  // On a drive the Console's sessions are its left pane (classic's Agents sidebar); with no
+  // session open Imago holds the middle beside it.
+  const sessions = page.getByRole('region', { name: 'Console: sessions', exact: true });
+  await expect(sessions.getByRole('button', { name: 'New session', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toHaveCount(1);
-  await expect(sessions).toBeVisible();
-  await sessions.getByRole('button', { name: 'Session', exact: true }).click();
+  await expect(page.getByRole('toolbar', { name: 'Session', exact: true })).toHaveCount(0);
+  await sessions.getByRole('button', { name: 'New session', exact: true }).click();
   const palette = page.getByRole('dialog', { name: 'New session', exact: true });
   await palette.getByRole('option').filter({ hasText: 'Support proof' }).first().click();
   const name = page.getByRole('dialog', { name: 'Name your session', exact: true }).getByRole('textbox', { name: 'Session name', exact: true });
@@ -395,11 +398,13 @@ test('agent sessions and drive configuration remain native and preserve one chat
   expect(createdResponse.ok()).toBe(true);
   const workspace = await createdResponse.json() as { conversationId: string };
   await expect(sessions).toContainText('Native agent session');
-  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toBeEditable();
-  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).locator('textarea')).toHaveCount(1);
-  const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
-  await expect(chat.getByLabel('Choose agent: Support proof', { exact: true })).toBeVisible();
-  const sessionInput = chat.getByLabel('Message Support proof', { exact: true });
+  // The session opens under its own bar, and its first conversation is a real chat in a pane
+  // of the grid — not a hand-off to Imago's column.
+  const bar = page.getByRole('toolbar', { name: 'Session', exact: true });
+  await expect(bar).toContainText('Native agent session');
+  const sessionInput = page.locator('[data-slot="object"]').getByLabel('Message Support proof', { exact: true });
+  await expect(sessionInput).toHaveCount(1);
+  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).getByLabel('Message Support proof', { exact: true })).toHaveCount(0);
   await expect(sessionInput).toBeEditable();
   const sent = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
   await sessionInput.fill('A real workspace conversation turn');
@@ -407,15 +412,18 @@ test('agent sessions and drive configuration remain native and preserve one chat
   const admitted = await sent;
   expect(admitted.ok()).toBe(true);
   expect(admitted.request().postDataJSON()).toMatchObject({ conversationId: workspace.conversationId, chatId: support.id });
-  await expect(chat.locator('[data-role="assistant"]')).toContainText('pong');
-  const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { title: string; pageId: string | null }[] };
-  const imagoId = roster.agents.find(agent => agent.title === 'Imago')?.pageId;
-  expect(imagoId).toBeTruthy();
-  await chat.getByLabel('Choose agent: Support proof', { exact: true }).click();
-  await chat.getByRole('radiogroup', { name: 'Agent', exact: true }).getByRole('radio', { name: /^Imago/ }).click();
-  await expect(chat.getByLabel('Choose agent: Imago', { exact: true })).toBeVisible();
-  await expect(chat.getByLabel('Message Imago', { exact: true })).toBeEditable();
-  await expect(chat).toHaveCount(1);
+  await expect(page.locator('[data-slot="object"]')).toContainText('pong');
+  // Add pane opens the picker beside it, where a second agent's chat can sit side by side.
+  await bar.getByRole('button', { name: 'Add pane', exact: true }).click();
+  await expect(page.locator('[data-slot="object"]').getByText('Open in this pane', { exact: true })).toBeVisible();
+  // Closing the session hands the middle back to Imago and ends nothing.
+  await bar.getByRole('button', { name: 'Close session', exact: true }).click();
+  await expect(bar).toHaveCount(0);
+  await expect(sessions).toContainText('Native agent session');
+  // Home, the dashboard, lists the same session under its drive.
+  await page.goto(imagoPath(user.homeDriveId, 'agents'));
+  await expect(sessions).toContainText('Console proof drive');
+  await expect(sessions).toContainText('Native agent session');
   await page.goto(imagoPath(user.homeDriveId, 'settings/integrations'));
   await expect(page.getByText('No integrations connected to this drive.', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled();
