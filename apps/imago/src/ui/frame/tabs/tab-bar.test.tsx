@@ -152,22 +152,22 @@ describe('TabBar (IMC-1.5)', () => {
     });
   });
 
-  test('closing the active tab from a section', async () => {
+  test('closing the active tab on screen goes to its neighbour', async () => {
     window.localStorage.setItem(
       tabsStorageKey('d1'),
       JSON.stringify({ tabs: [{ id: 'a', path: '/d1/files/plan' }, { id: 'b', path: '/d1/files/pricing' }], active: 'a' }),
     );
-    navigation.pathname = '/d1/files';
+    navigation.pathname = '/d1/files/plan';
     const root = render();
     await settle(() => {
       if (!titles(root).includes('Pricing Model')) throw new Error('tabs not loaded');
     });
     act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Q4 Launch Plan"]')?.click());
     assert({
-      given: 'the active tab closed while the viewer is on the Files section',
-      should: 'make its neighbour active without leaving the section',
+      given: 'the active tab closed while the viewer is on its page',
+      should: 'make its neighbour active and go to it',
       actual: [getUiState().resources.activeTab, navigation.pushed],
-      expected: ['b', []],
+      expected: ['b', ['/d1/files/pricing']],
     });
   });
 });

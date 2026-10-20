@@ -5,7 +5,7 @@ import { IMAGO_BASE_PATH } from '@/lib/auth/sign-in-url';
 import { useUIStore } from '@/retained/stores/useUIStore';
 import { dispatch, transactions } from '../../store/transactions';
 import { stageFor, type Stage } from '../stage/stage';
-import { createTabId, imagoPathOf, isNewTabClick, tabPathFor } from './tabs-model';
+import { createTabId, imagoPathOf, isNewTabClick, opensTab } from './tabs-model';
 
 /**
  * ⌘/Ctrl-click and middle-click on a link to a page in this drive open it as a tab beside the
@@ -21,8 +21,7 @@ export function useNewTabClicks(stage: Stage): void {
       if (!(anchor instanceof HTMLAnchorElement) || (anchor.target !== '' && anchor.target !== '_self') || anchor.hasAttribute('download')) return;
       const path = imagoPathOf(anchor.href, window.location.origin, IMAGO_BASE_PATH);
       if (path === null) return;
-      const target = stageFor(path);
-      if (tabPathFor(target, path) === null || target.driveId !== driveId) return;
+      if (!opensTab(path) || stageFor(path).driveId !== driveId) return;
       event.preventDefault();
       dispatch(transactions.openBackgroundTab, { path, id: createTabId() });
     };

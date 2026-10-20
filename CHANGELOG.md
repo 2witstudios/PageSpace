@@ -26,6 +26,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - Tool tabs such as Calendar and Console show their own icon.
   - The active tab is clearer: it takes the color of the sheet below it and stands out from the tab strip in both light and dark mode.
   - The browser's Back button returns to the tab you came from. Before, after opening a New tab or switching tabs, Back loaded the earlier page into the current tab and left two tabs showing it.
+  - Every navigation loads into the tab you're in, as in the classic interface, including the drive's chat and a section's index (Files, Messages, Tasks) from the rail. Before, those left the tab showing the last page you opened.
 - Opening Calendar, Activity or Console, any other spot from the rail, or an agent page no longer folds Imago away. Imago stays open beside every screen and page until you collapse or close it yourself.
 - Imago's Console works like the classic Agents console again:
   - Chats run inside the session's panes, so you can split the grid and talk to several agents side by side. Before, a chat pane only showed a button that moved the conversation into Imago's column.
