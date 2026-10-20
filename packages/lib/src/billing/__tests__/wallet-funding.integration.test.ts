@@ -161,7 +161,7 @@ describe('wallet funding against Postgres', () => {
     };
 
     const first = await applyOrgPoolRefill(invoice, PRICES);
-    expect(first).toMatchObject({ kind: 'granted', orgId: org.id, allowanceCents: 4800 });
+    expect(first).toMatchObject({ kind: 'granted', orgId: org.id, allowanceCents: 8000 });
     const replay = await applyOrgPoolRefill(invoice, PRICES);
     expect(replay).toEqual({ kind: 'duplicate', orgId: org.id });
 
@@ -171,13 +171,13 @@ describe('wallet funding against Postgres', () => {
       ownerType: 'org',
       subjectType: null,
       parentWalletId: null,
-      monthlyRemainingCents: 4800,
-      monthlyAllowanceCents: 4800,
+      monthlyRemainingCents: 8000,
+      monthlyAllowanceCents: 8000,
     });
     expect(pools[0].monthlyPeriodStart?.getTime()).toBe(PERIOD_START_S * 1000);
     const grants = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id));
     expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({ walletId: pools[0].id, entryType: 'monthly_grant', amountCents: 4800, paidCents: 8000 });
+    expect(grants[0]).toMatchObject({ walletId: pools[0].id, entryType: 'monthly_grant', amountCents: 8000, paidCents: 8000 });
 
     // An OLDER invoice paid late (dunning) is a new stripeRef: it refills once, but it
     // never moves the pool's period — the org's reset date — backwards.
@@ -186,9 +186,9 @@ describe('wallet funding against Postgres', () => {
       id: `in_${createId()}`,
       lines: { has_more: false, data: invoice.lines.data.map((l) => ({ ...l, period: { start: PERIOD_START_S - 30 * 86_400, end: PERIOD_START_S } })) },
     };
-    expect(await applyOrgPoolRefill(lateOld, PRICES)).toMatchObject({ kind: 'granted', allowanceCents: 4800 });
+    expect(await applyOrgPoolRefill(lateOld, PRICES)).toMatchObject({ kind: 'granted', allowanceCents: 8000 });
     const [afterLate] = await db.select().from(wallets).where(eq(wallets.id, pools[0].id));
-    expect(afterLate.monthlyRemainingCents).toBe(9600);
+    expect(afterLate.monthlyRemainingCents).toBe(16000);
     expect(afterLate.monthlyPeriodStart?.getTime()).toBe(PERIOD_START_S * 1000);
     expect(afterLate.monthlyPeriodEnd?.getTime()).toBe(PERIOD_END_S * 1000);
 
@@ -237,7 +237,7 @@ describe('wallet funding against Postgres', () => {
       .returning();
     created.orgs.push(org.id);
     // Base + 3 seats (8000) plus a manually added invoice item of 2500 that is no plan line.
-    // Pre-fix behavior summed every line: 10500 paid × 60% would mint 6300 — the review's bug.
+    // Pre-fix behavior summed every line: 10500 paid would mint 10500 — the review's bug.
     const invoice = {
       id: `in_${createId()}`,
       customer: org.stripeCustomerId,
@@ -258,13 +258,13 @@ describe('wallet funding against Postgres', () => {
     expect(await applyOrgPoolRefill(invoice, PRICES)).toMatchObject({
       kind: 'granted',
       orgId: org.id,
-      allowanceCents: 4800,
+      allowanceCents: 8000,
     });
     const [pool] = await db.select().from(wallets).where(eq(wallets.orgId, org.id));
-    expect(pool).toMatchObject({ monthlyRemainingCents: 4800, monthlyAllowanceCents: 4800 });
+    expect(pool).toMatchObject({ monthlyRemainingCents: 8000, monthlyAllowanceCents: 8000 });
     const grants = await db.select().from(creditLedger).where(eq(creditLedger.stripeRef, invoice.id));
     expect(grants).toHaveLength(1);
-    expect(grants[0]).toMatchObject({ amountCents: 4800, paidCents: 8000 });
+    expect(grants[0]).toMatchObject({ amountCents: 8000, paidCents: 8000 });
   });
 
   it.each([
