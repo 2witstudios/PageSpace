@@ -22,7 +22,7 @@ describe('railItems()', () => {
       should: 'list Chat, Files, Messages and Tasks, each at that drive’s section',
       actual: railItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
-        ['chat', 'Chat', '/drive-1'],
+        ['chat', 'Home', '/drive-1'],
         ['files', 'Files', '/drive-1/files'],
         ['messages', 'Messages', '/drive-1/messages'],
         ['tasks', 'Tasks', '/drive-1/tasks'],
@@ -66,7 +66,7 @@ describe('secondaryItems() (IMC-1.4)', () => {
       actual: secondaryItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
         ['calendar', 'Calendar', '/drive-1/calendar'],
-        ['agents', 'Agents', '/drive-1/agents'],
+        ['agents', 'Console', '/drive-1/agents'],
       ],
     });
   });

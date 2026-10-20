@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useMemo, useState, type ReactNode } from 'react';
 import { renderToolPane, type ToolPaneProps } from '../../frame/tool-pane/tool-pane.render';
 import { cn } from '../../cn';
+import { renderIcon } from '../../components/icon/icon.render';
 import { fileHref } from '../../files/files-browser/files-browser-model';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { canManageDrive } from '@/retained/hooks/usePermissions';
@@ -68,17 +69,19 @@ export function AgentsPane({ driveId, close }: ToolPaneProps): ReactNode {
   const appEnvIds = new Set(apps.map((app) => app.envId));
 
   return renderToolPane({
-    title: 'Agents',
-    label: 'Agents and sessions',
+    title: 'Console',
+    label: 'Console: agents and sessions',
     actions: (
       <button
         type="button"
-        className="flex h-8 items-center rounded-lg bg-accent-deep px-3 text-sm font-medium text-spine-ink disabled:opacity-50"
+        // The tool panes' one primary action, as Calendar's Event: spine blue with its own ink in both themes.
+        className="flex h-ask-pill cursor-pointer items-center gap-1 rounded-round border-0 bg-spine px-3 text-sm font-medium text-spine-on disabled:cursor-default disabled:opacity-50"
         disabled={!driveId}
         onClick={() => {
           if (driveId) openSpawn(driveId, driveName);
         }}
       >
+        {renderIcon({ name: 'plus', size: 12 })}
         Session
       </button>
     ),

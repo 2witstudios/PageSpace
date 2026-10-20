@@ -60,7 +60,7 @@ export function renderRailButton(props: RailButtonRenderProps): ReactNode {
   const inner = (
     <>
       {active ? <span className={spineMarkerClass(size)} aria-hidden="true" /> : null}
-      {imago ? <ImagoOrb size="tile" /> : renderIcon({ name: icon, size: size === 'primary' ? 20 : 18 })}
+      {imago ? <ImagoOrb size="rail" surface="dark" /> : renderIcon({ name: icon, size: size === 'primary' ? 20 : 18 })}
       {renderSpineCount(unread)}
       {renderRailTooltip(label)}
     </>

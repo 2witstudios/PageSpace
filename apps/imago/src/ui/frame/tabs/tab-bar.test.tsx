@@ -32,7 +32,7 @@ const client = createApiClient({
 const render = () =>
   mount(
     <ImagoSWRProvider client={client}>
-      <TabBar stage={stageFor(navigation.pathname)} driveKey="d1" />
+      <TabBar stage={stageFor(navigation.pathname)} driveKey="d1" homeHref="/d1" />
     </ImagoSWRProvider>,
   );
 
@@ -60,6 +60,21 @@ describe('TabBar (IMC-1.5)', () => {
       should: 'list them in order with the open page selected and channels written #name',
       actual: [titles(root), tabs(root).map((tab) => tab.getAttribute('aria-selected'))],
       expected: [['Q4 Launch Plan', 'Pricing Model', '#launch-ops'], ['true', 'false', 'false']],
+    });
+  });
+
+  test('New tab opens a tab on the drive home', async () => {
+    const root = render();
+    await settle(() => {
+      if (!titles(root).includes('#launch-ops')) throw new Error('labels not loaded');
+    });
+    act(() => root.querySelector<HTMLButtonElement>('[aria-label="New tab"]')?.click());
+    const { openTabs, activeTab } = getUiState().resources;
+    assert({
+      given: 'New tab with Q4 Launch Plan active',
+      should: "open a New tab beside it on the drive's home, make it active and go there, with no create palette",
+      actual: [titles(root), openTabs.find((tab) => tab.id === activeTab)?.path, navigation.pushed],
+      expected: [['Q4 Launch Plan', 'New tab', 'Pricing Model', '#launch-ops'], '/d1', ['/d1']],
     });
   });
 

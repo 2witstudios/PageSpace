@@ -159,7 +159,7 @@ describe('Rail', () => {
 
   test('links to the current drive', () => {
     const { container } = railAt('/drive-1/tasks/list-1');
-    const hrefs = ['Chat', 'Files', 'Messages', 'Tasks', 'Calendar', 'Drive settings'].map((name) =>
+    const hrefs = ['Home', 'Files', 'Messages', 'Tasks', 'Calendar', 'Drive settings'].map((name) =>
       control(container, name).getAttribute('href'),
     );
 

@@ -56,7 +56,7 @@ export type SyncTabs = {
  * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it reads
  * that drive's stored tabs first, then loads the current page (if it is a tab's object) into
  * the active tab as a step in that tab's own history, as browser tabs do. The browser's Back
- * and Forward move within the active tab's history. New tabs open only when asked for: New
+ * and Forward move within the active tab's history, or back to the tab that shows where they land. New tabs open only when asked for: New
  * tab, ⌘/Ctrl-click or middle-click.
  */
 export const tabsPlugin = {
@@ -68,12 +68,17 @@ export const tabsPlugin = {
       const base: TabStrip = loaded ? stripOf(state) : restoreActive(parseTabs(stored), path);
       const active = activeTabOf(base);
       const rewound = path !== null && pop && active !== null ? rewindTab(active, path, direction) : null;
+      // Back or Forward to a place outside the active tab's history (it was a step in another
+      // tab, as when New tab or a tab click left it): return to the tab that shows it.
+      const showing = path !== null && pop && rewound === null ? base.tabs.find((tab) => tab.path === path) : undefined;
       const strip =
         path === null || (rewound !== null && rewound === active)
           ? base
           : rewound !== null
             ? { tabs: base.tabs.map((tab) => (tab.id === rewound.id ? rewound : tab)), active: base.active }
-            : navigateTabs(base, path, id, resources.newTabPending);
+            : showing !== undefined
+              ? { tabs: base.tabs, active: showing.id }
+              : navigateTabs(base, path, id, resources.newTabPending);
       const newTabPending = path === null ? resources.newTabPending : false;
       const unchanged =
         loaded &&
@@ -95,6 +100,11 @@ export const tabsPlugin = {
         : withTabs(state, { activeTab: id }),
     openBackgroundTab: (state: UiState, { path, id }: { readonly path: string; readonly id: string }): UiState =>
       withTabs(state, { openTabs: openTabInBackground(stripOf(state), path, id).tabs }),
+    /** New tab, as in a browser: a tab beside the active one, on the drive's home, made active. */
+    openNewTab: (state: UiState, { path, id }: { readonly path: string; readonly id: string }): UiState => {
+      const strip = navigateTabs(stripOf(state), path, id, true);
+      return withTabs(state, { openTabs: strip.tabs, activeTab: strip.active, newTabPending: false });
+    },
     setNewTabPending: (state: UiState, newTabPending: boolean): UiState =>
       state.resources.newTabPending === newTabPending ? state : withTabs(state, { newTabPending }),
     stepBack: (state: UiState, _: void): UiState => step(state, 'back'),

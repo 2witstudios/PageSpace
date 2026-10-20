@@ -25,6 +25,7 @@ import {
   GripVertical,
   Hash,
   History,
+  House,
   LayoutGrid,
   ListTodo,
   Lock,
@@ -69,6 +70,7 @@ describe('icon names', () => {
       expected: {
         search: Search,
         chat: MessageSquare,
+        home: House,
         files: Files,
         messages: MessagesSquare,
         tasks: ListTodo,

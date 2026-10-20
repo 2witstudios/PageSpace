@@ -33,6 +33,8 @@ type View = {
   /** Frames are owed until then: a hover, a press, or a still view's first draw. */
   aliveUntil: number;
   dirty: boolean;
+  /** Its own studio when it sits on a dark surface; else the page's. */
+  studio: Studio | null;
 };
 
 /** How long a still orb stays alive after a hover, in ms. */
@@ -144,7 +146,9 @@ class MetalEngine {
       visible: true,
       aliveUntil: 0,
       dirty: true,
+      studio: null,
     };
+    view.studio = this.studioFor(canvas);
     const host = canvas.parentElement ?? canvas;
     const wake = () => {
       view.aliveUntil = performance.now() + HOVER_ALIVE;
@@ -218,9 +222,23 @@ class MetalEngine {
     if (!lost) this.schedule();
   }
 
+  /**
+   * An orb on a dark surface (`data-orb-surface="dark"`, the spine) keeps the page's silver body
+   * but takes the dark studio's bright rim for its silhouette: the light studio's dark rim and
+   * grazing flag would read as a ragged dark ring against the dark surface.
+   */
+  private studioFor(canvas: HTMLCanvasElement): Studio | null {
+    if (canvas.dataset['orbSurface'] !== 'dark') return null;
+    const { rim } = readStudio(this.doc, 'dark');
+    return { ...this.studio, rim, flag: rim, shadow: 0 };
+  }
+
   /** The theme or the viewport changed: re-read the studio when asked, and redraw everything. */
   private restyle(theme: boolean): void {
-    if (theme) this.studio = readStudio(this.doc);
+    if (theme) {
+      this.studio = readStudio(this.doc);
+      for (const view of this.views) view.studio = this.studioFor(view.canvas);
+    }
     this.worldDirty = true;
     for (const view of this.views) view.dirty = true;
     this.schedule();
@@ -325,7 +343,8 @@ class MetalEngine {
 
   /** Draws one view; false when it has no size to draw into yet. */
   private render(view: View): boolean {
-    const { gl, uniforms: u, studio } = this;
+    const { gl, uniforms: u } = this;
+    const studio = view.studio ?? this.studio;
     const rect = view.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
     const win = this.doc.defaultView as Window;

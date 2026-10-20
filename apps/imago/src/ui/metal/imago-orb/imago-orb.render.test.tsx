@@ -31,4 +31,13 @@ describe('renderImagoOrb()', () => {
       expected: '<canvas class="h-4 w-4 block flex-none" data-imago-orb="glyph" aria-hidden="true"></canvas>',
     });
   });
+
+  test('on a dark surface', () => {
+    assert({
+      given: "the spine's Chat tile",
+      should: 'mark the surface for the engine to light',
+      actual: renderToString(renderImagoOrb({ size: 'rail', fallback: false, surface: 'dark' })),
+      expected: `<canvas class="${imagoOrbClass('rail', false)}" data-imago-orb="rail" data-orb-surface="dark" aria-hidden="true"></canvas>`,
+    });
+  });
 });

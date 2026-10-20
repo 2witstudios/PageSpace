@@ -7,7 +7,7 @@ import { useImagoPageId } from '../../chat/use-chat-data/use-chat-data';
 import { dispatch, transactions } from '../../store/transactions';
 import { pageKey } from '../../files/page-object/page-object';
 import type { Stage } from '../stage/stage';
-import { activeTabOf, stepTab } from './tabs-model';
+import { activeTabOf, createTabId, stepTab } from './tabs-model';
 import { useOpenTabs } from './use-open-tabs';
 import { requestNewTab, useNewTabClicks } from './use-new-tab-clicks';
 import { pageTabOf, tabLabelFor } from './tab-label';
@@ -33,22 +33,26 @@ function TabItem(props: TabItemProps) {
   const label = tabLabelFor(props.path);
   if (label.kind === 'page') return <PageTab {...props} pageId={label.pageId} />;
   if (label.kind === 'conversation') return renderTab({ ...props, title: 'Direct message', icon: 'messages', hue: null });
-  return renderTab({ ...props, title: label.title, icon: 'settings', hue: null });
+  if (label.kind === 'home') return renderTab({ ...props, title: 'New tab', icon: 'home', hue: null });
+  return renderTab({ ...props, title: label.title, icon: label.icon ?? 'settings', hue: null });
 }
 
 export type TabBarProps = {
   readonly stage: Stage;
   /** Whose tabs these are: the drive the spine links into (DEC-C6: per drive). */
   readonly driveKey: string;
+  /** That drive's home, where New tab opens; null with no drive, when New tab asks what to create. */
+  readonly homeHref: string | null;
 };
 
 /**
  * The open-pages tab bar (IMC-1.5). Browser-style, as in classic: a navigation loads into the
  * active tab, and Back and Forward step through that tab's own history (off a tab, on a section
- * or the chat, Back returns to the active tab). New tab, ⌘/Ctrl-click and middle-click open
- * new tabs. Tabs persist per drive under imago's own key.
+ * or the chat, Back returns to the active tab). New tab opens a tab on the drive's home, as a
+ * browser's does, and what opens next loads into it; ⌘/Ctrl-click and middle-click open pages
+ * in background tabs. Tabs persist per drive under imago's own key.
  */
-export function TabBar({ stage, driveKey }: TabBarProps) {
+export function TabBar({ stage, driveKey, homeHref }: TabBarProps) {
   const router = useRouter();
   const open = useOpenTabs(stage, driveKey);
   useNewTabClicks(stage);
@@ -80,6 +84,10 @@ export function TabBar({ stage, driveKey }: TabBarProps) {
       dispatch(transactions.stepForward, undefined);
       router.push(forward.path);
     },
-    onNew: requestNewTab,
+    onNew: () => {
+      if (homeHref === null) return requestNewTab();
+      dispatch(transactions.openNewTab, { path: homeHref, id: createTabId() });
+      router.push(homeHref);
+    },
   });
 }

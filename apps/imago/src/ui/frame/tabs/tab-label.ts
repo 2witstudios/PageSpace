@@ -1,18 +1,22 @@
 import { isPageTypeValue, type PageTypeValue } from '@pagespace/lib/utils/enums';
+import type { IconName } from '../../components/icon/icon-names';
 
 /** What a tab's label is read from: the page API, the DM list, or the screen's nav name. */
 export type TabLabel =
   | { readonly kind: 'page'; readonly pageId: string }
   | { readonly kind: 'conversation'; readonly conversationId: string }
-  | { readonly kind: 'screen'; readonly title: string };
+  /** A drive tool carries its spine icon; every other screen draws the settings mark. */
+  | { readonly kind: 'screen'; readonly title: string; readonly icon?: IconName }
+  /** The drive's home: what a New tab shows until something opens in it. */
+  | { readonly kind: 'home' };
 
-const TOOLS: Readonly<Record<string, string>> = {
-  calendar: 'Calendar',
-  agents: 'Agents',
-  workflows: 'Workflows',
-  activity: 'Activity',
-  members: 'Members',
-  trash: 'Trash',
+const TOOLS: Readonly<Record<string, { readonly title: string; readonly icon: IconName }>> = {
+  calendar: { title: 'Calendar', icon: 'calendar' },
+  agents: { title: 'Console', icon: 'console' },
+  workflows: { title: 'Workflows', icon: 'workflows' },
+  activity: { title: 'Activity', icon: 'activity' },
+  members: { title: 'Members', icon: 'members' },
+  trash: { title: 'Trash', icon: 'trash' },
 };
 
 /** Drive settings, in the SPEC's nav names. */
@@ -85,9 +89,11 @@ export const tabLabelFor = (path: string): TabLabel => {
   if (first === 'orgs') return screen(third === 'drives' ? 'Drives' : ({ general: 'General', members: 'Members & seats', drives: 'Drives', policies: 'Policies', security: 'Security', billing: 'Plan & seats', audit: 'Audit log', attention: 'Needs your attention', danger: 'Danger zone' } as Readonly<Record<string, string>>)[fourth], 'Organization settings');
   if (first === 'account') return screen(ACCOUNT[second], 'Account');
   if (first === 'notifications') return screen('Notifications', 'Notifications');
+  if (second === '') return { kind: 'home' };
   if (second === 'files' || second === 'messages' || second === 'tasks') return { kind: 'page', pageId: third };
   if (second === 'settings') return screen(DRIVE_SETTINGS[third], 'Drive settings');
-  return screen(TOOLS[second], 'Drive');
+  const tool = TOOLS[second];
+  return tool === undefined ? screen(undefined, 'Drive') : { kind: 'screen', title: tool.title, icon: tool.icon };
 };
 
 /** A page tab's title and type from GET /api/pages/[id]; channels read "#name" as the boards draw them. */
