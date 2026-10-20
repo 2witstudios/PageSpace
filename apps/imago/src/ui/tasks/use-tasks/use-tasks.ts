@@ -28,6 +28,7 @@ import {
   setWipLimit,
   toggledAssignees,
   toggledStatus,
+  settledPatch,
   updateTask,
   type TaskPatch,
 } from '../task-edit/task-edit';
@@ -253,6 +254,13 @@ const createActions = (
     return order === null ? { refusal: NOT_FOUND } : { list: moved.list, send: () => reorderTasks(client, order) };
   };
 
+  /** A field edit: the tree and the request both take the settled patch. */
+  const edit = (taskId: string, patch: TaskPatch) =>
+    onTask(taskId, (tree, at, found) => {
+      const settled = settledPatch(found.task, patch);
+      return outcome(updateTask(tree, taskId, settled), () => patchTask(client, at, settled));
+    });
+
   const status = (taskId: string, slug: string) =>
     onTask(taskId, (tree, at) =>
       outcome(setStatus(tree, taskId, slug, now()), () => setTaskStatus(client, at, slug)),
@@ -272,8 +280,7 @@ const createActions = (
         const draft = { ...input, listPageId, id: `pending-${minted}`, pageId: `pending-page-${minted}`, now: now() };
         return outcome(addTask(tree, draft), () => createTask(client, listPageId, input));
       }),
-    update: (taskId, patch) =>
-      run(onTask(taskId, (tree, at) => outcome(updateTask(tree, taskId, patch), () => patchTask(client, at, patch)))),
+    update: (taskId, patch) => run(edit(taskId, patch)),
     setStatus: (taskId, slug) => run(status(taskId, slug)),
     toggleComplete: (taskId) =>
       run((tree) => {
@@ -293,9 +300,7 @@ const createActions = (
       return runAll([
         // The status goes first: it is the part the server may refuse.
         ...(slug === undefined || slug === task?.status ? [] : [status(taskId, slug)]),
-        ...(patch === undefined
-          ? []
-          : [onTask(taskId, (edited, at) => outcome(updateTask(edited, taskId, patch), () => patchTask(client, at, patch)))]),
+        ...(patch === undefined ? [] : [edit(taskId, patch)]),
         ...(chosen === undefined ? [] : [assignees(taskId, () => chosen)]),
         ...(index === undefined ? [] : [reorder(taskId, index)]),
       ]);

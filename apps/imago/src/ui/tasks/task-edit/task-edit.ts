@@ -17,6 +17,7 @@ import {
   openStatus,
   seedStatus,
 } from '../task-tree/task-tree';
+import { dueNotBeforeStart } from '../task-detail/due-date';
 
 /** An edit's result: the new tree, or the old one and why not. */
 export type Outcome = {
@@ -120,14 +121,28 @@ export type TaskPatch = {
   readonly startDate?: string | null;
 };
 
-/** Edits a task's own fields, validated as PATCH validates them. */
-export const updateTask = (root: TaskList, id: string, patch: TaskPatch): Outcome => {
-  if (locate(root, id) === undefined) return refuse(root, NOT_FOUND);
+/**
+ * The patch as it is sent: a due day picked on the start's own day, as its
+ * local midnight, moves up to the start's instant (dueNotBeforeStart), so a
+ * start with a time of day does not refuse it. Apply and send this, not the
+ * raw patch, so the tree and the server see the same dates.
+ */
+export const settledPatch = (task: Task | undefined, patch: TaskPatch): TaskPatch => {
+  if (patch.dueDate === undefined || patch.dueDate === null) return patch;
+  const start = patch.startDate === undefined ? (task?.startDate ?? null) : patch.startDate;
+  const dueDate = dueNotBeforeStart(patch.dueDate, start);
+  return dueDate === patch.dueDate ? patch : { ...patch, dueDate };
+};
+
+/** Edits a task's own fields, validated as PATCH validates them; send `settledPatch` of the same patch. */
+export const updateTask = (root: TaskList, id: string, raw: TaskPatch): Outcome => {
+  const current = locate(root, id)?.task;
+  if (current === undefined) return refuse(root, NOT_FOUND);
+  const patch = settledPatch(current, raw);
   if (patch.title !== undefined && patch.title.trim() === '') return refuse(root, 'Title cannot be empty');
   if (patch.priority !== undefined && !PRIORITIES.includes(patch.priority)) return refuse(root, 'Invalid priority');
-  const current = locate(root, id)?.task;
-  const start = patch.startDate === undefined ? current?.startDate : patch.startDate;
-  const due = patch.dueDate === undefined ? current?.dueDate : patch.dueDate;
+  const start = patch.startDate === undefined ? current.startDate : patch.startDate;
+  const due = patch.dueDate === undefined ? current.dueDate : patch.dueDate;
   if (start && due && Date.parse(start) > Date.parse(due)) {
     return refuse(root, 'Start date must be on or before the due date');
   }

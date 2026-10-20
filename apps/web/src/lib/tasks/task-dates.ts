@@ -25,7 +25,13 @@ export const parseTaskDateInput = (input: unknown, timezone: string): TaskDatePa
 
 export const START_AFTER_DUE_ERROR = 'Start date must be on or before the due date';
 
-/** True when both dates are set and the start falls after the due date. */
+/**
+ * True when both dates are set and the start falls after the due date. The
+ * comparison is of exact instants: the server has no viewer zone to read a
+ * calendar day in. A client that picks whole days (Imago's date field and
+ * Roadmap) sends a due day on the start's own day as the start's instant,
+ * not that day's midnight, so it never sends a pair this refuses.
+ */
 export const isStartAfterDue = (
   startDate: Date | null | undefined,
   dueDate: Date | null | undefined,

@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { KeyboardEvent, ReactNode } from 'react';
+import { AvatarGroup } from '../../components/avatar-group/avatar-group';
 import { Checkbox } from '../../components/checkbox/checkbox';
 import { shortDayLabel } from '../../components/date-picker/calendar';
 import { DatePicker } from '../../components/date-picker/date-picker';
@@ -17,6 +18,8 @@ import { dueDateFor, dueDay } from './due-date';
 import {
   taskChipClass,
   taskChipEmptyClass,
+  taskChipReadOnlyClass,
+  taskChipReadOnlyEmptyClass,
   taskConfirmActionsClass,
   taskConfirmCancelClass,
   taskConfirmClass,
@@ -40,6 +43,7 @@ import {
   taskStatusDotClass,
   taskStatusPillClass,
   taskStripButtonClass,
+  taskUnassignedClass,
 } from './task-detail-class';
 
 /** The writes the detail makes, each a void action on the open task unless it names another. */
@@ -78,7 +82,7 @@ export type TaskDetailRenderProps = {
   readonly dueSetByImago: boolean;
   /** The viewer's own day, YYYY-MM-DD: what the date chips and pickers read against. */
   readonly today: string;
-  /** Whether the viewer may edit the list: Delete is offered only then. */
+  /** Whether the viewer may edit the list: without it every field reads as text, and nothing writes. */
   readonly canEdit: boolean;
   /** Which subtasks have their own subtasks open. */
   readonly expandedIds: readonly string[];
@@ -94,27 +98,31 @@ export type TaskDetailRenderProps = {
 };
 
 /* Text commits when it is left, not on every key: an edit is one change. A
-   blank or unchanged title puts the old one back and sends nothing. */
-const titleInput = (task: Task, rename: (title: string) => void): ReactNode => (
-  <input
-    key={`${task.id}:${task.title}`}
-    aria-label="Title"
-    defaultValue={task.title}
-    className={taskDetailTitleClass}
-    onBlur={(event) => {
-      const value = event.currentTarget.value.trim();
-      if (value === '' || value === task.title) {
-        event.currentTarget.value = task.title;
-        return;
-      }
-      rename(value);
-    }}
-    onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Escape') event.currentTarget.value = task.title;
-      if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
-    }}
-  />
-);
+   blank or unchanged title puts the old one back and sends nothing. A viewer
+   who may not edit reads it as the heading it is. */
+const titleInput = (task: Task, rename: (title: string) => void, canEdit: boolean): ReactNode => {
+  if (!canEdit) return <h2 className={taskDetailTitleClass}>{task.title}</h2>;
+  return (
+    <input
+      key={`${task.id}:${task.title}`}
+      aria-label="Title"
+      defaultValue={task.title}
+      className={taskDetailTitleClass}
+      onBlur={(event) => {
+        const value = event.currentTarget.value.trim();
+        if (value === '' || value === task.title) {
+          event.currentTarget.value = task.title;
+          return;
+        }
+        rename(value);
+      }}
+      onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+        if (event.key === 'Escape') event.currentTarget.value = task.title;
+        if (event.key === 'Enter' || event.key === 'Escape') event.currentTarget.blur();
+      }}
+    />
+  );
+};
 
 /** Where the task sits: Tasks, its list, each task above it, then the task itself. */
 const crumbs = ({ driveId, holder, path, hrefFor }: TaskDetailRenderProps): ReactNode => {
@@ -245,13 +253,22 @@ type DateFieldProps = {
   readonly min?: string;
   readonly max?: string;
   readonly className: string;
-  readonly set: (instant: string | null) => void;
+  /** Absent for a viewer who may not edit: the chip only reads. */
+  readonly set?: (instant: string | null) => void;
 };
 
 /** A date as a chip ("Due · Fri 23", or "Set due date"), opening the picker; a pick saves and closes. */
 const dateField = ({ name, value, today, min, max, className, set }: DateFieldProps): ReactNode => {
   const day = dueDay(value);
   const label = `${name} date`;
+  if (set === undefined) {
+    return (
+      <span className={day === '' ? taskChipReadOnlyEmptyClass : className}>
+        <Icon name="calendar" size={14} />
+        {day === '' ? `No ${label.toLowerCase()}` : `${name} · ${shortDayLabel(day, today)}`}
+      </span>
+    );
+  }
   return (
     <Popover
       label={label}
@@ -296,6 +313,36 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
   const due = dueDay(task.dueDate);
   const start = dueDay(task.startDate);
   const priority = priorities.find((entry) => entry.value === task.priority);
+  const priorityLabel = priority?.label ?? task.priority;
+  const dueTone = dueToneOf(task.dueDate, today, isDone(list, task));
+  if (!props.canEdit) {
+    const agents = task.assignees.filter((entry) => entry.type === 'agent').map((entry) => entry.name);
+    return (
+      <div role="group" aria-label="Fields" className={taskFieldsClass}>
+        <span className={taskStatusPillClass(status.group, false)}>
+          {statusDot(status)}
+          {status.name}
+        </span>
+        {dateField({ name: 'Due', value: task.dueDate, today, className: taskDueChipClass(dueTone, false) })}
+        {dateField({ name: 'Start', value: task.startDate, today, className: taskChipReadOnlyClass })}
+        <span className={taskChipReadOnlyClass}>
+          {task.assignees.length === 0 ? (
+            <span className={taskUnassignedClass}>Unassigned</span>
+          ) : (
+            <AvatarGroup names={task.assignees.map((entry) => entry.name)} agents={agents} label="Assigned to" />
+          )}
+        </span>
+        <span className={taskChipReadOnlyClass}>
+          {priorityGlyph(task.priority)}
+          {priorityLabel}
+        </span>
+        <Link href={props.hrefFor(props.holder.pageId)} prefetch className={taskChipClass}>
+          <Icon name="tasks" size={14} />
+          {props.holder.title}
+        </Link>
+      </div>
+    );
+  }
   return (
     <div role="group" aria-label="Fields" className={taskFieldsClass}>
       <ChoiceMenu
@@ -317,7 +364,7 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
           value: task.dueDate,
           today,
           min: start,
-          className: taskDueChipClass(dueToneOf(task.dueDate, today, isDone(list, task))),
+          className: taskDueChipClass(dueTone),
           set: actions.setDueDate,
         })}
         {due === '' || !props.dueSetByImago ? null : <span className={taskHintClass}>set by Imago</span>}
@@ -332,9 +379,9 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
           if (isPriority(value)) actions.setPriority(value);
         }}
         trigger={
-          <button type="button" aria-label={`Priority: ${priority?.label ?? task.priority}`} className={taskChipClass}>
+          <button type="button" aria-label={`Priority: ${priorityLabel}`} className={taskChipClass}>
             {priorityGlyph(task.priority)}
-            {priority?.label ?? task.priority}
+            {priorityLabel}
           </button>
         }
       />
@@ -369,8 +416,9 @@ const subtasks = (task: Task, props: TaskDetailRenderProps): ReactNode => {
         expandedIds: props.expandedIds,
         notice: props.notice,
         toggleExpanded: props.actions.toggleExpanded,
-        toggleComplete: props.actions.toggleComplete,
+        toggleComplete: props.canEdit ? props.actions.toggleComplete : undefined,
         addTask: props.actions.addTask,
+        editable: props.canEdit,
         taskHref: (entry) => props.hrefFor(entry.pageId),
         addLabel: 'Add subtask',
         addPlaceholder: 'Subtask title',
@@ -397,9 +445,9 @@ export function renderTaskDetail(props: TaskDetailRenderProps): ReactNode {
           <Checkbox
             checked={isDone(list, task)}
             label={`Mark ${task.title} complete`}
-            toggle={() => actions.toggleComplete(task.id)}
+            toggle={props.canEdit ? () => actions.toggleComplete(task.id) : undefined}
           />
-          {titleInput(task, actions.rename)}
+          {titleInput(task, actions.rename, props.canEdit)}
         </div>
         {notice?.at === task.id ? (
           <p role="status" className={taskDetailNoticeClass}>

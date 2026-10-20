@@ -237,7 +237,9 @@ const openTask = async (routes: Record<string, FakeRoute> = server(), withTree =
   );
   const detail = container.querySelector('[data-detail]') as HTMLElement;
   await settle(() => {
-    if (field<HTMLInputElement>(detail, 'Title')?.value !== title) throw new Error('no task');
+    // A viewer who may edit gets the Title field; one who may not, the title as a heading.
+    const shown = field<HTMLInputElement>(detail, 'Title')?.value ?? detail.querySelector('article h2')?.textContent;
+    if (shown !== title) throw new Error('no task');
     if (!descriptionOf(detail)?.textContent?.includes('Hello team')) throw new Error('no description');
   });
   const tree = container.querySelector('[data-tree]') as HTMLElement | null;
@@ -603,9 +605,13 @@ describe('TaskObject: the detail’s popovers', () => {
     await settle(() => {});
     assert({
       given: 'a viewer the server says cannot edit the list',
-      should: 'not offer Delete',
-      actual: field(detail, 'Delete task'),
-      expected: null,
+      should: 'not offer Delete, a Title field or any field control',
+      actual: {
+        delete: field(detail, 'Delete task'),
+        title: field(detail, 'Title'),
+        controls: detail.querySelectorAll('[aria-label="Fields"] button').length,
+      },
+      expected: { delete: null, title: null, controls: 0 },
     });
   });
 });

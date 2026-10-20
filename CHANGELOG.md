@@ -10,7 +10,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.
   - **Focus** lists what you can start next, either in the open list or across every list in the drive, with a "Done today" section and a quick-add row.
   - **Roadmap** puts the list on a timeline in weeks, months or quarters. Drag a bar's ends to change its start or due date, and pick up tasks with no date from the Unscheduled tray.
-  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task.
+  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task. If you can only view the list, the detail shows these fields as plain text instead. A due date set on the same day as a start time is kept rather than refused.
   - On the Tasks home, you can tick tasks off straight from the list.
   - Lists update live when someone else changes them.
 

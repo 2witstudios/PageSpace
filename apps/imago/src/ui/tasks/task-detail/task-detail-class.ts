@@ -23,15 +23,23 @@ export const taskFieldValueClass = 'flex items-center gap-2';
 
 /* One control shape for every field: a hairline chip that firms on hover
    and while its popover is open, the small radius, 13px ink. */
-export const taskChipClass =
-  'inline-flex h-8 items-center gap-2 rounded-md border border-hairline bg-transparent px-2 text-sm text-ink transition-colors duration-120 ease-standard hover:border-border-strong hover:bg-surface-overlay aria-expanded:border-border-strong aria-expanded:bg-surface-overlay';
+/** A field as a viewer who may not edit reads it: the chip's shape, nothing that answers a pointer. */
+export const taskChipReadOnlyClass =
+  'inline-flex h-8 items-center gap-2 rounded-md border border-hairline bg-transparent px-2 text-sm text-ink';
+
+export const taskChipReadOnlyEmptyClass = cn(taskChipReadOnlyClass, 'text-ink-faint');
+
+export const taskChipClass = cn(
+  taskChipReadOnlyClass,
+  'transition-colors duration-120 ease-standard hover:border-border-strong hover:bg-surface-overlay aria-expanded:border-border-strong aria-expanded:bg-surface-overlay',
+);
 
 /** A chip with nothing set yet: its label in the faint ink. */
 export const taskChipEmptyClass = cn(taskChipClass, 'text-ink-faint');
 
 /** The Due chip, graded as a card grades it: red while overdue, full ink when soon. */
-export const taskDueChipClass = (tone: DueTone | null): string =>
-  cn(taskChipClass, tone === 'overdue' ? 'font-medium text-live' : tone === 'soon' && 'font-medium');
+export const taskDueChipClass = (tone: DueTone | null, editable = true): string =>
+  cn(editable ? taskChipClass : taskChipReadOnlyClass, tone === 'overdue' ? 'font-medium text-live' : tone === 'soon' && 'font-medium');
 
 const statusTone: Readonly<Record<StatusGroup, string>> = {
   todo: 'bg-surface-sunken text-ink',
@@ -39,10 +47,11 @@ const statusTone: Readonly<Record<StatusGroup, string>> = {
   done: 'bg-surface-sunken text-ink-muted',
 };
 
-/** The status pill: the chip rounded, tinted by its status's group. */
-export const taskStatusPillClass = (group: StatusGroup): string =>
+/** The status pill: the chip rounded, tinted by its status's group; read-only, it takes no hover. */
+export const taskStatusPillClass = (group: StatusGroup, editable = true): string =>
   cn(
-    'inline-flex h-8 items-center gap-2 rounded-round px-3 text-sm font-medium transition-colors duration-120 ease-standard hover:bg-surface-overlay aria-expanded:bg-surface-overlay',
+    'inline-flex h-8 items-center gap-2 rounded-round px-3 text-sm font-medium',
+    editable && 'transition-colors duration-120 ease-standard hover:bg-surface-overlay aria-expanded:bg-surface-overlay',
     statusTone[group],
   );
 

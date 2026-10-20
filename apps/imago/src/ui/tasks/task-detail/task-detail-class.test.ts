@@ -9,6 +9,8 @@ import * as detail from './task-detail-class';
 import {
   taskChipClass,
   taskChipEmptyClass,
+  taskChipReadOnlyClass,
+  taskChipReadOnlyEmptyClass,
   taskDescriptionClass,
   taskDetailClass,
   taskDetailCrumbsClass,
@@ -55,6 +57,24 @@ describe('task detail classes', () => {
     });
   });
 
+  test('read-only fields', () => {
+    const answers = (value: string): boolean => value.includes('hover:') || value.includes('aria-expanded:');
+    assert({
+      given: 'the fields as a viewer who may not edit reads them',
+      should: 'keep the chip’s shape and tone, and drop everything that answers a pointer',
+      actual: [
+        answers(taskChipReadOnlyClass),
+        answers(taskChipReadOnlyEmptyClass),
+        answers(taskStatusPillClass('in_progress', false)),
+        answers(taskDueChipClass('overdue', false)),
+        taskStatusPillClass('in_progress', false).endsWith('bg-accent-soft text-ink'),
+        taskDueChipClass('overdue', false).endsWith('font-medium text-live'),
+        taskChipClass.startsWith(taskChipReadOnlyClass),
+      ],
+      expected: [false, false, false, false, true, true, true],
+    });
+  });
+
   test('status, due and priority tones', () => {
     assert({
       given: 'each status group, each due tone and each priority',
@@ -94,9 +114,9 @@ describe('task detail classes', () => {
     const groups = ['todo', 'in_progress', 'done'] as const;
     const lists = [
       ...Object.values(detail).filter((value): value is string => typeof value === 'string'),
-      ...groups.map(taskStatusPillClass),
+      ...groups.flatMap((group) => [taskStatusPillClass(group), taskStatusPillClass(group, false)]),
       ...groups.map(taskStatusDotClass),
-      ...(['overdue', 'soon', 'later', null] as const).map(taskDueChipClass),
+      ...(['overdue', 'soon', 'later', null] as const).flatMap((tone) => [taskDueChipClass(tone), taskDueChipClass(tone, false)]),
       ...(['high', 'medium', 'low'] as const).flatMap((priority) => [
         taskPriorityBarClass(true, 4, priority),
         taskPriorityBarClass(false, 8, priority),

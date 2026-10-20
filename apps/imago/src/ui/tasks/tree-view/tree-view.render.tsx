@@ -49,8 +49,8 @@ export type TreeViewRenderProps = {
   readonly notice: TaskNotice | null;
   /** Void action: shows or hides a task's subtasks. */
   readonly toggleExpanded: (taskId: string) => void;
-  /** Void action: ticks a task, or unticks it. */
-  readonly toggleComplete: (taskId: string) => void;
+  /** Void action: ticks a task, or unticks it; absent for a viewer who may not, whose boxes are read-only. */
+  readonly toggleComplete?: (taskId: string) => void;
   /** Void action: adds a task to the list on `listPageId`; a refusal is shown at `at`. */
   readonly addTask: (listPageId: string, at: string, title: string) => void;
   /** Where a task's detail opens; without it, titles are plain text. */
@@ -130,6 +130,7 @@ const row = (props: TreeViewRenderProps, list: TaskList, task: Task, level: numb
   const open = branch && props.expandedIds.includes(task.id);
   const done = isDone(list, task);
   const editable = props.editable !== false;
+  const { toggleComplete } = props;
   const draw = (drag: RowDrag | null): ReactNode => (
     <li
       key={task.id}
@@ -146,7 +147,11 @@ const row = (props: TreeViewRenderProps, list: TaskList, task: Task, level: numb
           </button>
         )}
         {lead(props, task, branch, open)}
-        <Checkbox checked={done} label={`Complete ${task.title}`} toggle={() => props.toggleComplete(task.id)} />
+        <Checkbox
+          checked={done}
+          label={`Complete ${task.title}`}
+          toggle={toggleComplete === undefined ? undefined : () => toggleComplete(task.id)}
+        />
         {props.taskHref === undefined ? (
           <span className={taskTitleClass(done)} data-title="">
             {task.title}

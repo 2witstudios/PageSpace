@@ -1,6 +1,7 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { dueDateFor } from '../task-detail/due-date';
+import { settledPatch, updateTask } from '../task-edit/task-edit';
 import { list, task } from '../task-model/fixtures';
 import type { Task, TaskList } from '../task-model/task';
 import {
@@ -389,6 +390,21 @@ describe('dragging', () => {
         { dueDate: at('2026-10-25') },
         null,
       ],
+    });
+  });
+
+  test('a due edge dragged onto a start with a time of day', () => {
+    // A start set over the API at 09:00 local on the 12th; the bar's due edge goes back to that day.
+    const startDate = new Date(2026, 9, 12, 9).toISOString();
+    const root = list('root', [task('a', { startDate, dueDate: at('2026-10-23') })]);
+    const bar = { kind: 'bar', ...span } as const;
+    const patch = dragPatch(bar, span, draggedDates(span, 'due', -20), 'due') ?? {};
+    const saved = updateTask(root, 'a', patch);
+    assert({
+      given: 'the due edge clamped onto the start’s own day, sent as that day’s midnight',
+      should: 'save the due date at the start’s instant rather than refuse it',
+      actual: [settledPatch(root.tasks[0], patch), saved.refusal, saved.list.tasks[0]?.dueDate],
+      expected: [{ dueDate: startDate }, undefined, startDate],
     });
   });
 
