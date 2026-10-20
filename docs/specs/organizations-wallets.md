@@ -169,7 +169,7 @@ Answered in conversation (2026-09-15):
 - A-9 Full cutover (D-OW-42, 2026-10-11, supersedes indefinite grandfathering): Founder and personal Business billing paths are retired. Existing subscribers must complete an explicit, verified one-time migration before rollout; the final runtime supports only personal Free/Pro and organization Business. Stripe price identity, never an amount match, establishes plan entitlement. Unknown, retired, unconfigured, or ambiguous price identities grant no paid entitlement. Migration preserves existing credit value and must not silently charge or discard balances.
 - A-10 The subscription price and the metered credit allowance are decoupled: the allowance is a ratio of the price paid, and a credit has its own unit distinct from cents (MON-1..MON-8). The numbers are A-11.
 
-- A-11 Money model numbers: INCLUDED_CREDIT_RATIO 60% for Pro and Business; CREDITS_PER_DOLLAR 10 (one credit is ten cents; it was 100 until the denomination was cut to keep the numbers small); top-ups at the full rate with no ratio. So Pro includes 90 credits a month, Business 300 plus 60 per extra seat, and a 10-dollar pack is 100 credits. The canvas uses these numbers; every credit surface must fit them (UI-12).
+- A-11 Money model numbers: INCLUDED_CREDIT_RATIO 100% for Pro and Business (a dollar paid is 10 credits); CREDITS_PER_DOLLAR 10 (one credit is ten cents; it was 100 until the denomination was cut to keep the numbers small); top-ups at the full rate with no ratio. So Pro includes 150 credits a month, Business 500 plus 100 per extra seat, and a 10-dollar pack is 100 credits. The canvas uses these numbers; every credit surface must fit them (UI-12).
 
 
 

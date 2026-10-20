@@ -28,8 +28,8 @@ describe('MON-5 (partial) the web formatter, the marketing mirror, and admin con
       expect(MONTHLY_CREDIT_CENTS[tier], tier).toBe(tierAllowanceCents(tier));
       expect(MONTHLY_CREDITS[tier], tier).toBe(formatCreditCount(MONTHLY_CREDIT_CENTS[tier]));
     }
-    // A-11: Pro is $15 × 60% → 900.
-    expect(MONTHLY_CREDITS.pro).toBe('90');
+    // A-11: Pro is $15 × 100% → 150.
+    expect(MONTHLY_CREDITS.pro).toBe('150');
   });
 
   it('MON-8 FREE_STARTER_CREDITS_DISPLAY is the starter count, not a monthly figure', () => {
@@ -53,11 +53,11 @@ describe('MON-5 (partial) the web formatter, the marketing mirror, and admin con
   it('UI-12 the free phrase says "to start" and never "/month"; paid phrases say "/month"', () => {
     expect(monthlyCreditsPhrase('free')).toBe('50 credits to start');
     expect(creditsPhrase('free')).toBe('50 to start');
-    // A-11: Pro $15 × 60% → 90; Business $50 × 60% → 300.
-    expect(monthlyCreditsPhrase('pro')).toBe('90 credits/month');
-    expect(creditsPhrase('pro')).toBe('90/mo');
-    expect(monthlyCreditsPhrase('business')).toBe('300 credits/month');
-    expect(creditsPhrase('business')).toBe('300/mo');
+    // A-11: Pro $15 × 100% → 150; Business $50 × 100% → 500.
+    expect(monthlyCreditsPhrase('pro')).toBe('150 credits/month');
+    expect(creditsPhrase('pro')).toBe('150/mo');
+    expect(monthlyCreditsPhrase('business')).toBe('500 credits/month');
+    expect(creditsPhrase('business')).toBe('500/mo');
   });
 
   it('MON-4 top-up packs are credit counts; their prices are real purchases and keep dollar strings', () => {
@@ -73,8 +73,8 @@ describe('MON-6 plan-card facts (lane A2)', () => {
     // Literal A-11 copy, not rebuilt from MONTHLY_CREDITS: an expectation derived
     // from the module under test cannot fail.
     expect(includedCreditsPhrase('free')).toBe('50 credits to start');
-    expect(includedCreditsPhrase('pro')).toBe('90 credits included each month');
-    expect(includedCreditsPhrase('business')).toBe('300 credits included each month');
+    expect(includedCreditsPhrase('pro')).toBe('150 credits included each month');
+    expect(includedCreditsPhrase('business')).toBe('500 credits included each month');
     for (const tier of TIERS) {
       expect(includedCreditsPhrase(tier), tier).not.toContain('$');
       expect(includedCreditsPhrase(tier), tier).toMatch(/^\d/);
@@ -86,15 +86,15 @@ describe('MON-6 plan-card facts (lane A2)', () => {
     expect(topUpRatePhrase()).toBe('100 credits per $10');
   });
 
-  it('MON-6 / MON-4 the subscription figure carries the ratio and the top-up rate does not: Pro pays $15 for 90 included credits while $10 of top-up buys 100', () => {
-    expect(tierAllowanceCents('pro')).toBe(900);
+  it('MON-6 / MON-4 the subscription figure carries the ratio and the top-up rate does not: Pro pays $15 for 150 included credits while $10 of top-up buys 100', () => {
+    expect(tierAllowanceCents('pro')).toBe(1500);
     expect(topUpRatePhrase()).toBe('100 credits per $10');
   });
 
   it('MON-2 the *ForCents siblings render A-11 figures from a server-supplied number', () => {
-    expect(includedCreditsPhraseForCents('pro', tierAllowanceCents('pro'))).toBe('90 credits included each month');
-    expect(monthlyCreditsPhraseForCents('business', tierAllowanceCents('business'))).toBe('300 credits/month');
-    expect(creditsCellPhrase('pro', tierAllowanceCents('pro'))).toBe('90 credits/mo');
+    expect(includedCreditsPhraseForCents('pro', tierAllowanceCents('pro'))).toBe('150 credits included each month');
+    expect(monthlyCreditsPhraseForCents('business', tierAllowanceCents('business'))).toBe('500 credits/month');
+    expect(creditsCellPhrase('pro', tierAllowanceCents('pro'))).toBe('150 credits/mo');
   });
 });
 
