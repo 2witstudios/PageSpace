@@ -5,26 +5,17 @@
  * CHECK constraint (organizations_avatar_url_chk).
  */
 import {
-  AVATAR_MAX_BYTES,
   AVATAR_MIME_TYPES,
   avatarFilename,
   avatarFilenameFromPath,
   avatarPath,
-  avatarStorageKey,
-  isAvatarFilename,
   isAvatarPath,
 } from '../avatars/avatar-core';
 
 /** The accepted upload types: raster images only (an SVG can carry script). */
 export const ORG_AVATAR_MIME_TYPES: readonly string[] = AVATAR_MIME_TYPES;
 
-export const ORG_AVATAR_MAX_BYTES = AVATAR_MAX_BYTES;
-
 export const orgAvatarFilename = avatarFilename;
-
-export const isOrgAvatarFilename = isAvatarFilename;
-
-export const orgAvatarStorageKey = (orgId: string, filename: string): string => avatarStorageKey('org', orgId, filename);
 
 export const orgAvatarPath = (orgId: string, filename: string): string => avatarPath('org', orgId, filename);
 

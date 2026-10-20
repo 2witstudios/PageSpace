@@ -222,6 +222,7 @@ const createTaskFixture = (overrides: Partial<{
   status: overrides.status ?? ('pending' as const),
   priority: overrides.priority ?? ('medium' as const),
   position: overrides.position ?? 0,
+  startDate: null,
   dueDate: null,
   completedAt: null,
   createdAt: new Date('2024-01-01'),
@@ -234,6 +235,7 @@ const createTaskFixture = (overrides: Partial<{
 });
 
 // Route db.select shapes, distinguished by their selection keys:
+// { parentId, total, completed } → sub-task counts (grouped by parent page)
 // { total }                   → pagination count
 // { ..., color, ... }         → full status configs for represented lists
 // { listPageId, slug, group } → custom status configs for the statusGroup filter
@@ -245,11 +247,13 @@ interface SelectFixtures {
   slimConfigs?: unknown[];
   childPages?: unknown[];
   countRows?: unknown[];
+  subTaskRows?: unknown[];
 }
 
 const mockDbSelect = (fixtures: SelectFixtures) => {
   vi.mocked(db.select).mockImplementation(((selection?: Record<string, unknown>) => {
     const rows =
+      selection && 'completed' in selection ? (fixtures.subTaskRows ?? []) :
       selection && 'total' in selection ? (fixtures.countRows ?? []) :
       selection && 'color' in selection ? (fixtures.fullConfigs ?? []) :
       selection && 'slug' in selection ? (fixtures.slimConfigs ?? []) :
@@ -259,7 +263,13 @@ const mockDbSelect = (fixtures: SelectFixtures) => {
     const chain: Record<string, unknown> = {};
     chain.from = vi.fn(() => chain);
     chain.innerJoin = vi.fn(() => chain);
-    chain.where = vi.fn().mockResolvedValue(rows);
+    // where() is awaited directly by most queries; the sub-task count query
+    // chains .groupBy() after it, so the result is a thenable carrying groupBy.
+    chain.where = vi.fn(() => {
+      const whereResult = Promise.resolve(rows) as Promise<unknown[]> & { groupBy?: unknown };
+      whereResult.groupBy = vi.fn().mockResolvedValue(rows);
+      return whereResult;
+    });
     return chain;
   }) as any);
 };
@@ -422,6 +432,63 @@ describe('GET /api/tasks', () => {
         statusLabel: 'To Do',
         statusColor: 'bg-slate-100 text-slate-700',
       });
+    });
+  });
+
+  describe('sub-task counts', () => {
+    it('enriches each task with direct sub-task totals from one grouped query', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
+      ]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
+        createTaskFixture({ id: 'task_1', pageId: 'page_task_1' }),
+        createTaskFixture({ id: 'task_2', pageId: 'page_task_2' }),
+      ]);
+      mockDbSelect({
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }],
+        subTaskRows: [{ parentId: 'page_task_1', total: 3, completed: 1 }],
+      });
+
+      const response = await GET(new Request('https://example.com/api/tasks?context=user'));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      const byId = Object.fromEntries(body.tasks.map((t: { id: string }) => [t.id, t]));
+      expect(byId.task_1).toMatchObject({ subTaskCount: 3, subTaskCompletedCount: 1 });
+      expect(byId.task_2).toMatchObject({ subTaskCount: 0, subTaskCompletedCount: 0 });
+
+      // Batched: exactly one sub-task select, scoped to this page's task pages.
+      const subTaskSelects = vi.mocked(db.select).mock.calls.filter(
+        ([selection]) => !!selection && 'completed' in (selection as Record<string, unknown>),
+      );
+      expect(subTaskSelects).toHaveLength(1);
+      expect(inArray).toHaveBeenCalledWith(pages.parentId, ['page_task_1', 'page_task_2']);
+    });
+
+    it('skips the sub-task query when the page of results is empty', async () => {
+      const response = await GET(new Request('https://example.com/api/tasks?context=user'));
+      expect(response.status).toBe(200);
+      const subTaskSelects = vi.mocked(db.select).mock.calls.filter(
+        ([selection]) => !!selection && 'completed' in (selection as Record<string, unknown>),
+      );
+      expect(subTaskSelects).toHaveLength(0);
+    });
+
+    it('serializes wipLimit on statusConfigsByTaskList entries', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
+      ]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([createTaskFixture({ id: 'task_1' })]);
+      mockDbSelect({
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }],
+        fullConfigs: [{
+          listPageId: 'page_tasklist', id: 'cfg_1', taskListId: 'tasklist_1', name: 'Doing',
+          slug: 'pending', color: 'c', group: 'in_progress', position: 0, wipLimit: 4,
+        }],
+      });
+
+      const body = await (await GET(new Request('https://example.com/api/tasks?context=user'))).json();
+      expect(body.statusConfigsByTaskList.page_tasklist[0]).toMatchObject({ slug: 'pending', wipLimit: 4 });
     });
   });
 

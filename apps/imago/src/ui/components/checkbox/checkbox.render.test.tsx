@@ -58,4 +58,18 @@ describe('renderCheckbox', () => {
       expected: ['toggle'],
     });
   });
+
+  test('read-only', () => {
+    const markup = renderToString(renderCheckbox({ checked: true, label: 'Done' }));
+    assert({
+      given: 'no toggle: a viewer who may not change it',
+      should: 'render a disabled checkbox that still says its state, in the read-only class',
+      actual: [
+        markup.includes('disabled=""'),
+        markup.includes('aria-checked="true"'),
+        markup.includes(`class="${checkboxClass(true, true)}"`),
+      ],
+      expected: [true, true, true],
+    });
+  });
 });

@@ -1,4 +1,6 @@
 import { cn } from '../../cn';
+import type { Priority, StatusGroup } from '../task-model/task';
+import type { DueTone } from '../task-tree/task-tree';
 
 /* A task opened as the object: the reading column, as a document sits. */
 export const taskDetailClass = 'mx-auto flex w-full max-w-doc flex-col gap-4 px-8 py-6';
@@ -14,34 +16,88 @@ export const taskDetailTitleClass =
 /** Why an edit was refused, under the title. */
 export const taskDetailNoticeClass = 'text-xs font-medium text-live';
 
-/* PageSpace's fields in one quiet row that wraps. */
-export const taskFieldsClass = 'flex flex-wrap gap-x-6 gap-y-3 border-b border-hairline pb-4';
-
-export const taskFieldClass = 'flex flex-col gap-1';
-
-export const taskFieldLabelClass = 'text-2xs text-ink-faint';
+/* PageSpace's fields as one quiet row of controls that wraps, each opening its own popover. */
+export const taskFieldsClass = 'flex flex-wrap items-center gap-2 border-b border-hairline pb-4';
 
 export const taskFieldValueClass = 'flex items-center gap-2';
 
-/* One control shape for every field: a hairline that firms on hover, the
-   small radius, 13px ink. */
-export const taskControlClass =
-  'rounded-md border border-hairline bg-transparent px-2 py-1 text-sm text-ink transition-colors duration-120 ease-standard hover:border-border-strong';
+/* One control shape for every field: a hairline chip that firms on hover
+   and while its popover is open, the small radius, 13px ink. */
+/** A field as a viewer who may not edit reads it: the chip's shape, nothing that answers a pointer. */
+export const taskChipReadOnlyClass =
+  'inline-flex h-8 items-center gap-2 rounded-md border border-hairline bg-transparent px-2 text-sm text-ink';
 
-export const taskClearClass = 'cursor-pointer text-2xs text-ink-faint hover:text-ink';
+export const taskChipReadOnlyEmptyClass = cn(taskChipReadOnlyClass, 'text-ink-faint');
 
-export const taskAssigneesClass = 'relative';
+export const taskChipClass = cn(
+  taskChipReadOnlyClass,
+  'transition-colors duration-120 ease-standard hover:border-border-strong hover:bg-surface-overlay aria-expanded:border-border-strong aria-expanded:bg-surface-overlay',
+);
 
-export const taskAssigneesSummaryClass = cn(taskControlClass, 'summary-plain flex cursor-pointer items-center gap-2');
+/** A chip with nothing set yet: its label in the faint ink. */
+export const taskChipEmptyClass = cn(taskChipClass, 'text-ink-faint');
+
+/** The Due chip, graded as a card grades it: red while overdue, full ink when soon. */
+export const taskDueChipClass = (tone: DueTone | null, editable = true): string =>
+  cn(editable ? taskChipClass : taskChipReadOnlyClass, tone === 'overdue' ? 'font-medium text-live' : tone === 'soon' && 'font-medium');
+
+const statusTone: Readonly<Record<StatusGroup, string>> = {
+  todo: 'bg-surface-sunken text-ink',
+  in_progress: 'bg-accent-soft text-ink',
+  done: 'bg-surface-sunken text-ink-muted',
+};
+
+/** The status pill: the chip rounded, tinted by its status's group; read-only, it takes no hover. */
+export const taskStatusPillClass = (group: StatusGroup, editable = true): string =>
+  cn(
+    'inline-flex h-8 items-center gap-2 rounded-round px-3 text-sm font-medium',
+    editable && 'transition-colors duration-120 ease-standard hover:bg-surface-overlay aria-expanded:bg-surface-overlay',
+    statusTone[group],
+  );
+
+const dotTone: Readonly<Record<StatusGroup, string>> = {
+  todo: 'bg-ink-faint',
+  in_progress: 'bg-accent',
+  done: 'bg-online',
+};
+
+/** A status's group as a dot before its name, as the Board's column heads draw it. */
+export const taskStatusDotClass = (group: StatusGroup): string => cn('size-live-dot flex-none rounded-round', dotTone[group]);
+
+/** Imago's own mark beside a date it set. */
+export const taskHintClass = 'text-2xs text-ink-faint';
 
 export const taskUnassignedClass = 'text-ink-faint';
 
-export const taskAssigneesMenuClass =
-  'absolute z-popover mt-1 flex w-popover flex-col gap-1 rounded-lg border border-hairline bg-background p-2 shadow-ambient';
+/** The priority glyph: three bars, shortest first, standing on one line. */
+export const taskPriorityClass = 'flex h-3 flex-none items-end gap-px';
 
-export const taskAssigneesGroupClass = 'px-1 text-2xs font-semibold text-ink-faint';
+/** One bar, `height` px tall; lit bars read red for high, ink otherwise. */
+export const taskPriorityBarClass = (lit: boolean, height: 4 | 8 | 12, priority: Priority): string =>
+  cn(
+    'w-1 rounded-sm',
+    height === 4 ? 'h-1' : height === 8 ? 'h-2' : 'h-3',
+    lit ? (priority === 'high' ? 'bg-live' : 'bg-ink-muted') : 'bg-hairline',
+  );
 
-export const taskAssigneeOptionClass = 'flex items-center gap-2 p-1 text-sm text-ink';
+/* The assignee popover: a filter field, then Members and Agents. */
+export const taskAssigneeFilterClass =
+  'w-full rounded-md border border-hairline bg-transparent px-2 py-1 text-sm text-ink outline-none placeholder:text-ink-faint focus:border-border-strong';
+
+export const taskAssigneeListClass = 'flex max-h-agent-picker flex-col gap-1 overflow-y-auto';
+
+export const taskAssigneeEmptyClass = 'px-2 py-1 text-xs text-ink-faint';
+
+/* The delete confirmation, in its own small popover off the strip. */
+export const taskConfirmClass = 'flex flex-col gap-3 p-2 text-sm text-ink';
+
+export const taskConfirmActionsClass = 'flex justify-end gap-2';
+
+export const taskConfirmCancelClass =
+  'rounded-md px-3 py-1 text-xs font-medium text-ink-muted transition-colors duration-120 ease-standard hover:bg-surface-overlay hover:text-ink';
+
+export const taskConfirmDeleteClass =
+  'rounded-md bg-live px-3 py-1 text-xs font-medium text-accent-ink transition-colors duration-120 ease-standard hover:opacity-90';
 
 export const taskSectionClass = 'flex flex-col gap-2';
 

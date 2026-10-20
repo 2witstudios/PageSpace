@@ -1,14 +1,33 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { list, seededStatuses, task } from '../task-model/fixtures';
-import type { TaskStatus } from '../task-model/task';
+import type { Task, TaskStatus } from '../task-model/task';
 import {
+  laneAssignees,
   boardColumns,
+  boardLanes,
+  boardRows,
+  cellId,
+  collapsedKey,
   columnJump,
+  dropIndex,
+  dropPlace,
   dropStatus,
+  laneKeyOf,
+  lanesKey,
   moveAnnouncement,
   moveTargets,
+  parseWipLimit,
+  planDrop,
+  readCollapsed,
+  readLaneMode,
+  toggledCollapsed,
+  wipTone,
+  writeCollapsed,
+  writeLaneMode,
+  type BoardCell,
   type ColumnRect,
+  type LaneMode,
 } from './board';
 
 const slugs = (columns: ReturnType<typeof boardColumns>) =>
@@ -168,6 +187,192 @@ describe('moveAnnouncement()', () => {
         'Moved Book venue to Done.',
         'Could not move Plan launch to Done: Complete all sub-tasks first (1 of 1 remaining)',
       ],
+    });
+  });
+});
+
+// a, b to do; c in progress; d to do — one order across the columns.
+const ordered = list('l1', [
+  task('a', { status: 'pending', priority: 'high' }),
+  task('b', { status: 'pending' }),
+  task('c', { status: 'in_progress', assignees: [{ type: 'user', id: 'u-2', name: 'Ada' }] }),
+  task('d', { status: 'pending', assignees: [{ type: 'agent', id: 'ag-1', name: 'Imago' }, { type: 'user', id: 'u-2', name: 'Ada' }] }),
+]);
+
+const taskAt = (index: number) => ordered.tasks[index] as Task;
+
+const cellsOf = (mode: LaneMode) => {
+  const columns = boardColumns(ordered);
+  return new Map(boardRows(columns, boardLanes(ordered, mode), mode).flatMap((row) => row.cells.map((cell) => [cell.id, cell])));
+};
+
+const cell = (mode: LaneMode, id: string) => cellsOf(mode).get(id) as BoardCell;
+
+describe('lanes', () => {
+  test('the lanes of each mode', () => {
+    assert({
+      given: 'a board with no lanes, by priority and by assignee',
+      should: 'give one lane; all three priorities; each first assignee in list order, then Unassigned',
+      actual: (['none', 'priority', 'assignee'] as const).map((mode) => boardLanes(ordered, mode).map((lane) => lane.label)),
+      expected: [['All tasks'], ['High priority', 'Medium priority', 'Low priority'], ['Ada', 'Imago', 'Unassigned']],
+    });
+  });
+
+  test('which lane a card is in', () => {
+    assert({
+      given: 'a task on two people, and one on no one',
+      should: 'put the first in its first assignee’s lane and the other in Unassigned',
+      actual: [laneKeyOf(taskAt(3), 'assignee'), laneKeyOf(taskAt(0), 'assignee'), laneKeyOf(taskAt(0), 'priority')],
+      expected: ['assignee:agent:ag-1', 'assignee:none', 'priority:high'],
+    });
+  });
+
+  test('cells', () => {
+    assert({
+      given: 'the board split by priority',
+      should: 'give each lane a cell per column with an id of its own, the cards in list order',
+      actual: [cell('priority', cellId('priority:medium', 'pending')).tasks.map((entry) => entry.id), cell('priority', 'priority:high::pending').tasks.map((entry) => entry.id)],
+      expected: [['b', 'd'], ['a']],
+    });
+  });
+});
+
+describe('dropPlace()', () => {
+  const todo = cell('none', 'all::pending');
+  test('within a cell and from another', () => {
+    assert({
+      given: 'a card carried down onto a later one, up onto an earlier one, and one from another cell held in the lower and upper half',
+      should: 'land after, before, then by the half it is held over',
+      actual: [dropPlace(todo, 'a', 'd', false), dropPlace(todo, 'd', 'a', true), dropPlace(todo, 'c', 'b', true), dropPlace(todo, 'c', 'b', false)],
+      expected: ['after', 'before', 'after', 'before'],
+    });
+  });
+});
+
+describe('dropIndex()', () => {
+  const todo = cell('none', 'all::pending');
+  const done = cell('none', 'all::completed');
+  test('on a card, on open space and into an empty cell', () => {
+    assert({
+      given: 'c dropped before b, after d, on To Do’s open space, and into the empty Done',
+      should: 'count its place among the others: next to the card, after the cell’s last, or where it is',
+      actual: [
+        dropIndex(ordered.tasks, 'c', todo, { kind: 'card', overId: 'b', place: 'before' }),
+        dropIndex(ordered.tasks, 'c', todo, { kind: 'card', overId: 'd', place: 'after' }),
+        dropIndex(ordered.tasks, 'c', todo, { kind: 'cell' }),
+        dropIndex(ordered.tasks, 'c', done, { kind: 'cell' }),
+        dropIndex(ordered.tasks, 'a', todo, { kind: 'card', overId: 'a', place: 'after' }),
+      ],
+      expected: [1, 3, 3, 2, 0],
+    });
+  });
+});
+
+describe('planDrop()', () => {
+  const columns = boardColumns(ordered);
+  test('status, order and lane', () => {
+    assert({
+      given: 'a dropped after d in To Do, c dropped in Done, a dropped on itself, and b dropped in the High lane',
+      should: 'reorder only; change status only; do nothing; and give b high priority, in its place',
+      actual: [
+        planDrop(ordered, columns, 'a', cell('none', 'all::pending'), { kind: 'card', overId: 'd', place: 'after' }, 'none'),
+        planDrop(ordered, columns, 'c', cell('none', 'all::completed'), { kind: 'cell' }, 'none'),
+        planDrop(ordered, columns, 'a', cell('none', 'all::pending'), { kind: 'card', overId: 'a', place: 'before' }, 'none'),
+        planDrop(ordered, columns, 'b', cell('priority', 'priority:high::pending'), { kind: 'card', overId: 'a', place: 'after' }, 'priority'),
+      ].map((plan) => (plan === null ? null : [plan.status.slug, plan.statusChanged, plan.index, plan.change])),
+      expected: [
+        ['pending', false, 3, null],
+        ['completed', true, null, null],
+        null,
+        ['pending', false, null, { field: 'priority', priority: 'high' }],
+      ],
+    });
+  });
+
+  test('a filtered board', () => {
+    assert({
+      given: 'a board that may not reorder: a dropped after d, and c dropped before a in To Do',
+      should: 'do nothing for the first and change only the status for the second',
+      actual: [
+        planDrop(ordered, columns, 'a', cell('none', 'all::pending'), { kind: 'card', overId: 'd', place: 'after' }, 'none', false),
+        planDrop(ordered, columns, 'c', cell('none', 'all::pending'), { kind: 'card', overId: 'a', place: 'before' }, 'none', false),
+      ].map((plan) => (plan === null ? null : [plan.status.slug, plan.statusChanged, plan.index])),
+      expected: [null, ['pending', true, null]],
+    });
+  });
+});
+
+describe('wipTone() and parseWipLimit()', () => {
+  test('limits', () => {
+    assert({
+      given: 'no limit, under, at and over a limit of 3; then a blank, a number and junk typed',
+      should: 'grade the count, and read blank as clearing',
+      actual: [[wipTone(2, null), wipTone(2, 3), wipTone(3, 3), wipTone(4, 3)], [parseWipLimit(' '), parseWipLimit(' 4 '), Number.isNaN(parseWipLimit('x'))]],
+      expected: [[null, 'under', 'at', 'over'], [null, 4, true]],
+    });
+  });
+});
+
+describe('the viewer’s board choices', () => {
+  const memory = () => {
+    const store = new Map<string, string>();
+    return { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value) };
+  };
+  const refusing = {
+    getItem: () => {
+      throw new Error('blocked');
+    },
+    setItem: () => {
+      throw new Error('blocked');
+    },
+  };
+
+  test('kept per list', () => {
+    const storage = memory();
+    writeCollapsed(storage, 'l1', ['completed']);
+    writeLaneMode(storage, 'l1', 'assignee');
+    assert({
+      given: 'Done folded and Assignee lanes chosen on l1',
+      should: 'read them back for l1 under its own keys, and nothing for l2',
+      actual: [readCollapsed(storage, 'l1'), readLaneMode(storage, 'l1'), readCollapsed(storage, 'l2'), readLaneMode(storage, 'l2'), collapsedKey('l1'), lanesKey('l1')],
+      expected: [['completed'], 'assignee', [], 'none', 'imago:board-collapsed:l1', 'imago:board-lanes:l1'],
+    });
+  });
+
+  test('storage that refuses, or holds junk', () => {
+    const junk = memory();
+    junk.setItem(collapsedKey('l1'), '{not json');
+    junk.setItem(lanesKey('l1'), 'diagonal');
+    writeCollapsed(refusing, 'l1', ['completed']);
+    assert({
+      given: 'storage that throws, and storage holding what the board never wrote',
+      should: 'fall back to nothing folded and no lanes, without throwing',
+      actual: [readCollapsed(refusing, 'l1'), readLaneMode(refusing, 'l1'), readCollapsed(junk, 'l1'), readLaneMode(junk, 'l1')],
+      expected: [[], 'none', [], 'none'],
+    });
+  });
+
+  test('folding and opening', () => {
+    assert({
+      given: 'Done folded, then folded again',
+      should: 'add it, then take it off',
+      actual: [toggledCollapsed([], 'completed'), toggledCollapsed(['completed'], 'completed')],
+      expected: [['completed'], []],
+    });
+  });
+});
+
+describe('laneAssignees', () => {
+  const alice = { type: 'user' as const, id: 'u-a', name: 'Alice' };
+  const bob = { type: 'user' as const, id: 'u-b', name: 'Bob' };
+  const carol = { type: 'user' as const, id: 'u-c', name: 'Carol' };
+  test('swaps only the lane person', () => {
+    const shared = task('t', { assignees: [alice, bob] });
+    assert({
+      given: "a task on Alice and Bob in Alice's lane, dropped into Carol's, Bob's, then Unassigned",
+      should: 'swap Alice for the lane person and keep everyone else, or take everyone off',
+      actual: [laneAssignees(shared, [carol]), laneAssignees(shared, [bob]), laneAssignees(shared, [])],
+      expected: [[carol, bob], [bob], []],
     });
   });
 });

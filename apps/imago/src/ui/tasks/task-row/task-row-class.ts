@@ -4,7 +4,7 @@ import { cn } from '../../cn';
    type, quiet ink that comes up to full on hover. It holds controls rather
    than being one, so it carries no pointer of its own. */
 export const taskRowClass =
-  'flex w-full items-center gap-2 rounded-lg px-2 py-row-y text-left text-sm transition-colors duration-120 ease-standard hover:bg-surface-overlay';
+  'group/row flex w-full items-center gap-2 rounded-lg px-2 py-row-y text-left text-sm transition-colors duration-120 ease-standard hover:bg-surface-overlay';
 
 /* A caret takes the checkbox's square, so every title starts on one line;
    a leaf keeps the square empty. */

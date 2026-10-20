@@ -25,16 +25,22 @@ export const sectionHeadClass = 'flex h-8 items-center gap-2 border-b border-hai
 
 export const sectionCountClass = 'font-normal text-ink-muted';
 
-export const rowClass =
-  'flex min-h-10 items-center gap-3 border-b border-hairline px-2 transition-colors duration-120 ease-standard hover:bg-surface-overlay';
+/** A row and, under it, why its last tick was refused. */
+export const rowWrapClass = 'flex flex-col border-b border-hairline';
 
-export const circleClass = (done: boolean): string =>
+/** A row; a done one is dimmed. */
+export const rowClass = (done: boolean): string =>
   cn(
-    'flex size-4 flex-none items-center justify-center rounded-full border',
-    done ? 'border-status-success bg-status-success text-accent-ink' : 'border-ink-faint',
+    'flex min-h-10 items-center gap-3 px-2 transition-colors duration-120 ease-standard hover:bg-surface-overlay',
+    done && 'opacity-60',
   );
 
-export const rowTitleClass = 'block min-w-0 truncate text-sm text-ink no-underline hover:underline';
+/** The title; a done one is struck through. */
+export const rowTitleClass = (done: boolean): string =>
+  cn('block min-w-0 truncate text-sm no-underline hover:underline', done ? 'text-ink-muted line-through' : 'text-ink');
+
+/** Why a tick was refused, under the row, as a list row says it (task-row-class taskNoticeClass). */
+export const rowNoticeClass = 'px-2 pb-1 text-2xs font-medium text-live';
 
 export const rowMetaClass = 'block truncate text-xs text-ink-muted';
 

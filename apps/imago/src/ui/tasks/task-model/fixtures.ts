@@ -23,6 +23,7 @@ export const statusConfig = (
   color: 'bg-slate-100',
   group,
   position,
+  wipLimit: null,
   createdAt: '2026-10-01T00:00:00.000Z',
   updatedAt: '2026-10-01T00:00:00.000Z',
   ...overrides,
@@ -50,6 +51,7 @@ export const taskItem = (
   priority: 'medium',
   position: 0,
   dueDate: null,
+  startDate: null,
   completedAt: null,
   createdAt: '2026-10-01T00:00:00.000Z',
   updatedAt: '2026-10-01T00:00:00.000Z',
@@ -84,7 +86,7 @@ export const taskListResponse = (
 // Model builders, for the pure edits.
 
 export const seededStatuses: readonly TaskStatus[] = seededConfigs.map(
-  ({ id, slug, name, color, group, position }) => ({ id, slug, name, color, group, position }),
+  ({ id, slug, name, color, group, position }) => ({ id, slug, name, color, group, position, wipLimit: null }),
 );
 
 export const task = (id: string, overrides: Partial<Task> = {}): Task => ({
@@ -94,7 +96,9 @@ export const task = (id: string, overrides: Partial<Task> = {}): Task => ({
   status: 'pending',
   priority: 'medium',
   dueDate: null,
+  startDate: null,
   completedAt: null,
+  createdAt: '2026-10-01T00:00:00.000Z',
   assignees: [],
   position: 0,
   hasContent: false,

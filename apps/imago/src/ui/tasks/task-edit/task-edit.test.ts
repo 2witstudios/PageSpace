@@ -8,6 +8,8 @@ import {
   setStatus,
   toggleAssignee,
   toggleComplete,
+  setWipLimit,
+  settledPatch,
   updateTask,
 } from './task-edit';
 import { locate } from '../task-tree/task-tree';
@@ -53,7 +55,7 @@ describe('setStatus()', () => {
   });
 
   test('done to done', () => {
-    const statuses = [...list('x', []).statuses, { id: 'cfg-shipped', slug: 'shipped', name: 'Shipped', color: '', group: 'done' as const, position: 4 }];
+    const statuses = [...list('x', []).statuses, { id: 'cfg-shipped', slug: 'shipped', name: 'Shipped', color: '', group: 'done' as const, position: 4, wipLimit: null }];
     const root = list('root', [parent('p', [task('a', done)], { subtasks: list('page-p', [task('a', done)], { statuses }) })]);
     const outcome = setStatus(root, 'a', 'shipped', NOW);
 
@@ -98,8 +100,8 @@ describe('setStatus()', () => {
   test('statuses of the holding list', () => {
     const sub = list('page-p', [task('a', { status: 'icebox' })], {
       statuses: [
-        { id: '1', slug: 'icebox', name: 'Icebox', color: '', group: 'todo', position: 0 },
-        { id: '2', slug: 'shipped', name: 'Shipped', color: '', group: 'done', position: 1 },
+        { id: '1', slug: 'icebox', name: 'Icebox', color: '', group: 'todo', position: 0, wipLimit: null },
+        { id: '2', slug: 'shipped', name: 'Shipped', color: '', group: 'done', position: 1, wipLimit: null },
       ],
     });
     const root = list('root', [parent('p', [], { subtasks: sub, subTaskCount: 1 })]);
@@ -469,3 +471,76 @@ describe('moveTask()', () => {
 
 const allIds = (root: TaskList): string[] =>
   root.tasks.flatMap((entry) => [entry.id, ...(entry.subtasks ? allIds(entry.subtasks) : [])]);
+
+describe('setWipLimit', () => {
+  test('a limit, cleared, and refused', () => {
+    const root = list('root', []);
+    const set = setWipLimit(root, 'in_progress', 3);
+    const cleared = setWipLimit(set.list, 'in_progress', null);
+    assert({
+      given: 'a limit set on a status, then cleared, then a zero and an unknown status',
+      should: 'change only that status, then refuse the bad ones in place',
+      actual: [
+        set.list.statuses.find((status) => status.slug === 'in_progress')?.wipLimit,
+        cleared.list.statuses.find((status) => status.slug === 'in_progress')?.wipLimit,
+        setWipLimit(root, 'in_progress', 0).refusal,
+        setWipLimit(root, 'nope', 2).refusal,
+      ],
+      expected: [3, null, 'A limit is a whole number from 1 to 999', 'Status not found'],
+    });
+  });
+});
+
+describe('updateTask dates', () => {
+  test('start after due', () => {
+    const root = list('root', [task('a', { dueDate: '2026-10-20T00:00:00.000Z' })]);
+    assert({
+      given: 'a start date after the task’s due date, then one before it',
+      should: 'refuse the first as the server does and keep the second',
+      actual: [
+        updateTask(root, 'a', { startDate: '2026-10-25T00:00:00.000Z' }).refusal,
+        updateTask(root, 'a', { startDate: '2026-10-10T00:00:00.000Z' }).list.tasks[0]?.startDate,
+      ],
+      expected: ['Start date must be on or before the due date', '2026-10-10T00:00:00.000Z'],
+    });
+  });
+
+  test('a due day picked on a start with a time of day', () => {
+    // Local times, as the date field picks a day in the viewer's zone.
+    const start = new Date(2026, 9, 25, 9).toISOString();
+    const a = task('a', { startDate: start });
+    const root = list('root', [a]);
+    const pickedSameDay = new Date(2026, 9, 25).toISOString();
+    const settled = settledPatch(a, { dueDate: pickedSameDay });
+    const outcome = updateTask(root, 'a', settled);
+    assert({
+      given: 'a start at 09:00 and a due date picked on that same day, as its midnight',
+      should: 'keep the edit, the due date moved up to the start’s instant',
+      actual: [settled, outcome.refusal, find(outcome.list, 'a')?.dueDate],
+      expected: [{ dueDate: start }, undefined, start],
+    });
+  });
+
+  test('a due day before the start’s day', () => {
+    const a = task('a', { startDate: new Date(2026, 9, 25, 9).toISOString() });
+    const root = list('root', [a]);
+    const dayBefore = new Date(2026, 9, 23).toISOString();
+    assert({
+      given: 'a due date picked on a day before the start',
+      should: 'refuse it as the server does, and settle nothing',
+      actual: [updateTask(root, 'a', { dueDate: dayBefore }).refusal, settledPatch(a, { dueDate: dayBefore })],
+      expected: ['Start date must be on or before the due date', { dueDate: dayBefore }],
+    });
+  });
+
+  test('start and due sent together', () => {
+    const startDate = new Date(2026, 9, 25, 15).toISOString();
+    const dueDate = new Date(2026, 9, 25).toISOString();
+    assert({
+      given: 'a patch setting a 15:00 start and that day’s midnight due together',
+      should: 'settle the due date against the patch’s own start',
+      actual: settledPatch(task('a'), { startDate, dueDate }),
+      expected: { startDate, dueDate: startDate },
+    });
+  });
+});
