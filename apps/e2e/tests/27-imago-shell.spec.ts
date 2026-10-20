@@ -83,7 +83,7 @@ test.describe('signed in', () => {
     await expect(shell(page)).toHaveAttribute('data-list', 'list');
     await expect(listPane(page).getByRole('region', { name: 'Chat history' })).toBeVisible();
     await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toBeVisible();
-    await expect(railLink(page, 'Chat')).toHaveAttribute('aria-current', 'page');
+    await expect(railLink(page, 'Home')).toHaveAttribute('aria-current', 'page');
   });
 
   test('the rail and shell keep their DOM nodes across chat → files → settings → chat', async ({
@@ -97,7 +97,7 @@ test.describe('signed in', () => {
     const stops = [
       { link: 'Files', section: 'files', path: imagoPath(homeDriveId, 'files') },
       { link: 'Drive settings', section: 'settings', path: imagoPath(homeDriveId, 'settings') },
-      { link: 'Chat', section: 'chat', path: imagoPath(homeDriveId) },
+      { link: 'Home', section: 'chat', path: imagoPath(homeDriveId) },
     ];
     for (const stop of stops) {
       await railLink(page, stop.link).click();
