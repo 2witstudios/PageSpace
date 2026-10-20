@@ -72,9 +72,9 @@ describe('TabBar (IMC-1.5)', () => {
     const { openTabs, activeTab } = getUiState().resources;
     assert({
       given: 'New tab with Q4 Launch Plan active',
-      should: "open a New tab beside it on the drive's home, make it active and go there, with no create palette",
+      should: "open a tab beside it on the drive's home, make it active and go there, with no create palette",
       actual: [titles(root), openTabs.find((tab) => tab.id === activeTab)?.path, navigation.pushed],
-      expected: [['Q4 Launch Plan', 'New tab', 'Pricing Model', '#launch-ops'], '/d1', ['/d1']],
+      expected: [['Q4 Launch Plan', 'Home', 'Pricing Model', '#launch-ops'], '/d1', ['/d1']],
     });
   });
 
@@ -152,7 +152,7 @@ describe('TabBar (IMC-1.5)', () => {
     });
   });
 
-  test('closing the active tab from a section', async () => {
+  test('a section loads into the active tab', async () => {
     window.localStorage.setItem(
       tabsStorageKey('d1'),
       JSON.stringify({ tabs: [{ id: 'a', path: '/d1/files/plan' }, { id: 'b', path: '/d1/files/pricing' }], active: 'a' }),
@@ -162,12 +162,14 @@ describe('TabBar (IMC-1.5)', () => {
     await settle(() => {
       if (!titles(root).includes('Pricing Model')) throw new Error('tabs not loaded');
     });
-    act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Q4 Launch Plan"]')?.click());
+    const selected = () => root.querySelector('[role="tab"][aria-selected="true"]')?.textContent;
+    const loaded = [titles(root), selected()];
+    act(() => root.querySelector<HTMLButtonElement>('[aria-label="Close Files"]')?.click());
     assert({
-      given: 'the active tab closed while the viewer is on the Files section',
-      should: 'make its neighbour active without leaving the section',
-      actual: [getUiState().resources.activeTab, navigation.pushed],
-      expected: ['b', []],
+      given: 'the Files section opened from Q4 Launch Plan, then its tab closed',
+      should: 'show Files in that tab, still selected, and closing it move to its neighbour',
+      actual: [...loaded, getUiState().resources.activeTab, navigation.pushed],
+      expected: [['Files', 'Pricing Model'], 'Files', 'b', ['/d1/files/pricing']],
     });
   });
 });

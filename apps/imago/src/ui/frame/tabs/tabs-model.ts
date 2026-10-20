@@ -19,8 +19,11 @@ export const TAB_HISTORY_LIMIT = 50;
 
 export const newTab = (id: string, path: string): Tab => ({ id, path, back: [], forward: [] });
 
-/** The middle's object is a tab; the chat, a section index or the empty middle are not. */
-export const tabPathFor = (stage: Stage, pathname: string): string | null => (stage.object === null ? null : pathname);
+/**
+ * Every place is a step in a tab, as in classic: an object, a section index or a drive's chat.
+ * The root is not one: the server sends it on to the viewer's Home drive.
+ */
+export const tabPathFor = (pathname: string): string | null => (pathname === '/' ? null : pathname);
 
 /** The open tabs and the one the viewer is in (its id). */
 export type TabStrip = { readonly tabs: readonly Tab[]; readonly active: string | null };
@@ -40,10 +43,10 @@ export const visitInTab = (tab: Tab, path: string): Tab =>
   path === tab.path ? tab : { ...tab, path, back: [...tab.back, tab.path].slice(-TAB_HISTORY_LIMIT), forward: [] };
 
 /**
- * A navigation to a tab's object, as browser tabs (and classic) work: it loads into the active
- * tab as a new step in that tab's history. With no active tab (first load, or after it closed)
- * the viewer's tab for that page is picked up again, else one opens; New tab always opens one,
- * beside the active tab. `id` names the tab if one opens.
+ * A navigation, as browser tabs (and classic) work: it loads into the active tab as a new step
+ * in that tab's history. With no active tab (first load, or after it closed) the viewer's tab
+ * for that place is picked up again, else one opens; New tab always opens one, beside the
+ * active tab. `id` names the tab if one opens.
  */
 export const navigateTabs = (strip: TabStrip, path: string, id: string, inNewTab = false): TabStrip => {
   const active = activeTabOf(strip);
@@ -136,8 +139,8 @@ export const closeTab = (strip: TabStrip, id: string): { readonly tabs: readonly
 };
 
 /**
- * Where Close page goes: the section the page belongs to, so the tabs stay and Imago becomes
- * the ground (SPEC v3.3). Drive tools and settings go to the drive's chat, the account and
+ * Where Close page goes when it closes the last tab: the section the page belongs to, where
+ * Imago becomes the ground (SPEC v3.3). Drive tools and settings go to the drive's chat, the account and
  * DMs to their own roots.
  */
 export const sectionPath = (stage: Stage): string => {

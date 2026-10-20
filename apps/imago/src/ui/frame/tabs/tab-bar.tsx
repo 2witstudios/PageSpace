@@ -33,7 +33,7 @@ function TabItem(props: TabItemProps) {
   const label = tabLabelFor(props.path);
   if (label.kind === 'page') return <PageTab {...props} pageId={label.pageId} />;
   if (label.kind === 'conversation') return renderTab({ ...props, title: 'Direct message', icon: 'messages', hue: null });
-  if (label.kind === 'home') return renderTab({ ...props, title: 'New tab', icon: 'home', hue: null });
+  if (label.kind === 'home') return renderTab({ ...props, title: 'Home', icon: 'home', hue: null });
   return renderTab({ ...props, title: label.title, icon: label.icon ?? 'settings', hue: null });
 }
 
@@ -47,10 +47,10 @@ export type TabBarProps = {
 
 /**
  * The open-pages tab bar (IMC-1.5). Browser-style, as in classic: a navigation loads into the
- * active tab, and Back and Forward step through that tab's own history (off a tab, on a section
- * or the chat, Back returns to the active tab). New tab opens a tab on the drive's home, as a
- * browser's does, and what opens next loads into it; ⌘/Ctrl-click and middle-click open pages
- * in background tabs. Tabs persist per drive under imago's own key.
+ * active tab, sections and the chat included, and Back and Forward step through that tab's own
+ * history (before a navigation has synced, Back returns to the active tab). New tab opens a
+ * tab on the drive's home, as a browser's does, and what opens next loads into it;
+ * ⌘/Ctrl-click and middle-click open places in background tabs. Tabs persist per drive under imago's own key.
  */
 export function TabBar({ stage, driveKey, homeHref }: TabBarProps) {
   const router = useRouter();

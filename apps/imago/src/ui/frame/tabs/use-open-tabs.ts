@@ -5,7 +5,7 @@ import { useEffect, useRef } from 'react';
 import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
 import type { UiState } from '../../store/state';
-import { stageFor, type Stage } from '../stage/stage';
+import type { Stage } from '../stage/stage';
 import { basePathRelative } from '@/lib/auth/sign-in-url';
 import { closeTab, createTabId, popDirection, sectionPath, serializeTabs, tabPathFor, tabsStorageKey, type Tab } from './tabs-model';
 
@@ -52,24 +52,44 @@ export type OpenTabs = {
   readonly isCurrent: (tab: Tab) => boolean;
   /** Makes a tab active; its link then navigates to it. */
   readonly select: (id: string) => void;
-  /**
-   * Closes one tab. Closing the one on screen moves to its neighbour; with none left it goes to
-   * the section ('section', the tab bar) or stays put ('stay', the phone's open-pages sheet).
-   */
+  /** Closes one tab (useCloseTab). */
   readonly close: (id: string, whenLast?: 'section' | 'stay') => void;
   /** Closes every tab and stays where the viewer is. */
   readonly closeAll: () => void;
 };
 
 /**
- * The open tabs of a drive, browser-style as in classic: a navigation loads the middle's object
- * into the active tab as a step in that tab's own history (a new tab only when there is none,
- * or one was asked for), and tabs persist per drive under imago's own key. The tab bar and the
+ * Closes one tab. Closing the one on screen moves to its neighbour; with none left it goes to
+ * the section ('section': the tab bar, Close page) or stays put ('stay': the phone's open-pages
+ * sheet). Reads the tabs without syncing them, so any control can close one.
+ */
+export function useCloseTab(stage: Stage): (id: string, whenLast?: 'section' | 'stay') => void {
+  const pathname = usePathname() ?? '/';
+  const router = useRouter();
+  const tabs = useUiState(selectTabs);
+  const activeId = useUiState(selectActive);
+  return (id, whenLast = 'section') => {
+    const closing = tabs.find((tab) => tab.id === id);
+    const onScreen = closing !== undefined && closing.id === activeId && closing.path === pathname;
+    const result = closeTab({ tabs, active: activeId }, id);
+    dispatch(transactions.setTabs, result.tabs);
+    // The neighbour becomes active even off screen, so the next place loads into it rather
+    // than opening a tab.
+    if (result.next !== null) dispatch(transactions.activateTab, result.next.id);
+    if (!onScreen) return;
+    if (result.next !== null) router.push(result.next.path);
+    else if (whenLast === 'section') router.push(sectionPath(stage));
+  };
+}
+
+/**
+ * The open tabs of a drive, browser-style as in classic: every navigation loads into the
+ * active tab as a step in that tab's own history (a new tab only when there is none, or one
+ * was asked for), and tabs persist per drive under imago's own key. The tab bar and the
  * phone's open-pages sheet both read them.
  */
 export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   const pathname = usePathname() ?? '/';
-  const router = useRouter();
   const tabs = useUiState(selectTabs);
   const activeId = useUiState(selectActive);
   const loadedKey = useUiState(selectKey);
@@ -97,7 +117,7 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
     dispatch(transactions.syncTabs, {
       key,
       stored: storage.read(key),
-      path: tabPathFor(stageFor(pathname), pathname),
+      path: tabPathFor(pathname),
       id: createTabId(),
       pop,
       direction,
@@ -109,6 +129,7 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
   }, [tabs, activeId, loadedKey, key]);
 
   const isCurrent = (tab: Tab) => tab.id === activeId && tab.path === pathname;
+  const close = useCloseTab(stage);
 
   return {
     tabs,
@@ -116,18 +137,7 @@ export function useOpenTabs(stage: Stage, driveKey: string): OpenTabs {
     pathname,
     isCurrent,
     select: (id) => dispatch(transactions.activateTab, id),
-    close: (id, whenLast = 'section') => {
-      const closing = tabs.find((tab) => tab.id === id);
-      const onScreen = closing !== undefined && isCurrent(closing);
-      const result = closeTab({ tabs, active: activeId }, id);
-      dispatch(transactions.setTabs, result.tabs);
-      // The neighbour becomes active even off screen (on a section or the chat), so the next
-      // page loads into it rather than opening a tab.
-      if (result.next !== null) dispatch(transactions.activateTab, result.next.id);
-      if (!onScreen) return;
-      if (result.next !== null) router.push(result.next.path);
-      else if (whenLast === 'section') router.push(sectionPath(stage));
-    },
+    close,
     closeAll: () => dispatch(transactions.setTabs, []),
   };
 }
