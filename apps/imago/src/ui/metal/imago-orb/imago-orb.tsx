@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { getMetalEngine, type OrbMode } from '../metal-engine';
 import { renderImagoOrb } from './imago-orb.render';
-import type { OrbSize } from './imago-orb-class';
+import type { OrbSize, OrbSurface } from './imago-orb-class';
 
 export type ImagoOrbProps = {
   readonly size: OrbSize;
@@ -14,10 +14,12 @@ export type ImagoOrbProps = {
   readonly live?: boolean;
   readonly label?: string;
   readonly className?: string;
+  /** A surface darker than the page (the spine): lit as on a dark page, so its rim reads bright. */
+  readonly surface?: OrbSurface;
 };
 
 /** Imago, drawn as its liquid-metal orb wherever it shows up. */
-export function ImagoOrb({ size, live = false, label, className }: ImagoOrbProps): ReactNode {
+export function ImagoOrb({ size, live = false, label, className, surface }: ImagoOrbProps): ReactNode {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [fallback, setFallback] = useState(false);
   const mode: OrbMode = live ? 'live' : 'still';
@@ -31,5 +33,5 @@ export function ImagoOrb({ size, live = false, label, className }: ImagoOrbProps
     }
     return engine.register(element, mode, setFallback);
   }, [mode]);
-  return renderImagoOrb({ size, fallback, label, className, canvasRef: canvas });
+  return renderImagoOrb({ size, fallback, label, className, surface, canvasRef: canvas });
 }

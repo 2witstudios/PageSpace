@@ -25,7 +25,8 @@ function Row(props: RowProps) {
   if (label.kind === 'conversation') {
     return renderOpenPageRow({ ...props, title: 'Direct message', icon: 'messages', hue: null });
   }
-  return renderOpenPageRow({ ...props, title: label.title, icon: 'settings', hue: null });
+  if (label.kind === 'home') return renderOpenPageRow({ ...props, title: 'New tab', icon: 'home', hue: null });
+  return renderOpenPageRow({ ...props, title: label.title, icon: label.icon ?? 'settings', hue: null });
 }
 
 export type PhoneOpenPagesProps = {

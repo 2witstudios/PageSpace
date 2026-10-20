@@ -65,7 +65,7 @@ describe('Imago C v3 tokens (IMC-1.2)', () => {
       expected: {
         '--spine': 'oklch(0.35 0.08 235)',
         '--tint': 'oklch(0.982 0.005 235)',
-        '--tab-bar': 'oklch(0.975 0.006 235)',
+        '--tab-bar': 'oklch(0.935 0.008 235)',
         '--fill': 'oklch(0.15 0.01 220 / 0.04)',
         '--hairline': 'oklch(0.9 0.005 230 / 0.8)',
         '--accent-deep': 'oklch(0.38 0.16 235)',

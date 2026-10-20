@@ -47,7 +47,8 @@ export function SpendSourcePopover({ chip, options, selectedWalletId, driveName,
             chip.tone === 'paused' && 'border-dashed text-muted-foreground',
           )}
         >
-          <SpendSourceIcon source={chip.source} paused={chip.tone === 'paused'} className="text-muted-foreground" />
+          {/* Own credits are the default source, so from sm the count stands alone: no sparkle beside it. */}
+          <SpendSourceIcon source={chip.source} paused={chip.tone === 'paused'} className={cn('text-muted-foreground', chip.source === 'own_credits' && chip.tone !== 'paused' && 'sm:hidden')} />
           <span className="hidden truncate sm:inline" data-testid="spend-source-chip-text">{chip.text}</span>
           <ChevronDown className="hidden h-3 w-3 shrink-0 text-muted-foreground sm:inline" aria-hidden="true" />
         </button>

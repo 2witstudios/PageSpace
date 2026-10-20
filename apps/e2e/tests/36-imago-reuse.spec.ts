@@ -376,7 +376,7 @@ test('agent sessions and drive configuration remain native and preserve one chat
   const support = await factories.createPage(user.homeDriveId, { type: 'AI_CHAT', title: 'Support proof', aiProvider: DEFAULT_AI_PROVIDER, aiModel: DEFAULT_AI_MODEL });
   const page = await open(browser, baseURL!, imagoPath(user.homeDriveId, 'agents'));
   // On a drive the sessions are the Agents tool's left pane; its head button starts one.
-  const sessions = page.getByRole('region', { name: 'Agents and sessions', exact: true });
+  const sessions = page.getByRole('region', { name: 'Console: agents and sessions', exact: true });
   await expect(sessions.getByRole('button', { name: 'Session', exact: true })).toBeVisible();
   await expect(page.getByRole('complementary', { name: 'Imago', exact: true })).toHaveCount(1);
   await expect(sessions).toBeVisible();

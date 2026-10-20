@@ -22,6 +22,7 @@ import {
   GripVertical,
   Hash,
   History,
+  House,
   SquarePen,
   LayoutGrid,
   ListTodo,
@@ -61,6 +62,7 @@ import {
 export const icons = {
   search: Search,
   chat: MessageSquare,
+  home: House,
   files: Files,
   messages: MessagesSquare,
   tasks: ListTodo,

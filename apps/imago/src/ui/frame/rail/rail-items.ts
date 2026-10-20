@@ -34,7 +34,8 @@ const driveHref = (driveId: string | null, section: string): string | null => {
  * Messages and Tasks, each in the current drive. DMs live under Messages.
  */
 export const railItems = (driveId: string | null): readonly RailItem[] => [
-  { id: 'chat', icon: 'chat', label: 'Chat', href: driveHref(driveId, ''), imago: true },
+  // The drive's front page is Imago's chat, so the spine marks it as home.
+  { id: 'chat', icon: 'home', label: 'Home', href: driveHref(driveId, '') },
   { id: 'files', icon: 'files', label: 'Files', href: driveHref(driveId, 'files') },
   { id: 'messages', icon: 'messages', label: 'Messages', href: driveHref(driveId, 'messages') },
   { id: 'tasks', icon: 'tasks', label: 'Tasks', href: driveHref(driveId, 'tasks') },
@@ -56,12 +57,12 @@ export const classicHref = (driveId: string, path: string): string =>
   `/dashboard/${encodeURIComponent(driveId)}/${path}`;
 
 /**
- * Under the divider: Calendar and Agents, the tools that carry their own notifications or are
+ * Under the divider: Calendar and Console (the drive's agents and their sessions), the tools that carry their own notifications or are
  * used as destinations in their own right, each a route of the current drive.
  */
 export const secondaryItems = (driveId: string | null): readonly SecondaryItem[] => [
   { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar') },
-  { id: 'agents', icon: 'agents', label: 'Agents', href: driveHref(driveId, 'agents') },
+  { id: 'agents', icon: 'console', label: 'Console', href: driveHref(driveId, 'agents') },
 ];
 
 /**
@@ -81,6 +82,9 @@ export const moreItems = (driveId: string | null): readonly SecondaryItem[] => [
  */
 export const railDrive = (stage: Stage, homeDriveId: string | null): string | null =>
   stage.driveId ?? homeDriveId;
+
+/** The drive's front page (the spine's Home), where a New tab opens; null with no drive. */
+export const driveHomeHref = (driveId: string | null): string | null => driveHref(driveId, '');
 
 /** The URL alone picks the active item; the account belongs to the avatar. */
 export const activeRailItem = (stage: Stage): RailItemId | null => {
