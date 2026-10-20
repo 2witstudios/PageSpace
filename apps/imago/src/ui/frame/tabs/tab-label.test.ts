@@ -46,10 +46,33 @@ describe('tabLabelFor() (IMC-1.5)', () => {
 
   test("the drive's home", () => {
     assert({
-      given: 'a path that is the drive alone, where New tab opens',
+      given: 'a path that is the drive alone (its chat, where New tab opens)',
       should: 'read as the home',
       actual: tabLabelFor('/d1'),
       expected: { kind: 'home' },
+    });
+  });
+
+  test('section indexes', () => {
+    assert({
+      given: 'the Files, Messages and Tasks indexes and the DM list',
+      should: 'read as the spine names them, with its icons',
+      actual: ['/d1/files', '/d1/messages', '/d1/tasks', '/dm'].map(tabLabelFor),
+      expected: [
+        { kind: 'screen', title: 'Files', icon: 'files' },
+        { kind: 'screen', title: 'Messages', icon: 'messages' },
+        { kind: 'screen', title: 'Tasks', icon: 'tasks' },
+        { kind: 'screen', title: 'Messages', icon: 'messages' },
+      ],
+    });
+  });
+
+  test('the folder browser', () => {
+    assert({
+      given: "the folder browser at the drive's top and two folders down",
+      should: 'read as Files, then as the folder it shows',
+      actual: ['/d1/files/browse', '/d1/files/browse/f1/f2'].map(tabLabelFor),
+      expected: [{ kind: 'screen', title: 'Files', icon: 'files' }, { kind: 'page', pageId: 'f2' }],
     });
   });
 

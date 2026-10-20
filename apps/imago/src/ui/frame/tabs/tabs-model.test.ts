@@ -25,23 +25,22 @@ const pricing = newTab('b', '/d1/files/pricing');
 const ops = newTab('c', '/d1/messages/ops');
 
 describe('tabPathFor() (IMC-1.5)', () => {
-  test('pages, settings and account screens are tabs', () => {
+  test('every place is a tab step, as in classic', () => {
+    const places = ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display', '/d1', '/d1/files', '/d1/tasks', '/dm'];
     assert({
-      given: 'a page, a channel, a drive tool, drive settings and an account screen',
-      should: 'treat each as a tab at its path',
-      actual: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display'].map((path) =>
-        tabPathFor(stageFor(path), path),
-      ),
-      expected: ['/d1/files/plan', '/d1/messages/ops', '/d1/calendar', '/d1/settings/general', '/account/display'],
+      given: 'a page, a channel, a drive tool, settings, an account screen, the drive chat and section indexes',
+      should: 'treat each as a step at its path',
+      actual: places.map(tabPathFor),
+      expected: places,
     });
   });
 
-  test('an index or the chat is not a tab', () => {
+  test('the root', () => {
     assert({
-      given: 'the drive chat and a section index',
-      should: 'open no tab: nothing is in the middle but Imago',
-      actual: ['/d1', '/d1/files', '/d1/messages'].map((path) => tabPathFor(stageFor(path), path)),
-      expected: [null, null, null],
+      given: 'the root, which the server sends on to the Home drive',
+      should: 'not be a step',
+      actual: tabPathFor('/'),
+      expected: null,
     });
   });
 });

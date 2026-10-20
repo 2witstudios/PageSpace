@@ -45,10 +45,21 @@ describe('tabsPlugin (IMC-1.5)', () => {
     });
   });
 
-  test('a section index is not a step', () => {
+  test('a section is a step in the active tab', () => {
+    const files = syncTabs(first(), nav('/d1/files'));
+    const home = syncTabs(files, nav('/d1'));
+    assert({
+      given: 'a page open in a tab, then the rail’s Files and Home',
+      should: 'load each into the same tab, which stays active, with the trail on its Back',
+      actual: [paths(home), home.resources.activeTab, home.resources.openTabs[0]?.back],
+      expected: [['/d1'], 'p', ['/d1/files/pricing', '/d1/files']],
+    });
+  });
+
+  test('the root is not a step', () => {
     const next = syncTabs(first(), nav(null));
     assert({
-      given: 'the page closed (the section index, which is not a tab)',
+      given: 'the root (on its way to the Home drive)',
       should: 'keep every tab and the active one',
       actual: [paths(next), next.resources.activeTab],
       expected: [['/d1/files/pricing'], 'p'],

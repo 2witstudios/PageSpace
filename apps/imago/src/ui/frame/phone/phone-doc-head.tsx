@@ -21,21 +21,19 @@ import { PhoneOpenPages } from './phone-open-pages';
 export type PhoneDocHeadProps = {
   readonly stage: Stage;
   readonly pageId: string;
-  /** The drive whose tabs these are. */
-  readonly driveKey: string;
 };
 
 /**
  * The phone page head bound to the page API, the page trail, presence and the drive's open
  * tabs. The open-pages sheet opens from its count button.
  */
-export function PhoneDocHead({ stage, pageId, driveKey }: PhoneDocHeadProps): ReactNode {
+export function PhoneDocHead({ stage, pageId }: PhoneDocHeadProps): ReactNode {
   const { data } = usePage(pageId);
   const page = pageTabOf(data);
   const driveId = driveIdOf(data);
   const { trail } = usePageTrail(pageId);
   usePagePresence(pageId);
-  const open = useOpenTabs(stage, driveKey);
+  const open = useOpenTabs(stage);
   const [sheet, setSheet] = useState(false);
   const [dialog, setDialog] = useState<PageActionDialog | null>(null);
   const settled = trail?.at(-1)?.id === pageId;

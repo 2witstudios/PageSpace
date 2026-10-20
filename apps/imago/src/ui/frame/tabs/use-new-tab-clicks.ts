@@ -8,7 +8,7 @@ import { stageFor, type Stage } from '../stage/stage';
 import { createTabId, imagoPathOf, isNewTabClick, tabPathFor } from './tabs-model';
 
 /**
- * ⌘/Ctrl-click and middle-click on a link to a page in this drive open it as a tab beside the
+ * ⌘/Ctrl-click and middle-click on a link to a place in this drive open it as a tab beside the
  * active one without leaving it, as classic's tab bar does, instead of a browser tab. Plain
  * clicks load into the active tab (useOpenTabs).
  */
@@ -21,8 +21,7 @@ export function useNewTabClicks(stage: Stage): void {
       if (!(anchor instanceof HTMLAnchorElement) || (anchor.target !== '' && anchor.target !== '_self') || anchor.hasAttribute('download')) return;
       const path = imagoPathOf(anchor.href, window.location.origin, IMAGO_BASE_PATH);
       if (path === null) return;
-      const target = stageFor(path);
-      if (tabPathFor(target, path) === null || target.driveId !== driveId) return;
+      if (tabPathFor(path) === null || stageFor(path).driveId !== driveId) return;
       event.preventDefault();
       dispatch(transactions.openBackgroundTab, { path, id: createTabId() });
     };

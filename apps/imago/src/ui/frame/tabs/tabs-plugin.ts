@@ -42,7 +42,7 @@ const step = (state: UiState, direction: 'back' | 'forward'): UiState => {
 export type SyncTabs = {
   readonly key: string;
   readonly stored: string | null;
-  /** The tab path of where the viewer is now; null when that is not a tab's object. */
+  /** The tab path of where the viewer is now; null at the root, which is not a place. */
   readonly path: string | null;
   /** The id a tab gets if this navigation opens one. */
   readonly id: string;
@@ -54,9 +54,10 @@ export type SyncTabs = {
 
 /**
  * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it reads
- * that drive's stored tabs first, then loads the current page (if it is a tab's object) into
- * the active tab as a step in that tab's own history, as browser tabs do. The browser's Back
- * and Forward move within the active tab's history, or back to the tab that shows where they land. New tabs open only when asked for: New
+ * that drive's stored tabs first, then loads where the viewer is now (a page, a section, the
+ * chat) into the active tab as a step in that tab's own history, as browser tabs do. The
+ * browser's Back and Forward move within the active tab's history, or back to the tab that
+ * shows where they land. New tabs open only when asked for: New
  * tab, ⌘/Ctrl-click or middle-click.
  */
 export const tabsPlugin = {

@@ -1,11 +1,16 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { renderIcon } from '../../components/icon/icon.render';
+import { useUiState } from '../../store/store';
 import { dispatch, transactions } from '../../store/transactions';
-import type { HideableSection } from '../stage/stage';
+import type { UiState } from '../../store/state';
+import type { HideableSection, Stage } from '../stage/stage';
+import { activeTabOf, isNewTabClick, sectionPath } from '../tabs/tabs-model';
+import { useCloseTab } from '../tabs/use-open-tabs';
 import { askPillClass, headControlClass, headDividerClass } from './controls-class';
 
 /**
@@ -60,16 +65,37 @@ export function AskPill({ label = 'Ask' }: { readonly label?: string }): ReactNo
   );
 }
 
+const selectActiveTab = (state: UiState) => activeTabOf({ tabs: state.resources.openTabs, active: state.resources.activeTab });
+
 /**
- * At the end of the page head: the page leaves the middle for its section, keeping its tab,
- * and Imago takes the middle: closing the page reopens Imago whether it was collapsed beside
- * the page or closed on an earlier ground, so the middle is never left empty by this.
+ * At the end of the page head: closes the page's tab, as its × in the tab bar does, moving to
+ * the neighbour tab or, on the last, to the page's section. Imago takes the middle: closing
+ * the page reopens Imago whether it was collapsed beside the page or closed on an earlier
+ * ground, so the middle is never left empty by this. With no tab on screen it is a link to
+ * the section.
  */
-export function ClosePage({ href }: { readonly href: string }): ReactNode {
+export function ClosePage({ stage }: { readonly stage: Stage }): ReactNode {
+  const pathname = usePathname() ?? '/';
+  const active = useUiState(selectActiveTab);
+  const closeTab = useCloseTab(stage);
+  const tab = active !== null && active.path === pathname ? active : null;
   return (
     <>
       <span className={headDividerClass} aria-hidden="true" />
-      <Link href={href} prefetch={true} className={headControlClass} aria-label="Close page" title="Close page" onClick={() => dispatch(transactions.openImago, undefined)}>
+      <Link
+        href={sectionPath(stage)}
+        prefetch={true}
+        className={headControlClass}
+        aria-label="Close page"
+        title="Close page"
+        onClick={(event) => {
+          if (isNewTabClick(event)) return;
+          dispatch(transactions.openImago, undefined);
+          if (tab === null) return;
+          event.preventDefault();
+          closeTab(tab.id);
+        }}
+      >
         {renderIcon({ name: 'close', size: 12 })}
       </Link>
     </>
