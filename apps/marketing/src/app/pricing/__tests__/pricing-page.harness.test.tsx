@@ -38,11 +38,11 @@ describe('the pricing page follows the money model when its constants change', {
     const { cards, text } = renderCards(<PricingPage />);
 
     expect(cards.pro['plan-price']).toBe('$20');
-    expect(cards.pro['plan-included-credits']).toBe('120 credits included each month');
+    expect(cards.pro['plan-included-credits']).toBe('200 credits included each month');
     expect(cards.business['plan-price']).toBe('$80');
-    expect(cards.business['plan-included-credits']).toBe('480 credits included each month');
+    expect(cards.business['plan-included-credits']).toBe('800 credits included each month');
     expect(cards.business['plan-seats']).toBe('per organization · 4 seats included · $12 per extra seat a month');
-    expect(cards.business['plan-seat-credits']).toBe('+72 credits a month per extra seat');
+    expect(cards.business['plan-seat-credits']).toBe('+120 credits a month per extra seat');
     expect(cards.free['plan-price']).toBe('$0');
     expect(cards.free['plan-included-credits']).toBe('50 credits to start');
     for (const tier of ['free', 'pro', 'business']) {
