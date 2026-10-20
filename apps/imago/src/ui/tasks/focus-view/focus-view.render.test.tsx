@@ -125,4 +125,19 @@ describe('renderFocusView()', () => {
       expected: ['Task not found', 'Title is required'],
     });
   });
+
+  test('a viewer who may not edit', () => {
+    const { container } = setup(launch(), { toggleComplete: undefined, capture: undefined });
+    const boxes = [...container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')];
+    assert({
+      given: 'no toggleComplete and no capture',
+      should: 'show every row’s state on a disabled checkbox, and no capture row',
+      actual: {
+        disabled: boxes.map((box) => box.disabled),
+        checked: boxes.map((box) => box.getAttribute('aria-checked')),
+        capture: container.querySelector('[data-capture]'),
+      },
+      expected: { disabled: [true, true, true], checked: ['false', 'false', 'true'], capture: null },
+    });
+  });
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { dueDateFor, dueDay } from './due-date';
+import { dueDateFor, dueDay, dueNotBeforeStart } from './due-date';
 
 // Node rereads TZ when it is assigned, so each case runs in a real zone.
 const zones = ['Europe/Berlin', 'UTC', 'America/Los_Angeles'] as const;
@@ -76,6 +76,39 @@ describe('dueDateFor()', () => {
       should: 'clear the due date rather than send a bad one',
       actual: [dueDateFor(''), dueDateFor('2026-11'), dueDateFor('2026-13-45'), dueDateFor('2026-02-30')],
       expected: [null, null, null, null],
+    });
+  });
+});
+
+describe('dueNotBeforeStart()', () => {
+  test('a due day on a start with a time of day', () => {
+    assert({
+      given: 'a start at 09:00 local and its day’s midnight as the due date, in each zone',
+      should: 'take the start’s instant, so the start is not after the due date',
+      actual: zones.map((zone) =>
+        inZone(zone, () => {
+          const start = new Date(2026, 9, 25, 9).toISOString();
+          return dueNotBeforeStart(dueDateFor('2026-10-25'), start) === start;
+        }),
+      ),
+      expected: [true, true, true],
+    });
+  });
+
+  test('other due dates', () => {
+    const start = new Date(2026, 9, 25, 9).toISOString();
+    const later = new Date(2026, 9, 25, 17).toISOString();
+    const dayBefore = dueDateFor('2026-10-24');
+    assert({
+      given: 'a due later that day, a due the day before, no start, and no due',
+      should: 'keep each as it is',
+      actual: [
+        dueNotBeforeStart(later, start),
+        dueNotBeforeStart(dayBefore, start),
+        dueNotBeforeStart(later, null),
+        dueNotBeforeStart(null, start),
+      ],
+      expected: [later, dayBefore, later, null],
     });
   });
 });

@@ -28,12 +28,13 @@ describe('taskViews', () => {
   test('the switch', () => {
     assert({
       given: 'the canvases’ view switch',
-      should: 'offer Focus, Tree and Board in that order',
+      should: 'offer Focus, Tree, Board and Roadmap in that order',
       actual: taskViews.map(({ value, label }) => [value, label]),
       expected: [
         ['focus', 'Focus'],
         ['tree', 'Tree'],
         ['board', 'Board'],
+        ['roadmap', 'Roadmap'],
       ],
     });
   });

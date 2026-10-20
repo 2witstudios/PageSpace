@@ -9,10 +9,15 @@ import {
   renderBoard,
   renderBoardCard,
   renderBoardColumn,
+  renderCardMenu,
   renderCardPreview,
+  renderColumnMenu,
+  renderColumnRail,
   renderMoveMenu,
   type BoardCardRenderProps,
-  type BoardColumnRenderProps,
+  type BoardCellRenderProps,
+  type CardMenuRenderProps,
+  type ColumnMenuRenderProps,
   type MoveMenuRenderProps,
 } from './board-view.render';
 
@@ -38,21 +43,43 @@ const card = (overrides: Partial<BoardCardRenderProps> = {}): BoardCardRenderPro
   today: '2026-10-05',
   drag: inertDrag,
   move: menu(),
+  menu: null,
   subtasks: null,
+  insert: null,
+  adding: null,
   notice: null,
   ...overrides,
 });
 
-const columnProps = (overrides: Partial<BoardColumnRenderProps> = {}): BoardColumnRenderProps => ({
+const columnMenu = (overrides: Partial<ColumnMenuRenderProps> = {}): ColumnMenuRenderProps => ({
   status: todo,
-  count: 0,
-  target: false,
-  dropRef: () => undefined,
-  cards: null,
-  newCard: () => undefined,
-  notice: null,
+  open: false,
+  setOpen: () => undefined,
+  wip: null,
+  collapse: () => undefined,
   ...overrides,
 });
+
+type ColumnOverrides = Partial<BoardCellRenderProps> & { readonly add?: (title: string) => void };
+
+/** A column with its head, as the board without lanes draws it. */
+const columnProps = ({ add = () => undefined, ...overrides }: ColumnOverrides = {}): BoardCellRenderProps => {
+  const status = overrides.status ?? todo;
+  const count = overrides.count ?? 0;
+  return {
+    status,
+    head: { status, count, add: () => undefined, menu: columnMenu({ status }) },
+    label: status.name,
+    count,
+    target: false,
+    dropRef: () => undefined,
+    cards: null,
+    insertAtEnd: false,
+    newCard: { cell: `all::${status.slug}`, add },
+    notice: null,
+    ...overrides,
+  };
+};
 
 describe('renderBoardColumn()', () => {
   test('a column', () => {
@@ -115,7 +142,7 @@ describe('renderBoardColumn()', () => {
 describe('a column’s New card', () => {
   test('adding a card', () => {
     const added: string[] = [];
-    const container = mount(renderBoardColumn(columnProps({ status: blocked, newCard: (title) => added.push(title) })));
+    const container = mount(renderBoardColumn(columnProps({ status: blocked, add: (title) => added.push(title) })));
     const rest = [...container.querySelectorAll('button')].find((button) => button.textContent === 'New card');
     const inColumn = rest?.closest('section')?.getAttribute('aria-label');
     if (rest) click(rest);
@@ -159,7 +186,7 @@ describe('renderBoardCard()', () => {
         title: container.querySelector('[data-title]')?.textContent,
         progress: container.querySelector('[role="progressbar"]')?.getAttribute('aria-label'),
         handle: container.querySelector('button[data-drag]')?.getAttribute('aria-label'),
-        move: container.querySelector('button[aria-haspopup="menu"]')?.getAttribute('aria-label'),
+        move: container.querySelector('button[data-move]')?.getAttribute('aria-label'),
       },
       expected: {
         task: 'p',
@@ -292,10 +319,10 @@ describe('renderBoardCard()', () => {
     );
     assert({
       given: 'a done card in flight whose last move was refused',
-      should: 'strike its title, fade it and say why under it',
+      should: 'strike its title, leave a dashed slot and say why under it',
       actual: [
         container.querySelector('[data-title]')?.className.includes('line-through'),
-        container.querySelector('article')?.className.includes('opacity-60'),
+        container.querySelector('article')?.className.includes('border-dashed'),
         container.querySelector('li > [role="status"]')?.textContent,
       ],
       expected: [true, true, 'Complete all sub-tasks first'],
@@ -382,7 +409,9 @@ describe('renderMoveMenu()', () => {
 
 describe('renderBoard()', () => {
   test('the board', () => {
-    const container = mount(renderBoard({ label: 'Launch board', columns: <section />, announcement: 'Moved Book venue to Done.' }));
+    const container = mount(
+      renderBoard({ label: 'Launch board', body: <section />, announcement: 'Moved Book venue to Done.', lanes: 'none', selectLanes: () => undefined }),
+    );
     const live = container.querySelector('[aria-live="polite"]');
     assert({
       given: 'columns and the last move',
@@ -401,6 +430,153 @@ describe('renderCardPreview()', () => {
       should: 'draw its title on a card, hidden from assistive tech (the live region speaks for the drag)',
       actual: [container.textContent, container.firstElementChild?.getAttribute('aria-hidden')],
       expected: ['Book venue', 'true'],
+    });
+  });
+});
+
+describe('a column’s head', () => {
+  test('a WIP limit', () => {
+    const chip = (count: number) => {
+      const container = mount(renderBoardColumn(columnProps({ status: { ...doing, wipLimit: 2 }, count })));
+      const count$ = container.querySelector('[data-count]');
+      return [count$?.textContent, count$?.getAttribute('data-wip'), container.querySelector('h3')?.getAttribute('aria-label')];
+    };
+    assert({
+      given: 'In Progress limited to two, holding one, two and three',
+      should: 'show the count against the limit, warning at it and reading over it',
+      actual: [chip(1), chip(2), chip(3)],
+      expected: [
+        ['1/2', 'under', 'In Progress, 1 task, limit 2'],
+        ['2/2', 'at', 'In Progress, 2 tasks, limit 2'],
+        ['3/2', 'over', 'In Progress, 3 tasks, limit 2, over the limit'],
+      ],
+    });
+  });
+
+  test('"+" and a read-only column', () => {
+    const pressed: number[] = [];
+    const editable = mount(
+      renderBoardColumn(columnProps({ head: { status: todo, count: 0, add: () => pressed.push(1), menu: columnMenu() } })),
+    );
+    click(editable.querySelector('button[aria-label="New card in To Do"]') as HTMLButtonElement);
+    const readOnly = mount(
+      renderBoardColumn(columnProps({ head: { status: todo, count: 0, add: null, menu: columnMenu() }, newCard: null })),
+    );
+    assert({
+      given: 'a column’s "+" pressed, and a column for a viewer who may only read',
+      should: 'ask to open New card, and draw neither "+" nor New card read-only',
+      actual: {
+        pressed,
+        plus: readOnly.querySelector('button[aria-label="New card in To Do"]'),
+        newCard: readOnly.querySelector('[data-new-card]'),
+      },
+      expected: { pressed: [1], plus: null, newCard: null },
+    });
+  });
+
+  test('the column menu', () => {
+    const calls: string[] = [];
+    const container = mount(
+      renderColumnMenu(
+        columnMenu({
+          open: true,
+          collapse: () => calls.push('collapse'),
+          wip: { editing: true, draft: '4', start: () => calls.push('start'), type: (draft) => calls.push(`type ${draft}`), save: () => calls.push('save') },
+        }),
+      ),
+    );
+    const field = container.querySelector<HTMLInputElement>('input') as HTMLInputElement;
+    const focused = document.activeElement === field;
+    typeInto(field, '5');
+    press(field, 'Enter');
+    click([...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'Collapse') as HTMLButtonElement);
+    assert({
+      given: 'the column menu open on its limit field, 5 typed, Enter, then Collapse',
+      should: 'focus the field on the draft, hand on the typing, save on Enter and collapse',
+      actual: { label: field.getAttribute('aria-label'), value: field.value, focused, calls },
+      expected: { label: 'WIP limit for To Do', value: '4', focused: true, calls: ['type 5', 'save', 'collapse'] },
+    });
+  });
+});
+
+describe('renderColumnRail()', () => {
+  test('a folded column', () => {
+    const expanded: number[] = [];
+    const container = mount(
+      renderColumnRail({ status: done, label: 'Done', count: 3, target: false, dropRef: () => undefined, expand: () => expanded.push(1), named: true }),
+    );
+    const button = container.querySelector<HTMLButtonElement>('button[data-expand]') as HTMLButtonElement;
+    click(button);
+    assert({
+      given: 'Done folded to a rail holding three, then pressed',
+      should: 'keep it a column to drop on, name it with its count, and ask to open it',
+      actual: {
+        column: container.querySelector('section')?.getAttribute('data-column'),
+        label: button.getAttribute('aria-label'),
+        text: button.textContent,
+        expanded,
+      },
+      expected: { column: 'completed', label: 'Expand Done, 3 tasks', text: '3Done', expanded: [1] },
+    });
+  });
+});
+
+describe('renderCardMenu()', () => {
+  const cardMenu = (overrides: Partial<CardMenuRenderProps> = {}): CardMenuRenderProps => ({
+    title: 'Book venue',
+    taskId: 'z',
+    href: '/d1/tasks/page-z',
+    open: true,
+    setOpen: () => undefined,
+    confirming: false,
+    setConfirming: () => undefined,
+    addSubtask: () => undefined,
+    remove: () => undefined,
+    ...overrides,
+  });
+  const items = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+
+  test('open, then asking first', () => {
+    const calls: string[] = [];
+    const open = mount(renderCardMenu(cardMenu({ setConfirming: (on) => calls.push(`confirm ${on}`), addSubtask: () => calls.push('add') })));
+    const offered = items(open).map((item) => [item.textContent, item.getAttribute('href')]);
+    click(items(open)[1] as HTMLElement);
+    click(items(open)[2] as HTMLElement);
+    const asking = mount(renderCardMenu(cardMenu({ confirming: true, remove: () => calls.push('remove'), setConfirming: (on) => calls.push(`confirm ${on}`) })));
+    const question = asking.querySelector('p')?.textContent;
+    click(items(asking)[1] as HTMLElement);
+    click(items(asking)[0] as HTMLElement);
+    assert({
+      given: 'a card’s ⋯ menu: Add subtask, Delete…, then No and Yes on the question',
+      should: 'link Open to the task, and only delete once Yes is chosen in the menu',
+      actual: { offered, question, calls },
+      expected: {
+        offered: [
+          ['Open', '/d1/tasks/page-z'],
+          ['Add subtask', null],
+          ['Delete…', null],
+        ],
+        question: 'Delete Book venue?',
+        calls: ['add', 'confirm true', 'confirm false', 'remove'],
+      },
+    });
+  });
+});
+
+describe('where a card will land', () => {
+  test('lines before, after and at the end', () => {
+    const before = mount(renderBoardCard(card({ insert: 'before' })));
+    const after = mount(renderBoardCard(card({ insert: 'after' })));
+    const end = mount(renderBoardColumn(columnProps({ insertAtEnd: true })));
+    const place = (container: HTMLElement) => {
+      const line = container.querySelector('[data-insert]');
+      return line === null ? null : line.nextElementSibling?.tagName ?? 'last';
+    };
+    assert({
+      given: 'a card dragged in from another cell, held before a card, after it, and over an empty cell',
+      should: 'draw the landing line on that side, and at the end of the cell without saying it has no tasks',
+      actual: [place(before), place(after), end.querySelector('[data-insert]') !== null, end.querySelector('section > p')?.textContent],
+      expected: ['ARTICLE', 'last', true, undefined],
     });
   });
 });
