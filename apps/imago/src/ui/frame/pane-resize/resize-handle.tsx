@@ -43,10 +43,6 @@ export function ResizeHandle({ column, width, size, max, onResize }: ResizeHandl
   const seamRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const frame = useRef<number | null>(null);
-  // What React draws over the pane now, so a drag hands back the current width, not a stale one.
-  const drawn = useRef(size);
-  drawn.current = size;
-
   /**
    * Undo everything the drag did to the page, putting back the width React draws (`restore`).
    * The width eases again once React has drawn the result.
@@ -65,13 +61,13 @@ export function ResizeHandle({ column, width, size, max, onResize }: ResizeHandl
   };
 
   // The seam goes when its column stops docking (collapsed, or a tier crossed), maybe mid-drag;
-  // the Pane has then dropped its own width, so none is put back.
-  const releaseRef = useRef(release);
-  releaseRef.current = release;
-  useEffect(() => () => void releaseRef.current(undefined), []);
+  // the Pane has then dropped its own width, so none is put back. `release` reads only refs, so
+  // the first render's closure serves the unmount.
+  useEffect(() => () => void release(undefined), []);
 
   const end = () => {
-    const active = release(drawn.current);
+    // This render's handlers hold this render's size: what React draws over the pane now.
+    const active = release(size);
     // A press that never moved (a click, or half of a double-click) keeps the token width.
     if (active !== null && active.width !== width) onResize(active.width);
   };
