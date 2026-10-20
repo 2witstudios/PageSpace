@@ -105,6 +105,21 @@ describe('stageFor() settings and account', () => {
     });
   });
 
+  test('drive tools', () => {
+    assert({
+      given: 'a drive tool path',
+      should: 'title the tool by its spine name',
+      actual: stageFor('/drive-1/calendar').object,
+      expected: { kind: 'settings', title: 'Calendar', tool: 'calendar' },
+    });
+    assert({
+      given: 'the agents route, which the spine calls Console',
+      should: 'title it Console, as its tab does',
+      actual: stageFor('/drive-1/agents').object,
+      expected: { kind: 'settings', title: 'Console', tool: 'agents' },
+    });
+  });
+
   test('account', () => {
     assert({
       given: 'the user-level account path',
