@@ -396,9 +396,9 @@ test('the Console multiplexes chats in its panes and drive configuration remains
   // of the grid — not a hand-off to Imago's column.
   const bar = page.getByRole('toolbar', { name: 'Session', exact: true });
   await expect(bar).toContainText('Native agent session');
-  const sessionInput = page.getByRole('textbox', { name: 'Message Support proof', exact: true });
+  const sessionInput = page.locator('[data-slot="object"]').getByLabel('Message Support proof', { exact: true });
   await expect(sessionInput).toHaveCount(1);
-  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).getByRole('textbox', { name: 'Message Support proof', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Imago', exact: true }).getByLabel('Message Support proof', { exact: true })).toHaveCount(0);
   await expect(sessionInput).toBeEditable();
   const sent = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/api/ai/chat');
   await sessionInput.fill('A real workspace conversation turn');

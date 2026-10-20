@@ -749,6 +749,17 @@ describe('AgentsSidebar', () => {
       });
     });
 
+    test('clicking a session with no conversations and no shells still selects it, so its grid opens on the picker', async () => {
+      respondWithSessions([{ ...SESSION, conversations: [], shells: [] }]);
+      const user = userEvent.setup();
+      renderSidebar();
+
+      await user.click(await screen.findByText('api refactor'));
+
+      expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-1');
+      expect(useAgentSurfaceStore.getState().selectedConversationId).toBeNull();
+    });
+
     test('clicking a conversation selects it under its session, still without navigating', async () => {
       const user = userEvent.setup();
       renderSidebar();

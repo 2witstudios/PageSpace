@@ -1227,7 +1227,12 @@ function SessionRow({
       return;
     }
     const firstShell = session.shells[0];
-    if (firstShell) openShell(firstShell);
+    if (firstShell) {
+      openShell(firstShell);
+      return;
+    }
+    // Nothing listed: still open the session, so its empty grid seeds the pane picker.
+    selectSession(session.workspaceId);
   }, [tree, openConversation, openShell, selectConversation, selectSession, session.workspaceId, session.conversations, session.shells]);
 
   const endSession = useCallback(async () => {
