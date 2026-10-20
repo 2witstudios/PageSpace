@@ -38,8 +38,5 @@ export const taskListDescriptionToggleClass = (open: boolean): string =>
     open && 'text-ink',
   );
 
-/* Done of total, at the head of the outline. */
-export const taskListSummaryClass = 'flex items-center gap-3 px-2 text-xs text-ink-muted';
-
 /** What a filter that hides every task says. */
 export const taskListEmptyClass = 'px-2 py-6 text-center text-sm text-ink-faint';
