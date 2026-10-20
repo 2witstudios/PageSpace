@@ -147,6 +147,13 @@ beforeEach(() => {
 
 afterEach(unmountAll);
 
+/*
+ * Seven edits in turn, each waiting on its write and the revalidation after
+ * it: well under a second here, but past vitest's 5s default on a CI runner
+ * under coverage, where a timed-out test keeps running into the next ones.
+ */
+const EVERY_FIELD_TIMEOUT = 30_000;
+
 /** Waits for `check` to pass, letting React flush between tries. */
 const settle = async (check: () => void): Promise<void> => {
   for (let tries = 0; tries < 150; tries += 1) {
@@ -394,7 +401,7 @@ describe('TaskObject: a task', () => {
       actual: treeTitles(),
       expected: ['Plan the launch', 'Draft copy', 'Book press', 'Book venue'],
     });
-  });
+  }, EVERY_FIELD_TIMEOUT);
 
   test('ticking from the detail', async () => {
     // A leaf: list l1 holds only z, whose own page is page-p.
