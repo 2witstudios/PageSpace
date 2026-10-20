@@ -52,9 +52,9 @@ export async function DELETE(
     const recipientUserIds = await getDriveRecipientUserIds(drive.id);
 
     // Minted while the drive still exists, so its avatar folder can be emptied once it is gone.
-    const avatarToken = drive.avatarUrl
-      ? await mintDriveAvatarToken(drive.id, actorFromAuth(auth)).catch(() => null)
-      : null;
+    // Always, not only when an avatar is set: a replaced or removed file whose best-effort cleanup
+    // failed is still in the folder after the column is cleared (as the org delete does, ORG-1).
+    const avatarToken = await mintDriveAvatarToken(drive.id, actorFromAuth(auth)).catch(() => null);
 
     // Permanently delete the drive (cascade will delete all pages).
     //

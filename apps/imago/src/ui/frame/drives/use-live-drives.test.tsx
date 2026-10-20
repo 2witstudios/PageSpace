@@ -43,12 +43,13 @@ describe('useLiveDrives()', () => {
       fake.emit('drive:updated', { driveId: 'd1', operation: 'updated' });
       fake.emit('drive:updated', { driveId: 'd1', operation: 'updated', resourceType: 'command' });
       fake.emit('drive:member_added', { driveId: 'd2', operation: 'member_added' });
+      fake.emit('drive:member_role_changed', { driveId: 'd2', operation: 'member_role_changed' });
     });
     assert({
-      given: 'a drive update, a command change on the same channel, then a new membership',
-      should: 'refetch /api/drives for the drive update and the membership, not the command',
+      given: 'a drive update, a command change on the same channel, a new membership, then a role change',
+      should: 'refetch /api/drives for the drive update, the membership and the role change, not the command',
       actual: fake.mutate.mock.calls.map(([key]) => key),
-      expected: ['/api/drives', '/api/drives'],
+      expected: ['/api/drives', '/api/drives', '/api/drives'],
     });
   });
 

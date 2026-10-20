@@ -120,16 +120,23 @@ describe('DELETE /api/trash/drives/[driveId]', () => {
     );
   });
 
-  it('given a drive with an avatar, should empty its avatar folder once the drive is gone, and touch no storage for one without', async () => {
+  it('given a drive with an avatar, should empty its avatar folder once the drive is gone', async () => {
     mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Work', slug: 'work', isTrashed: true, ownerId: 'user-1', avatarUrl: '/api/drives/drive-1/avatar/avatar-a1.png' });
     expect((await DELETE(makeRequest(), context)).status).toBe(200);
     expect(mockCallDriveAvatarStorage).toHaveBeenCalledWith('drive-1', 'drive-token', { method: 'DELETE' });
     expect(mockDeleteWhere.mock.invocationCallOrder[0]).toBeLessThan(mockCallDriveAvatarStorage.mock.invocationCallOrder[0]);
+  });
 
-    vi.clearAllMocks();
+  it('given a drive with no avatar set, should still empty its avatar folder (a failed cleanup may have left files)', async () => {
     mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Work', slug: 'work', isTrashed: true, ownerId: 'user-1', avatarUrl: null });
     expect((await DELETE(makeRequest(), context)).status).toBe(200);
-    expect(mockMintDriveAvatarToken).not.toHaveBeenCalled();
+    expect(mockCallDriveAvatarStorage).toHaveBeenCalledWith('drive-1', 'drive-token', { method: 'DELETE' });
+  });
+
+  it('given no avatar token can be minted, should still delete the drive and touch no storage', async () => {
+    mockFindDrive.mockResolvedValue({ id: 'drive-1', name: 'Work', slug: 'work', isTrashed: true, ownerId: 'user-1', avatarUrl: null });
+    mockMintDriveAvatarToken.mockRejectedValueOnce(new Error('not a drive admin'));
+    expect((await DELETE(makeRequest(), context)).status).toBe(200);
     expect(mockCallDriveAvatarStorage).not.toHaveBeenCalled();
   });
 

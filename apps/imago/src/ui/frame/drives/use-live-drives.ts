@@ -6,7 +6,14 @@ import { useSocketStore } from '@/retained/stores/useSocketStore';
 import { DRIVES } from './drives';
 
 /** The drive events the realtime server sends to each viewer's own drives room (user:<id>:drives). */
-const DRIVE_EVENTS = ['drive:created', 'drive:updated', 'drive:deleted', 'drive:member_added', 'drive:member_removed'] as const;
+const DRIVE_EVENTS = [
+  'drive:created',
+  'drive:updated',
+  'drive:deleted',
+  'drive:member_added',
+  'drive:member_role_changed',
+  'drive:member_removed',
+] as const;
 
 /** command/workflow changes ride drive:updated too, but leave the drive list as it was. */
 const changesDriveList = (payload: unknown): boolean =>
