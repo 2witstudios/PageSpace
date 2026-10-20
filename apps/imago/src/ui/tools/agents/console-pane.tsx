@@ -6,6 +6,7 @@ import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import AgentsSidebar from '@/retained/components/layout/left-sidebar/AgentsSidebar';
 import { ALL_DRIVES } from '@/retained/lib/dashboard/focus';
 import { useAgentSurfaceStore } from '@/retained/stores/agents/useAgentSurfaceStore';
+import { dispatch, transactions } from '../../store/transactions';
 
 /**
  * The Console's pane (C-Drive-Agents): classic's Agents sidebar reused as it is. The drive's
@@ -21,6 +22,16 @@ export function ConsolePane({ driveId, close, allDrives = false }: ToolPaneProps
   useEffect(() => {
     useAgentSurfaceStore.setState({ driveId: scope });
   }, [scope]);
+  // Every row here selects through the agent surface store, the same session included (a page
+  // or shell row reselects it), and changes only the query. Each selection closes the narrow
+  // pane sheet, as a navigation does, so the pane it opened is not left covered.
+  useEffect(
+    () =>
+      useAgentSurfaceStore.subscribe((state, previous) => {
+        if (state.driveId === previous.driveId) dispatch(transactions.closePaneSheet, undefined);
+      }),
+    [],
+  );
   return renderToolPane({
     title: 'Console',
     label: 'Console: sessions',

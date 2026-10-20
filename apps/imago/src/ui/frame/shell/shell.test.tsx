@@ -302,21 +302,6 @@ describe('Shell', () => {
     });
   });
 
-  test('picking a session closes the narrow pane sheet, though only the query changed', () => {
-    navigation.search = '';
-    navigate('/drive-1/agents');
-    act(() => dispatch(transactions.expandSection, 'settings'));
-    const opened = getUiState().resources.paneSheetOpen;
-    navigation.search = 'workspace=s1';
-    navigate('/drive-1/agents');
-    assert({
-      given: 'the Console sheet open, then ?workspace=s1 on the same path',
-      should: 'close the sheet so the session grid is not left covered',
-      actual: [opened, getUiState().resources.paneSheetOpen],
-      expected: [true, false],
-    });
-  });
-
   test("Home's session bar reads every drive's sessions, a drive's only its own", () => {
     navigation.search = 'workspace=s1';
     navigate('/home-1/agents');

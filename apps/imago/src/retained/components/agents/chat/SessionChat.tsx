@@ -162,12 +162,7 @@ export function SessionChatView({
     dispatch(transactions.setChatDraft, typeof next === 'function' ? next(getUiState().resources.chatDraft) : next);
   }, []);
   // Keyed by conversation, so it outlives the pane's History and Settings tabs and a session switch.
-  const { draft: ownDraft, setDraft: saveOwnDraft } = useDraft(imagoComposer ? '' : buildDraftKey('ai', conversationId));
-  const ownDraftRef = useRef(ownDraft);
-  ownDraftRef.current = ownDraft;
-  const setOwnDraft = useCallback((next: string | ((current: string) => string)) => {
-    saveOwnDraft(typeof next === 'function' ? next(ownDraftRef.current) : next);
-  }, [saveOwnDraft]);
+  const { draft: ownDraft, setDraft: setOwnDraft } = useDraft(imagoComposer ? '' : buildDraftKey('ai', conversationId));
   const input = imagoComposer ? sharedDraft : ownDraft;
   const setInput = imagoComposer ? setSharedDraft : setOwnDraft;
   const sharedAttachments = useChatAttachments();

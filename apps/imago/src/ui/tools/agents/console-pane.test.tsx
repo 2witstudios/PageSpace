@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
+import { act } from 'react';
 import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { mount, unmountAll } from '@/ui/test-support/dom';
@@ -11,6 +12,8 @@ vi.mock('@/retained/components/layout/left-sidebar/AgentsSidebar', () => ({ defa
 
 const { ConsolePane } = await import('./console-pane');
 const { useAgentSurfaceStore } = await import('@/retained/stores/agents/useAgentSurfaceStore');
+const { getUiState } = await import('../../store/store');
+const { dispatch, transactions } = await import('../../store/transactions');
 
 afterEach(unmountAll);
 
@@ -39,6 +42,20 @@ describe('ConsolePane', () => {
       should: 'scope picks to that drive, then to every drive',
       actual: [drive, useAgentSurfaceStore.getState().driveId],
       expected: ['d1', null],
+    });
+  });
+
+  test('a selection from the pane closes the narrow pane sheet, even of the session already open', () => {
+    mount(<ConsolePane driveId="d1" close={null} />);
+    act(() => useAgentSurfaceStore.getState().selectSession('s1'));
+    act(() => dispatch(transactions.expandSection, 'settings'));
+    const reopened = getUiState().resources.paneSheetOpen;
+    act(() => useAgentSurfaceStore.getState().selectSession('s1'));
+    assert({
+      given: 'the sheet reopened over session s1, then s1 picked again (a page or shell row in it)',
+      should: 'close the sheet',
+      actual: [reopened, getUiState().resources.paneSheetOpen],
+      expected: [true, false],
     });
   });
 });
