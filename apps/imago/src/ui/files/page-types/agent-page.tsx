@@ -11,7 +11,6 @@ import PageAgentHistoryTab from '@/retained/components/ai/page-agents/PageAgentH
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { buildAgentSelectionUrl } from '@/retained/lib/agents/agent-selection';
 import { useAgentConversations } from '@/ui/chat/use-chat-data/use-chat-data';
-import { imagoStartsCollapsed } from '@/ui/frame/stage/stage';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
 import { SettingsSubnav } from '@/ui/files/settings-subnav/settings-subnav';
 import { getUiState } from '@/ui/store/store';
@@ -184,12 +183,6 @@ export function AgentPage({ page, driveId, pageId }: PageTypeProps) {
     setViewState(agentViewFrom(params.get(TAB_PARAM)));
     setCategoryState(agentCategoryFrom(params.get(CATEGORY_PARAM)));
   }, []);
-
-  // Entering the agent page folds Imago to its Ask pill (IMC-3.11). Keyed on the page, not on
-  // every render, so a viewer who reopens Imago is not folded back.
-  useEffect(() => {
-    if (imagoStartsCollapsed(page.type)) dispatch(transactions.collapseImago, undefined);
-  }, [pageId, page.type]);
 
   // Ask opens the side chat with this agent, so entering the page selects it there; leaving hands
   // the column back to the agent it had, so opening an object never changes the agent for good.
