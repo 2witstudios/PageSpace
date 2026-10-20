@@ -1,13 +1,7 @@
-import { Suspense } from 'react';
-import { getViewer } from '@/lib/auth/get-viewer';
-import { ActivityDashboard } from '@/retained/components/activity';
+import { redirectToHomeSection } from '@/lib/home-section';
+import type { SearchParams } from '@/lib/home-section-path';
 
-/** Your activity (C-Account-Activity): the user's change log in the account settings chrome. */
-export default async function Page() {
-  await getViewer();
-  return (
-    <Suspense fallback={null}>
-      <ActivityDashboard context="user" variant="settings" />
-    </Suspense>
-  );
+/** Moved to Home, the dashboard: an old link lands on Home's activity. */
+export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }): Promise<never> {
+  return redirectToHomeSection('activity', searchParams);
 }

@@ -20,6 +20,7 @@ import { AvatarMenu } from '../avatar-menu/avatar-menu';
 import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
 import { useLiveDrives } from '../drives/use-live-drives';
+import { HomeDriveProvider } from '../drives/home-drive-context';
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
 import { ListPane } from '../list-pane/list-pane';
@@ -308,7 +309,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         : stage.section === 'chat'
           ? chatColumn
           : (listScreen ?? objectColumn);
-    return renderPhoneShell({
+    return <HomeDriveProvider value={homeDriveId}>{renderPhoneShell({
       stage,
       hydrated,
       screen: <><RetainedSurface fill={false}><OrgSurfaceBanner /></RetainedSurface>{screen}</>,
@@ -320,9 +321,9 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         ) : null,
       bar: asking ? null : <PhoneBottomBar stage={stage} driveId={railDrive(stage, homeDriveId)} />,
       palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
-    });
+    })}</HomeDriveProvider>;
   }
-  return renderShell({
+  return <HomeDriveProvider value={homeDriveId}>{renderShell({
     stage,
     layout,
     columns,
@@ -351,5 +352,5 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
     chat: chatColumn,
     empty: <EmptyMiddle driveId={railDrive(stage, homeDriveId)} leading={opener(stage, columns, 'empty')} />,
     palette: <><CommandPalette stage={stage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
-  });
+  })}</HomeDriveProvider>;
 }

@@ -276,11 +276,12 @@ export const useTaskList = (pageId: string | null, title: string) => {
 
 /**
  * How many of the viewer's tasks each smart view holds, read from each view's
- * pagination.total. Undefined until every count has loaded.
+ * pagination.total. Undefined until every count has loaded. `allDrives` (Home,
+ * the dashboard) counts across every drive rather than this one.
  */
-export const useTaskViewCounts = (driveId: string | null) => {
+export const useTaskViewCounts = (driveId: string | null, allDrives = false) => {
   const client = useApiClient();
-  const { data, error } = useSWR(driveId === null ? null : (['imago:task-view-counts', driveId] as const), ([, id]) =>
+  const { data, error } = useSWR(driveId === null ? null : (['imago:task-view-counts', allDrives ? null : driveId] as const), ([, id]) =>
     Promise.all(
       taskViews.map(async (view) => [view.id, await fetchDriveTaskCount(client, id, view.dueDateFilter)] as const),
     ).then((counts) => Object.fromEntries(counts) as Record<TaskViewId, number>),
@@ -292,10 +293,11 @@ export const useTaskViewCounts = (driveId: string | null) => {
 const GROUND_PAGE_SIZE = 100;
 
 /**
- * The viewer's tasks in a drive for the ground: one status group, one due
- * window (or none), the first page of the route's answer.
+ * The viewer's tasks in a drive for the ground, or with no drive across every
+ * drive (Home, the dashboard): one status group, one due window (or none), the
+ * first page of the route's answer.
  */
-export const useDriveTasks = (driveId: string, statusGroup: StatusGroupFilter, dueDateFilter: DueDateFilter | undefined) => {
+export const useDriveTasks = (driveId: string | null, statusGroup: StatusGroupFilter, dueDateFilter: DueDateFilter | undefined) => {
   const client = useApiClient();
   const query = { driveId, statusGroup, dueDateFilter, limit: GROUND_PAGE_SIZE };
   const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query] as const, ([, q]) =>

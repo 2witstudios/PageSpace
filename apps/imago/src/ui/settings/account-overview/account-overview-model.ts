@@ -74,7 +74,6 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   '/account/hotkeys': 'Customize keyboard shortcuts',
   '/account/privacy': 'Review or withdraw cookie consent',
   '/account/ai': 'What this deployment can use',
-  '/account/agents': 'Agent sessions across your drives',
   '/account/agent-accounts': 'API keys Imago can use unseen',
   '/account/commands': 'Register pages as slash commands',
   '/account/plan': 'Your plan and what it includes',
@@ -86,15 +85,11 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   '/account/organizations': 'Organizations you belong to',
   '/account/backups': 'Snapshots of your drives',
   '/account/trash': 'Pages you trashed across drives',
-  '/account/activity': 'What changed across your drives',
   '/account/connections': 'People, invitations and DMs',
   '/account/integrations': 'External APIs for your assistants',
   '/account/integrations/google-calendar': 'Sync events with Google Calendar',
   '/account/mcp': 'Connect external tools to PageSpace',
   '/account/local-mcp': 'Servers running on this device',
-  '/account/calendar': 'Your events across drives',
-  '/account/messages': 'Channels across your drives',
-  '/account/tasks': 'Tasks assigned to you',
   '/account/legal/oss-licenses': 'Privacy Policy, Terms, OSS notices',
 };
 

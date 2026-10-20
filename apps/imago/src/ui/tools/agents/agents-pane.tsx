@@ -32,6 +32,20 @@ const sessionRowClass = (selected: boolean): string =>
     selected ? 'bg-accent-soft font-medium text-accent-deep' : 'text-ink hover:bg-fill',
   );
 
+/** The Console's one primary action, Session: starts a session through the spawn palette; null disables it. */
+export const renderSessionAction = (onStart: (() => void) | null): ReactNode => (
+  <button
+    type="button"
+    // The tool panes' one primary action, as Calendar's Event: spine blue with its own ink in both themes.
+    className="flex h-ask-pill cursor-pointer items-center gap-1 rounded-round border-0 bg-spine px-3 text-sm font-medium text-spine-on disabled:cursor-default disabled:opacity-50"
+    disabled={onStart === null}
+    onClick={onStart ?? undefined}
+  >
+    {renderIcon({ name: 'plus', size: 12 })}
+    Session
+  </button>
+);
+
 /**
  * The Agents tool's pane (C-Drive-Agents): the head with Session, then search, the sessions
  * grouped by their environment, each environment's published app, and the drive's agents.
@@ -71,20 +85,7 @@ export function AgentsPane({ driveId, close }: ToolPaneProps): ReactNode {
   return renderToolPane({
     title: 'Console',
     label: 'Console: agents and sessions',
-    actions: (
-      <button
-        type="button"
-        // The tool panes' one primary action, as Calendar's Event: spine blue with its own ink in both themes.
-        className="flex h-ask-pill cursor-pointer items-center gap-1 rounded-round border-0 bg-spine px-3 text-sm font-medium text-spine-on disabled:cursor-default disabled:opacity-50"
-        disabled={!driveId}
-        onClick={() => {
-          if (driveId) openSpawn(driveId, driveName);
-        }}
-      >
-        {renderIcon({ name: 'plus', size: 12 })}
-        Session
-      </button>
-    ),
+    actions: renderSessionAction(driveId ? () => openSpawn(driveId, driveName) : null),
     close,
     children: (
       <>

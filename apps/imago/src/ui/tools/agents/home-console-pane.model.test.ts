@@ -1,7 +1,7 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
-import { envStatusOf } from './account-agents-pane.model';
+import { envStatusOf } from './home-console-pane.model';
 
 const base = { driveId: 'd1', createdAt: '2026-10-12T10:00:00.000Z' };
 const sprite = (id: string, status: 'none' | 'running' | 'stopped'): DriveEnvDTO => ({ ...base, id, name: id, substrate: 'sprite', status });

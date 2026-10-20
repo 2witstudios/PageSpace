@@ -5,6 +5,7 @@
 // /imago/[driveId]/files/[pageId] names that page in that drive.
 
 import type { Stage } from '../../frame/stage/stage';
+import { isDashboard } from '../../frame/drives/home-scope';
 
 export type ContextRefRouteType = 'page' | 'channel' | 'drive' | 'dm' | 'other';
 
@@ -16,8 +17,13 @@ export type ContextRef = {
   readonly dmConversationId?: string;
 };
 
-/** The context ref for a stage: the open object, else the drive, else nothing. */
-export const contextRefFor = ({ driveId, section, object }: Stage): ContextRef => {
+/**
+ * The context ref for a stage: the open object, else the drive, else nothing.
+ * Home's aggregate sections are the dashboard, so they claim no drive and the
+ * server answers with every drive the viewer can reach, as classic's did.
+ */
+export const contextRefFor = (stage: Stage, homeDriveId: string | null = null): ContextRef => {
+  const { driveId, section, object } = stage;
   if (object?.kind === 'conversation') return { routeType: 'dm', dmConversationId: object.conversationId };
   if (driveId === null) return { routeType: 'other' };
   if (object?.kind === 'page') {
@@ -26,5 +32,6 @@ export const contextRefFor = ({ driveId, section, object }: Stage): ContextRef =
       ? { routeType: 'channel', pageId: object.pageId }
       : { routeType: 'page', pageId: object.pageId, driveId };
   }
+  if (isDashboard(stage, homeDriveId)) return { routeType: 'other' };
   return { routeType: 'drive', driveId };
 };

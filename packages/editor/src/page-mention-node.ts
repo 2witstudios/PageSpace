@@ -1,6 +1,6 @@
 import { Mention, type MentionOptions } from '@tiptap/extension-mention';
 import type { DOMOutputSpec, Node as PmNode } from '@tiptap/pm/model';
-import { nonEmptyStringAttr } from './pm-attrs.js';
+import { nonEmptyStringAttr } from './pm-attrs.ts';
 
 /**
  * The `pageMention` node's schema-affecting shape only: attributes and the

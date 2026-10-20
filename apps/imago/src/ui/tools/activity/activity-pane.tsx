@@ -42,16 +42,18 @@ const labelClass = 'text-2xs font-medium text-ink-faint';
 
 /**
  * The Activity tool's pane (C-Drive-Activity): the filters, written to the URL so the middle
- * timeline reads the same state.
+ * timeline reads the same state. On Home (`allDrives`) the timeline is the viewer's own activity
+ * across every drive, so there is no one else to filter by.
  */
-export function ActivityPane({ driveId, close }: ToolPaneProps): ReactNode {
+export function ActivityPane({ driveId, close, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+  const queryDriveId = allDrives ? null : driveId;
   const client = useApiClient();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const current = new URLSearchParams(searchParams.toString());
   const state = parseActivityUrl(current);
-  const { data: actors = [] } = useSWR(['imago:activity-actors', driveId] as const, ([, id]) =>
+  const { data: actors = [] } = useSWR(allDrives ? null : (['imago:activity-actors', driveId] as const), ([, id]) =>
     fetchActors(client, id),
   );
   const [exporting, setExporting] = useState(false);
@@ -66,7 +68,7 @@ export function ActivityPane({ driveId, close }: ToolPaneProps): ReactNode {
     setExporting(true);
     setExportFailed(false);
     try {
-      const response = await client.apiStream(`/api/activities/export?${activityQuery(state, driveId, new Date()).toString()}`);
+      const response = await client.apiStream(`/api/activities/export?${activityQuery(state, queryDriveId, new Date()).toString()}`);
       const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -88,7 +90,7 @@ export function ActivityPane({ driveId, close }: ToolPaneProps): ReactNode {
     close,
     children: (
       <div className="flex flex-col gap-4 px-1 py-2">
-        <div className="flex flex-col gap-1">
+        {allDrives ? null : <div className="flex flex-col gap-1">
           <label htmlFor="activity-actor" className={labelClass}>People &amp; agents</label>
           <select
             id="activity-actor"
@@ -101,7 +103,7 @@ export function ActivityPane({ driveId, close }: ToolPaneProps): ReactNode {
               <option key={actor.id} value={actor.id}>{actor.name || actor.email}</option>
             ))}
           </select>
-        </div>
+        </div>}
 
         <div className="flex flex-col gap-1">
           <label htmlFor="activity-operation" className={labelClass}>Operation</label>

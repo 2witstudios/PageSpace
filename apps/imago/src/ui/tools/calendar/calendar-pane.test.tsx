@@ -17,7 +17,7 @@ vi.mock('./use-calendar-state', () => ({
 }));
 vi.mock('@/retained/hooks/useDrive', () => ({
   useDriveStore: (selector: (store: unknown) => unknown) =>
-    selector({ drives: [{ id: 'drv_1', name: 'Studio' }], fetchDrives: () => undefined }),
+    selector({ drives: [{ id: 'drv_1', name: 'Studio' }, { id: 'drv_2', name: 'Ops' }], fetchDrives: () => undefined }),
 }));
 
 const setMode = (mode: 'cloud' | 'onprem') => {
@@ -92,6 +92,17 @@ describe('CalendarPane (C-Drive-Calendar)', () => {
         syncedLabel(null, now),
       ],
       expected: ['synced just now', 'synced 2 hr ago', 'not synced yet'],
+    });
+  });
+
+  test('on Home, every calendar the grid shows', () => {
+    const root = mount(<CalendarPane driveId="drv_1" allDrives close={null} />);
+    const calendars = Array.from(root.querySelectorAll('ul')[0]?.querySelectorAll('li') ?? []).map((li) => li.textContent);
+    assert({
+      given: 'Home, the dashboard, whose grid reads every drive',
+      should: 'list Personal and each drive before Google, as the grid’s chips do',
+      actual: calendars.slice(0, 3),
+      expected: ['Personal', 'Studio', 'Ops'],
     });
   });
 });

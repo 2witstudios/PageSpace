@@ -56,6 +56,14 @@ Imago needs the rest of the stack, because it uses classic's database, sessions 
    in to classic at `http://localhost:3000` and open `http://localhost:3006/imago`. A signed-out
    visit goes to classic's sign-in and comes back to the `/imago` address it came from.
 
+`bun run dev` in `apps/imago` and `apps/web` runs `next dev --turbopack`; `next build` stays on
+webpack. If something compiles differently under Turbopack, `bun run dev:webpack` in either app
+starts the webpack dev server instead. Neither app's `webpack()` function runs under Turbopack, so
+anything a dev session needs from it is restated in that app's `next.config.ts` (`turbopack`, and
+the Monaco and pdf.js copies). Workspace packages compiled from source import siblings as `./x.ts`
+(tsc's `rewriteRelativeImportExtensions` emits `./x.js` in `dist`), because Turbopack has no
+`extensionAlias` to map `./x.js` back to its `.ts` source.
+
 ## Docker Compose
 
 `docker compose up` runs imago's standalone server on `http://localhost:3006/imago` with no edge in

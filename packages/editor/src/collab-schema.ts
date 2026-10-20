@@ -7,12 +7,12 @@ import { TableKit } from '@tiptap/extension-table';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { Highlight } from '@tiptap/extension-highlight';
 import { TextAlign } from '@tiptap/extension-text-align';
-import { PageMentionNode } from './page-mention-node.js';
-import { CodeBlockNode } from './code-block-node.js';
-import { BlockId } from './block-id.js';
-import { CommentMark, InsertionMark, DeletionMark } from './collab-marks.js';
-import { ImageNode } from './image-node.js';
-import { djb2 } from './djb2.js';
+import { PageMentionNode } from './page-mention-node.ts';
+import { CodeBlockNode } from './code-block-node.ts';
+import { BlockId } from './block-id.ts';
+import { CommentMark, InsertionMark, DeletionMark } from './collab-marks.ts';
+import { ImageNode } from './image-node.ts';
+import { djb2 } from './djb2.ts';
 
 /**
  * Node-safe by contract: no React, no `document`/`window` at module-eval

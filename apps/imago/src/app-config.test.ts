@@ -203,8 +203,15 @@ describe('apps/imago configuration', () => {
   test('package.json', () => {
     assert({
       given: 'the imago dev script',
-      should: 'run next dev on port 3006',
+      should: 'run next dev on Turbopack on port 3006',
       actual: packageJson.scripts.dev,
+      expected: 'bun run styles:retained && next dev --turbopack --port 3006 --hostname 0.0.0.0',
+    });
+
+    assert({
+      given: 'the imago dev:webpack script',
+      should: 'run the webpack dev server on the same port',
+      actual: packageJson.scripts['dev:webpack'],
       expected: 'bun run styles:retained && next dev --port 3006 --hostname 0.0.0.0',
     });
 
