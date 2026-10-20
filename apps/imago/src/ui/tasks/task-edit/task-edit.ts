@@ -116,6 +116,8 @@ export type TaskPatch = {
   readonly priority?: Priority;
   /** An ISO date; null clears it. */
   readonly dueDate?: string | null;
+  /** When work is planned to begin, an ISO date; null clears it. */
+  readonly startDate?: string | null;
 };
 
 /** Edits a task's own fields, validated as PATCH validates them. */
@@ -123,6 +125,12 @@ export const updateTask = (root: TaskList, id: string, patch: TaskPatch): Outcom
   if (locate(root, id) === undefined) return refuse(root, NOT_FOUND);
   if (patch.title !== undefined && patch.title.trim() === '') return refuse(root, 'Title cannot be empty');
   if (patch.priority !== undefined && !PRIORITIES.includes(patch.priority)) return refuse(root, 'Invalid priority');
+  const current = locate(root, id)?.task;
+  const start = patch.startDate === undefined ? current?.startDate : patch.startDate;
+  const due = patch.dueDate === undefined ? current?.dueDate : patch.dueDate;
+  if (start && due && Date.parse(start) > Date.parse(due)) {
+    return refuse(root, 'Start date must be on or before the due date');
+  }
   return {
     list: mapTask(root, id, (task) => ({
       ...task,
@@ -164,6 +172,7 @@ export type NewTask = {
   readonly status?: string;
   readonly priority?: Priority;
   readonly dueDate?: string | null;
+  readonly startDate?: string | null;
   readonly assignees?: readonly Assignee[];
   readonly now: string;
 };
@@ -200,7 +209,9 @@ export const addTask = (root: TaskList, draft: NewTask): Outcome => {
     status,
     priority: draft.priority ?? 'medium',
     dueDate: draft.dueDate ?? null,
+    startDate: draft.startDate ?? null,
     completedAt,
+    createdAt: draft.now,
     assignees: draft.assignees ?? [],
     position: Math.max(0, ...siblings.map((task) => task.position)) + 1,
     hasContent: false,
@@ -223,6 +234,20 @@ export const addTask = (root: TaskList, draft: NewTask): Outcome => {
     },
   }));
   return { list: recount(opened, owner, 1, stamped(fresh)) };
+};
+
+/** A list's statuses with one status's work-in-progress limit changed. */
+export const setWipLimit = (root: TaskList, slug: string, wipLimit: number | null): Outcome => {
+  if (!root.statuses.some((status) => status.slug === slug)) return refuse(root, 'Status not found');
+  if (wipLimit !== null && (!Number.isInteger(wipLimit) || wipLimit < 1 || wipLimit > 999)) {
+    return refuse(root, 'A limit is a whole number from 1 to 999');
+  }
+  return {
+    list: {
+      ...root,
+      statuses: root.statuses.map((status) => (status.slug === slug ? { ...status, wipLimit } : status)),
+    },
+  };
 };
 
 /** Removes a task and everything under it, uncounting it on its parent. */

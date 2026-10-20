@@ -13,6 +13,11 @@ import type { TaskItemResponse } from '../task-model/task';
 import { TaskListView } from '../task-list-view/task-list-view';
 import { TaskObject } from './task-object';
 
+const push = vi.hoisted(() => vi.fn());
+// The list's Statuses and Workflows are classic's dialogs, covered where they live.
+vi.mock('../task-list-view/task-list-tools', () => ({ TaskListTools: () => null }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push }) }));
+
 // TaskObject's list branch is a dispatch boundary; the reused list's writes are covered by the live port suite.
 vi.mock('@/ui/files/page-view/page-view', () => ({ PageView: () => <><h2>Launch</h2><ul aria-label="Launch tasks" /></> }));
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
@@ -96,6 +101,12 @@ const server = (overrides: Record<string, FakeRoute> = {}) => {
     'GET /api/pages/page-p': () => Response.json({ id: 'page-p', content }),
     'GET /api/pages/page-p/permissions/check': () =>
       Response.json({ canView: true, canEdit: true, canShare: false, canDelete: false }),
+    'GET /api/pages/l1/permissions/check': () =>
+      Response.json({ canView: true, canEdit: true, canShare: false, canDelete: true }),
+    'DELETE /api/pages/l1/tasks/p': () => {
+      lists.l1 = (lists.l1 ?? []).filter((item) => item.id !== 'p');
+      return Response.json({ success: true });
+    },
     'PATCH /api/pages/page-p': ({ body }) => {
       content = (body as { content: string }).content;
       return Response.json({ id: 'page-p' });
@@ -124,8 +135,14 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
   setUiState(createInitialState());
   localStorage.clear();
+  push.mockReset();
 });
 
 afterEach(unmountAll);
@@ -157,11 +174,50 @@ const focus = (target: HTMLElement): void => {
   });
 };
 
-/** Picks an option the way the browser does: set the value, then `change`. */
-const choose = (select: HTMLSelectElement, value: string): void => {
-  act(() => {
-    select.value = value;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+/** A field's chip in the detail's row, by the start of its accessible name or text. */
+const chip = (root: ParentNode, name: string): HTMLButtonElement => {
+  const found = [...root.querySelectorAll<HTMLButtonElement>('[aria-label="Fields"] button')].find(
+    (button) => (button.getAttribute('aria-label') ?? button.textContent ?? '').startsWith(name),
+  );
+  if (found === undefined) throw new Error(`no ${name} chip`);
+  return found;
+};
+
+/** Opens a field's menu from the keyboard and chooses an option by its name. */
+const chooseFrom = (root: ParentNode, name: string, option: string): void => {
+  press(chip(root, name), 'Enter');
+  const item = [...document.querySelectorAll<HTMLElement>(`[role="menu"][aria-label="${name}"] [role="menuitemradio"]`)].find(
+    (entry) => entry.textContent === option,
+  );
+  if (item === undefined) throw new Error(`no ${option} in ${name}`);
+  click(item);
+};
+
+/** The open popover by name: it is portalled to the body, outside the detail. */
+const popover = (name: string) => document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${name}"]`);
+
+const inPopover = (name: string, label: string): HTMLButtonElement => {
+  const found = [...(popover(name)?.querySelectorAll<HTMLButtonElement>('button') ?? [])].find(
+    (button) => button.getAttribute('aria-label') === label || button.textContent === label,
+  );
+  if (found === undefined) throw new Error(`no ${label} in ${name}`);
+  return found;
+};
+
+const escape = (name: string): void => {
+  press(popover(name) as HTMLElement, 'Escape');
+};
+
+/** The Assignees chip: named by the faces on it, or Unassigned. */
+const assigneesChip = (root: ParentNode): HTMLButtonElement =>
+  (root.querySelector('[aria-label="Fields"] [aria-label^="Assigned to"]')?.closest('button') ??
+    chip(root, 'Unassigned')) as HTMLButtonElement;
+
+/** Opens the Assignees popover and waits for the drive's people to load into it. */
+const openAssignees = async (root: ParentNode, waitFor: string): Promise<void> => {
+  click(assigneesChip(root));
+  await settle(() => {
+    if (!popover('Assignees')?.querySelector(`[aria-label="Assign ${waitFor}"]`)) throw new Error('no assignable people');
   });
 };
 
@@ -170,11 +226,11 @@ const openTask = async (routes: Record<string, FakeRoute> = server(), withTree =
   const container = mount(
     <ImagoSWRProvider client={web.client}>
       <div data-detail="">
-        <TaskObject driveId="d1" pageId="page-p" viewerId="u-1" />
+        <TaskObject driveId="d1" pageId="page-p" viewerId="u-1" live={false} />
       </div>
       {withTree ? (
         <div data-tree="">
-          <TaskListView driveId="d1" pageId="l1" viewerId="u-1" />
+          <TaskListView driveId="d1" pageId="l1" viewerId="u-1" live={false} />
         </div>
       ) : null}
     </ImagoSWRProvider>,
@@ -182,7 +238,6 @@ const openTask = async (routes: Record<string, FakeRoute> = server(), withTree =
   const detail = container.querySelector('[data-detail]') as HTMLElement;
   await settle(() => {
     if (field<HTMLInputElement>(detail, 'Title')?.value !== title) throw new Error('no task');
-    if (!detail.querySelector('[aria-label="Assign Bo"]')) throw new Error('no assignable people');
     if (!descriptionOf(detail)?.textContent?.includes('Hello team')) throw new Error('no description');
   });
   const tree = container.querySelector('[data-tree]') as HTMLElement | null;
@@ -197,20 +252,29 @@ const openTask = async (routes: Record<string, FakeRoute> = server(), withTree =
 describe('TaskObject: a task', () => {
   test('its detail', async () => {
     const { detail } = await openTask();
-    const status = field<HTMLSelectElement>(detail, 'Status');
     const subtasks = detail.querySelector('[aria-label="Subtasks"]');
+    const status = chip(detail, 'Status').getAttribute('aria-label');
+    press(chip(detail, 'Status'), 'Enter');
+    const statuses = [...document.querySelectorAll('[role="menu"][aria-label="Status"] [role="menuitemradio"]')].map((item) => [
+      item.textContent,
+      item.getAttribute('aria-checked'),
+    ]);
+    press(document.querySelector('[role="menu"]') as HTMLElement, 'Escape');
     assert({
       given: '/d1/tasks/page-p, the page of task p in list Launch',
-      should: 'show its title, status, priority, due date, assignees, description and subtasks',
+      should: 'show its title, status (with the list’s statuses in its menu), priority, dates, assignees, Delete, description and subtasks',
       actual: {
         crumbs: detail.querySelector('nav[aria-label="Task path"]')?.textContent,
         title: field<HTMLInputElement>(detail, 'Title')?.value,
         complete: field(detail, 'Mark Plan launch complete')?.getAttribute('aria-checked'),
-        status: status?.value,
-        statuses: [...(status?.options ?? [])].map((option) => option.textContent),
-        priority: field<HTMLSelectElement>(detail, 'Priority')?.value,
-        due: field<HTMLInputElement>(detail, 'Due date')?.value,
+        status,
+        statuses,
+        priority: chip(detail, 'Priority').getAttribute('aria-label'),
+        // The chip names the day against the real clock: the month and year show only when they differ.
+        due: /^Due · Fri 9( Oct( 2026)?)?$/.test(chip(detail, 'Due').textContent ?? ''),
+        start: chip(detail, 'Set start date').textContent,
         assignees: field(detail, 'Assigned to Ada')?.getAttribute('role'),
+        delete: field(detail, 'Delete task')?.tagName,
         description: descriptionOf(detail)?.innerHTML.includes('<strong>team</strong>'),
         subtasksHeading: subtasks?.querySelector('h3')?.textContent,
         subtasks: [...(subtasks?.querySelectorAll('[data-title]') ?? [])].map((node) => node.textContent),
@@ -219,11 +283,18 @@ describe('TaskObject: a task', () => {
         crumbs: 'TasksLaunchPlan launch',
         title: 'Plan launch',
         complete: 'false',
-        status: 'pending',
-        statuses: ['To Do', 'In Progress', 'Blocked', 'Done'],
-        priority: 'medium',
-        due: '2026-10-09',
+        status: 'Status: To Do',
+        statuses: [
+          ['To Do', 'true'],
+          ['In Progress', 'false'],
+          ['Blocked', 'false'],
+          ['Done', 'false'],
+        ],
+        priority: 'Priority: Medium',
+        due: true,
+        start: 'Set start date',
         assignees: 'img',
+        delete: 'BUTTON',
         description: true,
         subtasksHeading: 'Subtasks · 0 of 1',
         subtasks: ['Draft copy'],
@@ -254,22 +325,30 @@ describe('TaskObject: a task', () => {
       if (!treeTitles().includes('Plan the launch')) throw new Error('title not in tree');
     });
 
-    choose(field<HTMLSelectElement>(detail, 'Priority') as HTMLSelectElement, 'high');
-    typeInto(field<HTMLInputElement>(detail, 'Due date') as HTMLInputElement, '2026-11-02');
+    chooseFrom(detail, 'Priority', 'High');
     await settle(() => {
-      if (field<HTMLInputElement>(detail, 'Due date')?.value !== '2026-11-02') throw new Error('due');
+      if (chip(detail, 'Priority').getAttribute('aria-label') !== 'Priority: High') throw new Error('priority');
     });
-    click(field<HTMLButtonElement>(detail, 'Assign Bo') as HTMLButtonElement);
+    click(chip(detail, 'Due'));
+    click(inPopover('Due date', 'Next month'));
+    click(inPopover('Due date', 'Monday, November 2, 2026'));
+    await settle(() => {
+      if (popover('Due date') !== null || !/^Due · Mon 2/.test(chip(detail, 'Due').textContent ?? '')) throw new Error('due');
+    });
+    await openAssignees(detail, 'Bo');
+    click(inPopover('Assignees', 'Assign Bo'));
     await settle(() => {
       if (field(detail, 'Assigned to Ada, Bo') === null) throw new Error('assignees');
     });
-    choose(field<HTMLSelectElement>(detail, 'Status') as HTMLSelectElement, 'in_progress');
+    escape('Assignees');
+    chooseFrom(detail, 'Status', 'In Progress');
     await settle(() => {
-      if (field<HTMLSelectElement>(detail, 'Status')?.value !== 'in_progress') throw new Error('status');
+      if (chip(detail, 'Status').getAttribute('aria-label') !== 'Status: In Progress') throw new Error('status');
     });
-    click(field<HTMLButtonElement>(detail, 'Clear due date') as HTMLButtonElement);
+    click(chip(detail, 'Due'));
+    click(inPopover('Due date', 'Clear date'));
     await settle(() => {
-      if (field<HTMLInputElement>(detail, 'Due date')?.value !== '') throw new Error('cleared');
+      if (chip(detail, 'Set due date').textContent !== 'Set due date') throw new Error('cleared');
     });
 
     const adder = [...detail.querySelectorAll<HTMLButtonElement>('[aria-label="Subtasks"] button')].find(
@@ -395,7 +474,8 @@ describe('TaskObject: a task', () => {
 
   test('taking an assignee off', async () => {
     const { web, detail } = await openTask();
-    click(field<HTMLButtonElement>(detail, 'Assign Ada') as HTMLButtonElement);
+    await openAssignees(detail, 'Ada');
+    click(inPopover('Assignees', 'Assign Ada'));
     await settle(() => {
       if (detail.textContent?.includes('Unassigned') !== true) throw new Error('still assigned');
     });
@@ -404,6 +484,128 @@ describe('TaskObject: a task', () => {
       should: 'save an empty set and show the task unassigned',
       actual: web.writes().map(({ body }) => body),
       expected: [{ assigneeIds: [] }],
+    });
+  });
+});
+
+describe('TaskObject: the detail’s popovers', () => {
+  test('filtering the people', async () => {
+    const { detail } = await openTask();
+    await openAssignees(detail, 'Bo');
+    const names = () =>
+      [...(popover('Assignees')?.querySelectorAll('[role="group"]') ?? [])].map((group) => [
+        group.getAttribute('aria-label'),
+        [...group.querySelectorAll('[role="checkbox"]')].map((box) => [box.getAttribute('aria-label')?.replace('Assign ', ''), box.getAttribute('aria-checked')]),
+      ]);
+    const all = names();
+    const filter = popover('Assignees')?.querySelector<HTMLInputElement>('input') as HTMLInputElement;
+    typeInto(filter, 'plan');
+    const agents = names();
+    typeInto(filter, 'zz');
+    assert({
+      given: 'the Assignees popover, filtered by "plan" and then by "zz"',
+      should: 'group Members and Agents with Ada ticked, narrow to the matching agent, then say no one matches',
+      actual: { all, agents, none: popover('Assignees')?.textContent?.includes('No one matches') },
+      expected: {
+        all: [
+          [
+            'Members',
+            [
+              ['Ada', 'true'],
+              ['Bo', 'false'],
+            ],
+          ],
+          ['Agents', [['Planner', 'false']]],
+        ],
+        agents: [['Agents', [['Planner', 'false']]]],
+        none: true,
+      },
+    });
+  });
+
+  test('a start date', async () => {
+    const { web, detail } = await openTask();
+    click(chip(detail, 'Set start date'));
+    const after = inPopover('Start date', 'Saturday, October 10, 2026').disabled;
+    click(inPopover('Start date', 'Monday, October 5, 2026'));
+    await settle(() => {
+      if (!/^Start · Mon 5/.test(chip(detail, 'Start').textContent ?? '')) throw new Error('start');
+    });
+    click(chip(detail, 'Due'));
+    const before = inPopover('Due date', 'Sunday, October 4, 2026').disabled;
+    assert({
+      given: 'a start date picked on a task due October 9',
+      should: 'refuse days after the due date, save the 5th as Berlin’s midnight, then refuse due days before it',
+      actual: { after, writes: web.writes().map(({ url, body }) => [url, body]), before },
+      expected: {
+        after: true,
+        writes: [['/api/pages/l1/tasks/p', { startDate: '2026-10-04T22:00:00.000Z' }]],
+        before: true,
+      },
+    });
+  });
+
+  test('deleting the task', async () => {
+    const { web, detail } = await openTask();
+    click(field<HTMLButtonElement>(detail, 'Delete task') as HTMLButtonElement);
+    const question = popover('Delete task')?.textContent?.includes('Delete this task and its subtasks?');
+    click(inPopover('Delete task', 'Cancel'));
+    const cancelled = { open: popover('Delete task'), writes: web.writes().length };
+    click(field<HTMLButtonElement>(detail, 'Delete task') as HTMLButtonElement);
+    click(inPopover('Delete task', 'Delete'));
+    await settle(() => {
+      if (push.mock.calls.length === 0) throw new Error('not left');
+    });
+    assert({
+      given: 'Delete asked, cancelled, then asked again and confirmed',
+      should: 'ask first, send nothing on Cancel, then DELETE the task and open its list',
+      actual: { question, cancelled, writes: web.writes().map(({ method, url }) => [method, url]), to: push.mock.calls[0]?.[0] },
+      expected: {
+        question: true,
+        cancelled: { open: null, writes: 0 },
+        writes: [['DELETE', '/api/pages/l1/tasks/p']],
+        to: '/d1/tasks/l1',
+      },
+    });
+  });
+
+  test('a refused delete', async () => {
+    const { detail } = await openTask(
+      server({ 'DELETE /api/pages/l1/tasks/p': () => Response.json({ error: 'Not allowed' }, { status: 403 }) }),
+    );
+    click(field<HTMLButtonElement>(detail, 'Delete task') as HTMLButtonElement);
+    click(inPopover('Delete task', 'Delete'));
+    await settle(() => {
+      if (!detail.textContent?.includes('Not allowed')) throw new Error('no refusal');
+    });
+    assert({
+      given: 'a delete the server refuses',
+      should: 'keep the task open, say why under its title, and stay put',
+      actual: {
+        title: field<HTMLInputElement>(detail, 'Title')?.value,
+        notice: detail.querySelector('[role="status"]')?.textContent,
+        pushed: push.mock.calls.length,
+      },
+      expected: { title: 'Plan launch', notice: 'Not allowed', pushed: 0 },
+    });
+  });
+
+  test('a viewer who may not edit the list', async () => {
+    const { web, detail } = await openTask(
+      server({
+        'GET /api/pages/l1/permissions/check': () =>
+          Response.json({ canView: true, canEdit: false, canShare: false, canDelete: false }),
+      }),
+    );
+    await settle(() => {
+      if (web.count('GET /api/pages/l1/permissions/check') === 0) throw new Error('not asked');
+    });
+    await settle(() => {});
+    assert({
+      given: 'a viewer the server says cannot edit the list',
+      should: 'not offer Delete',
+      actual: field(detail, 'Delete task'),
+      expected: null,
     });
   });
 });
@@ -494,7 +696,7 @@ describe('TaskObject: the description', () => {
     );
     const container = mount(
       <ImagoSWRProvider client={web.client}>
-        <TaskObject driveId="d1" pageId="page-p" viewerId="u-1" />
+        <TaskObject driveId="d1" pageId="page-p" viewerId="u-1" live={false} />
       </ImagoSWRProvider>,
     );
     await settle(() => {
@@ -567,7 +769,7 @@ describe('TaskObject: what the id names', () => {
     const web = fakeWeb(routes);
     return mount(
       <ImagoSWRProvider client={web.client}>
-        <TaskObject driveId="d1" pageId={pageId} viewerId="u-1" />
+        <TaskObject driveId="d1" pageId={pageId} viewerId="u-1" live={false} />
       </ImagoSWRProvider>,
     );
   };

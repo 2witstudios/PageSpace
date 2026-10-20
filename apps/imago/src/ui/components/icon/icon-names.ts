@@ -1,5 +1,11 @@
 import {
   Activity,
+  ChartGantt,
+  Columns3,
+  Diamond,
+  ListTree,
+  Target,
+  Zap,
   Bell,
   ArrowUpRight,
   Bot,
@@ -125,6 +131,13 @@ export const icons = {
   panelRightClose: PanelRightClose,
   // The Board's drag handle (IMG-9.4).
   grip: GripVertical,
+  // A task list's four views, and its Workflows control.
+  focus: Target,
+  tree: ListTree,
+  board: Columns3,
+  roadmap: ChartGantt,
+  milestone: Diamond,
+  workflow: Zap,
 } as const satisfies Readonly<Record<string, LucideIcon>>;
 
 export type IconName = keyof typeof icons;

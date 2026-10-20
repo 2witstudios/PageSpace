@@ -22,6 +22,7 @@ import { compareByPagePosition } from '@/services/api/task-ordering';
 import { checkSubTasksComplete, toToolFailure } from '@/lib/tasks/completion-guard';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
 import type { DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import {
   normalizeTaskAgentTriggerInput,
@@ -49,7 +50,8 @@ export const taskManagementTools = {
   update_task: tool({
     description: `Update fields of an existing task (identified by taskId). To create a task use create_task; to delete use delete_task; to reorder use reorder_task.
 
-Updatable fields: status, priority, assignees (assigneeId/assigneeAgentId/assigneeIds), dueDate, note, title, agentTrigger.
+Updatable fields: status, priority, assignees (assigneeId/assigneeAgentId/assigneeIds), startDate, dueDate, note, title, agentTrigger.
+startDate, when set alongside dueDate, must be on or before it.
 
 Status:
 - Task lists support custom statuses. Default statuses: pending, in_progress, blocked, completed
@@ -84,6 +86,7 @@ Agent Triggers:
         id: z.string(),
       })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format (null to clear)'),
+      startDate: z.string().nullable().optional().describe('Start date in ISO format (null to clear). Must be on or before the due date.'),
       note: z.string().optional().describe('Note about this update'),
       agentTrigger: z.preprocess(
         normalizeTaskAgentTriggerInput,
@@ -93,7 +96,7 @@ Agent Triggers:
       ).describe('Schedule an AI agent to run at task due date or on completion. Requires a drive-based task list.'),
     }),
     execute: async (params, { experimental_context: context }) => {
-      const { taskId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, note, agentTrigger } = params;
+      const { taskId, title, status, priority, assigneeId, assigneeAgentId, assigneeIds, dueDate, startDate, note, agentTrigger } = params;
       const userId = (context as ToolExecutionContext)?.userId;
 
       if (!userId) {
@@ -106,6 +109,7 @@ Agent Triggers:
       // the trigger scheduled against it must agree on the instant.
       const taskTimezone = (context as ToolExecutionContext).timezone || 'UTC';
       const parsedDueDate = dueDate ? parseDatetimeInTimezone(dueDate, taskTimezone) : null;
+      const parsedStartDate = startDate ? parseDatetimeInTimezone(startDate, taskTimezone) : null;
 
       if (!taskId) {
         throw new Error('taskId is required to update a task. To create a new task, use create_task.');
@@ -191,6 +195,14 @@ Agent Triggers:
         if (assigneeId !== undefined) updateData.assigneeId = assigneeId;
         if (assigneeAgentId !== undefined) updateData.assigneeAgentId = assigneeAgentId;
         if (dueDate !== undefined) updateData.dueDate = parsedDueDate;
+        if (startDate !== undefined) updateData.startDate = parsedStartDate;
+        // Compare effective values: a field not passed keeps its stored value.
+        if (isStartAfterDue(
+          startDate !== undefined ? parsedStartDate : existingTask.startDate,
+          dueDate !== undefined ? parsedDueDate : existingTask.dueDate,
+        )) {
+          throw new Error(START_AFTER_DUE_ERROR);
+        }
 
         // Add note to metadata
         if (note || status !== undefined) {
@@ -399,6 +411,7 @@ Agent Triggers:
         id: z.string(),
       })).optional().describe('Multiple assignees. Each: { type: "user"|"agent", id: "..." }'),
       dueDate: z.string().nullable().optional().describe('Due date in ISO format'),
+      startDate: z.string().nullable().optional().describe('Optional start date in ISO format. Must be on or before the due date.'),
       note: z.string().optional().describe('Note stored in task metadata'),
       position: z.number().optional().describe('Position in the list (defaults to end)'),
       agentTrigger: z.preprocess(
@@ -695,6 +708,7 @@ This helps agents understand their responsibilities and coordinate work with oth
             title: t.page?.title ?? '',
             status: t.status,
             priority: t.priority,
+            startDate: t.startDate,
             dueDate: t.dueDate,
             pageId: t.pageId,
             taskList: (() => {

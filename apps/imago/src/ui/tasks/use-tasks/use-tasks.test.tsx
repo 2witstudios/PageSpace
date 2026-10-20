@@ -6,6 +6,7 @@ import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import {
   useAssignable,
+  useDriveTasks,
   useDriveTaskLists,
   usePageTrail,
   useTaskList,
@@ -586,6 +587,121 @@ describe('useAssignable() and usePageTrail()', () => {
         none: undefined,
         asked: 2,
       },
+    });
+  });
+});
+
+describe('moveTo() and setWipLimit()', () => {
+  test('a card dropped into another column, then a column limit', async () => {
+    const { web, seen } = mountList(
+      listRoutes({
+        'PATCH /api/pages/l1/tasks/z': () => Response.json(taskItem('z', { status: 'in_progress' })),
+        'PATCH /api/pages/l1/tasks/reorder': () => Response.json({ success: true }),
+        'PUT /api/pages/l1/tasks/statuses': () => Response.json({ statusConfigs: seededConfigs }),
+      }),
+    );
+    await loaded(seen);
+    const results: unknown[] = [];
+    await act(async () => {
+      results.push(await seen.actions?.moveTo('z', 'in_progress', 0));
+    });
+    await act(async () => {
+      results.push(await seen.actions?.setWipLimit('in_progress', 3));
+    });
+    const [, , put] = web.writes();
+    assert({
+      given: 'a move to another status at the top, then a limit of 3 on that status',
+      should: 'save the status, then the order, then every status with the one limit changed',
+      actual: {
+        results,
+        writes: web.writes().map(({ method, url }) => [method, url]),
+        limits: (put?.body as { statuses: { slug?: string; id: string; wipLimit: number | null }[] }).statuses.map(
+          (status) => [status.id, status.wipLimit],
+        ),
+      },
+      expected: {
+        results: [{ ok: true }, { ok: true }],
+        writes: [
+          ['PATCH', '/api/pages/l1/tasks/z'],
+          ['PATCH', '/api/pages/l1/tasks/reorder'],
+          ['PUT', '/api/pages/l1/tasks/statuses'],
+        ],
+        limits: [
+          ['cfg-pending', null],
+          ['cfg-in_progress', 3],
+          ['cfg-blocked', null],
+          ['cfg-completed', null],
+        ],
+      },
+    });
+  });
+
+  test('a refused status leaves the order alone', async () => {
+    const { web, seen } = mountList(listRoutes());
+    await loaded(seen);
+    let result: unknown;
+    await act(async () => {
+      result = await seen.actions?.moveTo('p', 'completed', 1);
+    });
+    assert({
+      given: 'a parent with an open subtask dropped into Done',
+      should: 'refuse in the server’s words and write nothing',
+      actual: { result, writes: web.writes().length },
+      expected: { result: { ok: false, refusal: 'Complete all sub-tasks first (1 of 1 remaining)' }, writes: 0 },
+    });
+  });
+});
+
+describe('useDriveTasks().toggleComplete', () => {
+  test('ticked by the holding list’s statuses', async () => {
+    const ROWS = 'GET /api/tasks?context=drive&driveId=d1&limit=100&statusGroup=active';
+    let served = 'pending';
+    const web = fakeWeb({
+      [ROWS]: () =>
+        Response.json({
+          tasks: [
+            {
+              ...taskItem('z', { status: served }),
+              driveId: 'd1',
+              taskListPageId: 'l1',
+              taskListPageTitle: 'Launch',
+              statusGroup: served === 'completed' ? 'done' : 'todo',
+              statusLabel: 'To Do',
+              statusColor: '',
+            },
+          ],
+          statusConfigsByTaskList: { l1: seededConfigs },
+          pagination: { total: 1, limit: 100, offset: 0, hasMore: false },
+        }),
+      'PATCH /api/pages/l1/tasks/z': ({ body }) => {
+        served = (body as { status: string }).status;
+        return Response.json(taskItem('z', { status: served }));
+      },
+    });
+    const seen: { toggle: ((id: string) => Promise<unknown>) | null; loaded: boolean } = { toggle: null, loaded: false };
+    function Probe() {
+      const { response, toggleComplete } = useDriveTasks('d1', 'active', undefined);
+      seen.toggle = toggleComplete;
+      seen.loaded = response !== undefined;
+      return null;
+    }
+    render(
+      <ImagoSWRProvider client={web.client}>
+        <Probe />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!seen.loaded) throw new Error('not loaded');
+    });
+    let result: unknown;
+    await act(async () => {
+      result = await seen.toggle?.('z');
+    });
+    assert({
+      given: 'an open row of the drive ticked from the ground',
+      should: 'PATCH it to its own list’s done status, on that list’s page',
+      actual: { result, writes: web.writes().map(({ method, url, body }) => [method, url, body]) },
+      expected: { result: { ok: true }, writes: [['PATCH', '/api/pages/l1/tasks/z', { status: 'completed' }]] },
     });
   });
 });

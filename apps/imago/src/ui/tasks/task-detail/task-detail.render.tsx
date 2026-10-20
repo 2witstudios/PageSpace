@@ -1,23 +1,26 @@
 import Link from 'next/link';
 import type { KeyboardEvent, ReactNode } from 'react';
-import { AvatarGroup } from '../../components/avatar-group/avatar-group';
 import { Checkbox } from '../../components/checkbox/checkbox';
+import { shortDayLabel } from '../../components/date-picker/calendar';
+import { DatePicker } from '../../components/date-picker/date-picker';
 import { Icon } from '../../components/icon/icon';
+import { ChoiceMenu } from '../../components/popover/menu';
+import { Popover } from '../../components/popover/popover';
 import { ToolbarStrip } from '../../frame/toolbar-strip/toolbar-strip';
 import { defaultStatuses } from '../task-model/from-api';
-import type { Assignee, Priority, Task, TaskList, TaskListSummary } from '../task-model/task';
-import { isPriority, priorities } from '../task-meta/task-meta';
+import type { Assignee, Priority, Task, TaskList, TaskListSummary, TaskStatus } from '../task-model/task';
+import { dueToneOf, isPriority, priorities } from '../task-meta/task-meta';
 import { isDone, progress } from '../task-tree/task-tree';
 import { renderTreeView, type TaskNotice } from '../tree-view/tree-view.render';
+import { AssigneePicker, sameAssignee } from './assignee-picker';
 import { dueDateFor, dueDay } from './due-date';
 import {
-  taskAssigneeOptionClass,
-  taskAssigneesClass,
-  taskAssigneesGroupClass,
-  taskAssigneesMenuClass,
-  taskAssigneesSummaryClass,
-  taskClearClass,
-  taskControlClass,
+  taskChipClass,
+  taskChipEmptyClass,
+  taskConfirmActionsClass,
+  taskConfirmCancelClass,
+  taskConfirmClass,
+  taskConfirmDeleteClass,
   taskDetailClass,
   taskDetailCrumbsClass,
   taskDetailMessageClass,
@@ -25,15 +28,18 @@ import {
   taskDetailTitleClass,
   taskCrumbCurrentClass,
   taskDetailTitleRowClass,
-  taskFieldClass,
-  taskFieldLabelClass,
+  taskDueChipClass,
   taskFieldValueClass,
   taskFieldsClass,
+  taskHintClass,
+  taskPriorityBarClass,
+  taskPriorityClass,
   taskSavedClass,
   taskSectionClass,
   taskSectionHeadingClass,
+  taskStatusDotClass,
+  taskStatusPillClass,
   taskStripButtonClass,
-  taskUnassignedClass,
 } from './task-detail-class';
 
 /** The writes the detail makes, each a void action on the open task unless it names another. */
@@ -44,10 +50,14 @@ export type TaskDetailActions = {
   readonly setPriority: (priority: Priority) => void;
   /** An instant to set, or null to clear. */
   readonly setDueDate: (dueDate: string | null) => void;
+  /** When work is planned to begin: an instant to set, or null to clear. */
+  readonly setStartDate: (startDate: string | null) => void;
   readonly toggleAssignee: (assignee: Assignee) => void;
   readonly toggleExpanded: (taskId: string) => void;
   /** Adds a task to the list on `listPageId`; a refusal is shown at `at`. */
   readonly addTask: (listPageId: string, at: string, title: string) => void;
+  /** Deletes the open task and its subtasks; the detail then leaves for its list. */
+  readonly remove: () => void;
 };
 
 export type TaskDetailRenderProps = {
@@ -66,6 +76,10 @@ export type TaskDetailRenderProps = {
   readonly nextHref: string | null;
   /** Whether Imago last set the due date: the Due row says so. */
   readonly dueSetByImago: boolean;
+  /** The viewer's own day, YYYY-MM-DD: what the date chips and pickers read against. */
+  readonly today: string;
+  /** Whether the viewer may edit the list: Delete is offered only then. */
+  readonly canEdit: boolean;
   /** Which subtasks have their own subtasks open. */
   readonly expandedIds: readonly string[];
   /** Where a task's detail opens, and where a list's view does. */
@@ -78,15 +92,6 @@ export type TaskDetailRenderProps = {
   readonly activity: ReactNode;
   readonly actions: TaskDetailActions;
 };
-
-const sameAssignee = (a: Assignee, b: Assignee): boolean => a.type === b.type && a.id === b.id;
-
-const field = (label: string, control: ReactNode): ReactNode => (
-  <div key={label} className={taskFieldClass}>
-    <dt className={taskFieldLabelClass}>{label}</dt>
-    <dd className={taskFieldValueClass}>{control}</dd>
-  </div>
-);
 
 /* Text commits when it is left, not on every key: an edit is one change. A
    blank or unchanged title puts the old one back and sends nothing. */
@@ -160,6 +165,41 @@ const TaskStep = ({
     </Link>
   );
 
+/** Delete, confirmed in a small popover: the task goes with every subtask under it. */
+const deleteButton = (remove: () => void): ReactNode => (
+  <Popover
+    label="Delete task"
+    align="end"
+    width="auto"
+    trigger={
+      <button type="button" aria-label="Delete task" title="Delete task" className={taskStripButtonClass}>
+        <Icon name="trash" size={15} />
+      </button>
+    }
+  >
+    {(close) => (
+      <div className={taskConfirmClass}>
+        <p>Delete this task and its subtasks?</p>
+        <div className={taskConfirmActionsClass}>
+          <button type="button" className={taskConfirmCancelClass} onClick={close}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={taskConfirmDeleteClass}
+            onClick={() => {
+              close();
+              remove();
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    )}
+  </Popover>
+);
+
 /** The 44px strip: the task before and after in list order, and whether the last edit was saved. */
 const strip = (props: TaskDetailRenderProps): ReactNode => (
   <ToolbarStrip label="Task">
@@ -169,6 +209,7 @@ const strip = (props: TaskDetailRenderProps): ReactNode => (
     <span className={taskSavedClass}>
       {props.notice === null ? 'Saved' : 'Not saved'}
     </span>
+    {props.canEdit ? deleteButton(props.actions.remove) : null}
   </ToolbarStrip>
 );
 
@@ -178,114 +219,130 @@ const offered = (task: Task, assignable: readonly Assignee[]): readonly Assignee
   ...task.assignees.filter((entry) => !assignable.some((other) => sameAssignee(entry, other))),
 ];
 
-const assigneePicker = (task: Task, props: TaskDetailRenderProps): ReactNode => {
-  const everyone = offered(task, props.assignable);
-  const agents = task.assignees.filter((entry) => entry.type === 'agent').map((entry) => entry.name);
+const PRIORITY_BARS = [4, 8, 12] as const;
+
+/** The priority as three bars, as the Tasks ground draws it. */
+const priorityGlyph = (priority: Priority): ReactNode => {
+  const level = priority === 'high' ? 3 : priority === 'medium' ? 2 : 1;
   return (
-    <details className={taskAssigneesClass}>
-      <summary className={taskAssigneesSummaryClass}>
-        {task.assignees.length === 0 ? (
-          <span className={taskUnassignedClass}>Unassigned</span>
-        ) : (
-          <AvatarGroup names={task.assignees.map((entry) => entry.name)} agents={agents} label="Assigned to" />
-        )}
-        <Icon name="chevronDown" size={12} />
-      </summary>
-      <div className={taskAssigneesMenuClass}>
-        {(['user', 'agent'] as const).map((type) => {
-          const group = everyone.filter((entry) => entry.type === type);
-          return group.length === 0 ? null : (
-            <div key={type} className={taskFieldClass}>
-              <p className={taskAssigneesGroupClass}>{type === 'user' ? 'Members' : 'Agents'}</p>
-              {group.map((entry) => (
-                <span key={`${entry.type}:${entry.id}`} className={taskAssigneeOptionClass}>
-                  <Checkbox
-                    checked={task.assignees.some((other) => sameAssignee(entry, other))}
-                    label={`Assign ${entry.name}`}
-                    toggle={() => props.actions.toggleAssignee(entry)}
-                  />
-                  {entry.name}
-                </span>
-              ))}
-            </div>
-          );
-        })}
-      </div>
-    </details>
+    <span aria-hidden="true" className={taskPriorityClass}>
+      {PRIORITY_BARS.map((height, index) => (
+        <span key={height} className={taskPriorityBarClass(index < level, height, priority)} />
+      ))}
+    </span>
   );
 };
 
-/** PageSpace's fields for a task: status, priority, due date and assignees. */
-const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
-  const { list, actions } = props;
-  const statuses = list.statuses.length === 0 ? defaultStatuses : list.statuses;
-  const day = dueDay(task.dueDate);
+const statusDot = (status: TaskStatus): ReactNode => (
+  <span aria-hidden="true" className={taskStatusDotClass(status.group)} />
+);
+
+type DateFieldProps = {
+  readonly name: 'Due' | 'Start';
+  /** The stored instant, or null for none. */
+  readonly value: string | null;
+  readonly today: string;
+  readonly min?: string;
+  readonly max?: string;
+  readonly className: string;
+  readonly set: (instant: string | null) => void;
+};
+
+/** A date as a chip ("Due · Fri 23", or "Set due date"), opening the picker; a pick saves and closes. */
+const dateField = ({ name, value, today, min, max, className, set }: DateFieldProps): ReactNode => {
+  const day = dueDay(value);
+  const label = `${name} date`;
   return (
-    <dl className={taskFieldsClass}>
-      {field(
-        'Status',
-        <select
-          aria-label="Status"
-          className={taskControlClass}
-          value={task.status}
-          onChange={(event) => actions.setStatus(event.currentTarget.value)}
-        >
-          {statuses.map((status) => (
-            <option key={status.slug} value={status.slug}>
-              {status.name}
-            </option>
-          ))}
-        </select>,
-      )}
-      {field(
-        'Priority',
-        <select
-          aria-label="Priority"
-          className={taskControlClass}
-          value={task.priority}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            if (isPriority(value)) actions.setPriority(value);
+    <Popover
+      label={label}
+      trigger={
+        <button type="button" className={day === '' ? taskChipEmptyClass : className}>
+          <Icon name="calendar" size={14} />
+          {day === '' ? `Set ${label.toLowerCase()}` : `${name} · ${shortDayLabel(day, today)}`}
+        </button>
+      }
+    >
+      {(close) => (
+        <DatePicker
+          label={label}
+          value={day}
+          today={today}
+          min={min}
+          max={max}
+          pick={(picked) => {
+            close();
+            set(picked === null ? null : dueDateFor(picked));
           }}
-        >
-          {priorities.map((priority) => (
-            <option key={priority.value} value={priority.value}>
-              {priority.label}
-            </option>
-          ))}
-        </select>,
+          done={close}
+        />
       )}
-      {field(
-        'Due',
-        <>
-          <input
-            type="date"
-            aria-label="Due date"
-            className={taskControlClass}
-            value={day}
-            onChange={(event) => actions.setDueDate(dueDateFor(event.currentTarget.value))}
-          />
-          {day === '' || !props.dueSetByImago ? null : <span className={taskFieldValueClass}>set by Imago</span>}
-          {day === '' ? null : (
-            <button
-              type="button"
-              aria-label="Clear due date"
-              className={taskClearClass}
-              onClick={() => actions.setDueDate(null)}
-            >
-              Clear
-            </button>
-          )}
-        </>,
-      )}
-      {field('Assignees', assigneePicker(task, props))}
-      {field(
-        'List',
-        <Link href={props.hrefFor(props.holder.pageId)} prefetch>
-          {props.holder.title}
-        </Link>,
-      )}
-    </dl>
+    </Popover>
+  );
+};
+
+/** PageSpace's fields for a task as one row of chips: status, dates, people, priority and its list. */
+const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
+  const { list, actions, today } = props;
+  const statuses = list.statuses.length === 0 ? defaultStatuses : list.statuses;
+  const status: TaskStatus = statuses.find((entry) => entry.slug === task.status) ?? {
+    id: task.status,
+    slug: task.status,
+    name: task.status,
+    color: '',
+    group: 'todo',
+    position: 0,
+    wipLimit: null,
+  };
+  const due = dueDay(task.dueDate);
+  const start = dueDay(task.startDate);
+  const priority = priorities.find((entry) => entry.value === task.priority);
+  return (
+    <div role="group" aria-label="Fields" className={taskFieldsClass}>
+      <ChoiceMenu
+        label="Status"
+        value={task.status}
+        options={statuses.map((entry) => ({ value: entry.slug, label: entry.name, leading: statusDot(entry) }))}
+        choose={actions.setStatus}
+        trigger={
+          <button type="button" aria-label={`Status: ${status.name}`} className={taskStatusPillClass(status.group)}>
+            {statusDot(status)}
+            {status.name}
+            <Icon name="chevronDown" size={12} />
+          </button>
+        }
+      />
+      <span className={taskFieldValueClass}>
+        {dateField({
+          name: 'Due',
+          value: task.dueDate,
+          today,
+          min: start,
+          className: taskDueChipClass(dueToneOf(task.dueDate, today, isDone(list, task))),
+          set: actions.setDueDate,
+        })}
+        {due === '' || !props.dueSetByImago ? null : <span className={taskHintClass}>set by Imago</span>}
+      </span>
+      {dateField({ name: 'Start', value: task.startDate, today, max: due, className: taskChipClass, set: actions.setStartDate })}
+      <AssigneePicker assigned={task.assignees} offered={offered(task, props.assignable)} toggle={actions.toggleAssignee} />
+      <ChoiceMenu
+        label="Priority"
+        value={task.priority}
+        options={priorities.map((entry) => ({ value: entry.value, label: entry.label, leading: priorityGlyph(entry.value) }))}
+        choose={(value) => {
+          if (isPriority(value)) actions.setPriority(value);
+        }}
+        trigger={
+          <button type="button" aria-label={`Priority: ${priority?.label ?? task.priority}`} className={taskChipClass}>
+            {priorityGlyph(task.priority)}
+            {priority?.label ?? task.priority}
+          </button>
+        }
+      />
+      <Link href={props.hrefFor(props.holder.pageId)} prefetch className={taskChipClass}>
+        <Icon name="tasks" size={14} />
+        {props.holder.title}
+      </Link>
+    </div>
   );
 };
 
@@ -324,7 +381,7 @@ const subtasks = (task: Task, props: TaskDetailRenderProps): ReactNode => {
 
 /**
  * A task opened as the object, every field edited where it sits: tick it,
- * rename it, set its status, priority, due date and people, describe it, and
+ * rename it, set its status, priority, dates and people, describe it, delete it, and
  * work its subtasks. A refused edit says why under the title.
  */
 export function renderTaskDetail(props: TaskDetailRenderProps): ReactNode {

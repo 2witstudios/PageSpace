@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import { edgeOf, renderErrorState } from '../../frame/edge-state/edge-state.render';
 import { TASK_NOT_FOUND, renderNotFound } from '../../frame/not-found/not-found.render';
 import { useUiState } from '../../store/store';
@@ -11,7 +12,15 @@ import { locate, locateByPage } from '../task-tree/task-tree';
 import type { TaskNotice } from '../tree-view/tree-view.render';
 import { TaskDescription } from '../task-description/task-description';
 import { TaskAgentTriggersDialog } from '@/retained/components/layout/middle-content/page-views/task-list/TaskAgentTriggersDialog';
-import { useAssignable, usePageActivity, useTaskList, useTaskTriggers, type ActionResult } from '../use-tasks/use-tasks';
+import { localToday } from '../task-meta/task-meta';
+import {
+  useAssignable,
+  usePageActivity,
+  usePageEditable,
+  useTaskList,
+  useTaskTriggers,
+  type ActionResult,
+} from '../use-tasks/use-tasks';
 import { renderTaskDetail, renderTaskDetailMessage, type TaskDetailRenderProps } from './task-detail.render';
 import { activityRows, setByImago } from './task-activity';
 import { automationRows } from './task-automations';
@@ -45,7 +54,10 @@ export function TaskDetail({ holder, pageId, hrefFor, driveId }: TaskDetailProps
   const { list: tree, error, actions, retry } = useTaskList(holder.pageId, holder.title);
   const { assignable } = useAssignable(driveId);
   const expandedIds = useUiState(selectExpanded);
+  const canEdit = usePageEditable(holder.pageId);
+  const router = useRouter();
   const [notice, setNotice] = useState<TaskNotice | null>(null);
+  const [deleting, setDeleting] = useState(false);
   if (tree === undefined) {
     if (error === undefined) return renderTaskDetailMessage('Loading task…', 'status');
     return edgeOf(error) === 'not-found'
@@ -54,7 +66,9 @@ export function TaskDetail({ holder, pageId, hrefFor, driveId }: TaskDetailProps
   }
   const task = locateByPage(tree, pageId);
   const found = task === undefined ? undefined : locate(tree, task.id);
-  if (found === undefined) return renderTaskNotFound(driveId);
+  // A deleted task leaves the tree at once (the write is optimistic): say so
+  // rather than "not found" until the list it sat in opens.
+  if (found === undefined) return deleting ? renderTaskDetailMessage('Deleting task…', 'status') : renderTaskNotFound(driveId);
 
   const id = found.task.id;
   const report = (at: string) => (result: ActionResult) =>
@@ -87,6 +101,8 @@ export function TaskDetail({ holder, pageId, hrefFor, driveId }: TaskDetailProps
         notice,
         previousHref: sibling(-1),
         nextHref: sibling(1),
+        today: localToday(new Date()),
+        canEdit,
         expandedIds,
         hrefFor,
         description: <TaskDescription pageId={pageId} />,
@@ -96,9 +112,21 @@ export function TaskDetail({ holder, pageId, hrefFor, driveId }: TaskDetailProps
           setStatus: (slug) => run(id, actions.setStatus(id, slug)),
           setPriority: (priority) => run(id, actions.update(id, { priority })),
           setDueDate: (dueDate) => run(id, actions.update(id, { dueDate })),
+          setStartDate: (startDate) => run(id, actions.update(id, { startDate })),
           toggleAssignee: (assignee) => run(id, actions.toggleAssignee(id, assignee)),
           toggleExpanded: (taskId) => dispatch(transactions.toggleTaskExpanded, taskId),
           addTask: (listPageId, at, title) => run(at, actions.create(listPageId, { title })),
+          remove: () => {
+            setDeleting(true);
+            void actions.remove(id).then((result) => {
+              if (result.ok) {
+                router.push(hrefFor(holder.pageId));
+                return;
+              }
+              setDeleting(false);
+              setNotice({ at: id, message: result.refusal });
+            });
+          },
         },
       }}
     />

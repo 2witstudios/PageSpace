@@ -19,6 +19,8 @@ export type TaskStatusConfigResponse = {
   readonly color: string;
   readonly group: StatusGroup;
   readonly position: number;
+  /** The most cards the column should hold at once; advisory, never enforced. */
+  readonly wipLimit?: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 };
@@ -51,6 +53,8 @@ export type TaskItemResponse = {
   /** pages.position of the task's page: the one ordering rail. */
   readonly position: number;
   readonly dueDate: string | null;
+  /** When work is planned to begin; absent on rows from before the column existed. */
+  readonly startDate?: string | null;
   readonly completedAt: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -139,6 +143,8 @@ export type TaskStatus = {
   /** The group, not the slug, decides whether a task is done. */
   readonly group: StatusGroup;
   readonly position: number;
+  /** The Board column's work-in-progress limit; null when the list sets none. */
+  readonly wipLimit: number | null;
 };
 
 /** A person or an agent on a task. */
@@ -158,7 +164,11 @@ export type Task = {
   readonly status: string;
   readonly priority: Priority;
   readonly dueDate: string | null;
+  /** When work is planned to begin; null when unplanned. */
+  readonly startDate: string | null;
   readonly completedAt: string | null;
+  /** When the task was made: where a Roadmap bar starts without a start date. */
+  readonly createdAt: string;
   readonly assignees: readonly Assignee[];
   readonly position: number;
   readonly hasContent: boolean;
@@ -211,6 +221,8 @@ export type DriveTaskResponse = TaskItemResponse & {
 /** GET /api/tasks?context=drive. */
 export type DriveTasksResponse = {
   readonly tasks: readonly DriveTaskResponse[];
+  /** Each list's own statuses, keyed by the list's page id: what ticking a row moves it to. */
+  readonly statusConfigsByTaskList?: Readonly<Record<string, readonly TaskStatusConfigResponse[]>>;
   readonly pagination: {
     readonly total: number;
     readonly limit: number;

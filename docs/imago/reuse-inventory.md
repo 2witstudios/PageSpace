@@ -20,7 +20,7 @@ classic dashboard. Current master remains the PR target.
 | File specialized viewers | `components/layout/middle-content/page-views/file` | Same dispatcher; original PDF/image/media/text viewers; PDF worker copied locally |
 | Channel send/edit/quote/thread/reactions/files | `components/layout/middle-content/page-views/channel`, `components/messages`, `components/shared/MessageHoverToolbar` | `/:drive/messages/:page` and typed files dispatch |
 | DM destinations and conversations | `app/dashboard/dms` | `/dm/new`, `/dm/:conversation`; source conversation controls within retained surfaces |
-| Task lists, statuses, detail/configuration and triggers | `components/layout/middle-content/page-views/task-list`, `components/tasks`, `components/agent-triggers` | `/:drive/tasks/:list`, typed files dispatch; individual task route retains Imago detail |
+| Task statuses, workflows and agent triggers (dialogs only) | `page-views/task-list/StatusConfigManager`, `TaskListWorkflowsDialog`, `TaskAgentTriggersDialog` | Opened from the native list strip and task detail. The list itself (Focus, Tree, Board, Roadmap) and the task detail are native Imago (`ui/tasks`), on `/:drive/tasks/:list` and the typed files dispatch |
 | Workflows | `app/dashboard/[driveId]/workflows`, `components/workflows` | `/:drive/workflows`, rail overflow |
 | Creation and uploads | `components/create/QuickCreatePalette`, `components/layout/left-sidebar/PageTree`, `hooks/useFileDrop`, `lib/upload` | Files New page; Messages/Tasks Create page; palette all classic page types and uploads |
 | Tree operations and contextual lifecycle | `components/layout/left-sidebar/PageTree`, `components/layout/middle-content/content-header` | Files tree and object header; original move/copy/rename/trash/publish actions |
@@ -118,10 +118,11 @@ not claimed fully covered merely because the native gate passes.
 
 The retained page tree names its navigation and announces the current page.
 Channel/DM message rows are articles with pending state, inside named conversation
-regions. Kanban cards, drag handles, columns and task status/priority selectors
-have accessible names. These adapt the existing controls, not their API behavior.
-Task-list title navigation opens the existing native Tasks detail route; generic
-citations still resolve through the permission-filtered object route.
+regions. These adapt the existing controls, not their API behavior. Task lists
+are no longer retained: the native views name their columns, cards, drag handles,
+rows and menus themselves, and every task title opens the native Tasks detail
+route; generic citations still resolve through the permission-filtered object
+route.
 
 Native cloud billing and plan pages mirror classic's exact COEP exception needed
 by Stripe; all other native pages retain credentialless COEP. CSP script nonce,

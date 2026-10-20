@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { afterEach, beforeEach, describe, test } from 'vitest';
+import { afterEach, beforeEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { ImagoSWRProvider } from '@/api/swr-provider';
 import { click, mount, press, typeInto, unmountAll } from '../../test-support/dom';
@@ -9,6 +9,9 @@ import { setUiState } from '../../store/store';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TaskListView } from './task-list-view';
+
+// Statuses and Workflows are classic's dialogs, covered where they live; the list does not need them here.
+vi.mock('./task-list-tools', () => ({ TaskListTools: () => null }));
 
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 const L1 = 'GET /api/pages/l1/tasks?limit=200&offset=0';
@@ -29,6 +32,8 @@ const routes = (overrides: Record<string, FakeRoute> = {}): Record<string, FakeR
       ]),
     ),
   [PAGE_P]: () => Response.json(taskListResponse([taskItem('a', { title: 'Draft copy' })])),
+  'GET /api/pages/l1/permissions/check': () =>
+    Response.json({ canView: true, canEdit: true, canShare: false, canDelete: true }),
   ...overrides,
 });
 
@@ -71,13 +76,14 @@ const open = async (viewerId = 'u-1', table: Record<string, FakeRoute> = routes(
   const web = fakeWeb(table);
   const container = mount(
     <ImagoSWRProvider client={web.client}>
-      <TaskListView driveId="d1" pageId="l1" viewerId={viewerId} clock={clock} />
+      <TaskListView driveId="d1" pageId="l1" viewerId={viewerId} clock={clock} live={false} />
     </ImagoSWRProvider>,
   );
   await settle(() => {
-    // Loaded: titled, and the body is no longer the loading message.
-    if (container.querySelector('h2')?.textContent !== 'Launch') throw new Error('no title');
+    // Loaded: the strip is up, the body is no longer the loading message, and edits are allowed.
+    if (!container.querySelector('[role="toolbar"]')) throw new Error('no strip');
     if (container.textContent?.includes('Loading tasks…')) throw new Error('not loaded');
+    if (!container.querySelector('[data-add-root], [data-capture], [data-column]')) throw new Error('not editable');
   });
   return { web, container };
 };
@@ -93,16 +99,14 @@ describe('TaskListView', () => {
     const { container } = await open();
     assert({
       given: 'a task list opened in a drive',
-      should: 'title it, meter every loaded task and show the Tree view by default',
+      should: 'meter every loaded task in the strip and show the Tree view by default',
       actual: {
-        title: container.querySelector('h2')?.textContent,
         progress: container.querySelector('[role="progressbar"]')?.getAttribute('aria-label'),
         view: checked(container),
         group: container.querySelector('[role="radiogroup"]')?.getAttribute('aria-label'),
         tree: container.querySelector('ul')?.getAttribute('aria-label'),
       },
       expected: {
-        title: 'Launch',
         progress: '0 of 3 tasks done',
         view: 'Tree',
         group: 'View',
@@ -249,7 +253,7 @@ describe('TaskListView', () => {
     });
 
     const groups = (container: HTMLElement) =>
-      [...container.querySelectorAll('section')].map((section) => [
+      [...container.querySelectorAll('section:not([aria-label="List description"])')].map((section) => [
         section.getAttribute('aria-label'),
         [...section.querySelectorAll('li[data-task]')].map((row) => row.getAttribute('data-task')),
       ]);
@@ -401,7 +405,7 @@ describe('TaskListView', () => {
     const web = fakeWeb(table);
     const container = mount(
       <ImagoSWRProvider client={web.client}>
-        <TaskListView driveId="d1" pageId={pageId} viewerId="u-1" />
+        <TaskListView driveId="d1" pageId={pageId} viewerId="u-1" live={false} />
       </ImagoSWRProvider>,
     );
     return { web, container };

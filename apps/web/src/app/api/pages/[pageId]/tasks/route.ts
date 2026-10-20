@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, notInArray, count, isNotNull, ilike, gt, lte, sql } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, notInArray, count, ilike, gt, lte, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -13,12 +13,14 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
+import { parseTaskDateInput, isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
+import { getSubTaskCountsByPageId } from '@/lib/tasks/subtask-counts';
 import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus, resolveSeedCompletedAt } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
-import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
@@ -236,6 +238,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       pageId: true,
       status: true,
       priority: true,
+      startDate: true,
       dueDate: true,
       metadata: true,
       completedAt: true,
@@ -321,32 +324,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   // Batch-count sub-tasks (total + completed) for each task's linked page via pages.parentId
-  const subTaskCountByPageId = new Map<string, number>();
-  const subTaskCompletedByPageId = new Map<string, number>();
-  const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
-  if (linkedPageIds.length > 0) {
-    const baseWhere = and(inArray(pages.parentId, linkedPageIds), eq(pages.isTrashed, false));
-    const [subTaskRows, completedSubTaskRows] = await Promise.all([
-      db
-        .select({ parentId: pages.parentId, total: count() })
-        .from(taskItems)
-        .innerJoin(pages, eq(pages.id, taskItems.pageId))
-        .where(baseWhere)
-        .groupBy(pages.parentId),
-      db
-        .select({ parentId: pages.parentId, total: count() })
-        .from(taskItems)
-        .innerJoin(pages, eq(pages.id, taskItems.pageId))
-        .where(and(baseWhere, isNotNull(taskItems.completedAt)))
-        .groupBy(pages.parentId),
-    ]);
-    for (const row of subTaskRows) {
-      if (row.parentId) subTaskCountByPageId.set(row.parentId, Number(row.total));
-    }
-    for (const row of completedSubTaskRows) {
-      if (row.parentId) subTaskCompletedByPageId.set(row.parentId, Number(row.total));
-    }
-  }
+  const subTaskCountsByPageId = await getSubTaskCountsByPageId(
+    tasks.map(t => t.pageId).filter((id): id is string => !!id),
+  );
 
   const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
@@ -355,8 +335,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
     hasContent: computeHasContent(page?.content),
-    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
-    subTaskCompletedCount: subTaskCompletedByPageId.get(t.pageId ?? '') ?? 0,
+    subTaskCount: subTaskCountsByPageId.get(t.pageId ?? '')?.total ?? 0,
+    subTaskCompletedCount: subTaskCountsByPageId.get(t.pageId ?? '')?.completed ?? 0,
     page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
@@ -407,6 +387,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     assigneeAgentId,
     assigneeIds,
     dueDate,
+    startDate,
     note,
     position,
     timezone,
@@ -538,16 +519,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // zone. Resolving only for the trigger would leave the due date itself read
   // in the server's zone (#2404). An absolute due date needs no zone, so the
   // profile lookup stays skipped in the common case.
-  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const dueDateNeedsTimezone = (typeof dueDate === 'string' && isNaiveISODatetime(dueDate))
+    || (typeof startDate === 'string' && isNaiveISODatetime(startDate));
   const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
     ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
   // Only a string can be naive. Anything else — an epoch number, say — keeps the
   // prior `new Date()` behaviour instead of being stringified into an Invalid
   // Date; this route parses an unvalidated body, so that input is reachable.
-  const parsedDueDate = dueDate
-    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
-    : null;
+  const dueDateResult = parseTaskDateInput(dueDate, resolvedTimezone);
+  if (!dueDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
+  }
+  const parsedDueDate = dueDateResult.value;
+  const startDateResult = parseTaskDateInput(startDate, resolvedTimezone);
+  if (!startDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid start date' }, { status: 400 });
+  }
+  const parsedStartDate = startDateResult.value;
+  if (isStartAfterDue(parsedStartDate, parsedDueDate)) {
+    return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
+  }
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
@@ -588,6 +580,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
+      startDate: parsedStartDate,
       dueDate: parsedDueDate,
       completedAt: seedCompletedAt,
       metadata: {

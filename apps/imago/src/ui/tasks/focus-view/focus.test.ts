@@ -60,8 +60,8 @@ describe('frontier()', () => {
         parent('p', [task('a', { status: 'shipped' })], {
           subtasks: list('page-p', [task('a', { status: 'shipped' })], {
             statuses: [
-              { id: 's1', slug: 'todo', name: 'Todo', color: 'x', group: 'todo', position: 0 },
-              { id: 's2', slug: 'shipped', name: 'Shipped', color: 'x', group: 'done', position: 1 },
+              { id: 's1', slug: 'todo', name: 'Todo', color: 'x', group: 'todo', position: 0, wipLimit: null },
+              { id: 's2', slug: 'shipped', name: 'Shipped', color: 'x', group: 'done', position: 1, wipLimit: null },
             ],
           }),
         }),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, useTaskViewStore, viewFor } from '../task-views/task-views';
@@ -8,14 +8,42 @@ import { useDriveTasks } from '../use-tasks/use-tasks';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
 
+/** Where the viewer's chosen status group is kept, per browser. */
+export const STATUS_KEY = 'imago:tasks-ground-status';
+
+const isStatusGroup = (value: string | null): value is StatusGroupFilter =>
+  value === 'active' || value === 'completed' || value === 'all';
+
+/** The status group this viewer last chose; Active when none is kept or storage is unavailable. */
+export const storedStatus = (): StatusGroupFilter => {
+  try {
+    const value = localStorage.getItem(STATUS_KEY);
+    return isStatusGroup(value) ? value : 'active';
+  } catch {
+    return 'active';
+  }
+};
+
+const keepStatus = (status: StatusGroupFilter): void => {
+  try {
+    localStorage.setItem(STATUS_KEY, status);
+  } catch {
+    // A private window or blocked storage: the choice lasts this visit only.
+  }
+};
+
 /**
  * The Tasks ground: the viewer's tasks in the drive, for the view picked on
- * the pane and the status group picked here (Active by default).
+ * the pane and the status group picked here (Active until the viewer picks
+ * another, which is then remembered). Each row ticks done in place.
  */
 export function TasksGround({ driveId }: { readonly driveId: string }) {
   const view = useTaskViewStore((state) => state.view);
   const [status, setStatus] = useState<StatusGroupFilter>('active');
-  const { response, error, retry } = useDriveTasks(driveId, status, viewFor(view).dueDateFilter);
+  const [notice, setNotice] = useState<{ readonly at: string; readonly message: string } | null>(null);
+  // Read after mount, so the server's render and the first client render agree.
+  useEffect(() => setStatus(storedStatus()), []);
+  const { response, error, retry, toggleComplete } = useDriveTasks(driveId, status, viewFor(view).dueDateFilter);
   const today = localToday(new Date());
   const tasks = response?.tasks;
   const total = response?.pagination.total;
@@ -29,7 +57,16 @@ export function TasksGround({ driveId }: { readonly driveId: string }) {
     heading: groundHeading(view),
     subtitle,
     status,
-    onStatus: setStatus,
+    onStatus: (next) => {
+      keepStatus(next);
+      setNotice(null);
+      setStatus(next);
+    },
+    toggleComplete: (taskId) => {
+      setNotice(null);
+      void toggleComplete(taskId).then((result) => setNotice(result.ok ? null : { at: taskId, message: result.refusal }));
+    },
+    notice,
     state:
       tasks !== undefined
         ? { kind: 'ready', driveId, sections: groundSections(tasks, today) }

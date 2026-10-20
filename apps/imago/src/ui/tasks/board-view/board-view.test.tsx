@@ -8,12 +8,40 @@ import { dueDateFor } from '../task-detail/due-date';
 import { createInitialState } from '../../store/state';
 import { setUiState } from '../../store/store';
 import { fakeWeb, type FakeRoute } from '@/ui/test-support/fake-web';
-import { taskItem, taskListResponse } from '../task-model/fixtures';
+import { seededConfigs, taskItem, taskListResponse } from '../task-model/fixtures';
 import type { TaskItemResponse } from '../task-model/task';
-import { TaskListView } from '../task-list-view/task-list-view';
+import { useUiState } from '../../store/store';
+import type { UiState } from '../../store/state';
+import { dispatch, transactions } from '../../store/transactions';
+import { taskHref } from '../task-object/task-route';
+import { useTaskList } from '../use-tasks/use-tasks';
+import { BoardView } from './board-view';
 
-// The Board as a viewer gets it: TaskListView over the real useTaskList and
-// the imago API client, against a fake apps/web that answers the task routes.
+// The Board as a viewer gets it: BoardView over the real useTaskList and the
+// imago API client, against a fake apps/web that answers the task routes,
+// bound as the list view binds it.
+
+const selectExpanded = (state: UiState) => state.resources.expandedTasks;
+
+type BoardProps = { readonly editable?: boolean; readonly reorderable?: boolean };
+
+function Board({ editable = true, reorderable = true }: BoardProps) {
+  const { list, actions } = useTaskList('l1', 'Launch');
+  const expandedIds = useUiState(selectExpanded);
+  if (list === undefined) return null;
+  return (
+    <BoardView
+      list={list}
+      actions={actions}
+      editable={editable}
+      reorderable={reorderable}
+      today="2026-10-05"
+      expandedIds={expandedIds}
+      toggleExpanded={(taskId) => dispatch(transactions.toggleTaskExpanded, taskId)}
+      taskHref={(task) => taskHref('d1', task.pageId)}
+    />
+  );
+}
 
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 const L1 = 'GET /api/pages/l1/tasks?limit=200&offset=0';
@@ -87,14 +115,11 @@ const settle = async (check: () => void): Promise<void> => {
   check();
 };
 
-/** Noon UTC on 5 October: the 5th in every zone the tests run in. */
-const clock = () => new Date('2026-10-05T12:00:00.000Z');
-
-const open = async (table: Record<string, FakeRoute> = routes()) => {
+const open = async (table: Record<string, FakeRoute> = routes(), props: BoardProps = {}) => {
   const web = fakeWeb(table);
   const container = mount(
     <ImagoSWRProvider client={web.client}>
-      <TaskListView driveId="d1" pageId="l1" viewerId="u-1" clock={clock} />
+      <Board {...props} />
     </ImagoSWRProvider>,
   );
   await settle(() => {
@@ -112,7 +137,7 @@ const board = (container: HTMLElement) =>
 
 /** Each column header's read-out name and count. */
 const counts = (container: HTMLElement) =>
-  [...container.querySelectorAll('section[data-column] > h3')].map((heading) => heading.getAttribute('aria-label'));
+  [...container.querySelectorAll('section[data-column] h3')].map((heading) => heading.getAttribute('aria-label'));
 
 const columnOf = (container: HTMLElement, id: string) =>
   container.querySelector(`li[data-task="${id}"]`)?.closest('section')?.getAttribute('aria-label');
@@ -651,6 +676,195 @@ describe('Board view', () => {
       should: 'stay open for the press inside and close for the one outside',
       actual: { opened, afterInside, afterOutside: container.querySelector('[role="menu"]') !== null },
       expected: { opened: true, afterInside: true, afterOutside: false },
+    });
+  });
+
+  test('a viewer who may only read', async () => {
+    const { container } = await open(routes(), { editable: false });
+    const done = container.querySelector('section[data-column="completed"]') as HTMLElement;
+    click(done.querySelector('button[data-column-menu]') as HTMLButtonElement);
+    assert({
+      given: 'the board opened read-only',
+      should: 'draw no handles, New cards, "+", Move to… or card menus, keep the links, and offer only Collapse on a column',
+      actual: {
+        handles: container.querySelectorAll('button[data-drag]').length,
+        newCards: container.querySelectorAll('[data-new-card]').length,
+        plus: container.querySelectorAll('button[aria-label^="New card in"]').length,
+        move: container.querySelectorAll('button[data-move]').length,
+        cardMenus: container.querySelectorAll('button[data-card-menu]').length,
+        links: container.querySelectorAll('li[data-task] a[data-title]').length,
+        columnMenu: [...done.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent),
+      },
+      expected: { handles: 0, newCards: 0, plus: 0, move: 0, cardMenus: 0, links: 2, columnMenu: ['Collapse'] },
+    });
+  });
+
+  test('a WIP limit', async () => {
+    let limit: number | null = 1;
+    const served = () =>
+      Response.json(
+        taskListResponse(
+          [
+            taskItem('p', { title: 'Plan launch', status: 'in_progress', subTaskCount: 1, position: 0 }),
+            taskItem('z', { title: 'Book venue', position: 1 }),
+          ],
+          {
+            statusConfigs: seededConfigs.map((config) =>
+              config.slug === 'in_progress' ? { ...config, wipLimit: limit } : config,
+            ),
+          },
+        ),
+      );
+    const { web, container } = await open(
+      routes({
+        [L1]: served,
+        'PUT /api/pages/l1/tasks/statuses': ({ body }) => {
+          limit = (body as { statuses: { slug?: string; id: string; wipLimit: number | null }[] }).statuses.find(
+            (entry) => entry.id === 'cfg-in_progress',
+          )?.wipLimit ?? null;
+          return Response.json({ statusConfigs: seededConfigs });
+        },
+      }),
+    );
+    const chip = () => container.querySelector('section[data-column="in_progress"] [data-count]');
+    const before = [chip()?.textContent, chip()?.getAttribute('data-wip'), counts(container)[1]];
+    const column = container.querySelector('section[data-column="in_progress"]') as HTMLElement;
+    click(column.querySelector('button[data-column-menu]') as HTMLButtonElement);
+    click([...column.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'Set WIP limit…') as HTMLButtonElement);
+    const field = column.querySelector<HTMLInputElement>('input[aria-label="WIP limit for In Progress"]') as HTMLInputElement;
+    const filled = field.value;
+    typeInto(field, '3');
+    press(field, 'Enter');
+    await settle(() => {
+      if (web.writes().length === 0) throw new Error('not sent');
+    });
+    const sent = (web.writes()[0]?.body as { statuses: { id: string; wipLimit: number | null }[] }).statuses.map(
+      (entry) => [entry.id, entry.wipLimit],
+    );
+    assert({
+      given: 'In Progress holding one card against a limit of one, its limit set to 3 from the column menu',
+      should: 'warn at the limit, open the field on the current limit, PUT every status with the new limit and show it at once',
+      actual: { before, filled, sent, after: chip()?.textContent, tone: chip()?.getAttribute('data-wip') },
+      expected: {
+        before: ['1/1', 'at', 'In Progress, 1 task, limit 1'],
+        filled: '1',
+        sent: [
+          ['cfg-pending', null],
+          ['cfg-in_progress', 3],
+          ['cfg-blocked', null],
+          ['cfg-completed', null],
+        ],
+        after: '1/3',
+        tone: 'under',
+      },
+    });
+  });
+
+  test('folding a column to a rail', async () => {
+    const { container } = await open();
+    const done = () => container.querySelector('section[data-column="completed"]') as HTMLElement;
+    click(done().querySelector('button[data-column-menu]') as HTMLButtonElement);
+    click([...done().querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((item) => item.textContent === 'Collapse') as HTMLButtonElement);
+    const folded = { rail: done().hasAttribute('data-collapsed'), stored: localStorage.getItem('imago:board-collapsed:l1') };
+    unmountAll();
+    const again = await open();
+    const rail = again.container.querySelector('section[data-column="completed"]') as HTMLElement;
+    const remembered = rail.hasAttribute('data-collapsed');
+    click(rail.querySelector('button[data-expand]') as HTMLButtonElement);
+    assert({
+      given: 'Done collapsed from its menu, the board opened again, then the rail pressed',
+      should: 'fold it to a rail, remember that for this list, and open it back out',
+      actual: {
+        folded,
+        remembered,
+        expanded: again.container.querySelector('section[data-column="completed"]')?.hasAttribute('data-collapsed'),
+        stored: localStorage.getItem('imago:board-collapsed:l1'),
+      },
+      expected: { folded: { rail: true, stored: '["completed"]' }, remembered: true, expanded: false, stored: '[]' },
+    });
+  });
+
+  test('lanes by priority', async () => {
+    const { container } = await open(routes({ [L1]: () => served({ priority: 'high' }) }));
+    const priority = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((radio) => radio.textContent === 'Priority');
+    click(priority as HTMLButtonElement);
+    const lanes = [...container.querySelectorAll('[data-lane]')].map((lane) => [
+      lane.getAttribute('aria-label'),
+      [...lane.querySelectorAll('li[data-task]')].map((card) => card.getAttribute('data-task')),
+    ]);
+    assert({
+      given: 'Book venue at high priority, Plan launch at medium, and Lanes set to Priority',
+      should: 'split the columns into a lane per priority, each card in its own, and remember the choice',
+      actual: {
+        lanes,
+        cell: container.querySelector('li[data-task="z"]')?.closest('section')?.getAttribute('aria-label'),
+        stored: localStorage.getItem('imago:board-lanes:l1'),
+      },
+      expected: {
+        lanes: [
+          ['High priority', ['z']],
+          ['Medium priority', ['p']],
+          ['Low priority', []],
+        ],
+        cell: 'To Do, High priority',
+        stored: 'priority',
+      },
+    });
+  });
+
+  test('deleting from a card’s menu', async () => {
+    const { web, container } = await open(
+      routes({ 'DELETE /api/pages/l1/tasks/z': () => Response.json({ success: true }) }),
+    );
+    click(container.querySelector('button[data-card-menu="z"]') as HTMLButtonElement);
+    const items = () => [...container.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    const offered = items().map((item) => item.textContent);
+    click(items().find((item) => item.textContent === 'Delete…') as HTMLElement);
+    const asked = [container.querySelector('[role="menu"] p')?.textContent, items().map((item) => item.textContent)];
+    click(items().find((item) => item.textContent === 'Yes, delete') as HTMLElement);
+    await settle(() => {
+      if (announced(container) === '') throw new Error('not announced');
+    });
+    assert({
+      given: 'Book venue’s ⋯ menu, Delete… and then Yes',
+      should: 'offer Open, Add subtask and Delete, ask in the menu first, then DELETE the task and announce it',
+      actual: { offered, asked, writes: web.writes(), announced: announced(container) },
+      expected: {
+        offered: ['Open', 'Add subtask', 'Delete…'],
+        asked: ['Delete Book venue?', ['Yes, delete', 'No, keep it']],
+        writes: [{ method: 'DELETE', url: '/api/pages/l1/tasks/z', csrf: 'tok-1', body: undefined }],
+        announced: 'Deleted Book venue.',
+      },
+    });
+  });
+
+  test('a first subtask from a card’s menu', async () => {
+    const { web, container } = await open(
+      routes({
+        'POST /api/pages/page-z/tasks': () => Response.json(taskItem('s', { title: 'Call venue' }), { status: 201 }),
+        'GET /api/pages/page-z/tasks?limit=200&offset=0': () => Response.json(taskListResponse([])),
+      }),
+    );
+    click(container.querySelector('button[data-card-menu="z"]') as HTMLButtonElement);
+    click([...container.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((item) => item.textContent === 'Add subtask') as HTMLElement);
+    await settle(() => {
+      if (container.querySelector('li[data-task="z"] input[aria-label="Add subtask"]') === null) throw new Error('no field');
+    });
+    const field = container.querySelector<HTMLInputElement>('li[data-task="z"] input[aria-label="Add subtask"]') as HTMLInputElement;
+    const focused = document.activeElement === field;
+    typeInto(field, 'Call venue');
+    press(field, 'Enter');
+    await settle(() => {
+      if (web.writes().length === 0) throw new Error('not sent');
+    });
+    assert({
+      given: 'Add subtask chosen on a card with no subtasks, typed into and committed',
+      should: 'open a focused field in the card and POST the subtask to the task’s own list',
+      actual: { focused, writes: web.writes() },
+      expected: {
+        focused: true,
+        writes: [{ method: 'POST', url: '/api/pages/page-z/tasks', csrf: 'tok-1', body: { title: 'Call venue' } }],
+      },
     });
   });
 });

@@ -5,6 +5,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
+  - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.
+  - **Board** lets you drag a card within a column as well as between columns. Cards open in place to show their subtasks. A column can have a WIP limit, which is a reminder only and never blocks a move, and any column can fold to a narrow strip. Lanes split the board by priority or by assignee; dropping a card into another lane changes that field too.
+  - **Focus** lists what you can start next, either in the open list or across every list in the drive, with a "Done today" section and a quick-add row.
+  - **Roadmap** puts the list on a timeline in weeks, months or quarters. Drag a bar's ends to change its start or due date, and pick up tasks with no date from the Unscheduled tray.
+  - Tasks now have an optional **start date**, which you can set from a task's detail or the Roadmap. In a task's detail, status, due date, start date, priority and assignees open proper pickers, and you can delete the task.
+  - On the Tasks home, you can tick tasks off straight from the list.
+  - Lists update live when someone else changes them.
+
 - You can now subscribe to Pro and buy credit packs inside the PageSpace iPhone and iPad app, paid through your Apple ID. Pro bought in the app includes exactly what Pro on the web does (the same monthly credits, storage and models) and shows up on every device you sign in on. App Store prices are set a little higher to cover Apple's fee. Manage or cancel an App Store subscription from the app's Plan page or your Apple ID settings, and use Restore Purchases after reinstalling. A plan bought on the web is still managed on the web, and organization (Business) plans are still managed by the organization's admin. Credit packs can be bought either way, whichever store your plan is on.
 - The chat composer in a docked Imago column is one row: the model name is a single button, and it opens a searchable list of every model, browsed by provider, so the composer no longer clips against Send in a narrow column.
 - Imago now has a face of its own: a living liquid-metal orb wherever Imago shows up, in place of the generic agent icon. It moves on Imago's empty chat, in the chat header, while Imago is thinking, and on the Ask buttons. It listens as you type, churns while it thinks and ripples as it replies. Elsewhere it is still and comes alive when you hover it: the Chat button on the rail, Imago's page in the sidebar, tabs, recents, favorites, search and the agent picker. Your other agents keep their usual icon.

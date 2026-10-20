@@ -15,15 +15,17 @@ import useSWR, { type KeyedMutator } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import type { ApiClient } from '@/api/client';
-import type { Assignee, DueDateFilter, StatusGroupFilter, TaskList } from '../task-model/task';
+import type { Assignee, DriveTasksResponse, DueDateFilter, StatusGroupFilter, TaskList } from '../task-model/task';
+import { statusesFrom } from '../task-model/from-api';
 import { taskViews, type TaskViewId } from '../task-views/task-views';
-import { locate, type TaskLocation } from '../task-tree/task-tree';
+import { doneStatus, locate, openStatus, type TaskLocation } from '../task-tree/task-tree';
 import {
   addTask,
   moveTask,
   removeTask,
   setAssignees,
   setStatus,
+  setWipLimit,
   toggledAssignees,
   toggledStatus,
   updateTask,
@@ -46,6 +48,7 @@ import {
   reorderTasks,
   setTaskAssignees,
   setTaskStatus,
+  updateStatuses,
   updateTask as patchTask,
   type CreateTaskInput,
   type TaskAddress,
@@ -155,6 +158,14 @@ export type TaskActions = {
   readonly remove: (taskId: string) => Promise<ActionResult>;
   /** Moves a task to an index among its siblings. */
   readonly move: (taskId: string, toIndex: number) => Promise<ActionResult>;
+  /**
+   * Moves a task to a status and an index among its siblings in one gesture:
+   * the Board's drop on a card. The status is saved first; a refused status
+   * leaves the order alone.
+   */
+  readonly moveTo: (taskId: string, status: string, toIndex: number) => Promise<ActionResult>;
+  /** Sets (or, with null, clears) a status's work-in-progress limit on the root list. */
+  readonly setWipLimit: (slug: string, wipLimit: number | null) => Promise<ActionResult>;
 };
 
 /** A write worked out against the tree: refused, or the new tree and the request that saves it. */
@@ -210,6 +221,12 @@ const createActions = (
     send: () => Promise<unknown>,
   ): Plan => (edited.refusal === undefined ? { list: edited.list, send } : { refusal: edited.refusal });
 
+  const reorder = (taskId: string, toIndex: number) => (tree: TaskList): Plan => {
+    const moved = moveTask(tree, taskId, toIndex);
+    const order = moved.order;
+    return order === null ? { refusal: NOT_FOUND } : { list: moved.list, send: () => reorderTasks(client, order) };
+  };
+
   const status = (taskId: string, slug: string) =>
     onTask(taskId, (tree, at) =>
       outcome(setStatus(tree, taskId, slug, now()), () => setTaskStatus(client, at, slug)),
@@ -242,11 +259,33 @@ const createActions = (
       run(assignees(taskId, (current) => toggledAssignees(current, assignee))),
     remove: (taskId) =>
       run(onTask(taskId, (tree, at) => ({ list: removeTask(tree, taskId), send: () => deleteTask(client, at) }))),
-    move: (taskId, toIndex) =>
+    move: (taskId, toIndex) => run(reorder(taskId, toIndex)),
+    moveTo: async (taskId, slug, toIndex) => {
+      const tree = current();
+      const found = tree === undefined ? undefined : locate(tree, taskId);
+      if (found !== undefined && found.task.status !== slug) {
+        const moved = await run(status(taskId, slug));
+        if (!moved.ok) return moved;
+      }
+      return run(reorder(taskId, toIndex));
+    },
+    setWipLimit: (slug, wipLimit) =>
       run((tree) => {
-        const moved = moveTask(tree, taskId, toIndex);
-        const order = moved.order;
-        return order === null ? { refusal: NOT_FOUND } : { list: moved.list, send: () => reorderTasks(client, order) };
+        const edited = setWipLimit(tree, slug, wipLimit);
+        return outcome(edited, () =>
+          updateStatuses(
+            client,
+            tree.pageId,
+            edited.list.statuses.map(({ id, name, color, group, position, wipLimit: limit }) => ({
+              id,
+              name,
+              color,
+              group,
+              position,
+              wipLimit: limit,
+            })),
+          ),
+        );
       }),
   };
 };
@@ -303,5 +342,53 @@ export const useDriveTasks = (driveId: string, statusGroup: StatusGroupFilter, d
   );
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
-  return { response: data, error: error as unknown, isLoading, retry };
+  const latest = useRef(data);
+  latest.current = data;
+  /**
+   * Ticks a row (or unticks it) in the list that holds it, by that list's
+   * own statuses. The row shows its new state at once and the drive's rows
+   * are asked again either way; a refusal (open subtasks) comes back in the
+   * server's words.
+   */
+  const toggleComplete = useCallback(
+    async (taskId: string): Promise<ActionResult> => {
+      const response = latest.current;
+      const row = response?.tasks.find((entry) => entry.id === taskId);
+      if (response === undefined || row === undefined) return { ok: false, refusal: NOT_FOUND };
+      const statuses = statusesFrom(response.statusConfigsByTaskList?.[row.taskListPageId] ?? []);
+      const done = row.statusGroup === 'done';
+      const slug = statuses.length === 0 ? (done ? 'pending' : 'completed') : done ? openStatus(statuses) : doneStatus(statuses);
+      const next = statuses.find((status) => status.slug === slug);
+      const optimistic: DriveTasksResponse = {
+        ...response,
+        tasks: response.tasks.map((entry) =>
+          entry.id === taskId
+            ? {
+                ...entry,
+                status: slug,
+                statusGroup: next?.group ?? (done ? 'todo' : 'done'),
+                statusLabel: next?.name ?? entry.statusLabel,
+                completedAt: done ? null : now(),
+              }
+            : entry,
+        ),
+      };
+      let result: ActionResult = { ok: true };
+      try {
+        await mutate(
+          async () => {
+            await setTaskStatus(client, { listPageId: row.taskListPageId, taskId }, slug);
+            return undefined;
+          },
+          { optimisticData: optimistic, rollbackOnError: true, populateCache: false, revalidate: false },
+        );
+      } catch (caught) {
+        result = { ok: false, refusal: caught instanceof ApiError ? caught.message : OFFLINE };
+      }
+      await mutate();
+      return result;
+    },
+    [client, mutate],
+  );
+  return { response: data, error: error as unknown, isLoading, retry, toggleComplete };
 };

@@ -1,13 +1,12 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { Icon } from '../../components/icon/icon';
+import { Checkbox } from '../../components/checkbox/checkbox';
 import { renderErrorState } from '../../frame/edge-state/edge-state.render';
 import type { StatusGroupFilter } from '../task-model/task';
 import type { GroundRow, GroundSection } from './ground-rows';
 import {
   avatarClass,
   avatarOverlapClass,
-  circleClass,
   dueClass,
   groundClass,
   groundHeadingClass,
@@ -19,7 +18,9 @@ import {
   peopleClass,
   rowClass,
   rowMetaClass,
+  rowNoticeClass,
   rowTitleClass,
+  rowWrapClass,
   sectionClass,
   sectionCountClass,
   sectionHeadClass,
@@ -45,6 +46,10 @@ export type TasksGroundRenderProps = {
   readonly subtitle: string | undefined;
   readonly status: StatusGroupFilter;
   readonly onStatus: (status: StatusGroupFilter) => void;
+  /** Void action: ticks a row done, or opens it again. */
+  readonly toggleComplete: (taskId: string) => void;
+  /** Why the last tick was refused, under the row it was made on. */
+  readonly notice: { readonly at: string; readonly message: string } | null;
   readonly state:
     | { readonly kind: 'loading' }
     | { readonly kind: 'error'; readonly retry: () => void }
@@ -59,42 +64,49 @@ const initials = (name: string): string => {
   return letters === '' ? '?' : letters;
 };
 
-/** One row: the circle, the title and list, its status, priority, people and due date. */
-function renderRow(row: GroundRow, driveId: string): ReactNode {
+type RowContext = Pick<TasksGroundRenderProps, 'toggleComplete' | 'notice'> & { readonly driveId: string };
+
+/** One row: its checkbox, the title and list, its status, priority, people and due date; a refusal under it. */
+function renderRow(row: GroundRow, { driveId, toggleComplete, notice }: RowContext): ReactNode {
   const href = `/${encodeURIComponent(driveId)}/tasks/${encodeURIComponent(row.pageId)}`;
   const priorityLevel = row.priority === 'high' ? 3 : row.priority === 'medium' ? 2 : 1;
   return (
-    <div key={row.id} role="row" className={rowClass}>
-      <span aria-hidden="true" className={circleClass(row.done)}>
-        {row.done ? <Icon name="check" /> : null}
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <Link href={href} prefetch className={rowTitleClass}>
-          {row.title}
-        </Link>
-        <span className={rowMetaClass}>{row.list}</span>
-      </span>
-      <span className={statusPillClass}>
-        <span aria-hidden="true" className={statusDotClass(row.statusGroup)} />
-        {row.statusLabel}
-      </span>
-      <span role="img" aria-label={`Priority ${row.priority}`} className={priorityClass}>
-        {PRIORITY_BARS.map((height, index) => (
-          <span key={height} aria-hidden="true" className={priorityBarClass(index < priorityLevel, height, row.priority)} />
-        ))}
-      </span>
-      <span className={peopleClass}>
-        {row.people.map((person, index) => (
-          <span
-            key={`${person.type}-${person.id}`}
-            title={person.name}
-            className={`${avatarClass(person.type === 'agent')} ${index > 0 ? avatarOverlapClass : ''}`}
-          >
-            {initials(person.name)}
-          </span>
-        ))}
-      </span>
-      <span className={dueClass(row.dueTone)}>{row.due}</span>
+    <div key={row.id} className={rowWrapClass}>
+      <div role="row" className={rowClass(row.done)}>
+        <Checkbox checked={row.done} label={`Complete ${row.title}`} toggle={() => toggleComplete(row.id)} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <Link href={href} prefetch className={rowTitleClass(row.done)}>
+            {row.title}
+          </Link>
+          <span className={rowMetaClass}>{row.list}</span>
+        </span>
+        <span className={statusPillClass}>
+          <span aria-hidden="true" className={statusDotClass(row.statusGroup)} />
+          {row.statusLabel}
+        </span>
+        <span role="img" aria-label={`Priority ${row.priority}`} className={priorityClass}>
+          {PRIORITY_BARS.map((height, index) => (
+            <span key={height} aria-hidden="true" className={priorityBarClass(index < priorityLevel, height, row.priority)} />
+          ))}
+        </span>
+        <span className={peopleClass}>
+          {row.people.map((person, index) => (
+            <span
+              key={`${person.type}-${person.id}`}
+              title={person.name}
+              className={`${avatarClass(person.type === 'agent')} ${index > 0 ? avatarOverlapClass : ''}`}
+            >
+              {initials(person.name)}
+            </span>
+          ))}
+        </span>
+        <span className={dueClass(row.dueTone)}>{row.due}</span>
+      </div>
+      {notice?.at === row.id ? (
+        <p role="status" className={rowNoticeClass}>
+          {notice.message}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -103,7 +115,15 @@ function renderRow(row: GroundRow, driveId: string): ReactNode {
  * The Tasks index: the viewer's tasks in one status group, grouped by due
  * date. It fills the middle column, with Imago docked beside it.
  */
-export function renderTasksGround({ heading, subtitle, status, onStatus, state }: TasksGroundRenderProps): ReactNode {
+export function renderTasksGround({
+  heading,
+  subtitle,
+  status,
+  onStatus,
+  toggleComplete,
+  notice,
+  state,
+}: TasksGroundRenderProps): ReactNode {
   const rows = state.kind === 'ready' ? state.sections.reduce((count, section) => count + section.rows.length, 0) : null;
   return (
     <section aria-label={heading} className={groundClass}>
@@ -144,7 +164,7 @@ export function renderTasksGround({ heading, subtitle, status, onStatus, state }
                   {section.name}
                   <span className={sectionCountClass}>{section.rows.length}</span>
                 </h3>
-                {section.rows.map((row) => renderRow(row, state.driveId))}
+                {section.rows.map((row) => renderRow(row, { driveId: state.driveId, toggleComplete, notice }))}
               </section>
             ))
         )}

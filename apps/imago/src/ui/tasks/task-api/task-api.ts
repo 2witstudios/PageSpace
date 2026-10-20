@@ -70,6 +70,16 @@ export type DriveTasksQuery = {
   readonly dueDateFilter?: DueDateFilter;
 };
 
+/** One status as PUT /tasks/statuses takes it: the whole row, with its limit. */
+export type StatusUpdate = {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+  readonly group: TaskStatus['group'];
+  readonly position: number;
+  readonly wipLimit: number | null;
+};
+
 /** The viewer's tasks in a drive, as GET /api/tasks answers them. */
 export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
   client.apiFetch<DriveTasksResponse>(taskPaths.driveTasks(query));
@@ -150,6 +160,7 @@ export type CreateTaskInput = {
   readonly status?: string;
   readonly priority?: Priority;
   readonly dueDate?: string | null;
+  readonly startDate?: string | null;
   readonly assignees?: readonly Assignee[];
 };
 
@@ -162,6 +173,7 @@ export const createTask = (client: ApiClient, listPageId: string, input: CreateT
       ...(input.status === undefined ? {} : { status: input.status }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
+      ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
       ...(input.assignees === undefined ? {} : { assigneeIds: assigneeIds(input.assignees) }),
     },
   });
@@ -184,6 +196,10 @@ export const setTaskAssignees = (client: ApiClient, at: TaskAddress, assignees: 
 /** DELETE a task: its page is trashed and the task removed. */
 export const deleteTask = (client: ApiClient, at: TaskAddress) =>
   client.apiFetch<{ success: boolean }>(taskPaths.task(at.listPageId, at.taskId), { method: 'DELETE' });
+
+/** PUT /tasks/statuses: every status of a list, each with its work-in-progress limit. */
+export const updateStatuses = (client: ApiClient, pageId: string, statuses: readonly StatusUpdate[]) =>
+  client.apiFetch<TaskStatusesResponse>(taskPaths.statuses(pageId), { method: 'PUT', json: { statuses } });
 
 /** PATCH /tasks/reorder: every task's new position in one list. */
 export const reorderTasks = (client: ApiClient, plan: ReorderPlan) =>

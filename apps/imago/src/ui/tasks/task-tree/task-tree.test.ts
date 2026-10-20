@@ -27,6 +27,7 @@ const status = (slug: string, group: TaskStatus['group'], position: number): Tas
   color: '',
   group,
   position,
+  wipLimit: null,
 });
 
 /** root → a → b → c → d: five levels, the deepest PageSpace nests. */
