@@ -1,5 +1,5 @@
-// The Tasks ground's rows, read from GET /api/tasks?context=drive: the
-// viewer's own tasks, sectioned by when they fall due (Overdue, Due this week,
+// The Tasks ground's rows, read from GET /api/tasks (one drive, or on Home
+// every drive): the viewer's own tasks, sectioned by when they fall due (Overdue, Due this week,
 // Later), each with the fields a row shows. Nothing here is invented: every
 // field is the route's, or derived from it by the viewer's own day.
 
@@ -15,6 +15,8 @@ export type GroundRow = {
   readonly driveId: string;
   readonly title: string;
   readonly list: string;
+  /** The task's drive by name, when the ground reads across drives; null on a drive's own ground. */
+  readonly drive: string | null;
   readonly statusLabel: string;
   readonly statusGroup: StatusGroup;
   readonly done: boolean;
@@ -34,8 +36,12 @@ const SECTION_OF: Record<DueWindow, GroundSectionName> = {
   later: 'Later',
 };
 
-/** One task as a row, read by `today` (YYYY-MM-DD, the viewer's own day). */
-export const groundRow = (task: DriveTaskResponse, today: string): GroundRow => {
+/**
+ * One task as a row, read by `today` (YYYY-MM-DD, the viewer's own day). With
+ * `driveNames` (Home, across drives) the row names its drive; a drive the list
+ * does not name is left unnamed rather than guessed.
+ */
+export const groundRow = (task: DriveTaskResponse, today: string, driveNames?: ReadonlyMap<string, string>): GroundRow => {
   const done = task.statusGroup === 'done';
   return {
     id: task.id,
@@ -43,6 +49,7 @@ export const groundRow = (task: DriveTaskResponse, today: string): GroundRow => 
     driveId: task.driveId,
     title: task.title,
     list: task.taskListPageTitle,
+    drive: driveNames?.get(task.driveId) ?? null,
     statusLabel: task.statusLabel,
     statusGroup: task.statusGroup,
     done,
@@ -57,11 +64,15 @@ export const groundRow = (task: DriveTaskResponse, today: string): GroundRow => 
  * The tasks in their sections, in order. A section with no rows is still
  * returned, empty, so the caller decides whether to draw it.
  */
-export const groundSections = (tasks: readonly DriveTaskResponse[], today: string): readonly GroundSection[] => {
+export const groundSections = (
+  tasks: readonly DriveTaskResponse[],
+  today: string,
+  driveNames?: ReadonlyMap<string, string>,
+): readonly GroundSection[] => {
   const sections: Record<GroundSectionName, GroundRow[]> = { Overdue: [], 'Due this week': [], Later: [] };
   for (const task of tasks) {
     const window = dueWindowOf(task.dueDate, today, task.statusGroup === 'done') ?? 'later';
-    sections[SECTION_OF[window]].push(groundRow(task, today));
+    sections[SECTION_OF[window]].push(groundRow(task, today, driveNames));
   }
   return (['Overdue', 'Due this week', 'Later'] as const).map((name) => ({ name, rows: sections[name] }));
 };

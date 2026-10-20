@@ -13,6 +13,7 @@ import { fetchCalendarJson } from './calendar-fetch';
 import { formatCalendarDate } from './calendar-state';
 import { MiniMonth } from './mini-month';
 import { useCalendarState } from './use-calendar-state';
+import { userCalendars, type UserCalendar } from '../user-calendar/user-calendars';
 
 export type GoogleCalendarStatus = {
   readonly connected: boolean;
@@ -37,12 +38,19 @@ const rowClass = 'flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-sm
 
 /**
  * The Calendar tool's pane (C-Drive-Calendar): the Event button, the October mini month, the
- * CALENDARS group (the drive, and Google when it is connected and this is not on-prem) and the
- * EVENT TYPES legend. The visible date is the URL's, so the middle follows the picker.
+ * CALENDARS group (the drive, or on Home, the dashboard, Personal and every drive as the grid
+ * shows them; then Google when it is connected and this is not on-prem) and the EVENT TYPES
+ * legend. The visible date is the URL's, so the middle follows the picker.
  */
-export function CalendarPane({ driveId, close }: ToolPaneProps): ReactNode {
+export function CalendarPane({ driveId, close, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const { state, update } = useCalendarState();
-  const driveName = useDriveStore((store) => store.drives.find((drive) => drive.id === driveId)?.name);
+  const drives = useDriveStore((store) => store.drives);
+  const drive = drives.find((entry) => entry.id === driveId);
+  const calendars: readonly UserCalendar[] = allDrives
+    ? userCalendars(drives)
+    : drive === undefined
+      ? []
+      : [{ key: drive.id, name: drive.name, dotClass: getDriveCalendarColor(drive.id, [drive.id]).dot }];
   const fetchDrives = useDriveStore((store) => store.fetchDrives);
   useEffect(() => {
     fetchDrives();
@@ -73,12 +81,12 @@ export function CalendarPane({ driveId, close }: ToolPaneProps): ReactNode {
         <MiniMonth date={state.date} onSelect={(date) => update({ date: formatCalendarDate(date) })} />
         <h3 className={groupHeadingClass}>CALENDARS</h3>
         <ul className="flex flex-col gap-px">
-          {driveName === undefined ? null : (
-            <li className={rowClass}>
-              <span aria-hidden="true" className={`size-presence-dot flex-none rounded-sm ${getDriveCalendarColor(driveId, [driveId]).dot}`} />
-              <span className="min-w-0 flex-1 truncate">{driveName}</span>
+          {calendars.map((calendar) => (
+            <li key={calendar.key} className={rowClass}>
+              <span aria-hidden="true" className={`size-presence-dot flex-none rounded-sm ${calendar.dotClass}`} />
+              <span className="min-w-0 flex-1 truncate">{calendar.name}</span>
             </li>
-          )}
+          ))}
           {onPrem || connection === null ? null : (
             <li className={rowClass}>
               <span aria-hidden="true" className="size-presence-dot flex-none rounded-sm bg-accent-deep" />

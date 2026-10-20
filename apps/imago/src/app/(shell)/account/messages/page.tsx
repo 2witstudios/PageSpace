@@ -1,8 +1,7 @@
-import RetainedPage from '@/retained/app/dashboard/channels/page';
-import type { ComponentProps } from 'react';
-import { getViewer } from '@/lib/auth/get-viewer';
+import { redirectToHomeSection } from '@/lib/home-section';
+import type { SearchParams } from '@/lib/home-section-path';
 
-export default async function Page(props: ComponentProps<typeof RetainedPage> & object) {
-  await getViewer();
-  return <RetainedPage {...props} />;
+/** Moved to Home, the dashboard: an old link lands on Home's messages. */
+export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }): Promise<never> {
+  return redirectToHomeSection('messages', searchParams);
 }

@@ -19,6 +19,7 @@ export function imagoHref(href: string): string {
   const [first, second, ...rest] = segments;
   let destination: string;
   if (first === 'channels' && second) destination = `/p/${second}`;
+  // The cross-drive sections are Home's; /account/<section> redirects there on the server.
   else if (['channels', 'tasks', 'calendar', 'activity', 'trash'].includes(first)) destination = `/account/${first === 'channels' ? 'messages' : first}`;
   else if (first === 'agents') destination = '/account/agents';
   else if (first === 'dms') destination = `/dm${second ? `/${second}` : ''}`;
@@ -80,8 +81,7 @@ export function classicPathname(pathname: string | null): string {
   if (pathname === '/orgs' || pathname.startsWith('/orgs/')) return pathname;
   if (pathname === '/') return '/dashboard';
   const globalSection = pathname.split('/')[2];
-  if (pathname.startsWith('/account/') && ['messages', 'tasks', 'calendar', 'activity', 'trash'].includes(globalSection)) return `/dashboard/${globalSection === 'messages' ? 'channels' : globalSection}`;
-  if (pathname === '/account/agents') return '/dashboard/agents';
+  if (pathname.startsWith('/account/') && globalSection === 'trash') return '/dashboard/trash';
   if (pathname === '/account' || pathname.startsWith('/account/')) return pathname.replace('/account', '/settings');
   if (pathname === '/dm' || pathname.startsWith('/dm/')) return pathname.replace('/dm', '/dashboard/dms');
   if (pathname.startsWith('/p/')) return pathname;

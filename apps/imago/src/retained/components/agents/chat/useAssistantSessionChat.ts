@@ -56,7 +56,7 @@ import {
 import { useActiveStream, useConversationActiveStream } from '@/retained/hooks/useActiveStream';
 import { useStopStream } from '@/retained/hooks/useStopStream';
 import { useAuth } from '@/retained/hooks/useAuth';
-import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
 
 import { useConversationSubscription } from '@/retained/hooks/useConversationSubscription';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
@@ -74,10 +74,10 @@ import type { UseAgentSessionChatReturn } from './useAgentSessionChat';
  */
 export function useAssistantContextRef(driveId: string | null): ContextRef {
   const pathname = usePathname();
-  const drives = useDriveStore((state) => state.drives);
+  const homeDriveId = useHomeDriveId();
   return useMemo(
-    () => (driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives)),
-    [driveId, pathname, drives],
+    () => (driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, homeDriveId)),
+    [driveId, pathname, homeDriveId],
   );
 }
 

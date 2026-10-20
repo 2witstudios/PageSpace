@@ -17,6 +17,7 @@ import {
   useConversationScrollRef
 } from '@/retained/components/ai/ui/conversation';
 import { useDriveStore } from '@/retained/hooks/useDrive';
+import { useHomeDriveId } from '@/ui/frame/drives/home-drive-context';
 import { useAssistantSettingsStore } from '@/retained/stores/useAssistantSettingsStore';
 import { useGlobalChatConversation } from '@/retained/contexts/GlobalChatContext';
 import { usePageAgentSidebarState, type SidebarAgentInfo } from '@/retained/hooks/page-agents';
@@ -517,6 +518,7 @@ const SidebarChatTab: React.FC = () => {
   // Subscribe to drives so the location-context effect re-runs once the store
   // populates (drive labels would otherwise stay null until the next nav).
   const drives = useDriveStore((state) => state.drives);
+  const homeDriveId = useHomeDriveId();
 
   useEffect(() => {
     fetchDrives();
@@ -546,8 +548,8 @@ const SidebarChatTab: React.FC = () => {
   }, [pathname, drives]);
 
   const buildFreshContextRef = useCallback(
-    () => buildContextRef(pathname, drives),
-    [pathname, drives],
+    () => buildContextRef(pathname, homeDriveId),
+    [pathname, homeDriveId],
   );
 
   // ============================================

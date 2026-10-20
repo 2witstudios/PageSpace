@@ -1,7 +1,7 @@
-import { AgentsWorkspace } from '@/retained-adapters/agents-workspace';
-import { getViewer } from '@/lib/auth/get-viewer';
-export default async function AgentsPage() {
-await getViewer();
-const driveId = undefined;
-return <AgentsWorkspace driveId={driveId} />;
+import { redirectToHomeSection } from '@/lib/home-section';
+import type { SearchParams } from '@/lib/home-section-path';
+
+/** Moved to Home, the dashboard: an old link lands on Home's agents. */
+export default async function Page({ searchParams }: { searchParams: Promise<SearchParams> }): Promise<never> {
+  return redirectToHomeSection('agents', searchParams);
 }

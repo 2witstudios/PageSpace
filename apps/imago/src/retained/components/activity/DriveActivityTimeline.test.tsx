@@ -8,11 +8,13 @@ import { DriveActivityTimeline } from './DriveActivityTimeline';
 
 const nav = vi.hoisted(() => ({ search: '' }));
 const api = vi.hoisted(() => ({ fetchWithAuth: vi.fn(), post: vi.fn() }));
+const swr = vi.hoisted(() => ({ data: undefined as unknown }));
 
 vi.mock('@/retained-adapters/navigation', () => ({
   useSearchParams: () => new URLSearchParams(nav.search),
 }));
 vi.mock('@/retained/lib/auth/auth-fetch', () => api);
+vi.mock('swr', () => ({ default: (key: string | null) => ({ data: key === null ? undefined : swr.data }) }));
 
 const row = (overrides: Partial<ActivityLog>): ActivityLog => ({
   id: 'act-1',
@@ -66,6 +68,7 @@ const respondWith = (activities: ActivityLog[], total: number) => {
 
 beforeEach(() => {
   nav.search = '';
+  swr.data = undefined;
   api.fetchWithAuth.mockReset();
   api.post.mockReset();
 });
@@ -129,6 +132,32 @@ describe('DriveActivityTimeline', () => {
       should: 'say why in an alert rather than an empty timeline',
       actual: container.querySelector('[role="alert"]')?.textContent,
       expected: 'Forbidden',
+    });
+  });
+
+  test('names each row’s drive on Home, the dashboard', async () => {
+    swr.data = [{ id: 'd1', name: 'Marketing', kind: 'STANDARD' }];
+    respondWith([row({ id: 'a', driveId: 'd1' })], 1);
+    const container = mount(<DriveActivityTimeline driveId={null} />);
+    await settle(() => expect(container.textContent).toContain('Status page copy'));
+    assert({
+      given: 'the viewer’s activity across every drive',
+      should: 'say which drive each change was in',
+      actual: container.textContent?.includes('in Marketing'),
+      expected: true,
+    });
+  });
+
+  test('a single drive leaves the drive name off', async () => {
+    swr.data = [{ id: 'd1', name: 'Marketing', kind: 'STANDARD' }];
+    respondWith([row({ id: 'a', driveId: 'd1' })], 1);
+    const container = mount(<DriveActivityTimeline driveId="d1" />);
+    await settle(() => expect(container.textContent).toContain('Status page copy'));
+    assert({
+      given: 'one drive’s activity',
+      should: 'not repeat the drive on every row',
+      actual: container.textContent?.includes('in Marketing'),
+      expected: false,
     });
   });
 });
