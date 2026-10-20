@@ -60,7 +60,7 @@ import { decideClosePane } from '@/retained/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
-import { DeleteDriveEnvDialog, DriveEnvNameDialog, EnrollmentCodeDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import { DeleteDriveEnvDialog, DriveEnvNameDialog, EnrollmentCodeDialog, RebuildDriveEnvDialog, type DeleteEnvOutcome } from './DriveEnvDialogs';
 import type { LocalEnvEnrollmentIssue } from '@/retained/components/agents/LocalEnvEnrollment';
 import { DevPreviewAffordance } from '@/retained/components/dev-preview/DevPreviewAffordance';
 import { envDevPreviewPath } from '@/retained/hooks/dev-preview/useDevPreviewStatus';
@@ -856,7 +856,7 @@ function DriveEnvRow({
   );
 
   const deleteEnv = useCallback(
-    async ({ force }: { force: boolean }): Promise<{ blockedByLiveSessions: number } | null> => {
+    async ({ force }: { force: boolean }): Promise<DeleteEnvOutcome> => {
       try {
         await del(force ? `${envPath}?force=true` : envPath);
       } catch (error) {
@@ -873,26 +873,26 @@ function DriveEnvRow({
         toast.error('Could not delete the environment', {
           description: error instanceof Error ? error.message : 'Please try again.',
         });
-        return null;
+        return 'failed';
       }
       onEnvsChanged();
       // Deleting an environment CASCADES its sessions away, so the sessions
       // listing is stale the moment this resolves — not just the env listing.
       void mutate(isWorkspaceListingKey);
       toast.success(`Deleted “${displayName}”`);
-      return null;
+      return 'deleted';
     },
     [envPath, onEnvsChanged, mutate, displayName],
   );
 
-  const rebuildEnv = useCallback(async () => {
+  const rebuildEnv = useCallback(async (): Promise<boolean> => {
     try {
       await post(`${envPath}/rebuild`);
     } catch (error) {
       toast.error('Could not rebuild the environment', {
         description: error instanceof Error ? error.message : 'Please try again.',
       });
-      return;
+      return false;
     }
     onEnvsChanged();
     // The sessions listing goes stale too, for the same reason the delete path
@@ -902,6 +902,7 @@ function DriveEnvRow({
     // the rows keep claiming `running` against a machine that no longer exists.
     void mutate(isWorkspaceListingKey);
     toast.success(`“${displayName}” was rebuilt`, { description: 'It came back blank.' });
+    return true;
   }, [envPath, onEnvsChanged, mutate, displayName]);
 
   /**

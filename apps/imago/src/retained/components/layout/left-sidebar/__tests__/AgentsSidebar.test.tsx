@@ -2332,6 +2332,41 @@ describe('AgentsSidebar', () => {
       );
     });
 
+    test('a forced delete that fails keeps the escalated question open, so it can be retried', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockDel.mockRejectedValueOnce(
+        new ApiRequestError('Sessions are still running in this environment', 409, { reason: 'live_sessions', liveSessionCount: 2 }),
+      );
+      mockDel.mockRejectedValueOnce(new ApiRequestError('Service unavailable', 503, null));
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Delete environment'));
+      await user.click(await screen.findByRole('button', { name: 'Delete environment' }));
+      await user.click(await screen.findByRole('button', { name: 'End sessions and delete' }));
+      await waitFor(() => expect(mockDel).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1?force=true'));
+
+      expect(await screen.findByRole('button', { name: 'End sessions and delete' })).toBeDefined();
+    });
+
+    test('a rebuild that fails keeps its confirmation open', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockRejectedValueOnce(new ApiRequestError('Service unavailable', 503, null));
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      await user.click(await screen.findByText('Rebuild to blank'));
+      await user.click(await screen.findByRole('button', { name: 'Rebuild to blank' }));
+      await waitFor(() => expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs/env-1/rebuild'));
+
+      expect(await screen.findByRole('button', { name: 'Rebuild to blank' })).toBeDefined();
+      expect(screen.getByText(/comes back BLANK/)).toBeDefined();
+    });
+
     test('renaming PATCHes the name and nothing else — there is no kind to change', async () => {
       const user = userEvent.setup();
       respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);

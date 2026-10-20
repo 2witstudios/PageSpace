@@ -139,6 +139,9 @@ export function DriveEnvNameDialog({
   );
 }
 
+/** How a delete ended: done, failed (the dialog stays open to retry), or refused while sessions are live. */
+export type DeleteEnvOutcome = 'deleted' | 'failed' | { blockedByLiveSessions: number };
+
 /**
  * Delete, in two questions rather than one.
  *
@@ -163,8 +166,7 @@ export function DeleteDriveEnvDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   envName: string;
-  /** Resolves to the live-session count when the server refused; null once it is done. */
-  onDelete: (options: { force: boolean }) => Promise<{ blockedByLiveSessions: number } | null>;
+  onDelete: (options: { force: boolean }) => Promise<DeleteEnvOutcome>;
 }) {
   const [liveSessionCount, setLiveSessionCount] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -179,9 +181,10 @@ export function DeleteDriveEnvDialog({
     if (submitting) return;
     setSubmitting(true);
     try {
-      const refusal = await onDelete({ force });
-      if (refusal) {
-        setLiveSessionCount(refusal.blockedByLiveSessions);
+      const outcome = await onDelete({ force });
+      if (outcome === 'failed') return;
+      if (outcome !== 'deleted') {
+        setLiveSessionCount(outcome.blockedByLiveSessions);
         return;
       }
       onOpenChange(false);
@@ -245,7 +248,8 @@ export function RebuildDriveEnvDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   envName: string;
-  onRebuild: () => Promise<void>;
+  /** Resolves true once rebuilt; false keeps the confirmation open to retry. */
+  onRebuild: () => Promise<boolean>;
 }) {
   const [submitting, setSubmitting] = useState(false);
 
@@ -269,8 +273,7 @@ export function RebuildDriveEnvDialog({
               event.preventDefault();
               setSubmitting(true);
               try {
-                await onRebuild();
-                onOpenChange(false);
+                if (await onRebuild()) onOpenChange(false);
               } finally {
                 setSubmitting(false);
               }
