@@ -176,6 +176,7 @@ import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
 import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
@@ -1657,5 +1658,149 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       taskId: mockTaskId,
     }));
     expect(broadcastPageEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/pages/[pageId]/tasks/[taskId] — startDate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Drop any queued Once values a previous test left unconsumed.
+    vi.mocked(db.query.taskItems.findFirst).mockReset();
+    capturedUpdates.length = 0;
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.taskAssignees.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupAuth();
+    setupCanEdit(true);
+  });
+
+  const withRelations = (task: Record<string, unknown>) => ({
+    ...task, assignee: null, assigneeAgent: null, user: null, assignees: [],
+  });
+
+  /** First findFirst = the existing row; second = the post-update fetch. */
+  const setupExisting = (existing: Record<string, unknown>, afterUpdate: Record<string, unknown> = existing) => {
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce(existing as never)
+      .mockResolvedValueOnce(withRelations(afterUpdate) as never);
+    setupTransaction(afterUpdate);
+  };
+
+  it('stores an ISO startDate, returns it, and records it in the audit updatedFields', async () => {
+    const start = new Date('2026-03-01T00:00:00Z');
+    setupExisting(baseTask, { ...baseTask, startDate: start });
+
+    const response = await PATCH(createPatchRequest({ startDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(response.status).toBe(200);
+    expect(capturedUpdates.find(v => 'startDate' in v)?.startDate).toEqual(start);
+    expect((await response.json()).startDate).toBe(start.toISOString());
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      details: expect.objectContaining({ updatedFields: expect.arrayContaining(['startDate']) }),
+    }));
+  });
+
+  it('includes startDate in the task_updated broadcast payload', async () => {
+    const start = new Date('2026-03-01T00:00:00Z');
+    setupExisting(baseTask, { ...baseTask, startDate: start });
+
+    await PATCH(createPatchRequest({ startDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'task_updated',
+      data: expect.objectContaining({ startDate: start }),
+    }));
+  });
+
+  it('clears startDate with null', async () => {
+    setupExisting({ ...baseTask, startDate: new Date('2026-03-01T00:00:00Z') }, { ...baseTask, startDate: null });
+
+    const response = await PATCH(createPatchRequest({ startDate: null }), context);
+
+    expect(response.status).toBe(200);
+    const write = capturedUpdates.find(v => 'startDate' in v);
+    expect(write).toBeDefined();
+    expect(write?.startDate).toBeNull();
+  });
+
+  it('does not touch startDate when the field is absent', async () => {
+    setupExisting(baseTask, { ...baseTask, priority: 'high' });
+
+    const response = await PATCH(createPatchRequest({ priority: 'high' }), context);
+
+    expect(response.status).toBe(200);
+    expect(capturedUpdates.some(v => 'startDate' in v)).toBe(false);
+  });
+
+  it('returns 400 for an invalid startDate without writing', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({ startDate: 'not-a-date' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Invalid start date');
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the new startDate is after the new dueDate', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({
+      startDate: '2026-03-10T00:00:00Z',
+      dueDate: '2026-03-01T00:00:00Z',
+    }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('compares a new startDate against the EXISTING dueDate when dueDate is absent', async () => {
+    setupExisting({ ...baseTask, dueDate: new Date('2026-03-01T00:00:00Z') });
+
+    const response = await PATCH(createPatchRequest({ startDate: '2026-03-05T00:00:00Z' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+  });
+
+  it('compares a new dueDate against the EXISTING startDate when startDate is absent', async () => {
+    setupExisting({ ...baseTask, startDate: new Date('2026-03-05T00:00:00Z') });
+
+    const response = await PATCH(createPatchRequest({ dueDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+  });
+
+  it('accepts a startDate equal to the dueDate', async () => {
+    const same = new Date('2026-03-01T00:00:00Z');
+    setupExisting({ ...baseTask, dueDate: same }, { ...baseTask, dueDate: same, startDate: same });
+
+    const response = await PATCH(createPatchRequest({ startDate: same.toISOString() }), context);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('allows clearing the dueDate even when the stored startDate is set', async () => {
+    setupExisting(
+      { ...baseTask, startDate: new Date('2026-03-05T00:00:00Z'), dueDate: new Date('2026-03-10T00:00:00Z') },
+      { ...baseTask, startDate: new Date('2026-03-05T00:00:00Z'), dueDate: null },
+    );
+
+    const response = await PATCH(createPatchRequest({ dueDate: null }), context);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('returns 400 for an invalid dueDate instead of writing an Invalid Date', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({ dueDate: 'garbage' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Invalid due date');
   });
 });

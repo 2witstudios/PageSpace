@@ -82,14 +82,14 @@ describe('planFacts: the three plan-card facts, one source for the marketing pag
     );
   });
 
-  it('Spec A-11: Pro includes 90, Business 300, and an extra seat adds 60 credits', () => {
+  it('Spec A-11: Pro includes 150, Business 500, and an extra seat adds 100 credits', () => {
     const seatCents = centsFromDollars(TIER_PLAN_LIMITS.business.extraSeatUsd);
     expect(planFacts('business').org?.extraSeatCredits).toBe(
       `+${formatCreditCount(allowanceCentsForPaidCents(seatCents, 'business'))} credits a month per extra seat`,
     );
-    expect(planFacts('business').org?.extraSeatCredits).toBe('+60 credits a month per extra seat');
-    expect(planFacts('pro').includedCredits).toBe('90 credits included each month');
-    expect(planFacts('business').includedCredits).toBe('300 credits included each month');
+    expect(planFacts('business').org?.extraSeatCredits).toBe('+100 credits a month per extra seat');
+    expect(planFacts('pro').includedCredits).toBe('150 credits included each month');
+    expect(planFacts('business').includedCredits).toBe('500 credits included each month');
     expect(planFacts('free').includedCredits).toBe('50 credits to start');
   });
 

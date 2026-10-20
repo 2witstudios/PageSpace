@@ -10,8 +10,7 @@ const pane = (name: string) =>
     return <p>{`${name}:${driveId}:${allDrives ? 'all' : 'one'}`}</p>;
   };
 vi.mock('../../tools/calendar/calendar-pane', () => ({ CalendarPane: pane('calendar') }));
-vi.mock('../../tools/agents/agents-pane', () => ({ AgentsPane: pane('agents') }));
-vi.mock('../../tools/agents/home-console-pane', () => ({ HomeConsolePane: pane('home-console') }));
+vi.mock('../../tools/agents/console-pane', () => ({ ConsolePane: pane('agents') }));
 vi.mock('../../tools/workflows/workflows-pane', () => ({ WorkflowsPane: pane('workflows') }));
 vi.mock('../../tools/activity/activity-pane', () => ({ ActivityPane: pane('activity') }));
 vi.mock('../../tools/members/members-pane', () => ({ MembersPane: pane('members') }));
@@ -32,9 +31,9 @@ describe('ToolPane', () => {
   test('on Home, the dashboard tools read every drive', () => {
     assert({
       given: 'Home’s Calendar, Console, Activity and Workflows',
-      should: 'scope Calendar and Activity to every drive, give Console the every-drive pane, and keep Workflows Home’s own',
+      should: 'scope Calendar and Activity to every drive, give Console every drive’s sessions, and keep Workflows Home’s own',
       actual: (['calendar', 'agents', 'activity', 'workflows'] as const).map((tool) => at(tool, 'home')),
-      expected: ['calendar:home:all', 'home-console:home:one', 'activity:home:all', 'workflows:home:one'],
+      expected: ['calendar:home:all', 'agents:home:all', 'activity:home:all', 'workflows:home:one'],
     });
   });
 

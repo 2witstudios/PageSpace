@@ -16,8 +16,8 @@ describe('invoice-grant derives every grant through allowanceCentsForPaidCents',
     }
   });
 
-  it('MON-2 Pro at list price ($15) includes 900 credits of value (A-11)', () => {
-    expect(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(900);
+  it('MON-2 Pro at list price ($15) includes 1500 credits of value (A-11)', () => {
+    expect(grantForInvoice({ amountPaidCents: 1500, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(1500);
   });
 
   it('MON-8 the free tier has no ratio: a paid amount on free grants nothing here', () => {
@@ -59,7 +59,7 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
   it('MON-2 (a) a gifted subscription grants list price × ratio, records paidCents 0, basis list', () => {
     expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_cycle', hasSubscriptionParent: true, gifted: true, tier: 'pro' }))
       .toEqual({ paidCents: 0, allowanceCents: list(), basis: 'list', reason: 'gifted' });
-    expect(list()).toBe(900);
+    expect(list()).toBe(1500);
   });
 
   it('D-OW-30 nothing creates trials: a $0 subscription_create invoice with subtotal 0 that is not a gift grants nothing', () => {
@@ -73,10 +73,10 @@ describe('grantForInvoice — D-OW-16: entitlement follows amount paid except gr
     expect(grantForInvoice({ amountPaidCents: 0, billingReason: 'subscription_update', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(0);
   });
 
-  it('MON-2 (c) a partial discount grants from amount_paid: 50% off → half, 20% off → 720', () => {
+  it('MON-2 (c) a partial discount grants from amount_paid: 50% off → half, 20% off → 1200', () => {
     expect(grantForInvoice({ amountPaidCents: 750, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }))
       .toEqual({ paidCents: 750, allowanceCents: list() / 2, basis: 'paid', reason: 'paid' });
-    expect(grantForInvoice({ amountPaidCents: 1200, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(720);
+    expect(grantForInvoice({ amountPaidCents: 1200, billingReason: 'subscription_cycle', hasSubscriptionParent: true, tier: 'pro' }).allowanceCents).toBe(1200);
   });
 
   it('MON-2 (d) a 100% coupon on a non-gifted subscription grants nothing, even on subscription_create', () => {

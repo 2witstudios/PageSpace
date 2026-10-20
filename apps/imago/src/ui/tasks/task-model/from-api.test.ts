@@ -47,9 +47,9 @@ describe('statusesFrom()', () => {
       should: 'order them by position, keeping only what the model reads',
       actual: statusesFrom(configs),
       expected: [
-        { id: 'cfg-todo', slug: 'todo', name: 'todo', color: 'bg-slate-100', group: 'todo', position: 0 },
-        { id: 'cfg-doing', slug: 'doing', name: 'doing', color: 'bg-slate-100', group: 'in_progress', position: 1 },
-        { id: 'cfg-done', slug: 'done', name: 'done', color: 'bg-slate-100', group: 'done', position: 2 },
+        { id: 'cfg-todo', slug: 'todo', name: 'todo', color: 'bg-slate-100', group: 'todo', position: 0, wipLimit: null },
+        { id: 'cfg-doing', slug: 'doing', name: 'doing', color: 'bg-slate-100', group: 'in_progress', position: 1, wipLimit: null },
+        { id: 'cfg-done', slug: 'done', name: 'done', color: 'bg-slate-100', group: 'done', position: 2, wipLimit: null },
       ],
     });
   });
@@ -160,7 +160,9 @@ describe('taskFromItem()', () => {
         status: 'in_progress',
         priority: 'high',
         dueDate: '2026-10-09T00:00:00.000Z',
+        startDate: null,
         completedAt: null,
+        createdAt: '2026-10-01T00:00:00.000Z',
         assignees: [],
         position: 3,
         hasContent: true,

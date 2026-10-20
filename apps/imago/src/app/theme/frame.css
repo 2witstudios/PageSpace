@@ -100,6 +100,19 @@
   --spacing-progress: 28px;
   --spacing-progress-track: 3px;
   --spacing-board-column: 244px;
+  /* A Board column folded to its name, standing on end. */
+  --spacing-board-rail: 44px;
+  /* How long the rail's name may run on end before it is cut short. */
+  --spacing-board-rail-label: 160px;
+  /* The line that marks where a dragged card will land. */
+  --spacing-board-insert: 2px;
+  /* The Roadmap: its lane list, one lane's row, a bar and a milestone. */
+  --spacing-roadmap-lanes: 260px;
+  --spacing-roadmap-row: 36px;
+  --spacing-roadmap-head: 44px;
+  --spacing-roadmap-bar: 20px;
+  --spacing-roadmap-handle: 8px;
+  --spacing-roadmap-milestone: 10px;
   --spacing-menu: 192px;
   --spacing-popover: 224px;
   --spacing-description: 96px;
@@ -204,6 +217,16 @@
   &::-moz-progress-bar {
     background-color: var(--color-accent);
   }
+}
+
+/* The Roadmap's late span: diagonal stripes of the live tone, so the days
+   past a due date read as time owed rather than more bar. */
+@utility roadmap-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--live-soft) 0 4px,
+    color-mix(in oklch, var(--live) 28%, transparent) 4px 8px
+  );
 }
 
 /* A <details> summary used as a control: no disclosure triangle in any

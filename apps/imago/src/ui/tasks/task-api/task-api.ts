@@ -54,6 +54,7 @@ export const taskPaths = {
     );
     if (query.statusGroup !== undefined) params.set('statusGroup', query.statusGroup);
     if (query.dueDateFilter !== undefined) params.set('dueDateFilter', query.dueDateFilter);
+    if (query.offset !== undefined && query.offset > 0) params.set('offset', String(query.offset));
     return `/api/tasks?${params.toString()}`;
   },
   /** A task's agent triggers, keyed by the task's id (not its page's). */
@@ -74,11 +75,56 @@ export type DriveTasksQuery = {
   readonly limit: number;
   readonly statusGroup?: StatusGroupFilter;
   readonly dueDateFilter?: DueDateFilter;
+  /** Rows to skip in the route's newest-updated-first order; the first page without it. */
+  readonly offset?: number;
+};
+
+/** One status as PUT /tasks/statuses takes it: the whole row, with its limit. */
+export type StatusUpdate = {
+  readonly id: string;
+  readonly name: string;
+  readonly color: string;
+  readonly group: TaskStatus['group'];
+  readonly position: number;
+  readonly wipLimit: number | null;
 };
 
 /** The viewer's tasks in a drive, as GET /api/tasks answers them. */
 export const fetchDriveTasks = (client: ApiClient, query: DriveTasksQuery) =>
   client.apiFetch<DriveTasksResponse>(taskPaths.driveTasks(query));
+
+/** The most rows a drive-wide read takes: ten of the route's 100-row pages. */
+const DRIVE_TASKS_CAP = 1000;
+
+/**
+ * Every one of the viewer's tasks in a drive: the first page of GET
+ * /api/tasks, then every further page at once, by offset, joining the rows
+ * and each list's statuses in page order. The offsets come from the first
+ * page's total and count the route's own rows, so a page the route left
+ * short or empty (orphans it dropped) never ends the read early. The order is
+ * newest-updated first, so a row touched during the read can land on two
+ * pages (it is kept once) or slide onto a page already read and be missed
+ * until the next read. Stops at 1000 rows, leaving `hasMore` set.
+ */
+export const fetchEveryDriveTask = async (client: ApiClient, query: DriveTasksQuery): Promise<DriveTasksResponse> => {
+  const first = await fetchDriveTasks(client, { ...query, offset: undefined });
+  const { total } = first.pagination;
+  const end = Math.min(total, DRIVE_TASKS_CAP);
+  const offsets: number[] = [];
+  for (let offset = query.limit; query.limit > 0 && offset < end; offset += query.limit) offsets.push(offset);
+  const rest = await Promise.all(offsets.map((offset) => fetchDriveTasks(client, { ...query, offset })));
+  const pages = [first, ...rest];
+  const tasks = new Map<string, DriveTasksResponse['tasks'][number]>();
+  for (const row of pages.flatMap((page) => page.tasks)) if (!tasks.has(row.id)) tasks.set(row.id, row);
+  return {
+    tasks: [...tasks.values()],
+    statusConfigsByTaskList: pages.reduce<NonNullable<DriveTasksResponse['statusConfigsByTaskList']>>(
+      (configs, page) => ({ ...configs, ...page.statusConfigsByTaskList }),
+      {},
+    ),
+    pagination: { total, limit: query.limit, offset: 0, hasMore: total > DRIVE_TASKS_CAP },
+  };
+};
 
 /** How many of the viewer's tasks in a drive fall in a due window (all of them without one): the route's pagination.total. */
 export const fetchDriveTaskCount = async (
@@ -156,6 +202,7 @@ export type CreateTaskInput = {
   readonly status?: string;
   readonly priority?: Priority;
   readonly dueDate?: string | null;
+  readonly startDate?: string | null;
   readonly assignees?: readonly Assignee[];
 };
 
@@ -168,6 +215,7 @@ export const createTask = (client: ApiClient, listPageId: string, input: CreateT
       ...(input.status === undefined ? {} : { status: input.status }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(input.dueDate === undefined ? {} : { dueDate: input.dueDate }),
+      ...(input.startDate === undefined ? {} : { startDate: input.startDate }),
       ...(input.assignees === undefined ? {} : { assigneeIds: assigneeIds(input.assignees) }),
     },
   });
@@ -190,6 +238,10 @@ export const setTaskAssignees = (client: ApiClient, at: TaskAddress, assignees: 
 /** DELETE a task: its page is trashed and the task removed. */
 export const deleteTask = (client: ApiClient, at: TaskAddress) =>
   client.apiFetch<{ success: boolean }>(taskPaths.task(at.listPageId, at.taskId), { method: 'DELETE' });
+
+/** PUT /tasks/statuses: every status of a list, each with its work-in-progress limit. */
+export const updateStatuses = (client: ApiClient, pageId: string, statuses: readonly StatusUpdate[]) =>
+  client.apiFetch<TaskStatusesResponse>(taskPaths.statuses(pageId), { method: 'PUT', json: { statuses } });
 
 /** PATCH /tasks/reorder: every task's new position in one list. */
 export const reorderTasks = (client: ApiClient, plan: ReorderPlan) =>

@@ -234,9 +234,9 @@ describe('applyStripeFunding', () => {
 
     await applyStripeFunding(invoiceEvent, { tier: 'pro' });
 
-    // A-11: 60% of the $15 paid.
+    // A-11: 100% of the $15 paid.
     const allowance = tierAllowanceCents('pro');
-    expect(allowance).toBe(900);
+    expect(allowance).toBe(1500);
     expect(cap.ledgerValues).toMatchObject({
       userId: 'u1',
       // WAL-5: the grant names the payer's personal root wallet, resolved inside the tx.
@@ -556,7 +556,7 @@ describe('applyStripeFunding', () => {
 
     // The ratio math itself is covered directly (no shell, no mocks) in
     // money-model.test.ts and invoice-grant.test.ts; these tests prove the funding
-    // shell wires amount_paid through the ratio (A-11: 60%).
+    // shell wires amount_paid through the ratio (100%).
     it('MON-2 sizes the grant as amount_paid × the default ratio, not the tier list price, and records paidCents on the ledger row', async () => {
       const cap: Captured = {};
       refill(cap);
@@ -564,7 +564,7 @@ describe('applyStripeFunding', () => {
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
       const expected = allowanceCentsForPaidCents(1500, 'pro');
-      expect(expected).toBe(900);
+      expect(expected).toBe(1500);
       expect(cap.ledgerValues).toMatchObject({
         entryType: 'monthly_grant',
         amountCents: expected,
@@ -657,7 +657,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(0, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         const list = allowanceCentsForPaidCents(tierListPriceCents('pro'), 'pro');
-        expect(list).toBe(900);
+        expect(list).toBe(1500);
         expect(cap.ledgerValues).toMatchObject({ amountCents: list, paidCents: 0, stripeRef: 'in_123' });
         expect(cap.balanceSet).toMatchObject({ monthlyRemainingCents: list, monthlyAllowanceCents: list });
         expect(mockApiLogger.info).toHaveBeenCalledWith(
@@ -714,7 +714,7 @@ describe('applyStripeFunding', () => {
         await applyStripeFunding(paidInvoiceEvent(1200, { subtotal: 1500, billing_reason: 'subscription_cycle' }), { tier: 'pro' });
 
         expect(cap.ledgerValues).toMatchObject({ amountCents: allowanceCentsForPaidCents(1200, 'pro'), paidCents: 1200 });
-        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(720);
+        expect(allowanceCentsForPaidCents(1200, 'pro')).toBe(1200);
       });
 
       it('MON-2 (d) a 100% coupon on a NON-gifted subscription grants nothing — admin gifting is the door', async () => {
@@ -732,13 +732,13 @@ describe('applyStripeFunding', () => {
       });
     });
 
-    it('MON-2 / D-OW-17 a full-price invoice grants A-11\'s 60% of what it paid', async () => {
+    it('MON-2 / D-OW-17 a full-price invoice grants 100% of what it paid', async () => {
       const cap: Captured = {};
       refill(cap);
 
       await applyStripeFunding(paidInvoiceEvent(1500), { tier: 'pro' });
 
-      expect(cap.ledgerValues).toMatchObject({ amountCents: 900, paidCents: 1500 });
+      expect(cap.ledgerValues).toMatchObject({ amountCents: 1500, paidCents: 1500 });
     });
   });
 });

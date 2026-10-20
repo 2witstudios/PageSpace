@@ -19,9 +19,9 @@ describe('orgPlanQuote', () => {
     });
   });
 
-  it('UI-6 (partial): the included credits are the money-model ratio of the price (7,800 credits for $130 at 60%)', () => {
-    expect(orgPlanQuote(13).includedCreditCents).toBe(7_800);
-    expect(orgPlanQuote(15).includedCreditCents).toBe(9_000);
+  it('UI-6 (partial): the included credits are the money-model ratio of the price (13,000 for $130 at 100%)', () => {
+    expect(orgPlanQuote(13).includedCreditCents).toBe(13_000);
+    expect(orgPlanQuote(15).includedCreditCents).toBe(15_000);
   });
 
   it('derives the included credits from the money-model ratio rather than a hard-coded figure', () => {

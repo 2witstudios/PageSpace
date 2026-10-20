@@ -3,6 +3,7 @@ import {
   activeTabOf,
   navigateTabs,
   openTabInBackground,
+  opensTab,
   parseTabs,
   restoreActive,
   rewindTab,
@@ -42,8 +43,8 @@ const step = (state: UiState, direction: 'back' | 'forward'): UiState => {
 export type SyncTabs = {
   readonly key: string;
   readonly stored: string | null;
-  /** The tab path of where the viewer is now; null when that is not a tab's object. */
-  readonly path: string | null;
+  /** Where the viewer is now, basePath-relative. */
+  readonly path: string;
   /** The id a tab gets if this navigation opens one. */
   readonly id: string;
   /** The browser's own Back or Forward brought the viewer here. */
@@ -53,11 +54,12 @@ export type SyncTabs = {
 };
 
 /**
- * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation: on a new drive it reads
- * that drive's stored tabs first, then loads the current page (if it is a tab's object) into
- * the active tab as a step in that tab's own history, as browser tabs do. The browser's Back
- * and Forward move within the active tab's history, or back to the tab that shows where they land. New tabs open only when asked for: New
- * tab, ⌘/Ctrl-click or middle-click.
+ * The tab bar's state (IMC-1.5). `syncTabs` runs on every navigation, as classic's does: on a
+ * new drive it reads that drive's stored tabs first, then loads the current place into the
+ * active tab as a step in that tab's own history, as browser tabs do. The browser's Back and
+ * Forward move within the active tab's history, or back to the tab that shows where they land.
+ * New tabs open only when asked for (New tab, ⌘/Ctrl-click or middle-click), or for an object
+ * when no tab is active.
  */
 export const tabsPlugin = {
   resources: (): TabsResources => ({ openTabs: [], activeTab: null, newTabPending: false, tabsKey: null }),
@@ -67,19 +69,21 @@ export const tabsPlugin = {
       const loaded = resources.tabsKey === key;
       const base: TabStrip = loaded ? stripOf(state) : restoreActive(parseTabs(stored), path);
       const active = activeTabOf(base);
-      const rewound = path !== null && pop && active !== null ? rewindTab(active, path, direction) : null;
+      const rewound = pop && active !== null ? rewindTab(active, path, direction) : null;
       // Back or Forward to a place outside the active tab's history (it was a step in another
       // tab, as when New tab or a tab click left it): return to the tab that shows it.
-      const showing = path !== null && pop && rewound === null ? base.tabs.find((tab) => tab.path === path) : undefined;
+      const showing = pop && rewound === null ? base.tabs.find((tab) => tab.path === path) : undefined;
+      const opening = opensTab(path);
       const strip =
-        path === null || (rewound !== null && rewound === active)
+        rewound !== null && rewound === active
           ? base
           : rewound !== null
             ? { tabs: base.tabs.map((tab) => (tab.id === rewound.id ? rewound : tab)), active: base.active }
             : showing !== undefined
               ? { tabs: base.tabs, active: showing.id }
-              : navigateTabs(base, path, id, resources.newTabPending);
-      const newTabPending = path === null ? resources.newTabPending : false;
+              : navigateTabs(base, path, id, resources.newTabPending && opening);
+      // A pending New tab waits for the page it is for: a place that opens no tab leaves it set.
+      const newTabPending = opening ? false : resources.newTabPending;
       const unchanged =
         loaded &&
         strip.tabs === resources.openTabs &&

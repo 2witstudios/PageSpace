@@ -27,6 +27,8 @@ const html = (props: Partial<TasksGroundRenderProps> & Pick<TasksGroundRenderPro
         subtitle: '2 tasks in 1 list',
         status: 'active',
         onStatus: noop,
+        toggleComplete: noop,
+        notice: null,
         ...props,
       })}
     </>,
@@ -45,13 +47,17 @@ describe('renderTasksGround()', () => {
     });
     assert({
       given: 'an overdue task and a done one, Active selected',
-      should: 'show the heading, the Active · Completed · All segment with Active pressed, and only the non-empty sections',
+      should: 'show the heading, the segment with Active pressed, only the non-empty sections, and a checkbox per row with the done one struck through and dimmed',
       actual: {
         heading: markup.includes('<h2') && markup.includes('Assigned to you'),
         segment: ['Active', 'Completed', 'All'].map((label) => markup.includes('aria-label="Status"') && markup.includes(`>${label}<`)),
         pressed: /aria-pressed="true"[^>]*>Active</.test(markup) && !/aria-pressed="true"[^>]*>Completed</.test(markup),
         sections: ['Overdue', 'Due this week', 'Later'].map((name) => markup.includes(`aria-label="${name}"`)),
-        complete: markup.includes('role="img" aria-label="Priority medium"'),
+        priority: markup.includes('role="img" aria-label="Priority medium"'),
+        open: /role="checkbox" aria-checked="false" aria-label="Complete Task over"/.test(markup),
+        done: /role="checkbox" aria-checked="true" aria-label="Complete Task later"/.test(markup),
+        struck: (markup.match(/line-through/g) ?? []).length,
+        dimmed: (markup.match(/opacity-60/g) ?? []).length,
         link: markup.includes('href="/d1/tasks/page-over"'),
       },
       expected: {
@@ -59,7 +65,11 @@ describe('renderTasksGround()', () => {
         segment: [true, true, true],
         pressed: true,
         sections: [true, false, true],
-        complete: true,
+        priority: true,
+        open: true,
+        done: true,
+        struck: 1,
+        dimmed: 1,
         link: true,
       },
     });
@@ -90,6 +100,19 @@ describe('renderTasksGround()', () => {
         }).includes('No completed tasks in this view.'),
       },
       expected: { loading: true, failed: true, empty: true },
+    });
+  });
+
+  test('a refused tick', () => {
+    const markup = html({
+      notice: { at: 'over', message: 'Complete all sub-tasks first' },
+      state: { kind: 'ready', sections: groundSections([row('over'), row('other')], '2026-10-12') },
+    });
+    assert({
+      given: 'a refusal on one row',
+      should: 'say why once, as a status under that row',
+      actual: (markup.match(/role="status"[^>]*>Complete all sub-tasks first</g) ?? []).length,
+      expected: 1,
     });
   });
 });

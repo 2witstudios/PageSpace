@@ -51,7 +51,6 @@ roots += ['app/dashboard/connections/page.tsx', 'app/dashboard/drives/page.tsx']
 
 # Retired by the C v3 redesign: native screens or the shell's panes replaced these, so a re-port must not bring them back.
 RETIRED = {
-    'components/layout/left-sidebar/AgentsSidebar.tsx',
     'app/settings/page.tsx',
     'app/dashboard/[driveId]/settings/page.tsx',
     'app/dashboard/[driveId]/calendar/page.tsx',

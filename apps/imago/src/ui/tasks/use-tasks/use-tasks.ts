@@ -15,17 +15,20 @@ import useSWR, { type KeyedMutator } from 'swr';
 import { useApiClient } from '@/api/swr-provider';
 import { ApiError } from '@/api/errors';
 import type { ApiClient } from '@/api/client';
-import type { Assignee, DueDateFilter, StatusGroupFilter, TaskList } from '../task-model/task';
+import type { Assignee, DriveTasksResponse, DueDateFilter, StatusGroupFilter, TaskList } from '../task-model/task';
+import { statusesFrom } from '../task-model/from-api';
 import { taskViews, type TaskViewId } from '../task-views/task-views';
-import { locate, type TaskLocation } from '../task-tree/task-tree';
+import { doneStatus, locate, openStatus, type TaskLocation } from '../task-tree/task-tree';
 import {
   addTask,
   moveTask,
   removeTask,
   setAssignees,
   setStatus,
+  setWipLimit,
   toggledAssignees,
   toggledStatus,
+  settledPatch,
   updateTask,
   type TaskPatch,
 } from '../task-edit/task-edit';
@@ -35,6 +38,7 @@ import {
   fetchAssignable,
   fetchDriveTaskCount,
   fetchDriveTasks,
+  fetchEveryDriveTask,
   fetchDriveTaskLists,
   fetchPageContent,
   fetchPagePermissions,
@@ -46,6 +50,7 @@ import {
   reorderTasks,
   setTaskAssignees,
   setTaskStatus,
+  updateStatuses,
   updateTask as patchTask,
   type CreateTaskInput,
   type TaskAddress,
@@ -64,14 +69,16 @@ export const useDriveTaskLists = (driveId: string | null) => {
 };
 
 /**
- * Whether the viewer may edit a page: true only on a definite yes. Read
- * before anything that saves on its own, so nothing is typed into a field
- * the server would refuse.
+ * Whether the viewer may edit a page: undefined until the server says, and
+ * false if it cannot be asked. Anything that saves on its own, deletes or
+ * adds waits for a definite true, so nothing is typed into a field the
+ * server would refuse; a field edited one click at a time may show while it
+ * is undefined, the server refusing (and the edit rolling back) if it must.
  */
-export const usePageEditable = (pageId: string) => {
+export const usePageEditable = (pageId: string): boolean | undefined => {
   const client = useApiClient();
-  const { data } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
-  return data?.canEdit === true;
+  const { data, error } = useSWR(['imago:page-permissions', pageId] as const, ([, id]) => fetchPagePermissions(client, id));
+  return error === undefined ? data?.canEdit : false;
 };
 
 /** Who can be put on the drive's tasks, for the assignee picker. */
@@ -155,6 +162,25 @@ export type TaskActions = {
   readonly remove: (taskId: string) => Promise<ActionResult>;
   /** Moves a task to an index among its siblings. */
   readonly move: (taskId: string, toIndex: number) => Promise<ActionResult>;
+  /**
+   * One Board drop as one edit: any of a new status, a lane's field
+   * (priority, or who is on the task) and a place among its siblings. Every
+   * part is worked out on the tree first, so a refusal (a parent with open
+   * subtasks dropped into Done) sends nothing; the tree shows the whole move
+   * at once, the parts are saved in that order, and the tree is read back
+   * once at the end.
+   */
+  readonly moveTo: (taskId: string, move: TaskMove) => Promise<ActionResult>;
+  /** Sets (or, with null, clears) a status's work-in-progress limit on the root list. */
+  readonly setWipLimit: (slug: string, wipLimit: number | null) => Promise<ActionResult>;
+};
+
+/** What one Board drop changes; any part may be left out. */
+export type TaskMove = {
+  readonly status?: string;
+  readonly patch?: TaskPatch;
+  readonly assignees?: readonly Assignee[];
+  readonly index?: number;
 };
 
 /** A write worked out against the tree: refused, or the new tree and the request that saves it. */
@@ -173,19 +199,31 @@ const createActions = (
 ): TaskActions => {
   let minted = 0;
 
-  const run = async (plan: (tree: TaskList) => Plan): Promise<ActionResult> => {
+  /**
+   * Plans each step on the tree the step before left, so a later step sees
+   * the earlier ones; any refusal sends nothing. The requests then go one
+   * after another, under one optimistic tree and one read-back.
+   */
+  const runAll = async (steps: readonly ((tree: TaskList) => Plan)[]): Promise<ActionResult> => {
     const tree = current();
     if (tree === undefined) return { ok: false, refusal: LOADING };
-    const planned = plan(tree);
-    if ('refusal' in planned) return { ok: false, refusal: planned.refusal };
+    let working = tree;
+    const sends: (() => Promise<unknown>)[] = [];
+    for (const step of steps) {
+      const planned = step(working);
+      if ('refusal' in planned) return { ok: false, refusal: planned.refusal };
+      working = planned.list;
+      sends.push(planned.send);
+    }
+    if (sends.length === 0) return { ok: true };
     let result: ActionResult = { ok: true };
     try {
       await mutate(
         async () => {
-          await planned.send();
+          for (const send of sends) await send();
           return undefined;
         },
-        { optimisticData: planned.list, rollbackOnError: true, populateCache: false, revalidate: false },
+        { optimisticData: working, rollbackOnError: true, populateCache: false, revalidate: false },
       );
     } catch (error) {
       result = { ok: false, refusal: error instanceof ApiError ? error.message : OFFLINE };
@@ -194,6 +232,8 @@ const createActions = (
     await mutate();
     return result;
   };
+
+  const run = (plan: (tree: TaskList) => Plan): Promise<ActionResult> => runAll([plan]);
 
   /** A write to one task, addressed to the list that holds it. */
   const onTask =
@@ -209,6 +249,19 @@ const createActions = (
     edited: { readonly list: TaskList; readonly refusal?: string },
     send: () => Promise<unknown>,
   ): Plan => (edited.refusal === undefined ? { list: edited.list, send } : { refusal: edited.refusal });
+
+  const reorder = (taskId: string, toIndex: number) => (tree: TaskList): Plan => {
+    const moved = moveTask(tree, taskId, toIndex);
+    const order = moved.order;
+    return order === null ? { refusal: NOT_FOUND } : { list: moved.list, send: () => reorderTasks(client, order) };
+  };
+
+  /** A field edit: the tree and the request both take the settled patch. */
+  const edit = (taskId: string, patch: TaskPatch) =>
+    onTask(taskId, (tree, at, found) => {
+      const settled = settledPatch(found.task, patch);
+      return outcome(updateTask(tree, taskId, settled), () => patchTask(client, at, settled));
+    });
 
   const status = (taskId: string, slug: string) =>
     onTask(taskId, (tree, at) =>
@@ -229,8 +282,7 @@ const createActions = (
         const draft = { ...input, listPageId, id: `pending-${minted}`, pageId: `pending-page-${minted}`, now: now() };
         return outcome(addTask(tree, draft), () => createTask(client, listPageId, input));
       }),
-    update: (taskId, patch) =>
-      run(onTask(taskId, (tree, at) => outcome(updateTask(tree, taskId, patch), () => patchTask(client, at, patch)))),
+    update: (taskId, patch) => run(edit(taskId, patch)),
     setStatus: (taskId, slug) => run(status(taskId, slug)),
     toggleComplete: (taskId) =>
       run((tree) => {
@@ -242,12 +294,40 @@ const createActions = (
       run(assignees(taskId, (current) => toggledAssignees(current, assignee))),
     remove: (taskId) =>
       run(onTask(taskId, (tree, at) => ({ list: removeTask(tree, taskId), send: () => deleteTask(client, at) }))),
-    move: (taskId, toIndex) =>
-      run((tree) => {
-        const moved = moveTask(tree, taskId, toIndex);
-        const order = moved.order;
-        return order === null ? { refusal: NOT_FOUND } : { list: moved.list, send: () => reorderTasks(client, order) };
-      }),
+    move: (taskId, toIndex) => run(reorder(taskId, toIndex)),
+    moveTo: (taskId, move) => {
+      const tree = current();
+      const task = tree === undefined ? undefined : locate(tree, taskId)?.task;
+      const { status: slug, patch, assignees: chosen, index } = move;
+      return runAll([
+        // The status goes first: it is the part the server may refuse.
+        ...(slug === undefined || slug === task?.status ? [] : [status(taskId, slug)]),
+        ...(patch === undefined ? [] : [edit(taskId, patch)]),
+        ...(chosen === undefined ? [] : [assignees(taskId, () => chosen)]),
+        ...(index === undefined ? [] : [reorder(taskId, index)]),
+      ]);
+    },
+    setWipLimit: (slug, wipLimit) =>
+      run((tree) =>
+        outcome(setWipLimit(tree, slug, wipLimit), async () => {
+          // PUT writes every field of every row it is sent, so it is sent the
+          // server's rows as they stand now, not this tab's copy: a rename or
+          // reorder made elsewhere since is kept, and only this limit changes.
+          const fresh = await fetchTaskStatuses(client, tree.pageId);
+          return updateStatuses(
+            client,
+            tree.pageId,
+            fresh.map(({ id, name, color, group, position, wipLimit: limit, slug: rowSlug }) => ({
+              id,
+              name,
+              color,
+              group,
+              position,
+              wipLimit: rowSlug === slug ? wipLimit : limit,
+            })),
+          );
+        }),
+      ),
   };
 };
 
@@ -292,18 +372,77 @@ export const useTaskViewCounts = (driveId: string | null, allDrives = false) => 
 /** The most rows the ground asks for in one request (the route's limit ceiling). */
 const GROUND_PAGE_SIZE = 100;
 
+/** How much of the route's answer a drive read takes: its first page, or every page up to the cap. */
+export type DriveTaskPages = 'first' | 'every';
+
 /**
- * The viewer's tasks in a drive for the ground, or with no drive across every
- * drive (Home, the dashboard): one status group, one due window (or none), the
- * first page of the route's answer.
+ * The viewer's tasks in a drive, or with no drive across every drive (Home,
+ * the dashboard): one status group, one due window (or none). The ground
+ * reads the first page of the route's answer; Focus's "All lists" reads
+ * every page, since its frontier would otherwise lose the older (often the
+ * most overdue) rows.
  */
-export const useDriveTasks = (driveId: string | null, statusGroup: StatusGroupFilter, dueDateFilter: DueDateFilter | undefined) => {
+export const useDriveTasks = (
+  driveId: string | null,
+  statusGroup: StatusGroupFilter,
+  dueDateFilter: DueDateFilter | undefined,
+  pages: DriveTaskPages = 'first',
+) => {
   const client = useApiClient();
   const query = { driveId, statusGroup, dueDateFilter, limit: GROUND_PAGE_SIZE };
-  const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query] as const, ([, q]) =>
-    fetchDriveTasks(client, q),
+  const { data, error, isLoading, mutate } = useSWR(['imago:drive-tasks', query, pages] as const, ([, q, read]) =>
+    read === 'every' ? fetchEveryDriveTask(client, q) : fetchDriveTasks(client, q),
   );
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
-  return { response: data, error: error as unknown, isLoading, retry };
+  const latest = useRef(data);
+  latest.current = data;
+  /**
+   * Ticks a row (or unticks it) in the list that holds it, by that list's
+   * own statuses. The row shows its new state at once and the drive's rows
+   * are asked again either way; a refusal (open subtasks) comes back in the
+   * server's words.
+   */
+  const toggleComplete = useCallback(
+    async (taskId: string): Promise<ActionResult> => {
+      const response = latest.current;
+      const row = response?.tasks.find((entry) => entry.id === taskId);
+      if (response === undefined || row === undefined) return { ok: false, refusal: NOT_FOUND };
+      const statuses = statusesFrom(response.statusConfigsByTaskList?.[row.taskListPageId] ?? []);
+      const done = row.statusGroup === 'done';
+      // With no statuses of its own, these fall back to PageSpace's 'pending' and 'completed'.
+      const slug = done ? openStatus(statuses) : doneStatus(statuses);
+      const next = statuses.find((status) => status.slug === slug);
+      const optimistic: DriveTasksResponse = {
+        ...response,
+        tasks: response.tasks.map((entry) =>
+          entry.id === taskId
+            ? {
+                ...entry,
+                status: slug,
+                statusGroup: next?.group ?? (done ? 'todo' : 'done'),
+                statusLabel: next?.name ?? entry.statusLabel,
+                completedAt: done ? null : now(),
+              }
+            : entry,
+        ),
+      };
+      let result: ActionResult = { ok: true };
+      try {
+        await mutate(
+          async () => {
+            await setTaskStatus(client, { listPageId: row.taskListPageId, taskId }, slug);
+            return undefined;
+          },
+          { optimisticData: optimistic, rollbackOnError: true, populateCache: false, revalidate: false },
+        );
+      } catch (caught) {
+        result = { ok: false, refusal: caught instanceof ApiError ? caught.message : OFFLINE };
+      }
+      await mutate();
+      return result;
+    },
+    [client, mutate],
+  );
+  return { response: data, error: error as unknown, isLoading, retry, toggleComplete };
 };

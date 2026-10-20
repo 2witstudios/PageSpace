@@ -1,9 +1,9 @@
 import { test, expect, type BrowserContext, type Locator, type Page, type Response } from '@playwright/test';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { taskItems } from '@pagespace/db/schema/tasks';
+import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
 import {
   deleteUsers,
   freshBrowser,
@@ -14,14 +14,15 @@ import {
   signIn,
   type ImagoUser,
 } from '../fixtures/imago.fixture';
-import { newTaskButton } from '../fixtures/retained-tasks.fixture';
 
 /**
  * # Tasks in imago, end to end (IMG-9.6)
  *
  * A user signed in through the real magic-link route, in a browser of their own, against real
- * web, realtime and imago servers and a real database: adding a task and ticking it in the Table
- * view, moving one across the Kanban board, setting a due date in a task's detail, and being refused
+ * web, realtime and imago servers and a real database, working a task list in imago's native
+ * view (ui/tasks/task-list-view): adding a task and ticking it in the Tree, moving one across
+ * the Board by its "Move to…" menu and by a keyboard drag, setting a column's WIP limit,
+ * scheduling a task onto the Roadmap, setting a due date in a task's detail, and being refused
  * the completion of a parent whose subtask is still open. Every write goes through imago's API
  * client to apps/web's task routes; every task under test is created by the click that adds it.
  * Only the list itself is seeded, so each test starts on it.
@@ -36,11 +37,12 @@ import { newTaskButton } from '../fixtures/retained-tasks.fixture';
  * ## Persistence
  *
  * Each change is read back twice: from the database, which is what apps/web stored, and from a
- * reload, which keeps nothing of the page, so what it draws came from the server.
+ * reload, which keeps nothing of the page but this viewer's chosen view (localStorage), so what
+ * it draws came from the server.
  *
  * ## Waits
  *
- * No sleeps. Each step waits for what it caused: the POST or PATCH answer it sent, then the
+ * No sleeps. Each step waits for what it caused: the POST, PATCH or PUT answer it sent, then the
  * state the view draws once the list is revalidated from the server.
  */
 
@@ -72,8 +74,8 @@ const openAt = async (
 ): Promise<Page> => {
   const { context, page } = await freshBrowser(browser, baseURL ?? '');
   contexts.push(context);
-  // Exercise the retained wide table here; spec 36 covers the compact pane controls.
-  await page.setViewportSize({ width: 2400, height: 1000 });
+  // Wide enough for the Board's four columns side by side; spec 36 covers the Files route.
+  await page.setViewportSize({ width: 1800, height: 1000 });
   await signIn(page, user, path);
   await hydrated(page);
   return page;
@@ -98,41 +100,35 @@ const expectOk = async (answer: Response): Promise<void> => {
 
 const tasksPath = (pageId: string) => `/api/pages/${pageId}/tasks`;
 const taskPath = (pageId: string, taskId: string) => `/api/pages/${pageId}/tasks/${taskId}`;
+const statusesPath = (pageId: string) => `/api/pages/${pageId}/tasks/statuses`;
 
-const treeOf = (page: Page) => page.locator('[data-slot="object"]');
-/** A task's tick: "Complete"/"Reopen" in a list row, "Mark <title> complete" on the task's own page. */
-const checkbox = (scope: Page | Locator, title: string) =>
-  scope
-    .getByRole('checkbox', { name: new RegExp(`^(?:(?:Complete|Reopen) ${title}|Mark ${title} complete)$`) })
-    .filter({ visible: true });
-
-/**
- * Shows the Done group's rows: the Table groups tasks by status and starts the Done group
- * collapsed, and a reload forgets both that and the All filter.
- */
-const showDone = async (page: Page): Promise<void> => {
-  const all = treeOf(page).getByRole('button', { name: 'All', exact: true });
-  if ((await all.getAttribute('aria-pressed')) !== 'true') await all.click();
-  const group = treeOf(page).getByRole('button', { name: /^Done\b/ });
-  await expect(group).toBeVisible();
-  if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
+const objectOf = (page: Page) => page.locator('[data-slot="object"]');
+const strip = (page: Page) => objectOf(page).getByRole('toolbar', { name: 'List controls', exact: true });
+/** One of the strip's Focus | Tree | Board | Roadmap radios. */
+const viewRadio = (page: Page, name: 'Focus' | 'Tree' | 'Board' | 'Roadmap') =>
+  strip(page).getByRole('radiogroup', { name: 'View', exact: true }).getByRole('radio', { name, exact: true });
+const showView = async (page: Page, name: 'Focus' | 'Tree' | 'Board' | 'Roadmap'): Promise<void> => {
+  await viewRadio(page, name).click();
+  await expect(viewRadio(page, name)).toHaveAttribute('aria-checked', 'true');
 };
 
+/** A task's tick: "Complete <title>" in a Tree row, "Mark <title> complete" on the task's own detail. */
+const checkbox = (scope: Page | Locator, title: string) =>
+  scope.getByRole('checkbox', { name: new RegExp(`^(?:Complete ${title}|Mark ${title} complete)$`) });
+
 /**
- * Adds a task with the "Add task" (or "Add subtask") control under `scope`, which writes it to
- * the list on `listPage`, and closes the field again. Resolves with what apps/web created.
+ * Adds a task with the InlineAdd under `scope` ("Add task" at the end of the Tree, "Add subtask"
+ * in a detail's Subtasks), which writes it to the list on `listPage`, and closes the field again.
+ * Resolves with what apps/web created.
  */
 const addTask = async (
   page: Page,
   scope: Locator,
-  { label, listPage, title }: { label: string; listPage: string; title: string },
+  { label, listPage, title }: { label: 'Add task' | 'Add subtask'; listPage: string; title: string },
 ): Promise<TaskCreated> => {
   const created = answerTo(page, 'POST', tasksPath(listPage));
-  const rootTask = label === 'Add task';
-  await (rootTask ? newTaskButton(scope) : scope.getByRole('button', { name: label, exact: true })).click();
-  const field = rootTask
-    ? scope.locator('input[placeholder="+ Add a new task..."]:visible')
-    : scope.getByRole('textbox', { name: label, exact: true });
+  await scope.getByRole('button', { name: label, exact: true }).click();
+  const field = scope.getByRole('textbox', { name: label, exact: true });
   await field.fill(title);
   await field.press('Enter');
   const answer = await created;
@@ -140,7 +136,7 @@ const addTask = async (
   await field.press('Escape');
   const task = (await answer.json()) as TaskCreated;
   // The pending row is swapped for the server's once the list is read back.
-  await expect(scope.locator(rootTask ? `[data-task-id="${task.id}"]:visible` : `[data-task="${task.id}"]`)).toBeVisible();
+  await expect(scope.locator(`[data-task="${task.id}"]`)).toBeVisible();
   return task;
 };
 
@@ -151,6 +147,16 @@ const storedTask = async (taskId: string) => {
     .innerJoin(pages, eq(pages.id, taskItems.pageId))
     .where(eq(taskItems.id, taskId));
   return row;
+};
+
+/** The WIP limit stored on one of the list's statuses. */
+const storedWipLimit = async (slug: string) => {
+  const [row] = await db
+    .select({ wipLimit: taskStatusConfigs.wipLimit })
+    .from(taskStatusConfigs)
+    .innerJoin(taskLists, eq(taskLists.id, taskStatusConfigs.taskListId))
+    .where(and(eq(taskLists.pageId, listPageId), eq(taskStatusConfigs.slug, slug)));
+  return row?.wipLimit;
 };
 
 /**
@@ -175,62 +181,62 @@ const fetchInPage = (page: Page, method: string, path: string, json: Record<stri
     { method, path, json },
   );
 
-test('a task added in the Table view, then ticked, stays added and done across reloads', async ({
+test('a task added in the Tree view, then ticked, stays added and done across reloads', async ({
   browser,
   baseURL,
 }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, 'tasks'));
 
-  // The list pane opens the list as the object, in the Table view a new viewer starts in.
+  // The list pane opens the list as the object, in the Tree view a new viewer starts in.
   await page.locator('[data-slot="list"]').getByRole('link', { name: new RegExp(`^${LIST}\\b`) }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${listPageId}`)));
-  await expect(page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true })).toHaveAttribute('aria-current', 'page');
-  await treeOf(page).getByRole('button', { name: 'All', exact: true }).click();
+  await expect(viewRadio(page, 'Tree')).toHaveAttribute('aria-checked', 'true');
 
-  const tree = treeOf(page);
+  const tree = objectOf(page);
   const task = await addTask(page, tree, { label: 'Add task', listPage: listPageId, title: 'Write the brief' });
   expect(await storedTask(task.id)).toMatchObject({ title: 'Write the brief', status: 'pending', completedAt: null });
 
   await reload(page);
-  await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'false');
+  await expect(checkbox(objectOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'false');
 
   // Ticking it is a PATCH to its done status; the server stamps completedAt.
   const ticked = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
-  await checkbox(treeOf(page), 'Write the brief').click();
+  await checkbox(objectOf(page), 'Write the brief').click();
   await expectOk(await ticked);
-  await showDone(page);
-  await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
+  await expect(checkbox(objectOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
   const done = await storedTask(task.id);
   expect(done?.status).toBe('completed');
   expect(done?.completedAt).not.toBeNull();
 
+  // The Tree keeps done tasks in place, ticked.
   await reload(page);
-  await showDone(page);
-  await expect(checkbox(treeOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
+  await expect(checkbox(objectOf(page), 'Write the brief')).toHaveAttribute('aria-checked', 'true');
 });
 
-const boardOf = (page: Page) => page.getByRole('group', { name: 'Task board', exact: true });
+const boardOf = (page: Page) => page.getByRole('group', { name: `${LIST} board`, exact: true });
 const column = (page: Page, name: string) => boardOf(page).getByRole('region', { name, exact: true });
 const card = (scope: Locator, title: string) => scope.getByRole('article', { name: title, exact: true });
 
-test('a task moved with the status selector stays in its Kanban column across a reload', async ({
+test('a task moved with its Move to… menu stays in its Board column across a reload', async ({
   browser,
   baseURL,
 }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
-  const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Draft the post' });
-  await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Pick a date' });
+  const task = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Draft the post' });
+  await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Pick a date' });
 
-  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
+  await showView(page, 'Board');
   await expect(card(column(page, 'To Do'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 2 tasks');
 
-  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Table', exact: true }).click();
+  // "Move to…" lists the other statuses; choosing one is a PATCH of the task's status.
   const moved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
-  await treeOf(page).getByRole('combobox', { name: 'Status of Draft the post', exact: true }).click();
-  await page.getByRole('option', { name: 'In Progress', exact: true }).click();
+  await card(column(page, 'To Do'), 'Draft the post').getByRole('button', { name: 'Move Draft the post to…', exact: true }).click();
+  await boardOf(page)
+    .getByRole('menu', { name: 'Move Draft the post to', exact: true })
+    .getByRole('menuitem', { name: 'In Progress', exact: true })
+    .click();
   await expectOk(await moved);
-  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
   await expect(card(column(page, 'In Progress'), 'Draft the post')).toBeVisible();
   await expect(column(page, 'In Progress').getByRole('heading')).toHaveAccessibleName('In Progress, 1 task');
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 1 task');
@@ -238,6 +244,7 @@ test('a task moved with the status selector stays in its Kanban column across a 
 
   // The Board is this viewer's saved view, so the reload opens on it, drawn from the server.
   await reload(page);
+  await expect(viewRadio(page, 'Board')).toHaveAttribute('aria-checked', 'true');
   await expect(card(column(page, 'In Progress'), 'Draft the post')).toBeVisible();
   await expect(card(column(page, 'To Do'), 'Pick a date')).toBeVisible();
   await expect(column(page, 'In Progress').getByRole('heading')).toHaveAccessibleName('In Progress, 1 task');
@@ -245,31 +252,39 @@ test('a task moved with the status selector stays in its Kanban column across a 
 
 test('a card dragged to another column on the Board stays there across a reload', async ({ browser, baseURL }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
-  const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Order banners' });
-  await page.getByRole('group', { name: 'View', exact: true }).getByRole('button', { name: 'Board', exact: true }).click();
+  const task = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Order banners' });
+  await showView(page, 'Board');
+  await expect(card(column(page, 'To Do'), 'Order banners')).toBeVisible();
 
-  const handle = page.getByRole('button', { name: 'Drag Order banners', exact: true });
-  const from = await handle.boundingBox();
-  const held = await card(column(page, 'To Do'), 'Order banners').boundingBox();
-  const to = await column(page, 'Blocked').boundingBox();
-  if (from === null || held === null || to === null) throw new Error('the card or the Blocked column is not on screen');
-
-  // A real pointer drag: press on the handle, travel past the 4px activation distance, then on in
-  // steps so each move is a pointermove the sensor sees, and let go. The board picks the column
-  // the closest corners of the dragged card and column, and the
-  // handle is at the card's left edge: so the pointer travels as far as takes the card's centre
-  // to the column's.
-  const start = { x: from.x + from.width / 2, y: from.y + from.height / 2 };
-  const end = {
-    x: start.x + (to.x + to.width / 2) - (held.x + held.width / 2),
-    y: start.y + (to.y + held.height) - held.y,
+  // A keyboard drag (@dnd-kit's KeyboardSensor): Space picks the card up by its handle, each
+  // ArrowRight carries it a whole column along its lane, Space drops it. Each step waits for
+  // the drag's own live-region announcement, so no key outruns the board. The live region
+  // holds only the latest line, and picking up is at once replaced by where the card is
+  // over, so the pickup is read from that. The sensor starts listening for keys a moment
+  // after it picks the card up, so a key that lands before then changes nothing: a step
+  // presses again only while the announcement has not moved at all.
+  const handle = card(column(page, 'To Do'), 'Order banners').getByRole('button', { name: 'Drag Order banners', exact: true });
+  const live = page.locator('[id^="DndLiveRegion"]');
+  const announced = (text: string) => expect(live).toHaveText(text);
+  const step = async (key: string, from: string, to: string) => {
+    for (let tries = 0; tries < 5; tries += 1) {
+      await page.keyboard.press(key);
+      try {
+        await expect(live).not.toHaveText(from, { timeout: 1000 });
+        break;
+      } catch {
+        // The key was not heard yet: press it again.
+      }
+    }
+    await announced(to);
   };
   const moved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(start.x + 12, start.y, { steps: 4 });
-  await page.mouse.move(end.x, end.y, { steps: 12 });
-  await page.mouse.up();
+  await handle.focus();
+  await page.keyboard.press('Space');
+  await announced('Order banners is over To Do.');
+  await step('ArrowRight', 'Order banners is over To Do.', 'Order banners is over In Progress.');
+  await step('ArrowRight', 'Order banners is over In Progress.', 'Order banners is over Blocked.');
+  await page.keyboard.press('Space');
   await expectOk(await moved);
   await expect(card(column(page, 'Blocked'), 'Order banners')).toBeVisible();
   expect((await storedTask(task.id))?.status).toBe('blocked');
@@ -279,30 +294,94 @@ test('a card dragged to another column on the Board stays there across a reload'
   await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 0 tasks');
 });
 
+test('a WIP limit set from a Board column’s menu stays set across a reload', async ({ browser, baseURL }) => {
+  const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
+  await showView(page, 'Board');
+  const inProgress = column(page, 'In Progress');
+  await expect(inProgress.getByRole('heading')).toHaveAccessibleName('In Progress, 0 tasks');
+
+  // Set WIP limit… swaps the item for a number field; Enter saves every status back (PUT).
+  await inProgress.getByRole('button', { name: 'In Progress column actions', exact: true }).click();
+  const menu = inProgress.getByRole('menu', { name: 'In Progress column', exact: true });
+  await menu.getByRole('menuitem', { name: 'Set WIP limit…', exact: true }).click();
+  const limit = menu.getByRole('spinbutton', { name: 'WIP limit for In Progress', exact: true });
+  await limit.fill('2');
+  const saved = answerTo(page, 'PUT', statusesPath(listPageId));
+  await limit.press('Enter');
+  await expectOk(await saved);
+  await expect(inProgress.getByRole('heading')).toHaveAccessibleName('In Progress, 0 tasks, limit 2');
+  expect(await storedWipLimit('in_progress')).toBe(2);
+  // The other columns keep no limit: the PUT sent each row back whole.
+  expect(await storedWipLimit('pending')).toBeNull();
+
+  await reload(page);
+  await expect(column(page, 'In Progress').getByRole('heading')).toHaveAccessibleName('In Progress, 0 tasks, limit 2');
+  await expect(column(page, 'To Do').getByRole('heading')).toHaveAccessibleName('To Do, 0 tasks');
+});
+
+test('a task scheduled on the Roadmap draws as a bar, and still does after a reload', async ({ browser, baseURL }) => {
+  const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
+  const task = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Plan the launch' });
+
+  await showView(page, 'Roadmap');
+  const timeline = page.getByRole('group', { name: `${LIST} roadmap`, exact: true });
+  const bar = timeline.getByRole('group', { name: /^Plan the launch, / });
+  // Undated, it waits in the Unscheduled tray; Schedule gives it a due date a week out.
+  await expect(bar).toHaveCount(0);
+  const saved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
+  await page
+    .getByRole('region', { name: 'Unscheduled', exact: true })
+    .getByRole('button', { name: 'Schedule Plan the launch', exact: true })
+    .click();
+  await expectOk(await saved);
+  await expect(bar).toBeVisible();
+  await expect(bar).toHaveAccessibleName(/^Plan the launch, .+ to .+, To Do$/);
+  const weekOut = await page.evaluate(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7).toISOString();
+  });
+  expect((await storedTask(task.id))?.dueDate?.toISOString()).toBe(weekOut);
+
+  await reload(page);
+  await expect(viewRadio(page, 'Roadmap')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByRole('group', { name: `${LIST} roadmap`, exact: true }).getByRole('group', { name: /^Plan the launch, / })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Unscheduled', exact: true })).toHaveCount(0);
+});
+
 test('a due date set in the task’s detail stays set across a reload', async ({ browser, baseURL }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
-  const task = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Book the venue' });
+  const task = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Book the venue' });
 
   // The title opens the task's detail in the object pane.
-  await treeOf(page).getByRole('button', { name: 'Book the venue', exact: true }).click();
+  await objectOf(page).getByRole('link', { name: 'Book the venue', exact: true }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${task.pageId}`)));
-  const detail = page.getByRole('article', { name: 'Book the venue', exact: true });
-  // A date field has no ARIA role of its own; its label names it.
-  const due = detail.getByLabel('Due date', { exact: true });
-  await expect(due).toHaveValue('');
+  const fields = page.getByRole('article', { name: 'Book the venue', exact: true }).getByRole('group', { name: 'Fields', exact: true });
+  await fields.getByRole('button', { name: 'Set due date', exact: true }).click();
 
+  // A quick pick saves and closes the picker.
   const saved = answerTo(page, 'PATCH', taskPath(listPageId, task.id));
-  await due.fill('2026-11-14');
+  await page.getByRole('dialog', { name: 'Due date', exact: true }).getByRole('button', { name: /^Next week/ }).click();
   await expectOk(await saved);
 
   // Stored as that day's midnight in the viewer's own zone, as classic stores it.
-  const midnight = await page.evaluate(() => new Date(2026, 10, 14).toISOString());
+  const { midnight, dayName } = await page.evaluate(() => {
+    const now = new Date();
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
+    return {
+      midnight: day.toISOString(),
+      dayName: day.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+    };
+  });
   expect((await storedTask(task.id))?.dueDate?.toISOString()).toBe(midnight);
+  await expect(fields.getByRole('button', { name: /^Due · / })).toBeVisible();
 
   await reload(page);
-  await expect(
-    page.getByRole('article', { name: 'Book the venue', exact: true }).getByLabel('Due date', { exact: true }),
-  ).toHaveValue('2026-11-14');
+  const reloaded = page.getByRole('article', { name: 'Book the venue', exact: true }).getByRole('group', { name: 'Fields', exact: true });
+  await expect(reloaded.getByRole('button', { name: 'Set due date', exact: true })).toHaveCount(0);
+  // The picker opens on the stored day, selected.
+  await reloaded.getByRole('button', { name: /^Due · / }).click();
+  const picker = page.getByRole('dialog', { name: 'Due date', exact: true });
+  await expect(picker.getByRole('gridcell', { selected: true }).getByRole('button')).toHaveAccessibleName(dayName);
 });
 
 test('a parent with an open subtask is refused completion, by the view and by the server', async ({
@@ -310,11 +389,11 @@ test('a parent with an open subtask is refused completion, by the view and by th
   baseURL,
 }) => {
   const page = await openAt(browser, baseURL, imagoPath(driveId, `tasks/${listPageId}`));
-  const parent = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Ship it' });
-  const stale = await addTask(page, treeOf(page), { label: 'Add task', listPage: listPageId, title: 'Print it' });
+  const parent = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Ship it' });
+  const stale = await addTask(page, objectOf(page), { label: 'Add task', listPage: listPageId, title: 'Print it' });
 
-  // Hold root-list revalidation to reproduce a genuinely stale client while the
-  // outside write and completion still reach the real server. Socket refresh normally
+  // Refused by the server: hold root-list revalidation to reproduce a genuinely stale client
+  // while the outside write and completion still reach the real server. Socket refresh normally
   // updates the subtask count and correctly refuses completion before a PATCH.
   let releaseRefresh: () => void = () => {};
   const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
@@ -327,13 +406,18 @@ test('a parent with an open subtask is refused completion, by the view and by th
     const outside = await fetchInPage(page, 'POST', tasksPath(stale.pageId), { title: 'Proof the cover' });
     expect(outside.status).toBe(201);
     const refused = answerTo(page, 'PATCH', taskPath(listPageId, stale.id));
-    await checkbox(treeOf(page), 'Print it').click();
+    await checkbox(objectOf(page), 'Print it').click();
     const refusal = await refused;
     expect(refusal.status()).toBe(422);
     expect(await refusal.json()).toMatchObject({ code: 'SUBTASKS_INCOMPLETE', pending: 1, total: 1 });
-    await expect(page.getByText('Complete all sub-tasks first (1 of 1 remaining)', { exact: true })).toBeVisible();
-    await expect(checkbox(treeOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
+    // The optimistic tick is rolled back at once.
+    await expect(checkbox(objectOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
     expect(await storedTask(stale.id)).toMatchObject({ status: 'pending', completedAt: null });
+    // The view says why once the list it re-reads after a refusal comes back.
+    releaseRefresh();
+    const row = objectOf(page).locator(`[data-task="${stale.id}"]`);
+    await expect(row.getByRole('status')).toHaveText('Complete all sub-tasks first (1 of 1 remaining)');
+    await expect(checkbox(objectOf(page), 'Print it')).toHaveAttribute('aria-checked', 'false');
   } finally {
     releaseRefresh();
     // Wait for held handlers to finish; removing them immediately can also
@@ -343,7 +427,7 @@ test('a parent with an open subtask is refused completion, by the view and by th
 
   // Refused by the view: a subtask added in the detail is one the view counts, so ticking the
   // parent says why at once and sends nothing.
-  await treeOf(page).getByRole('button', { name: 'Ship it', exact: true }).click();
+  await objectOf(page).getByRole('link', { name: 'Ship it', exact: true }).click();
   await page.waitForURL(pathnameIs(imagoPath(driveId, `tasks/${parent.pageId}`)));
   const detail = page.getByRole('article', { name: 'Ship it', exact: true });
   const subtasks = detail.getByRole('region', { name: 'Subtasks', exact: true });
@@ -357,7 +441,9 @@ test('a parent with an open subtask is refused completion, by the view and by th
     }
   });
   await checkbox(detail, 'Ship it').click();
-  await expect(detail.getByRole('status')).toHaveText('Complete all sub-tasks first (1 of 1 remaining)');
+  await expect(
+    detail.getByRole('status').filter({ hasText: 'Complete all sub-tasks first' }),
+  ).toHaveText('Complete all sub-tasks first (1 of 1 remaining)');
   await expect(checkbox(detail, 'Ship it')).toHaveAttribute('aria-checked', 'false');
   expect(completions, 'the view sent a completion it should have refused').toEqual([]);
 
