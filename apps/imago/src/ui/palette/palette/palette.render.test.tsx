@@ -108,6 +108,17 @@ describe('renderPalette()', () => {
     });
   });
 
+  test('a long drive name', () => {
+    const name = 'A workspace with a very long name that would crowd out the field';
+    const html = markup({ driveName: name });
+    assert({
+      given: 'a drive whose name is longer than its segment',
+      should: 'keep the whole name as the segment’s title, for the cut-short text',
+      actual: attribute(html, 'button type="button" role="radio"', 'title'),
+      expected: name,
+    });
+  });
+
   test('every drive', () => {
     const html = markup({
       allDrives: true,

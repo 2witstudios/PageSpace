@@ -351,6 +351,30 @@ describe('CommandPalette', () => {
     });
   });
 
+  test('the highlight is scrolled into view', async () => {
+    const scrolled: string[] = [];
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.textContent ?? '');
+    };
+    try {
+      const { container } = setup();
+      ctrlK(document.body);
+      typeInto(field(container) as HTMLInputElement, 'road');
+      await listed(container, 3);
+      scrolled.length = 0;
+      press(field(container) as HTMLInputElement, 'ArrowUp');
+      assert({
+        given: 'the highlight moved up from the first result, wrapping to the last',
+        should: 'scroll the last result into view',
+        actual: scrolled,
+        expected: ['Road tasks↵'],
+      });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
   test('the pointer', async () => {
     const { container } = setup();
     ctrlK(document.body);

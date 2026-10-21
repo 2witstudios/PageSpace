@@ -66,6 +66,12 @@ export type PaletteRenderProps = {
   readonly close: () => void;
 };
 
+/** A result row's id: the field's aria-activedescendant, and what the container scrolls into view. */
+export const paletteOptionId = (idPrefix: string, index: number): string => `${idPrefix}-result-${index}`;
+
+/** The row the highlight lands on: a shorter answer than the highlight reaches starts again at its top. */
+export const highlightedIndex = (active: number, count: number): number => (count === 0 ? -1 : active < count ? active : 0);
+
 const noteFor = (status: PaletteSearch['status'], count: number, browsing: boolean): string | null => {
   if (status === 'idle') return 'Type to search';
   if (status === 'loading') return browsing ? 'Loading…' : 'Searching…';
@@ -101,10 +107,9 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
   const { typeQuery, toggleAllDrives, move, pick, hover, close } = props;
   if (!open) return null;
   const listId = `${idPrefix}-results`;
-  const optionId = (index: number) => `${idPrefix}-result-${index}`;
+  const optionId = (index: number) => paletteOptionId(idPrefix, index);
   const count = rows.length + people.length;
-  // A shorter answer than the highlight reaches starts again at its top.
-  const highlighted = count === 0 ? -1 : active < count ? active : 0;
+  const highlighted = highlightedIndex(active, count);
   const browsing = query.trim() === '';
   const note = noteFor(status, count, browsing);
 
@@ -144,6 +149,7 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
       role="radio"
       aria-checked={selected}
       tabIndex={-1}
+      title={label}
       className={paletteScopeOptionClass(selected)}
       onMouseDown={(event) => event.preventDefault()}
       onClick={selected ? undefined : toggleAllDrives}

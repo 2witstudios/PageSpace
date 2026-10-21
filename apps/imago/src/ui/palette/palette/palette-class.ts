@@ -7,12 +7,12 @@ import { cn } from '../../cn';
  */
 export const paletteLayerClass = 'fixed inset-0 z-popover flex items-start justify-center px-4 pt-16';
 
-/** The sheet: narrower than a document column, the ladder's sheet corner. */
+/** The sheet: narrower than a document column, the ladder's sheet corner, never taller than the viewport. */
 export const paletteSheetClass =
-  'flex w-full max-w-palette flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised';
+  'flex max-h-palette-sheet w-full max-w-palette flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised';
 
 /** The field row: the search icon, the input, and the scope switch, ruled off from the results. */
-export const paletteFieldClass = 'flex h-palette-field items-center gap-3 border-b border-hairline pr-3 pl-4';
+export const paletteFieldClass = 'flex h-palette-field flex-none items-center gap-3 border-b border-hairline pr-3 pl-4';
 
 export const paletteSearchIconClass = 'flex-none text-accent';
 
@@ -28,14 +28,15 @@ export const paletteScopeClass = 'flex flex-none gap-1 rounded-md border border-
 
 export const paletteScopeOptionClass = (selected: boolean): string =>
   cn(
-    'h-6 cursor-pointer rounded-sm px-2 text-xs font-medium transition-colors duration-120 ease-standard',
+    'h-6 max-w-palette-scope cursor-pointer truncate rounded-sm px-2 text-xs font-medium transition-colors duration-120 ease-standard',
     selected ? 'bg-surface-overlay text-ink shadow-1' : 'text-ink-muted hover:text-ink',
   );
 
-export const paletteListClass = 'm-0 flex list-none flex-col px-2 pt-1 pb-2';
+/** The results take what height the sheet has left and scroll inside it. */
+export const paletteListClass = 'm-0 flex min-h-0 flex-1 list-none flex-col overflow-y-auto px-2 pt-1 pb-2';
 
 /** A group's heading in the results: Pages, People, Recently updated. */
-export const paletteGroupClass = 'flex flex-col';
+export const paletteGroupClass = 'flex flex-none flex-col';
 
 export const paletteGroupLabelClass = 'px-2 pt-3 pb-1 text-2xs font-semibold tracking-caps text-ink-faint uppercase';
 
@@ -65,10 +66,11 @@ export const paletteMatchClass = 'text-accent-strong';
 export const paletteDriveClass = 'truncate text-xs text-ink-faint';
 
 /** Searching, nothing found, or a failure, under the field. */
-export const paletteNoteClass = 'px-4 py-3 text-sm text-ink-muted';
+export const paletteNoteClass = 'flex-none px-4 py-3 text-sm text-ink-muted';
 
 /** The keyboard hints under the results. */
-export const paletteFooterClass = 'flex flex-wrap items-center gap-4 border-t border-hairline px-4 py-2 text-xs text-ink-faint';
+export const paletteFooterClass =
+  'flex flex-none flex-wrap items-center gap-4 border-t border-hairline px-4 py-2 text-xs text-ink-faint';
 
 export const paletteHintClass = 'flex items-center gap-1';
 

@@ -17,7 +17,7 @@ import { destinationFor } from '../palette-route/palette-route';
 import { searchPath, type PaletteResult } from '../palette-search/palette-search';
 import { isApplePlatform, isPaletteShortcut } from '../palette-shortcut/palette-shortcut';
 import { usePaletteSearch } from '../use-palette-search/use-palette-search';
-import { renderPalette, type PaletteRow } from './palette.render';
+import { highlightedIndex, paletteOptionId, renderPalette, type PaletteRow } from './palette.render';
 
 export type CommandPaletteProps = {
   readonly stage: Stage;
@@ -100,6 +100,15 @@ export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandP
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // The highlight moves while focus stays in the field, so the list is scrolled to keep it in sight.
+  // scrollIntoView is missing where there is no layout (jsdom).
+  const count = rows.length + search.people.length;
+  useEffect(() => {
+    if (!open) return;
+    const index = highlightedIndex(active, count);
+    if (index >= 0) document.getElementById(paletteOptionId(idPrefix, index))?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, active, count, idPrefix]);
+
   const pick = (index: number) => {
     const result = search.results[index];
     if (result === undefined) return;
@@ -122,7 +131,7 @@ export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandP
     inputRef,
     typeQuery: (next) => dispatch(setPaletteQuery, next),
     toggleAllDrives: () => dispatch(togglePaletteAllDrives, undefined),
-    move: (by) => dispatch(movePaletteActive, { by, count: rows.length + search.people.length }),
+    move: (by) => dispatch(movePaletteActive, { by, count }),
     pick,
     hover: (index) => dispatch(setPaletteActive, index),
     close,

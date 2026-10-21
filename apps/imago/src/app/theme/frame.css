@@ -132,6 +132,11 @@
   --spacing-palette-row: 44px;
   --spacing-palette-tile: 28px;
   --spacing-palette-kbd: 20px;
+  /* The sheet stays inside the viewport below the layer's top padding, with
+     as much again below it; the results scroll inside. */
+  --spacing-palette-sheet: calc(100dvh - 128px);
+  /* A scope segment, so a long drive name cannot crowd out the field. */
+  --spacing-palette-scope: 160px;
   /* Small capitals open up a little to read as a label. */
   --tracking-caps: 0.06em;
 
