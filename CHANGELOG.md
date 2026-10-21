@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- In Imago, opening Calendar from the rail now shows the calendar beside its sidebar immediately.
 - Imago message filters now remove duplicate conversations from overlapping inbox pages so switching All, Channels and Direct does not leave stale rows behind. Segmented selectors fit their buttons without an empty tail.
 - Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.
 

@@ -62,10 +62,10 @@ describe('secondaryItems() (IMC-1.4)', () => {
   test('Calendar and Agents under the divider', () => {
     assert({
       given: 'the current drive',
-      should: 'list Calendar and Agents at that drive',
+      should: 'open Calendar with its screen and leave Console sidebar-first',
       actual: secondaryItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
-        ['calendar', 'Calendar', '/drive-1/calendar'],
+        ['calendar', 'Calendar', '/drive-1/calendar/view'],
         ['agents', 'Console', '/drive-1/agents'],
       ],
     });
@@ -166,6 +166,15 @@ describe('activeRailItem()', () => {
 });
 
 describe('activeRailPlace()', () => {
+  test('Calendar’s default destination and closed screen', () => {
+    assert({
+      given: 'Calendar with its screen open, then its sidebar alone',
+      should: 'mark the rail destination as the current page and the sidebar as its section',
+      actual: ['/drive-1/calendar/view', '/drive-1/calendar'].map((path) => activeRailPlace(stageFor(path))),
+      expected: ['page', 'section'],
+    });
+  });
+
   test('the active item’s own URL, or a place inside its section', () => {
     const paths = [
       '/drive-1',
