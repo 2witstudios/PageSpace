@@ -3,8 +3,10 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
 import { formatBytes } from '@pagespace/lib/client-safe';
-import { isBillingEnabled } from '@/retained/lib/deployment-mode';
 import { imagoReturnPath } from '@/lib/auth/sign-in-url';
+import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
+import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
+import { useAuthStore } from '@/retained/stores/useAuthStore';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import { uploadFileToS3, type UploadedPage } from '@/retained/lib/upload/orchestrator';
 
@@ -32,6 +34,13 @@ export function useFileDrop({
     isUploading: false,
     uploadProgress: 0
   });
+
+  // "Get more storage" leads only where this client can sell (Stripe) and this viewer manages the
+  // payer the server charged: their own quota, or an org they are an Owner or Admin of.
+  const { showBilling } = useBillingVisibility();
+  const viewerId = useAuthStore((s) => s.user?.id) ?? null;
+  const { organizations } = useMyOrganizations();
+  const adminOrgIds = organizations.filter((o) => o.role !== 'MEMBER').map((o) => o.id).join(',');
 
   const isFileDrag = useCallback((e: DragEvent) => {
     if (!e.dataTransfer?.types) return false;
@@ -113,11 +122,12 @@ export function useFileDrop({
       } else if (errorMessage.includes('503')) {
         toast.error('Server is busy. Please try again later.');
       } else {
-        const denial = quotaDenial(error);
+        const denial = quotaDenial(error, { viewerId, adminOrgIds: new Set(adminOrgIds ? adminOrgIds.split(',') : []), canBuy: showBilling });
         if (denial) {
-          toast.error(denial.reason, denial.manageHref && isBillingEnabled()
-            ? { action: { label: 'Get more storage', onClick: () => window.location.assign(imagoReturnPath(denial.manageHref as string)) } }
-            : undefined);
+          const href = denial.manageHref;
+          toast.error(denial.reason, href
+            ? { action: { label: 'Get more storage', onClick: () => window.location.assign(imagoReturnPath(href)) } }
+            : denial.contact ? { description: denial.contact } : undefined);
         } else {
           toast.error('Upload not allowed');
         }
@@ -184,7 +194,7 @@ export function useFileDrop({
         uploadProgress: 0
       }));
     }
-  }, [driveId, parentId, isFileDrag, onUploadComplete, onUploadError]);
+  }, [driveId, parentId, isFileDrag, onUploadComplete, onUploadError, viewerId, adminOrgIds, showBilling]);
 
   const resetDragState = useCallback(() => {
     setState(prev => ({ ...prev, isDraggingFiles: false }));
@@ -201,11 +211,21 @@ export function useFileDrop({
   };
 }
 
+/** Who is looking at a quota refusal: whether they may buy here, and which payers they manage. */
+export interface QuotaViewer {
+  viewerId: string | null;
+  /** Orgs the viewer is an Owner or Admin of: the ones whose billing page they can act on. */
+  adminOrgIds: ReadonlySet<string>;
+  /** This client may sell storage (Stripe). */
+  canBuy: boolean;
+}
+
 /**
- * The storage check's 413 refusal: its reason, and, when more storage would resolve it,
- * where the payer can get it (their own Storage screen, or the org's billing page for an org drive).
+ * The storage check's 413 refusal: its reason, and, when more storage would resolve it, where
+ * this viewer can get it (their own Storage screen, or the billing page of an org they run).
+ * When someone else pays (a personal drive's owner, an org's admins), `contact` says who to ask.
  */
-export function quotaDenial(error: unknown): { reason: string; manageHref: string | null } | null {
+export function quotaDenial(error: unknown, viewer: QuotaViewer): { reason: string; manageHref: string | null; contact: string | null } | null {
   const { status, body } = (error ?? {}) as { status?: unknown; body?: unknown };
   if (status !== 413 || !body || typeof body !== 'object') return null;
   const { reason, quota, requiredBytes } = body as {
@@ -220,11 +240,16 @@ export function quotaDenial(error: unknown): { reason: string; manageHref: strin
     && typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
     && requiredBytes > quota.availableBytes;
   const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
-  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null };
-  const manageHref = typeof quota?.orgId === 'string'
-    ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing`
-    : typeof quota?.userId === 'string'
-      ? '/account/storage'
-      : null;
-  return { reason, manageHref };
+  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null, contact: null };
+  if (typeof quota?.orgId === 'string') {
+    return viewer.adminOrgIds.has(quota.orgId)
+      ? { reason, manageHref: viewer.canBuy ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing` : null, contact: null }
+      : { reason, manageHref: null, contact: "Ask an Owner or Admin of the drive's organization to add storage." };
+  }
+  if (typeof quota?.userId === 'string') {
+    return quota.userId === viewer.viewerId
+      ? { reason, manageHref: viewer.canBuy ? '/account/storage' : null, contact: null }
+      : { reason, manageHref: null, contact: "This drive's storage is its owner's. Ask them to free up or add space." };
+  }
+  return { reason, manageHref: null, contact: null };
 }
