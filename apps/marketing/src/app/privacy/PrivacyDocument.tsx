@@ -1,0 +1,290 @@
+import { LegalPageShell } from "@/components/LegalPageShell";
+import { legalHref } from "@/lib/legal-embed";
+import { LEGAL_LAST_UPDATED } from "@/lib/metadata";
+
+/** The privacy page's text. `embed` drops the site navigation and footer for the iOS app (`?embed=1`). */
+export function PrivacyDocument({ embed }: { embed: boolean }) {
+  return (
+    <LegalPageShell embed={embed}>
+
+      <div className="container mx-auto px-4 py-12 md:py-16 max-w-4xl">
+        <div className="mb-8">
+          <h1 className="text-4xl font-bold mb-2">Privacy Policy</h1>
+          <p className="text-muted-foreground">Last updated: {LEGAL_LAST_UPDATED}</p>
+        </div>
+
+        <div className="prose prose-lg max-w-none dark:prose-invert">
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">1. Introduction</h2>
+            <p className="mb-4">
+              PageSpace is committed to protecting your privacy. This Privacy Policy explains how we collect, use, and protect information in our cloud-based workspace platform, and describes your rights under the General Data Protection Regulation (GDPR), the UK GDPR, and similar data protection laws.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">2. Who We Are (Data Controller)</h2>
+            <p className="mb-4">
+              PageSpace is operated by Jonathan Woodall, trading as PageSpace, a sole proprietorship established in the United States. Jonathan Woodall is the data controller responsible for your personal data under this Privacy Policy. You can reach the controller directly at <strong>hello@pagespace.ai</strong>.
+            </p>
+            <p className="mb-4">
+              <strong>Data Protection Officer (DPO):</strong> PageSpace has not appointed a DPO. GDPR Art 37 only requires one where core activities involve large-scale, regular, and systematic monitoring of data subjects, or large-scale processing of special-category data. PageSpace is a single-operator business that does neither. Privacy questions and requests are handled personally by the controller at the email address above, and we will appoint a DPO if the scale of our processing ever meets the Art 37 threshold.
+            </p>
+            <p className="mb-4">
+              <strong>EU / UK representative:</strong> PageSpace is operated from the United States and has no establishment in the EU or UK. We have not appointed an Art 27 representative because our processing of EU and UK personal data is occasional, does not include large-scale processing of special categories of data or criminal-conviction data, and is unlikely to result in a risk to the rights and freedoms of data subjects (the exemption in GDPR Art 27(2)(a)). We review this position as our user base changes and will appoint a representative if the exemption ceases to apply. In the meantime, EU and UK data subjects and supervisory authorities can contact the controller directly at hello@pagespace.ai.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">3. Cloud-Based Privacy Approach</h2>
+            <p className="mb-4">
+              PageSpace is designed with privacy and security as core principles:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Secure Cloud Storage:</strong> Your data is stored in our cloud infrastructure with access controls and security logging</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links, with sessions managed using opaque tokens</li>
+              <li><strong>Data Protection:</strong> Sensitive secrets like OAuth tokens for connected integrations are encrypted using AES-256-GCM encryption. Note that document content and chat messages are stored as plain text to enable search functionality</li>
+              <li><strong>Transparency:</strong> Clear information about how we handle your data and what security measures we implement</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">4. Information We Collect</h2>
+            <h3 className="text-xl font-semibold mb-3">4.1 Account and Content Data</h3>
+            <p className="mb-4">
+              Information we collect and store includes:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>User account information (username, email)</li>
+              <li>Pages, documents, and content you create (stored as plain text in our database)</li>
+              <li>Files you upload (stored in object storage)</li>
+              <li>File organization and workspace structure</li>
+              <li>Application settings and preferences</li>
+              <li>Chat messages and AI conversation history (stored as plain text in our database)</li>
+              <li>Usage analytics and subscription billing information (via Stripe, or via Apple for purchases made in the iOS app)</li>
+              <li>OAuth tokens for connected integrations such as Google Calendar, Google Drive, and GitHub (encrypted using AES-256-GCM)</li>
+            </ul>
+
+            <h3 className="text-xl font-semibold mb-3">4.2 Technical Information</h3>
+            <p className="mb-4">
+              We collect technical information to maintain and improve the service:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>IP addresses and device information</li>
+              <li>Browser type and version</li>
+              <li>Error logs for troubleshooting</li>
+              <li>Performance metrics for optimization</li>
+              <li>Feature usage statistics (first-party, only with your analytics consent — see our <a href={legalHref("/cookies", embed)} className="text-primary hover:underline">Cookie Policy</a>)</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">5. Lawful Basis for Processing</h2>
+            <p className="mb-4">
+              Under GDPR Art 6, we rely on the following lawful bases for each purpose we process personal data for:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Account provision</strong> (creating and operating your account, storing your content) — <strong>Contract</strong> (Art 6(1)(b)): necessary to provide the service you signed up for</li>
+              <li><strong>Billing and subscriptions</strong> — <strong>Contract</strong> (Art 6(1)(b)): necessary to perform our agreement with you</li>
+              <li><strong>Security and audit logs</strong> — <strong>Legitimate interest</strong> (Art 6(1)(f)): protecting the service, our users, and detecting abuse. Our balancing test: this logging is limited to what is needed to secure accounts and investigate incidents, users reasonably expect a workspace service to keep security records, the data is access-restricted and not used for any other purpose, and the impact on users is minimal compared with the harm an unsecured service would expose them to</li>
+              <li><strong>Product analytics</strong> — <strong>Consent</strong> (Art 6(1)(a)): our first-party usage tracker only runs after you opt in, and you can withdraw at any time</li>
+              <li><strong>Marketing emails</strong> — <strong>Consent</strong> (Art 6(1)(a)): only sent if you opt in, and withdrawable at any time</li>
+              <li><strong>AI processing</strong> (sending your prompts and the content you choose to include to AI providers) — <strong>Contract</strong> (Art 6(1)(b)): AI features are part of the service you signed up for, and are only triggered by your own explicit actions</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">6. Third-Party AI Services</h2>
+            <p className="mb-4">
+              When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Provider routing is managed by PageSpace at the deployment level — you do not supply or store provider API keys yourself. Every cloud model PageSpace offers is reached through <strong>OpenRouter</strong>, a routing provider: your request goes to OpenRouter, which forwards it to the provider of the model you selected. The parties involved are:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>OpenRouter (routing):</strong> OpenRouter receives your prompt and the context you include on every cloud AI request, and forwards it to the provider of the model you selected.</li>
+              <li><strong>Model providers:</strong> the provider of the model you choose generates the response. The catalogue includes Anthropic (Claude), OpenAI (GPT), Google (Gemini), xAI (Grok), Z.ai, DeepSeek, Mistral, Meta, Qwen, Moonshot AI, Cohere and others; the model selected by default for a new account is Z.ai&#39;s GLM-5.3 Flash. AI usage is metered against your credits (a one-time starter grant on Free, a monthly allowance on paid plans); Free plans use a curated set of models, and paid plans unlock the full catalogue.</li>
+              <li><strong>Ollama (on-premises/local option):</strong> for self-hosted deployments, PageSpace supports Ollama, which runs models locally — your prompts and content never leave your own infrastructure when using this option.</li>
+            </ul>
+            <p className="mb-4">
+              <strong>Important:</strong> When using AI services, we send your prompts and relevant context through OpenRouter to the provider of the model you selected, to generate a response. We do not share your personal information or unrelated workspace data with AI providers. Anthropic, OpenAI, Google and xAI state that inputs sent through their APIs are not used to train their models. For every model, retention and training are governed by the upstream provider&#39;s own policy, which OpenRouter publishes per model — check the model&#39;s entry on OpenRouter if this matters for your data.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">7. Data Processing and Storage</h2>
+            <h3 className="text-xl font-semibold mb-3">7.1 Cloud Processing</h3>
+            <p className="mb-4">
+              Data processing occurs on our secure cloud infrastructure, hosted by Fly.io in the United States (Ashburn, Virginia), including:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>Content creation and editing</li>
+              <li>Search and indexing</li>
+              <li>File organization</li>
+              <li>Real-time collaboration</li>
+              <li>AI model inference through third-party providers</li>
+            </ul>
+
+            <h3 className="text-xl font-semibold mb-3">7.2 Database Storage</h3>
+            <p className="mb-4">
+              Your data is stored in our cloud database infrastructure with security measures appropriate for a service of this type, including:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Access Controls:</strong> Database access is restricted to authorized services and personnel, with all operations logged for security analysis</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication via passkeys and magic links</li>
+              <li><strong>Secret Encryption:</strong> OAuth tokens for connected integrations and other application secrets are encrypted using AES-256-GCM</li>
+              <li><strong>Connection Security:</strong> Database connections use secure protocols</li>
+              <li><strong>Disk Encryption:</strong> The volume holding our database is encrypted at rest by our hosting provider</li>
+              <li><strong>Content Storage:</strong> Document content and chat messages are stored as plain text in our database to enable full-text search and collaboration features. This means content is not application-level encrypted in the database</li>
+            </ul>
+            <p className="mb-4">
+              <strong>Note:</strong> Our logging infrastructure captures database operations, errors, and security events for troubleshooting and security analysis, but does not constitute real-time monitoring or intrusion detection.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">8. Data Sharing</h2>
+            <p className="mb-4">
+              PageSpace does not sell or rent your personal data. We may share your data only in these situations:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>With AI service providers when you use AI features</li>
+              <li>When you explicitly share or collaborate with other users</li>
+              <li>With service providers who help us operate the platform (under data processing agreements) — see our <a href={legalHref("/subprocessors", embed)} className="text-primary hover:underline">Subprocessors</a> page for the full list</li>
+              <li>When required by law or to protect our legal rights</li>
+              <li>In connection with a business transfer (merger, acquisition, etc.)</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">9. Data Security</h2>
+            <p className="mb-4">
+              We implement security measures appropriate for a cloud-based workspace service, including:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Data in Transit:</strong> Secure HTTPS connections for all web traffic</li>
+              <li><strong>Authentication Security:</strong> Passwordless authentication eliminates credential-based attack vectors</li>
+              <li><strong>Session Management:</strong> Opaque session tokens with proper expiration and validation</li>
+              <li><strong>Secret Protection:</strong> AES-256-GCM encryption for OAuth tokens and stored integration credentials</li>
+              <li><strong>Database Access:</strong> Restricted access controls with comprehensive logging of operations, errors, and security events</li>
+              <li><strong>Input Validation:</strong> Comprehensive sanitization and validation of user inputs</li>
+              <li><strong>Rate Limiting:</strong> Protection against abuse and excessive API usage</li>
+              <li><strong>CSRF Protection:</strong> Built-in protection against cross-site request forgery</li>
+              <li><strong>Encrypted Backups:</strong> Database backups are encrypted (AES-256) before they leave the database host</li>
+            </ul>
+            <p className="mb-4">
+              While we implement commercially reasonable security measures, no system is 100% secure. We encourage users to register passkeys on their devices, use secure email accounts, and follow good security practices. You are responsible for maintaining backups of critical data.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">10. Your Rights and Control</h2>
+            <p className="mb-4">
+              Under GDPR and similar laws, you have the following rights over your personal data:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Access:</strong> All your data is accessible through the application interface</li>
+              <li><strong>Modification (Rectification):</strong> Edit or update any content at any time</li>
+              <li><strong>Deletion (Erasure):</strong> Delete individual items or your entire workspace</li>
+              <li><strong>Export (Data Portability):</strong> Data export available by request - contact us for assistance</li>
+              <li><strong>Restriction (Art 18):</strong> Request that we limit processing of your data in certain circumstances (e.g. while a dispute about accuracy is resolved)</li>
+              <li><strong>Objection (Art 21):</strong> Object to processing based on legitimate interest, including for direct marketing purposes</li>
+              <li><strong>Withdraw Consent (Art 7(3)):</strong> Where processing is based on consent (e.g. analytics or marketing emails), withdraw it at any time without affecting the lawfulness of processing before withdrawal</li>
+              <li><strong>Complain to a supervisory authority (Art 13(2)(d)):</strong> You have the right to lodge a complaint with a data protection supervisory authority. Because PageSpace is not established in the EU, you may complain to the Data Protection Authority of the EU member state where you live or work, or where you believe an infringement occurred. UK residents may complain to the Information Commissioner&#39;s Office (ICO)</li>
+            </ul>
+            <p className="mb-4">
+              We respond to rights requests within one month of receipt (GDPR Art 12(3)). We would appreciate the chance to address any concern directly before you contact a supervisory authority.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">11. Automated Decision-Making</h2>
+            <p className="mb-4">
+              We do not make solely-automated decisions that produce legal effects concerning you or similarly significantly affect you (GDPR Art 22). Two automated safeguards do exist, and neither has such an effect: an account is temporarily locked for 15 minutes after 10 consecutive failed sign-in attempts, and a subscription whose payment ultimately fails (after Stripe&#39;s retry period) is returned to the Free plan without deleting any of your content. Both are reversible, and you can contact us at any time to have a person review either outcome.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">12. Children&#39;s Privacy</h2>
+            <p className="mb-4">
+              PageSpace is not intended for anyone under 16, and you must be at least 16 to create an account. We do not knowingly collect personal information from anyone under 16. If you believe someone under 16 has provided personal information, please contact us and we will delete it.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">13. Changes to This Policy</h2>
+            <p className="mb-4">
+              We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy on this page and updating the &quot;Last updated&quot; date.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">14. Data Retention</h2>
+            <p className="mb-4">
+              We retain different categories of data for different lengths of time, depending on why we hold it:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Account and content data:</strong> retained while your account is active. Upon a deletion request, we complete erasure within 30 days (our internal Art 12(3) service-level target), except where we are required to retain specific records by law</li>
+              <li><strong>Deleted chats and page versions:</strong> deleted chat records and superseded page versions are kept for 30 days so they can be restored, then permanently removed</li>
+              <li><strong>Security and monitoring logs:</strong> retention varies by log type — API metrics, error logs, and AI-usage logs are kept for 90 days by default; system logs for 30 days; general user-activity logs (including consented product analytics) for 180 days. Our tamper-evident security audit log and activity log are retained indefinitely because deleting entries would break the cryptographic hash chain that proves they haven&#39;t been altered — this is justified under GDPR Art 17(3)(b) as necessary for compliance with a legal obligation</li>
+              <li><strong>Backups:</strong> an encrypted logical backup of the database is taken daily and retained for 30 days; our hosting provider&#39;s automatic disk snapshots are retained for 5 days. Content you delete therefore disappears from all backups within 30 days of deletion</li>
+            </ul>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">15. International Users and Data Processing</h2>
+            <p className="mb-4">
+              PageSpace is operated from the United States. If you are accessing our services from outside the United States, including from the European Economic Area (EEA) or United Kingdom, your information will be transferred to, stored, and processed in the United States.
+            </p>
+            <p className="mb-4">
+              Where we transfer personal data from the EEA to the United States, we rely on the European Commission&#39;s Standard Contractual Clauses (SCCs, Module 2: controller-to-processor) incorporated into the data processing agreement of each subprocessor, rather than relying on your consent alone. For UK personal data we rely on the same SCCs together with the ICO&#39;s International Data Transfer Addendum. Where a subprocessor is certified under the EU-U.S. Data Privacy Framework (and its UK Extension), we may rely on that adequacy decision instead. Our subprocessors, and the mechanism used for each, are listed on our <a href={legalHref("/subprocessors", embed)} className="text-primary hover:underline">Subprocessors</a> page.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">16. Payment and Billing Information</h2>
+            <p className="mb-4">
+              When you purchase a subscription or credits on the web, payment processing is handled by Stripe, Inc., and Stripe&#39;s privacy policy governs the collection and use of payment information. When you purchase in the PageSpace iOS app, the purchase is made through Apple In-App Purchase: Apple processes the payment under its own privacy policy and shares with us only the transaction details needed to provide what you bought (such as the product, purchase date, and an anonymous transaction identifier), never your payment card details. We do not store your credit card information on our servers.
+            </p>
+            <p className="mb-4">
+              We receive and store information about your subscription status, billing history, and usage metrics necessary for providing our services and managing your account.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">17. Data Security Incidents</h2>
+            <p className="mb-4">
+              In the event of a personal data breach, we follow GDPR&#39;s two-part notification model:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li>We notify the competent supervisory authority without undue delay and, where feasible, within 72 hours of becoming aware of the breach (Art 33), unless the breach is unlikely to result in a risk to your rights and freedoms.</li>
+              <li>Where a breach is likely to result in a <em>high</em> risk to your rights and freedoms, we also communicate it to you directly, without undue delay, in clear and plain language (Art 34). This notification has no fixed hour deadline, but we aim to act as quickly as the circumstances allow.</li>
+            </ul>
+            <p className="mb-4">
+              Notifications will include information about the nature of the incident, the data affected, and the steps we are taking to address it.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">18. Records of Processing Activities</h2>
+            <p className="mb-4">
+              A full Records of Processing Activities (RoPA) register is maintained internally per GDPR Art 30. GDPR does not require us to publish this register, so it is not reproduced here.
+            </p>
+          </section>
+
+          <section className="mb-8">
+            <h2 className="text-2xl font-semibold mb-4">19. Contact Us</h2>
+            <p className="mb-4">
+              If you have any questions about this Privacy Policy or our privacy practices, please contact us at:
+            </p>
+            <ul className="list-disc pl-6 mb-4">
+              <li><strong>Email:</strong> hello@pagespace.ai</li>
+              <li><strong>Support:</strong> Available through the in-app help system</li>
+              <li><strong>Community:</strong> <a href="https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t" className="text-primary hover:underline">AI Agent Hub</a></li>
+            </ul>
+            <p className="mb-4">
+              For data protection requests (access, deletion, portability), please use the subject line &quot;Data Protection Request&quot; in your email.
+            </p>
+          </section>
+        </div>
+      </div>
+
+    </LegalPageShell>
+  );
+}
