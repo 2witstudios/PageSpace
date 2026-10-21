@@ -11,4 +11,7 @@ export async function isEmbedded(searchParams: LegalSearchParams): Promise<boole
   return (await searchParams)[EMBED_PARAM] === "1";
 }
 
+/** Client-side check against `window.location.search`, for root-level UI outside the legal pages. */
+export const isEmbeddedSearch = (search: string): boolean => new URLSearchParams(search).get(EMBED_PARAM) === "1";
+
 export const legalHref = (path: string, embed: boolean): string => (embed ? `${path}?${EMBED_PARAM}=1` : path);
