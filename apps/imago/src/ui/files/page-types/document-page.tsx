@@ -68,13 +68,13 @@ export const editedLabel = (updatedAt: Date, now: Date = new Date()): string =>
   `Edited ${formatDistance(updatedAt, now, { addSuffix: true })}`;
 
 /**
- * The Formatting strip (C-Files-Doc): the Rich/Markdown mode group, the formatting tools while the
+ * The Formatting strip (C-Files-Doc): the optional Rich/Code mode group, the formatting tools while the
  * rich editor is on screen, and Saving… / Saved at the end.
  */
 export function FormattingStrip({ pageId, state }: { readonly pageId: string; readonly state: DocumentToolbarState }) {
   return (
     <ToolbarStrip label="Formatting">
-      <EditorToggles alwaysShow />
+      <EditorToggles />
       {state.formatting ? <Toolbar editor={state.editor} contentMode={state.contentMode} /> : <div className="flex-1" />}
       <SaveStatus pageId={pageId} />
     </ToolbarStrip>

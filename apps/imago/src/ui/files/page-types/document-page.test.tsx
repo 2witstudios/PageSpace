@@ -11,11 +11,12 @@ import { DocumentTitle, FindStrip, FormattingStrip, editedAtOf, editedLabel, use
 
 vi.mock('@/retained/hooks/useMobile', () => ({ useMobile: () => false }));
 vi.mock('@/retained/hooks/useDisplayPreferences', () => ({
-  useDisplayPreferences: () => ({ preferences: { showCodeToggle: false, showTokenCounts: false, defaultMarkdownMode: false } }),
+  useDisplayPreferences: () => ({ preferences: { showCodeToggle: display.showCodeToggle, showTokenCounts: false, defaultMarkdownMode: false } }),
 }));
 vi.mock('@/retained/components/layout/middle-content/content-header/EditableTitle', () => ({
   EditableTitle: ({ variant }: { readonly variant?: string }) => <h1 data-variant={variant}>Q4 Launch Plan</h1>,
 }));
+const display = vi.hoisted(() => ({ showCodeToggle: false }));
 const pageState = vi.hoisted(() => ({ data: undefined as unknown }));
 vi.mock('../page-object/page-object', () => ({ usePage: () => ({ data: pageState.data }) }));
 
@@ -44,6 +45,7 @@ beforeEach(() => {
   useDocumentStore.setState({ activeView: 'rich' });
   useDocumentManagerStore.setState({ savingDocuments: new Set() });
   pageState.data = undefined;
+  display.showCodeToggle = false;
 });
 
 afterEach(unmountAll);
@@ -69,13 +71,13 @@ describe('editedLabel (IMC-3.2)', () => {
 });
 
 describe('FormattingStrip (IMC-3.1)', () => {
-  test('the default rich strip: a labelled toolbar with the Editor mode group, labelled tools and Saved', () => {
+  test('the default rich strip hides editor modes and keeps formatting tools and Saved', () => {
     const root = mount(<FormattingStrip pageId={PAGE_ID} state={{ editor: fakeEditor([]), contentMode: 'html', formatting: true }} />);
     const strip = root.querySelector('[role="toolbar"]');
     const labelled = (label: string) => root.querySelector(`[aria-label="${label}"]`);
     assert({
       given: 'a rich, editable document',
-      should: 'render the Formatting toolbar with the Editor mode group, every labelled tool and the Saved status',
+      should: 'render the Formatting toolbar without the Editor mode group, with every labelled tool and the Saved status',
       actual: [
         strip?.getAttribute('aria-label'),
         root.querySelector('[role="group"][aria-label="Editor mode"]')?.textContent,
@@ -83,7 +85,7 @@ describe('FormattingStrip (IMC-3.1)', () => {
           .every((label) => labelled(label) !== null),
         strip?.textContent?.includes('Saved'),
       ],
-      expected: ['Formatting', 'RichMarkdown', true, true],
+      expected: ['Formatting', undefined, true, true],
     });
   });
 
@@ -99,13 +101,14 @@ describe('FormattingStrip (IMC-3.1)', () => {
     });
   });
 
-  test('Markdown mode: the group shows Markdown pressed and no formatting tools', () => {
+  test('Code mode: the group shows Code pressed and no formatting tools', () => {
+    display.showCodeToggle = true;
     useDocumentStore.setState({ activeView: 'code' });
     const root = mount(<FormattingStrip pageId={PAGE_ID} state={{ editor: fakeEditor([]), contentMode: 'markdown', formatting: false }} />);
-    const markdown = [...root.querySelectorAll('[role="group"][aria-label="Editor mode"] button')].find((b) => b.textContent === 'Markdown');
+    const markdown = [...root.querySelectorAll('[role="group"][aria-label="Editor mode"] button')].find((b) => b.textContent === 'Code');
     assert({
       given: 'the document in Markdown mode',
-      should: 'press the Markdown toggle and drop the rich formatting tools',
+      should: 'press the Code toggle and drop the rich formatting tools',
       actual: [markdown?.getAttribute('aria-pressed'), root.querySelector('[aria-label="Bold"]')],
       expected: ['true', null],
     });
