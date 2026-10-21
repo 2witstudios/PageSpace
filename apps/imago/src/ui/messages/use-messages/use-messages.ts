@@ -94,11 +94,11 @@ export const useDriveChannels = (driveId: string | null) => {
   return { channels: data, error: error as unknown, isLoading, retry };
 };
 
-/** The unified inbox (DMs and every drive's channels, newest first) with unread counts, live. */
-export const useInbox = () => {
+/** The unified inbox (DMs and every drive's channels, newest first) with unread counts, live; nothing while disabled. */
+export const useInbox = (enabled = true) => {
   const client = useApiClient();
-  const { data, error, isLoading, mutate } = useSWR(['imago:inbox'] as const, () => fetchInbox(client));
-  useLiveThreads<MessageThread>(data, mutate, { kind: 'all' });
+  const { data, error, isLoading, mutate } = useSWR(enabled ? (['imago:inbox'] as const) : null, () => fetchInbox(client));
+  useLiveThreads<MessageThread>(data, mutate, enabled ? { kind: 'all' } : null);
   /** Void action: asks the server again after a failure. */
   const retry = useCallback(() => void mutate(), [mutate]);
   return { threads: data, error: error as unknown, isLoading, retry };

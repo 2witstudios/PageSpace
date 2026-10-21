@@ -8,13 +8,18 @@ export const RECENTS = '/api/user/recents?limit=20';
 
 export type RecentRow = {
   readonly id: string;
+  /** The drive the page lives in. */
+  readonly driveId: string;
   readonly title: string;
   readonly type: PageTypeValue;
   readonly viewedAt: string;
 };
 
-/** This drive's recents from GET /api/user/recents, newest first (as the API orders them). */
-export const recentsOf = (body: unknown, driveId: string, limit: number): readonly RecentRow[] => {
+/**
+ * A drive's recents from GET /api/user/recents, newest first (as the API orders them); every
+ * drive's with a null drive.
+ */
+export const recentsOf = (body: unknown, driveId: string | null, limit: number): readonly RecentRow[] => {
   if (typeof body !== 'object' || body === null) return [];
   const { recents } = body as { readonly recents?: unknown };
   if (!Array.isArray(recents)) return [];
@@ -23,8 +28,9 @@ export const recentsOf = (body: unknown, driveId: string, limit: number): readon
       if (typeof row !== 'object' || row === null) return [];
       const { id, title, type, driveId: owner, viewedAt } = row as Record<string, unknown>;
       return typeof id === 'string' && typeof title === 'string' && typeof type === 'string' && isPageTypeValue(type) &&
-        owner === driveId && typeof viewedAt === 'string' && !Number.isNaN(Date.parse(viewedAt))
-        ? [{ id, title, type, viewedAt }]
+        typeof owner === 'string' && (driveId === null || owner === driveId) &&
+        typeof viewedAt === 'string' && !Number.isNaN(Date.parse(viewedAt))
+        ? [{ id, driveId: owner, title, type, viewedAt }]
         : [];
     })
     .slice(0, limit);
@@ -50,8 +56,8 @@ export const ageLabel = (iso: string, now: Date): string => {
 export const drivePageHref = (driveId: string, pageId: string): string =>
   `/${encodeURIComponent(driveId)}/files/${encodeURIComponent(pageId)}`;
 
-/** This drive's recents, live with the API. */
-export const useRecents = (driveId: string | null, limit: number): readonly RecentRow[] => {
+/** This drive's recents, live with the API; none without a drive, every drive's with `allDrives`. */
+export const useRecents = (driveId: string | null, limit: number, allDrives = false): readonly RecentRow[] => {
   const { data } = useSWR<unknown>(driveId === null ? null : RECENTS);
-  return driveId === null ? [] : recentsOf(data, driveId, limit);
+  return driveId === null ? [] : recentsOf(data, allDrives ? null : driveId, limit);
 };

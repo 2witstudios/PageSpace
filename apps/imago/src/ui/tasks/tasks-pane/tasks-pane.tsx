@@ -6,7 +6,9 @@ import { createTaskList } from '@/ui/files/create-file/create-file';
 import { localToday } from '../task-meta/task-meta';
 import { listProgress } from '../task-tree/task-tree';
 import { useDriveTaskLists, useDriveTasks, useTaskList, useTaskViewCounts } from '../use-tasks/use-tasks';
-import { useIsHome } from '../../frame/drives/home-drive-context';
+import { useAllDrives } from '../../frame/drives/use-section-scope';
+import { DriveList } from '../../frame/drives/drive-list';
+import { ListGroup } from '../../components/list-group/list-group';
 import { taskViews, taskViewHref } from '../task-views/task-views';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections } from '../tasks-ground/ground-rows';
@@ -27,7 +29,7 @@ const GLANCE_ROWS = 6;
 
 /** Needs attention: the viewer's open tasks that are overdue or due this week, read from the same answer the Assigned view does. */
 function TaskGlance({ driveId }: { readonly driveId: string }) {
-  const allDrives = useIsHome(driveId);
+  const allDrives = useAllDrives('tasks', driveId);
   const { response } = useDriveTasks(allDrives ? null : driveId, 'active', undefined);
   const driveNames = useDriveNames(allDrives);
   const due = response === undefined
@@ -81,14 +83,16 @@ function TaskListRow({ driveId, pageId, title, selected }: TaskListRowProps) {
   });
 }
 
-/** The Tasks section's pane: the smart views with counts, then the drive's task lists with their progress. */
+/**
+ * The Tasks section's pane: the smart views with counts, then the drive's task lists with their
+ * progress. Switched to All drives, the views and glance read every drive and the lists give way
+ * to the drives to pick from.
+ */
 export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPaneProps) {
+  const allDrives = useAllDrives('tasks', driveId);
   const { lists, error, retry } = useDriveTaskLists(driveId);
-  const { counts } = useTaskViewCounts(driveId, useIsHome(driveId));
+  const { counts } = useTaskViewCounts(driveId, allDrives);
   const holder = useTaskHolder(driveId, selectedPageId);
-  if (holder !== null && selectedPageId !== null) {
-    return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
-  }
   const views = renderTaskViews({
     views: taskViews.map((entry) => ({
       id: entry.id,
@@ -101,6 +105,21 @@ export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPane
     })),
   });
   const glance = <TaskGlance driveId={driveId} />;
+  // All drives lists the drives even beside an open task: the scope, not the open list, decides the pane.
+  if (allDrives) {
+    return (
+      <>
+        {views}
+        {glance}
+        <ListGroup label="Drives">
+          <DriveList section="tasks" currentId={driveId} />
+        </ListGroup>
+      </>
+    );
+  }
+  if (holder !== null && selectedPageId !== null) {
+    return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
+  }
   if (lists === undefined) {
     return (
       <>

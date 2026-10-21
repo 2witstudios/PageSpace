@@ -7,8 +7,12 @@ const segment = encodeURIComponent;
 
 const DAY_MS = 86_400_000;
 
-/** Whether a thread of the unified inbox is shown under this filter. */
-export const inboxKeeps = (filter: InboxFilter, thread: MessageThread): boolean => {
+/**
+ * Whether a thread of the unified inbox is shown under this filter. Scoped to a drive, other
+ * drives' channels drop out; the viewer's DMs belong to no drive and always stay.
+ */
+export const inboxKeeps = (filter: InboxFilter, thread: MessageThread, driveId: string | null = null): boolean => {
+  if (driveId !== null && thread.kind === 'channel' && thread.driveId !== driveId) return false;
   if (filter === 'all') return true;
   return filter === 'channels' ? thread.kind === 'channel' : thread.kind === 'dm';
 };

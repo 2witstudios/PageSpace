@@ -23,6 +23,15 @@ describe('recentsOf() (IMC-1.7)', () => {
     });
   });
 
+  test("every drive's recents", () => {
+    assert({
+      given: "apps/web's recents with no drive to keep",
+      should: 'keep every drive’s, each with its drive, newest first',
+      actual: recentsOf(body, null, 3).map((row) => [row.id, row.driveId]),
+      expected: [['plan', 'studio'], ['other', 'home'], ['pricing', 'studio']],
+    });
+  });
+
   test('not a recents body', () => {
     assert({
       given: 'nothing loaded or an error body',

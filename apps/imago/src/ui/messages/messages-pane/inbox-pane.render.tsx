@@ -76,7 +76,7 @@ const renderNote = (text: string, role: 'status' | 'alert' | undefined, retry?: 
 /**
  * The Messages index's pane: a segmented Show filter (All, Channels, Direct) over the viewer's
  * channels and DMs merged newest first, each row with its name, time, "Sender: preview" and unread
- * count, and a footer naming the scope.
+ * count. The head's scope switch names the drives it reads.
  */
 export function renderInboxPane(props: InboxPaneRenderProps): ReactNode {
   const { filter, onFilter, retry } = props;
@@ -90,7 +90,6 @@ export function renderInboxPane(props: InboxPaneRenderProps): ReactNode {
           : props.rows.length === 0
             ? renderNote(emptyNote[filter], undefined)
             : <ul className="flex flex-col gap-1">{props.rows.map(renderRow)}</ul>}
-      <p className="px-2 pt-2 text-xs text-ink-faint">Showing all drives</p>
     </div>
   );
 }
