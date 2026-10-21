@@ -213,7 +213,7 @@ test('a typed draft survives chat → files → chat, with the caret back in the
 
   await composer(page).fill('Half a thought about the roadmap');
 
-  await railLink(page, 'Files').click();
+  await railLink(page, 'Pages').click();
   await page.waitForURL(pathnameIs(files));
   await expect(page.locator('[data-section]')).toHaveAttribute('data-section', 'files');
   // The rail link took focus with the click: nothing has put it back yet.
@@ -230,7 +230,7 @@ test('a typed draft survives chat → files → chat, with the caret back in the
   await expect(composer(page)).toHaveValue('Half a thought about the roadmap, continued');
 
   // Back to the chat under the ⌘K palette: the palette keeps the caret, nothing moves it behind the modal.
-  await railLink(page, 'Files').click();
+  await railLink(page, 'Pages').click();
   await page.waitForURL(pathnameIs(files));
   await page.keyboard.press('ControlOrMeta+k');
   const search = page.getByRole('dialog', { name: 'Search' }).getByRole('combobox');

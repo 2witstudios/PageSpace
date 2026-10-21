@@ -148,7 +148,7 @@ describe('History and New chat in the head', () => {
     const home = show('/d1').container; await settle();
     const files = show('/d1/files').container; await settle();
     expect(home.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
-    expect(files.querySelector('aside > header > span:not(.flex-1)')?.textContent).toBe('Files');
+    expect(files.querySelector('aside > header > span:not(.flex-1)')?.textContent).toBe('Pages');
   });
 });
 

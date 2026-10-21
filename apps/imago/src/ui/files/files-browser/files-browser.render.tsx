@@ -320,13 +320,13 @@ export function renderFilesBrowser(props: FilesBrowserRenderProps): ReactNode {
   return (
     <section
       className={browserClass}
-      aria-label="Files browser"
+      aria-label="Pages browser"
       onDragEnter={props.onDragEnter}
       onDragOver={props.onDragOver}
       onDragLeave={props.onDragLeave}
       onDrop={props.onDrop}
     >
-      <ToolbarStrip label="Files">
+      <ToolbarStrip label="Pages">
         <nav aria-label="Breadcrumb" className={crumbsClass}>
           {crumbs.map((crumb, index) => (
             <Fragment key={crumb.href}>

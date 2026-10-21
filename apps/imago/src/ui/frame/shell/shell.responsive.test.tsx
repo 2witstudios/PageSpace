@@ -156,7 +156,7 @@ vi.mock('@/ui/files/page-head/page-head', async () => {
 
 // The phone page head and Back load the page, its trail and the drive's tabs; their own suite proves them.
 vi.mock('@/ui/frame/phone/phone-doc-head', () => ({
-  PhoneDocHead: ({ pageId }: { pageId: string }) => h('header', { 'data-phone-head': pageId }, h('a', { 'aria-label': 'Back to Files', href: '/' })),
+  PhoneDocHead: ({ pageId }: { pageId: string }) => h('header', { 'data-phone-head': pageId }, h('a', { 'aria-label': 'Back to Pages', href: '/' })),
 }));
 vi.mock('@/ui/frame/phone/phone-chat-back', () => ({
   PhoneChatBack: ({ onBack }: { onBack: () => void }) => h('button', { type: 'button', 'aria-label': 'Back to Q4 Launch Plan', onClick: onBack }),
@@ -349,7 +349,7 @@ describe('Shell on a phone (C-Resp-Phone-Tree)', () => {
         bar?.querySelector('[aria-current="page"]')?.getAttribute('aria-label'),
         container.querySelector('[data-slot="chat"]'),
       ],
-      expected: [1, null, 'Files', null],
+      expected: [1, null, 'Pages', null],
     });
   });
 

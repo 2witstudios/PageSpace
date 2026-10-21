@@ -77,7 +77,7 @@ describe('PageObject', () => {
       given: 'a 404, a 403, a page of another drive and a trashed page',
       should: 'each draw the same not-found object with a way back to the drive’s files',
       actual,
-      expected: cases.map(([name]) => [name, 'Page not found', '/d1/files', 'Back to Files', null]),
+      expected: cases.map(([name]) => [name, 'Page not found', '/d1/files', 'Back to Pages', null]),
     });
   });
 

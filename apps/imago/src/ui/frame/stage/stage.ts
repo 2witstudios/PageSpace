@@ -223,7 +223,7 @@ export const paneLayout = (
 };
 
 const sectionNames: Readonly<Record<ListSection, string>> = {
-  files: 'Files',
+  files: 'Pages',
   messages: 'Messages',
   tasks: 'Tasks',
 };
@@ -302,7 +302,7 @@ export const chatContextFor = (
     return {
       density,
       contextLabel: `${sectionNames[stage.section]} in context`,
-      placeholder: stage.section === 'files' ? 'Ask across Files, or @mention a page' : `Ask about your ${stage.section}…`,
+      placeholder: stage.section === 'files' ? 'Ask across Pages, or @mention a page' : `Ask about your ${stage.section}…`,
     };
   }
   return {

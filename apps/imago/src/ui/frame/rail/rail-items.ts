@@ -36,7 +36,7 @@ const driveHref = (driveId: string | null, section: string): string | null => {
 export const railItems = (driveId: string | null): readonly RailItem[] => [
   // The drive's front page is Imago's chat, so the spine marks it as home.
   { id: 'chat', icon: 'home', label: 'Home', href: driveHref(driveId, '') },
-  { id: 'files', icon: 'files', label: 'Files', href: driveHref(driveId, 'files') },
+  { id: 'files', icon: 'files', label: 'Pages', href: driveHref(driveId, 'files') },
   { id: 'messages', icon: 'messages', label: 'Messages', href: driveHref(driveId, 'messages') },
   { id: 'tasks', icon: 'tasks', label: 'Tasks', href: driveHref(driveId, 'tasks') },
 ];
