@@ -50,6 +50,7 @@ const everywhere = [
 const ALPHA_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=d-1';
 const HOME_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&driveId=home-1';
 const ALL_ROAD = 'GET /api/mentions/search?q=road&types=page%2Cuser&crossDrive=true';
+const ALPHA_RECENT = 'GET /api/mentions/search?types=page&driveId=d-1';
 
 const answer =
   (body: unknown): FakeRoute =>
@@ -68,6 +69,9 @@ const setup = (pathname = '/d-1/files', routes: Record<string, FakeRoute> = {}, 
   return { web, container, composer };
 };
 
+/** The "All workspaces" segment of the scope switch. */
+const allWorkspaces = (container: HTMLElement) =>
+  [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((radio) => radio.textContent === 'All workspaces') as HTMLButtonElement;
 const dialog = (container: HTMLElement) => container.querySelector('[role="dialog"]');
 const field = (container: HTMLElement) => container.querySelector<HTMLInputElement>('input[role="combobox"]');
 const options = (container: HTMLElement) =>
@@ -197,7 +201,7 @@ describe('CommandPalette', () => {
     ctrlK(document.body);
     typeInto(field(container) as HTMLInputElement, 'road');
     await listed(container, 3);
-    const toggle = container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement;
+    const toggle = allWorkspaces(container);
     click(toggle);
     await settle(() => {
       if (!options(container).some((option) => option.text?.includes('Road planner'))) throw new Error('not every drive');
@@ -208,7 +212,7 @@ describe('CommandPalette', () => {
     press(field(container) as HTMLInputElement, 'Enter');
 
     assert({
-      given: '"Include all workspaces" ticked with "road" typed, then the agent picked',
+      given: '"All workspaces" picked with "road" typed, then the agent picked',
       should:
         'ask every drive, list the pages the server answered with each one’s drive, then the people, and open the agent’s drive chat talking to it',
       actual: {
@@ -296,30 +300,54 @@ describe('CommandPalette', () => {
     });
   });
 
-  test('focus stays in the palette', () => {
+  test('Tab switches the scope and focus stays in the field', () => {
     const { container } = setup();
     ctrlK(document.body);
     const input = field(container) as HTMLInputElement;
-    const toggle = container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement;
-    const tabbed = press(input, 'Tab');
-    toggle.focus();
-    const wrapped = press(toggle, 'Tab');
-    const onField = document.activeElement === input;
-    const back = press(input, 'Tab');
-    const shiftWrapped = (() => {
-      input.focus();
-      const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    const tab = (shiftKey: boolean) => {
+      const event = new KeyboardEvent('keydown', { key: 'Tab', shiftKey, bubbles: true, cancelable: true });
       act(() => {
         input.dispatchEvent(event);
       });
-      return [event.defaultPrevented, document.activeElement === toggle];
-    })();
+      return [event.defaultPrevented, getUiState().resources.paletteAllDrives, document.activeElement === input];
+    };
+    const tabbed = tab(false);
+    const shiftTabbed = tab(true);
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    act(() => {
+      allWorkspaces(container).dispatchEvent(press);
+    });
 
     assert({
-      given: 'Tab from the field, Tab from the toggle, and Shift-Tab from the field',
-      should: 'let the browser move to the toggle, wrap back to the field, and wrap back to the toggle',
-      actual: [tabbed, wrapped, onField, back, shiftWrapped],
-      expected: [false, true, true, false, [true, true]],
+      given: 'Tab, then Shift-Tab, in the field, then a press on a scope segment',
+      should: 'switch to every drive and back, keeping focus in the field, and not let the press take focus',
+      actual: [tabbed, shiftTabbed, press.defaultPrevented],
+      expected: [
+        [true, true, true],
+        [true, false, true],
+        true,
+      ],
+    });
+  });
+
+  test('recently updated pages with nothing typed', async () => {
+    const { web, container } = setup('/d-1/files', { [ALPHA_RECENT]: answer([page('p-9', 'Meeting notes', 'DOCUMENT', 'd-1')]) });
+    ctrlK(document.body);
+    await listed(container, 1);
+    const listedRows = options(container);
+    const group = container.querySelector('[role="group"]')?.getAttribute('aria-label');
+    press(field(container) as HTMLInputElement, 'Enter');
+
+    assert({
+      given: 'the palette opened in Alpha with nothing typed',
+      should: 'ask for Alpha’s pages alone, list the recently updated ones highlighted from the top, and open one on Enter',
+      actual: [searches(web), group, listedRows, router.pushed],
+      expected: [
+        ['/api/mentions/search?types=page&driveId=d-1'],
+        'Recently updated',
+        [{ text: 'Meeting notes↵', selected: 'true' }],
+        ['/d-1/files/p-9'],
+      ],
     });
   });
 
@@ -373,7 +401,7 @@ describe('CommandPalette edge cases', () => {
     ctrlK(document.body);
     typeInto(field(container) as HTMLInputElement, 'road');
     await listed(container, 3);
-    click(container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement);
+    click(allWorkspaces(container));
     await settle(() => {
       if (!options(container).some((option) => option.text?.includes('Road planner'))) throw new Error('not every drive');
     });
@@ -395,7 +423,7 @@ describe('CommandPalette edge cases', () => {
     ctrlK(document.body);
     typeInto(field(container) as HTMLInputElement, 'road');
     await listed(container, 3);
-    click(container.querySelector<HTMLButtonElement>('[role="checkbox"]') as HTMLButtonElement);
+    click(allWorkspaces(container));
     await settle(() => {
       if (!options(container).some((option) => option.text?.includes('Roadside'))) throw new Error('not every drive');
     });

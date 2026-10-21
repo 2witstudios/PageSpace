@@ -1,9 +1,9 @@
 import type { KeyboardEvent, ReactNode, Ref } from 'react';
 import { Search } from 'lucide-react';
-import { renderCheckbox } from '../../components/checkbox/checkbox.render';
 import { Icon } from '../../components/icon/icon';
 import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import type { IconName } from '../../components/icon/icon-names';
+import { matchParts } from '../palette-match/palette-match';
 import type { PaletteUser } from '../palette-search/palette-search';
 import type { PaletteSearch } from '../use-palette-search/use-palette-search';
 import {
@@ -12,14 +12,21 @@ import {
   paletteFooterClass,
   paletteGroupClass,
   paletteGroupLabelClass,
+  paletteHintClass,
+  paletteHintEndClass,
   paletteInputClass,
   paletteKbdClass,
   paletteLayerClass,
   paletteListClass,
+  paletteMatchClass,
   paletteNoteClass,
   paletteRowClass,
   paletteScopeClass,
+  paletteScopeOptionClass,
+  paletteSearchIconClass,
   paletteSheetClass,
+  paletteTextClass,
+  paletteTileClass,
   paletteTitleClass,
 } from './palette-class';
 
@@ -38,12 +45,12 @@ export type PaletteRenderProps = {
   readonly open: boolean;
   readonly query: string;
   readonly allDrives: boolean;
-  /** What the field searches, for its placeholder: the open drive's name, or every drive. */
-  readonly scope: string;
+  /** The open drive's name: the switch's first segment, and what the field searches unless every drive is. */
+  readonly driveName: string;
   readonly status: PaletteSearch['status'];
-  /** The Pages group. */
+  /** The Pages group, or with an empty field the recently updated pages. */
   readonly rows: readonly PaletteRow[];
-  /** The Users group, listed after the pages. */
+  /** The People group, listed after the pages. */
   readonly people: readonly PaletteUser[];
   /** The highlighted row, counted down the pages and then the people. */
   readonly active: number;
@@ -59,34 +66,38 @@ export type PaletteRenderProps = {
   readonly close: () => void;
 };
 
-const noteFor = (status: PaletteSearch['status'], count: number, scope: string): string | null => {
-  if (status === 'idle') return `Type to search ${scope}`;
-  if (status === 'loading') return 'Searching…';
+const noteFor = (status: PaletteSearch['status'], count: number, browsing: boolean): string | null => {
+  if (status === 'idle') return 'Type to search';
+  if (status === 'loading') return browsing ? 'Loading…' : 'Searching…';
   if (status === 'error') return 'Search failed. Try again.';
-  return count === 0 ? 'No matches' : null;
+  if (count > 0) return null;
+  return browsing ? 'Nothing here yet' : 'No matches';
 };
 
-/** Tab and Shift-Tab cycle the sheet's own controls: the palette is modal. */
-const keepFocusInside = (event: KeyboardEvent<HTMLElement>): void => {
-  const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('input, button')];
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (first === undefined || last === undefined) return;
-  const leaving = event.shiftKey ? document.activeElement === first : document.activeElement === last;
-  if (!leaving) return;
-  event.preventDefault();
-  (event.shiftKey ? last : first).focus();
-};
+/** A title with the part the query matched tinted. */
+const renderTitle = (title: string, query: string): ReactNode =>
+  matchParts(title, query).map((part, index) =>
+    part.match ? (
+      <span key={index} className={paletteMatchClass}>
+        {part.text}
+      </span>
+    ) : (
+      part.text
+    ),
+  );
 
 /**
  * The ⌘K palette (IMG-10.2): a modal search over the drive, or every drive.
  * The field is a combobox over the results listbox, so the highlight moves
  * with the arrows while focus stays in the field; Enter opens the
- * highlighted result and Escape closes. Results are two groups, Pages and
- * Users; the highlighted row carries the Enter hint.
+ * highlighted result, Tab switches between the drive and every drive, and
+ * Escape closes. Focus never leaves the field, so the palette needs no other
+ * tab stop. With the field empty it lists the recently updated pages;
+ * typing lists two groups, Pages and People. The highlighted row carries the
+ * Enter hint.
  */
 export function renderPalette(props: PaletteRenderProps): ReactNode {
-  const { open, query, allDrives, scope, status, rows, people, active, idPrefix, inputRef } = props;
+  const { open, query, allDrives, driveName, status, rows, people, active, idPrefix, inputRef } = props;
   const { typeQuery, toggleAllDrives, move, pick, hover, close } = props;
   if (!open) return null;
   const listId = `${idPrefix}-results`;
@@ -94,7 +105,8 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
   const count = rows.length + people.length;
   // A shorter answer than the highlight reaches starts again at its top.
   const highlighted = count === 0 ? -1 : active < count ? active : 0;
-  const note = noteFor(status, count, scope);
+  const browsing = query.trim() === '';
+  const note = noteFor(status, count, browsing);
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.key === 'Escape') {
@@ -108,7 +120,8 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
       event.preventDefault();
       if (highlighted >= 0) pick(highlighted);
     } else if (event.key === 'Tab') {
-      keepFocusInside(event);
+      event.preventDefault();
+      toggleAllDrives();
     }
   };
 
@@ -121,6 +134,24 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
     onClick: () => pick(index),
   });
 
+  const enterHint = (index: number) =>
+    index === highlighted ? <kbd className={paletteKbdClass('accent')}>↵</kbd> : null;
+
+  // A segment never takes focus: a press keeps it in the field, and Tab is the keyboard's way to switch.
+  const scopeOption = (label: string, selected: boolean) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      tabIndex={-1}
+      className={paletteScopeOptionClass(selected)}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={selected ? undefined : toggleAllDrives}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div
       className={paletteLayerClass}
@@ -131,7 +162,7 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
     >
       <div role="dialog" aria-modal="true" aria-label="Search" className={paletteSheetClass} onKeyDown={onKeyDown}>
         <div className={paletteFieldClass}>
-          <Search size={16} strokeWidth={1.5} aria-hidden="true" />
+          <Search size={18} strokeWidth={2} aria-hidden="true" className={paletteSearchIconClass} />
           <input
             ref={inputRef}
             type="text"
@@ -144,43 +175,51 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
             autoComplete="off"
             spellCheck={false}
             value={query}
-            placeholder={`Search ${scope}…`}
-            className={paletteInputClass(highlighted >= 0)}
+            placeholder={`Search ${allDrives ? 'all workspaces' : driveName}…`}
+            className={paletteInputClass}
             onChange={(event) => typeQuery(event.currentTarget.value)}
           />
-          <span className={paletteScopeClass}>
-            {renderCheckbox({ checked: allDrives, label: 'Include all workspaces', toggle: toggleAllDrives })}
-            <span aria-hidden="true">All workspaces</span>
-          </span>
+          <div role="radiogroup" aria-label="Search in" aria-keyshortcuts="Tab" className={paletteScopeClass}>
+            {scopeOption(driveName, !allDrives)}
+            {scopeOption('All workspaces', allDrives)}
+          </div>
         </div>
         <div id={listId} role="listbox" aria-label="Results" className={paletteListClass}>
           {rows.length > 0 ? (
-            <div role="group" aria-label="Pages" className={paletteGroupClass}>
+            <div role="group" aria-label={browsing ? 'Recently updated' : 'Pages'} className={paletteGroupClass}>
               <div className={paletteGroupLabelClass} aria-hidden="true">
-                Pages
+                {browsing ? 'Recently updated' : 'Pages'}
               </div>
               {rows.map((row, index) => (
                 <div key={row.id} {...optionProps(index)}>
-                  {row.imago ? <ImagoOrb size="glyph" /> : <Icon name={row.icon} />}
-                  <span className={paletteTitleClass}>{row.title}</span>
-                  {row.driveName === null ? null : <span className={paletteDriveClass}>{row.driveName}</span>}
-                  {index === highlighted ? <kbd className={paletteKbdClass}>↵</kbd> : null}
+                  <span className={paletteTileClass(index === highlighted)}>
+                    {row.imago ? <ImagoOrb size="glyph" /> : <Icon name={row.icon} />}
+                  </span>
+                  <span className={paletteTextClass}>
+                    <span className={paletteTitleClass}>{renderTitle(row.title, query)}</span>
+                    {row.driveName === null ? null : <span className={paletteDriveClass}>{row.driveName}</span>}
+                  </span>
+                  {enterHint(index)}
                 </div>
               ))}
             </div>
           ) : null}
           {people.length > 0 ? (
-            <div role="group" aria-label="Users" className={paletteGroupClass}>
+            <div role="group" aria-label="People" className={paletteGroupClass}>
               <div className={paletteGroupLabelClass} aria-hidden="true">
-                Users
+                People
               </div>
               {people.map((person, offset) => {
                 const index = rows.length + offset;
                 return (
                   <div key={person.id} {...optionProps(index)}>
-                    <Icon name="members" />
-                    <span className={paletteTitleClass}>{person.name}</span>
-                    {index === highlighted ? <kbd className={paletteKbdClass}>↵</kbd> : null}
+                    <span className={paletteTileClass(index === highlighted)}>
+                      <Icon name="members" />
+                    </span>
+                    <span className={paletteTextClass}>
+                      <span className={paletteTitleClass}>{renderTitle(person.name, query)}</span>
+                    </span>
+                    {enterHint(index)}
                   </div>
                 );
               })}
@@ -191,14 +230,22 @@ export function renderPalette(props: PaletteRenderProps): ReactNode {
           {note ?? `${count} ${count === 1 ? 'result' : 'results'}`}
         </p>
         <div aria-hidden="true" className={paletteFooterClass}>
-          <span>
-            <kbd className={paletteKbdClass}>↑↓</kbd> move
+          <span className={paletteHintClass}>
+            <kbd className={paletteKbdClass('key')}>↑</kbd>
+            <kbd className={paletteKbdClass('key')}>↓</kbd>
+            Navigate
           </span>
-          <span>
-            <kbd className={paletteKbdClass}>↵</kbd> open
+          <span className={paletteHintClass}>
+            <kbd className={paletteKbdClass('key')}>↵</kbd>
+            Open
           </span>
-          <span>
-            <kbd className={paletteKbdClass}>esc</kbd> close
+          <span className={paletteHintClass}>
+            <kbd className={paletteKbdClass('key')}>Tab</kbd>
+            Switch scope
+          </span>
+          <span className={paletteHintEndClass}>
+            <kbd className={paletteKbdClass('key')}>esc</kbd>
+            Close
           </span>
         </div>
       </div>

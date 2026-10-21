@@ -4,12 +4,15 @@ import {
   paletteDriveClass,
   paletteFieldClass,
   paletteInputClass,
+  paletteKbdClass,
   paletteLayerClass,
   paletteListClass,
   paletteNoteClass,
   paletteRowClass,
   paletteScopeClass,
+  paletteScopeOptionClass,
   paletteSheetClass,
+  paletteTileClass,
   paletteTitleClass,
 } from './palette-class';
 
@@ -17,63 +20,79 @@ describe('palette classes', () => {
   test('layer and sheet', () => {
     assert({
       given: 'the palette over the frame',
-      should: 'cover the frame above the panes and hold a raised glass sheet a document column wide',
+      should: 'cover the frame above the panes and hold a raised glass sheet the palette’s width',
       actual: [paletteLayerClass, paletteSheetClass],
       expected: [
         'fixed inset-0 z-popover flex items-start justify-center px-4 pt-16',
-        'flex w-full max-w-doc flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised',
+        'flex w-full max-w-palette flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised',
       ],
     });
   });
 
-  test('input halo follows the highlight', () => {
+  test('the input never draws a halo', () => {
     assert({
-      given: 'the palette input with and without a highlighted result',
-      should: 'drop its halo only while a result carries the focus cue',
-      actual: {
-        highlighted: paletteInputClass(true).includes('focus-visible:shadow-none'),
-        unhighlighted: paletteInputClass(false).includes('focus-visible:shadow-none'),
-      },
-      expected: { highlighted: true, unhighlighted: false },
+      given: 'the palette input',
+      should: 'drop the global focus halo, which the sheet would clip at its top',
+      actual: paletteInputClass.includes('focus-visible:shadow-none'),
+      expected: true,
     });
   });
 
   test('field', () => {
     assert({
-      given: 'the field row, its input and the scope toggle',
-      should: 'be a hairline-ruled row with a borderless composer-height input',
-      actual: [paletteFieldClass, paletteInputClass(false), paletteScopeClass],
+      given: 'the field row, its input and the scope switch',
+      should: 'be a hairline-ruled row with a borderless input filling it, and a sunken two-segment track',
+      actual: [paletteFieldClass, paletteInputClass, paletteScopeClass],
       expected: [
-        'flex items-center gap-2 border-b border-hairline px-3 text-ink-muted',
-        'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint',
-        'flex flex-none items-center gap-2 text-xs text-ink-muted',
+        'flex h-palette-field items-center gap-3 border-b border-hairline pr-3 pl-4',
+        'h-full min-w-0 flex-1 border-none bg-transparent text-md tracking-tight text-ink outline-none placeholder:text-ink-faint focus-visible:shadow-none',
+        'flex flex-none gap-1 rounded-md border border-hairline bg-surface-sunken p-1',
       ],
+    });
+  });
+
+  test('scope segments', () => {
+    assert({
+      given: 'the selected segment and the other',
+      should: 'raise only the selected one',
+      actual: [paletteScopeOptionClass(true).includes('bg-surface-overlay'), paletteScopeOptionClass(false).includes('bg-surface-overlay')],
+      expected: [true, false],
     });
   });
 
   test('results', () => {
     assert({
       given: 'the list, a highlighted row and a quiet one',
-      should: 'tint only the highlighted row, at full ink',
-      actual: [paletteListClass, paletteRowClass(true), paletteRowClass(false)],
+      should: 'tint only the highlighted row and its icon tile',
+      actual: [
+        paletteListClass,
+        paletteRowClass(true),
+        paletteRowClass(false),
+        paletteTileClass(true).includes('bg-accent-soft'),
+        paletteTileClass(false).includes('bg-accent-soft'),
+      ],
       expected: [
-        'm-0 flex list-none flex-col gap-1 p-1',
-        'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors duration-120 ease-standard bg-accent-soft text-ink',
-        'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors duration-120 ease-standard text-ink-muted',
+        'm-0 flex list-none flex-col px-2 pt-1 pb-2',
+        'flex h-palette-row w-full cursor-pointer items-center gap-3 rounded-lg px-2 text-left text-base text-ink transition-colors duration-120 ease-standard bg-accent-soft',
+        'flex h-palette-row w-full cursor-pointer items-center gap-3 rounded-lg px-2 text-left text-base text-ink transition-colors duration-120 ease-standard',
+        true,
+        false,
       ],
     });
   });
 
-  test('labels', () => {
+  test('labels and key caps', () => {
     assert({
-      given: 'a result’s title, its drive and the note under the field',
-      should: 'truncate the title, keep the drive faint and the note muted',
-      actual: [paletteTitleClass, paletteDriveClass, paletteNoteClass],
-      expected: [
-        'min-w-0 flex-1 truncate',
-        'flex-none truncate text-2xs text-ink-faint',
-        'px-3 py-row-y text-sm text-ink-muted',
+      given: 'a result’s title, its drive, the note under the field, and a footer and a row key cap',
+      should: 'truncate the title and drive, keep the note muted, raise the footer key and tint the row’s',
+      actual: [
+        paletteTitleClass,
+        paletteDriveClass,
+        paletteNoteClass,
+        paletteKbdClass('key').includes('shadow-1'),
+        paletteKbdClass('accent').includes('bg-accent-soft'),
       ],
+      expected: ['truncate font-medium', 'truncate text-xs text-ink-faint', 'px-4 py-3 text-sm text-ink-muted', true, true],
     });
   });
 });

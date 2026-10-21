@@ -14,7 +14,7 @@ describe('searchPath()', () => {
 
   test('every drive', () => {
     assert({
-      given: '"Include all workspaces" ticked, with or without an open drive',
+      given: '"All workspaces" picked, with or without an open drive',
       should: 'ask for every drive the viewer can reach and name none',
       actual: [
         searchPath({ query: 'road', driveId: 'd-1', allDrives: true }),
@@ -27,16 +27,27 @@ describe('searchPath()', () => {
     });
   });
 
-  test('nothing to ask', () => {
+  test('nothing typed', () => {
     assert({
-      given: 'an empty or blank query, or no drive to search and not every drive',
-      should: 'ask nothing',
+      given: 'an empty or blank query in a drive, and across every drive',
+      should: 'ask for pages alone, which the route answers with the recently updated ones',
       actual: [
         searchPath({ query: '', driveId: 'd-1', allDrives: false }),
         searchPath({ query: '   ', driveId: 'd-1', allDrives: true }),
-        searchPath({ query: 'road', driveId: null, allDrives: false }),
       ],
-      expected: [null, null, null],
+      expected: [`${PALETTE_SEARCH}?types=page&driveId=d-1`, `${PALETTE_SEARCH}?types=page&crossDrive=true`],
+    });
+  });
+
+  test('nowhere to search', () => {
+    assert({
+      given: 'no drive to search and not every drive, with and without a query',
+      should: 'ask nothing',
+      actual: [
+        searchPath({ query: 'road', driveId: null, allDrives: false }),
+        searchPath({ query: '', driveId: null, allDrives: false }),
+      ],
+      expected: [null, null],
     });
   });
 });

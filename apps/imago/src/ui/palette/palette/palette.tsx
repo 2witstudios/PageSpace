@@ -48,9 +48,10 @@ const rowFor = (result: PaletteResult, names: ReadonlyMap<string, string> | null
 /**
  * The ⌘K command palette, mounted once by the shell. ⌘K (Ctrl-K off Apple)
  * opens it from anywhere and closes it again; closing gives focus back to
- * whatever had it. It searches the drive the rail is in, or with "Include
- * all workspaces" every drive, through apps/web's permission-filtered
- * search, and lists only what that search answers. Picking a result goes to
+ * whatever had it. It searches the drive the rail is in, or with "All
+ * workspaces" every drive, through apps/web's permission-filtered search,
+ * and lists only what that search answers; with nothing typed, that is the
+ * recently updated pages. Picking a result goes to
  * its imago route; an agent opens its drive's chat talking to it.
  */
 export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandPaletteProps) {
@@ -70,7 +71,7 @@ export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandP
   const names = allDrives ? new Map((drives ?? []).map((drive) => [drive.id, drive.name])) : null;
   const imagoPageId = useImagoPageId();
   const rows = search.results.map((result) => rowFor(result, names, imagoPageId));
-  const scope = allDrives ? 'all workspaces' : (drives?.find((drive) => drive.id === driveId)?.name ?? 'this drive');
+  const driveName = drives?.find((drive) => drive.id === driveId)?.name ?? 'This drive';
 
   const close = useCallback(() => {
     dispatch(closePalette, undefined);
@@ -112,7 +113,7 @@ export function CommandPalette({ stage, homeDriveId, drives, delayMs }: CommandP
     open,
     query,
     allDrives,
-    scope,
+    driveName,
     status: search.status,
     rows,
     people: search.people,
