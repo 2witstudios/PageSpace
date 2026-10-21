@@ -6,11 +6,11 @@ describe('listPaneClass()', () => {
   test('the variants', () => {
     assert({
       given: 'the wide list and the narrow tree',
-      should: 'hold its own width so the content never reflows while the pane slides',
+      should: 'fill the allocated pane width and allow content to shrink for every variant',
       actual: [listPaneClass('list'), listPaneClass('tree')],
       expected: [
-        'flex h-full flex-none flex-col border-r border-hairline bg-background w-list-pane',
-        'flex h-full flex-none flex-col border-r border-hairline bg-background w-tree-pane',
+        'flex h-full w-full min-w-0 flex-1 flex-col border-r border-hairline bg-background',
+        'flex h-full w-full min-w-0 flex-1 flex-col border-r border-hairline bg-background',
       ],
     });
   });
