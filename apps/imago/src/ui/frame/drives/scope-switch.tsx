@@ -18,8 +18,6 @@ export type ScopeSwitchViewProps = {
   readonly choose: (scope: SectionScope) => void;
 };
 
-const isScope = (value: string): value is SectionScope => value === 'drive' || value === 'all';
-
 /** The switch drawn from its props: the drive by name, or All drives. */
 export function renderScopeSwitch({ driveName, scope, choose }: ScopeSwitchViewProps): ReactNode {
   return (
@@ -30,9 +28,8 @@ export function renderScopeSwitch({ driveName, scope, choose }: ScopeSwitchViewP
         { value: 'drive', label: driveName },
         { value: 'all', label: 'All drives' },
       ]}
-      choose={(next) => {
-        if (isScope(next)) choose(next);
-      }}
+      // The menu offers only these two values.
+      choose={(next) => choose(next === 'all' ? 'all' : 'drive')}
       trigger={
         <button type="button" className={chipClass} aria-label={`Showing ${scope === 'all' ? 'all drives' : driveName}`}>
           <span className="min-w-0 truncate">{scope === 'all' ? 'All drives' : driveName}</span>

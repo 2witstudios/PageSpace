@@ -64,3 +64,14 @@ describe('isDashboard() with switched sections', () => {
     });
   });
 });
+
+describe('isDashboard() without a drive', () => {
+  test('a driveless route', () => {
+    assert({
+      given: 'the user-level DM index, even with every section switched to All drives',
+      should: 'never claim the dashboard, since no drive is in the URL',
+      actual: isDashboard(stageFor('/dm'), 'home1', { messages: 'all', tasks: 'all' }),
+      expected: false,
+    });
+  });
+});
