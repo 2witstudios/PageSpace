@@ -328,14 +328,6 @@ async function driveNamesById(driveIds: string[]): Promise<Map<string, string>> 
   return new Map(rows.map((r) => [r.id, r.name]));
 }
 
-/** Which of these drives are Home drives (drives.kind = 'HOME'), for wallet lists. */
-async function homeDriveIdsAmong(driveIds: string[]): Promise<Set<string>> {
-  const unique = [...new Set(driveIds)];
-  if (unique.length === 0) return new Set();
-  const rows = await db.select({ id: drives.id }).from(drives).where(and(inArray(drives.id, unique), eq(drives.kind, 'HOME')));
-  return new Set(rows.map((r) => r.id));
-}
-
 /** Org names by id, for wallet lists (UI-10): through the org repository (POL-1 seam). */
 async function orgNamesById(orgIds: string[]): Promise<Map<string, string>> {
   return findOrganizationNames(orgIds);
@@ -553,6 +545,10 @@ export async function updateDriveWallet(
     for (const action of plan.actions) {
       const denied = requireAction(access, action);
       if (denied) return denied;
+    }
+    // A Home drive is never funded: its old wallet may only be run down, so its allocation can only go to 0.
+    if (access.homeDrive && input.allocationCents !== undefined && input.allocationCents > 0) {
+      return { ok: false, status: 403, code: 'home_drive_unfunded', message: 'Your Home drive cannot be funded. Its wallet can only be run down, paused or deleted.' };
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
     await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: { ...plan.set } }));
@@ -1320,16 +1316,12 @@ export async function listMyWallets(actor: AccessActor, credential: WalletCreden
       .from(wallets)
       .where(and(eq(wallets.subjectType, 'drive'), inArray(wallets.subjectId, driveIds)))
       .limit(1000);
-    const walletDriveIds = rows.flatMap((r) => (r.subjectId ? [r.subjectId] : []));
-    const driveNames = await driveNamesById(walletDriveIds);
-    const homeDriveIds = await homeDriveIdsAmong(walletDriveIds);
+    const driveNames = await driveNamesById(rows.flatMap((r) => (r.subjectId ? [r.subjectId] : [])));
     const mySpent = await mySpendByWallet(userId, rows.map((r) => r.id));
     for (const row of rows) {
       if (!row.subjectId) continue;
       const entry = driveWalletListEntry({ ...row, subjectId: row.subjectId }, driveNames.get(row.subjectId) ?? null, mySpent.get(row.id) ?? 0);
-      // A Home drive's wallet is never spent (sharedSpendLegsFor), so it is no source to spend from; the
-      // owner still sees it under what they fund, where its Wallet settings can pause or delete it.
-      if (!homeDriveIds.has(row.subjectId)) result.driveWallets.push(entry);
+      result.driveWallets.push(entry);
       // The funder sees the balance of what they fund (UI-10), as its consumers do.
       if (row.parentWalletId === personalId) result.funds.driveWallets.push(entry);
     }

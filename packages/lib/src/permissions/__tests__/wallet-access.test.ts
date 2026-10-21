@@ -59,8 +59,9 @@ describe('wallet-access: what each may do', () => {
   });
 
   it('a Home drive is its owner\'s own spend: nothing funds it, and a wallet made earlier can only be run down', () => {
-    expect(walletActionsFor('lead', { orgDrive: false, homeDrive: true })).toEqual(['view', 'view_spend_by_member', 'pause', 'set_rules', 'delete', 'set_caps']);
-    for (const action of ['create', 'allocate', 'top_up', 'donate'] as const) {
+    // allocate stays so an old wallet's allocation can be lowered to 0; the service refuses a positive one.
+    expect(walletActionsFor('lead', { orgDrive: false, homeDrive: true })).toEqual(['view', 'view_spend_by_member', 'allocate', 'pause', 'set_rules', 'delete', 'set_caps']);
+    for (const action of ['create', 'top_up', 'donate'] as const) {
       expect(mayTakeWalletAction('lead', action, { orgDrive: false, homeDrive: true })).toBe(false);
     }
     expect(walletActionsFor('member', { orgDrive: false, homeDrive: true })).toEqual(['view']);

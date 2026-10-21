@@ -48,7 +48,7 @@ export default function DriveWalletSettingsPage() {
   return (
     <SettingsScreen
       title="Wallet"
-      lede={isHome ? 'Home is your own space: what AI usage here spends is always your own credits.' : `What AI usage in ${driveName} spends from, and who funds it.`}
+      lede={isHome ? 'Home is your own space: AI usage here spends your own credits, and nothing needs funding.' : `What AI usage in ${driveName} spends from, and who funds it.`}
     >
       {isLoading ? (
         <>
@@ -88,6 +88,11 @@ function WalletSections({ driveId, driveName, orgName, isHome, read, memberNames
       {!wallet && !isHome && !panels.create && (
         <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
           {driveName} has no wallet. AI usage here spends from {orgName ? 'your seat allowance or ' : ''}your own credits.
+        </p>
+      )}
+      {wallet && isHome && (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground" data-testid="wallet-home-legacy-note">
+          This wallet was made before Home stopped taking funding. What is left in it is spent first, then your own credits. Nothing can add to it: set its allocation to 0, or pause or delete it.
         </p>
       )}
       {wallet && (

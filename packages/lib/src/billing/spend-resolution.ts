@@ -262,8 +262,8 @@ async function resolveAutomationSpend(input: {
     return { kind: 'skip', reason: 'creator_departed', walletId: null, chargeCents: 0 };
   }
   // A person present spends only a drive wallet they may draw (the chat path's rule); an automation's creator
-  // was vetted above. A Home drive's wallet is never drawn, by anyone (sharedSpendLegsFor).
-  const mayDraw = input.personPresent ? sharedSpendLegsFor(standing).driveWallet : standing !== null && standing.isHome !== true;
+  // was vetted above.
+  const mayDraw = input.personPresent ? sharedSpendLegsFor(standing).driveWallet : standing !== null;
   const driveWallet = standing && mayDraw ? await driveWalletOf(standing.driveId) : null;
   // SEAT-9: a lapsed org's drive wallet reads as paused, so the run SKIPS — never a person.
   const orgLapsed = await orgLapsedFor(standing?.orgId);

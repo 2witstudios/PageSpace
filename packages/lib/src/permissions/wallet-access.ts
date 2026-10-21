@@ -23,8 +23,10 @@
  * see the drive may donate (WAL-4); the donation service re-checks visibility itself.
  *
  * A HOME drive is the owner's own private space (drive-guards): AI usage there is the owner's own
- * spend, so nothing may fund it — no wallet is created, allocated, topped up or donated to. A
- * wallet made before this rule can still be viewed, paused, ruled and deleted, so it winds down.
+ * spend, so nothing may fund it — no wallet is created, topped up or donated to. A wallet made
+ * before this rule keeps working until it is spent: what is left in it is the owner's own credits
+ * and only the owner spends in Home. It can be paused, ruled, deleted, and its allocation lowered
+ * to 0 (the service refuses a positive one), so nothing is stranded and nothing new comes in.
  */
 import { decideOrgRole, holdsOrgRole } from '../organizations/authorize-core';
 
@@ -71,7 +73,7 @@ export function walletViewerRole(standing: WalletStanding): WalletViewer {
 const CONSUMER_ACTIONS: readonly WalletAction[] = ['view', 'donate'];
 const ORG_LEAD_ACTIONS: readonly WalletAction[] = ['view', 'view_spend_by_member', 'pause', 'set_rules', 'donate'];
 /** The actions that put credits INTO a wallet: refused on a Home drive, whose spend is its owner's own. */
-const FUNDING_ACTIONS: readonly WalletAction[] = ['create', 'allocate', 'top_up', 'donate'];
+const FUNDING_ACTIONS: readonly WalletAction[] = ['create', 'top_up', 'donate'];
 
 /** The drive facts wallet access turns on. `homeDrive` absent reads as a standard drive. */
 export interface WalletDriveFacts {
