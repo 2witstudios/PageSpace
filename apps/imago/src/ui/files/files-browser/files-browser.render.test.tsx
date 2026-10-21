@@ -68,7 +68,7 @@ describe('the Files strip', () => {
         button(container, 'Grid view')?.getAttribute('aria-pressed'),
         [...container.querySelectorAll('button')].some((candidate) => candidate.textContent === 'New Page'),
       ],
-      expected: ['Files', 'Launch', 'true', 'false', true],
+      expected: ['Pages', 'Launch', 'true', 'false', true],
     });
   });
 

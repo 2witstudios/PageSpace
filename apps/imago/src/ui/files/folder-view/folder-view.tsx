@@ -65,7 +65,7 @@ export function FolderView({ driveId, folderId, now = systemNow }: FolderViewPro
   // does not list draws as any unknown page does.
   const path = pathTo(drawn.nodes, folderId);
   if (path === undefined) {
-    return renderNotFound({ ...PAGE_NOT_FOUND, homeHref: filesHref, linkLabel: 'Back to Files' });
+    return renderNotFound({ ...PAGE_NOT_FOUND, homeHref: filesHref, linkLabel: 'Back to Pages' });
   }
   return renderFolderView({
     path,

@@ -269,7 +269,7 @@ describe('the folder browser', () => {
   test('files dragged over an empty folder say how many go into it', async () => {
     const { container } = show(['archive']);
     await drawn(container);
-    const section = container.querySelector('section[aria-label="Files browser"]') as HTMLElement;
+    const section = container.querySelector('section[aria-label="Pages browser"]') as HTMLElement;
     const enter = new Event('dragenter', { bubbles: true, cancelable: true });
     Object.defineProperty(enter, 'dataTransfer', {
       value: { types: ['Files'], items: [{ kind: 'file' }, { kind: 'file' }] },

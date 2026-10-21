@@ -90,12 +90,12 @@ test.describe('signed in', () => {
     page,
   }) => {
     await page.goto(imagoPath(homeDriveId));
-    await whenHydrated(page, railLink(page, 'Files'));
+    await whenHydrated(page, railLink(page, 'Pages'));
     await tag(rail(page), 'rail');
     await tag(shell(page), 'shell');
 
     const stops = [
-      { link: 'Files', section: 'files', path: imagoPath(homeDriveId, 'files') },
+      { link: 'Pages', section: 'files', path: imagoPath(homeDriveId, 'files') },
       { link: 'Drive settings', section: 'settings', path: imagoPath(homeDriveId, 'settings') },
       { link: 'Home', section: 'chat', path: imagoPath(homeDriveId) },
     ];
@@ -125,7 +125,7 @@ test.describe('signed in', () => {
       { link: 'Tasks', section: 'tasks', index: 'tasks', row: 'Due today', object: 'tasks/view/today' },
     ];
     await page.goto(imagoPath(homeDriveId));
-    await whenHydrated(page, railLink(page, 'Files'));
+    await whenHydrated(page, railLink(page, 'Pages'));
     for (const stop of stops) {
       await railLink(page, stop.link).click();
       await page.waitForURL(pathnameIs(imagoPath(homeDriveId, stop.index)));
@@ -230,7 +230,7 @@ test.describe('signed in', () => {
     const hide = await whenHydrated(page, listPane(page).getByRole('button', { name: 'Close sidebar', exact: true }));
     await hide.click();
     await expect.poll(() => widthOf(listPane(page))).toBe(0);
-    const files = railLink(page, 'Files');
+    const files = railLink(page, 'Pages');
     await page.evaluate(() => {
       const pane = document.querySelector('[data-slot="list"]');
       const record = window as Window & { __widths?: number[] };
@@ -310,7 +310,7 @@ test.describe('signed out', () => {
 
     await page.waitForURL(pathnameIs(requested));
     await expect(shell(page)).toHaveAttribute('data-section', 'files');
-    await expect(railLink(page, 'Files')).toHaveAttribute('aria-current', 'page');
+    await expect(railLink(page, 'Pages')).toHaveAttribute('aria-current', 'page');
     expect(await page.context().cookies()).toContainEqual(
       expect.objectContaining({ name: 'session' }),
     );
