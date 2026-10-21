@@ -20,7 +20,8 @@ import { BrandChip } from '../brand-chip/brand-chip';
 import { DRIVES, driveStatus, drivesFrom, type DriveSummary } from '../drives/drives';
 import { useLiveDrives } from '../drives/use-live-drives';
 import { ScopeSwitch } from '../drives/scope-switch';
-import { hasScope } from '../drives/section-scope';
+import { hasScope, resolveScope } from '../drives/section-scope';
+import { useSectionScopes } from '../drives/use-section-scope';
 import { HomeDriveProvider } from '../drives/home-drive-context';
 import { DRIVE_NOT_FOUND, renderNotFound } from '../not-found/not-found.render';
 import { renderPaneHeader } from '../pane/pane-header';
@@ -213,6 +214,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   // The Console's open session rides the query string; with none open, Imago holds its middle.
   const search = useSearchParams()?.toString() ?? '';
   const stage = consoleStage(routeStage, parseAgentSelection(search).sessionId !== null);
+  // The Console's session bar reads the drives its pane lists: every drive when Console is switched to All drives.
+  const consoleAllDrives = resolveScope(useSectionScopes(), 'agents', stage.driveId !== null && stage.driveId === homeDriveId) === 'all';
   const tier = useViewportTier();
   const phone = tier === 'phone';
   const paneSheetOpen = useUiState(selectPaneSheetOpen);
@@ -266,8 +269,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       ) : !missing && isConsole(stage) ? (
         // The open session's bar is the Console's head; it closes the session, not the route.
         <SessionToolbar
-          // Home's Console lists every drive's sessions, so its bar reads them all too.
-          driveId={stage.driveId === homeDriveId ? undefined : stage.driveId ?? undefined}
+          driveId={consoleAllDrives ? undefined : stage.driveId ?? undefined}
           leading={opener(stage, columns, 'page')}
           trailing={columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
         />

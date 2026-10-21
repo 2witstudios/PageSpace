@@ -6,6 +6,7 @@ import { mount, unmountAll } from '../../test-support/dom';
 import { HomeDriveProvider } from './home-drive-context';
 import { SectionScoped } from './section-scoped';
 import { setSectionScope } from './use-section-scope';
+import { SECTION_SCOPES_KEY } from './section-scope';
 
 afterEach(unmountAll);
 
@@ -37,6 +38,19 @@ describe('SectionScoped', () => {
       should: 'follow the switch on every drive',
       actual: { toDrive, toAll: [home.textContent, other.textContent] },
       expected: { toDrive: ['this drive', 'this drive'], toAll: ['every drive', 'every drive'] },
+    });
+  });
+
+  test('choices made while nothing listened', () => {
+    act(() => setSectionScope('calendar', 'drive'));
+    unmountAll();
+    // Another tab switched Calendar while no scoped pane was mounted here, so its event was missed.
+    window.localStorage.setItem(SECTION_SCOPES_KEY, JSON.stringify({ calendar: 'all' }));
+    assert({
+      given: 'a stored choice written while no pane listened',
+      should: 'read it when a pane mounts again',
+      actual: at('d1', 'home').textContent,
+      expected: 'every drive',
     });
   });
 });

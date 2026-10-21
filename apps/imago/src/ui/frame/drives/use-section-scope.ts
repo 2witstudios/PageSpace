@@ -13,33 +13,47 @@ import {
   type SectionScopes,
 } from './section-scope';
 
-/** localStorage, which can throw (private windows, blocked site data): choices then live for the session. */
+/**
+ * localStorage, which can throw (private windows, blocked site data): choices then live for the
+ * session. A read that throws is undefined, unlike null for nothing stored; a write says whether
+ * it held.
+ */
 const storage = {
-  read: (): string | null => {
+  read: (): string | null | undefined => {
     try {
       return window.localStorage.getItem(SECTION_SCOPES_KEY);
     } catch {
-      return null;
+      return undefined;
     }
   },
-  write: (value: string): void => {
+  write: (value: string): boolean => {
     try {
       window.localStorage.setItem(SECTION_SCOPES_KEY, value);
+      return true;
     } catch {
-      // The choice still holds for this window.
+      return false;
     }
   },
 };
 
 /**
  * One snapshot for the window, so a pane's head and the middle it scopes move together. It is
- * read from storage on first use and kept in step with other tabs through the storage event.
+ * kept in step with other tabs through the storage event while anything listens, and read from
+ * storage again when something starts listening, since events in between were missed. Once a
+ * write has failed, memory alone holds the choice and storage is not read over it.
  */
 let current: SectionScopes | null = null;
+let memoryOnly = false;
 const listeners = new Set<() => void>();
 
+const fromStorage = (): SectionScopes | null => {
+  if (memoryOnly) return null;
+  const raw = storage.read();
+  return raw === undefined ? null : parseScopes(raw);
+};
+
 const snapshot = (): SectionScopes => {
-  current ??= parseScopes(storage.read());
+  current ??= fromStorage() ?? NO_SCOPES;
   return current;
 };
 
@@ -49,11 +63,16 @@ const publish = (next: SectionScopes): void => {
 };
 
 const onStorage = (event: StorageEvent): void => {
-  if (event.key === SECTION_SCOPES_KEY) publish(parseScopes(event.newValue));
+  if (event.key === SECTION_SCOPES_KEY && !memoryOnly) publish(parseScopes(event.newValue));
 };
 
 const subscribe = (listener: () => void): (() => void) => {
-  if (listeners.size === 0) window.addEventListener('storage', onStorage);
+  if (listeners.size === 0) {
+    window.addEventListener('storage', onStorage);
+    const stored = fromStorage();
+    // Same choices keep the same snapshot, so nothing re-renders for a read that changed nothing.
+    if (stored !== null && serializeScopes(stored) !== serializeScopes(current ?? NO_SCOPES)) current = stored;
+  }
   listeners.add(listener);
   return () => {
     listeners.delete(listener);
@@ -69,7 +88,7 @@ export const setSectionScope = (section: ScopedSection, scope: SectionScope): vo
   const scopes = snapshot();
   if (scopes[section] === scope) return;
   const next = { ...scopes, [section]: scope };
-  storage.write(serializeScopes(next));
+  if (!storage.write(serializeScopes(next))) memoryOnly = true;
   publish(next);
 };
 

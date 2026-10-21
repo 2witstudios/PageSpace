@@ -1,7 +1,7 @@
 'use client';
 
-import type { ChannelThread, DirectThread } from '../message-model/message';
-import { useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
+import type { ChannelThread, DirectThread, MessageThread } from '../message-model/message';
+import { useDirectThreads, useDriveChannels, useInbox } from '../use-messages/use-messages';
 import { InboxPane } from './inbox-pane';
 import { useAllDrives } from '../../frame/drives/use-section-scope';
 import { renderMessagesPane, type MessageRowView, type MessagesSectionView } from './messages-pane.render';
@@ -60,13 +60,28 @@ export function MessagesPane({ driveId, selectedPageId, selectedConversationId }
   return unified ? (
     <InboxPane driveId={allDrives ? null : driveId} />
   ) : (
-    <CompactPane driveId={driveId} selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />
+    <CompactPane
+      driveId={driveId}
+      allDrives={allDrives}
+      selectedPageId={selectedPageId}
+      selectedConversationId={selectedConversationId}
+    />
   );
 }
 
-/** The compact groups: the current drive's channels, then the viewer's DMs. */
-function CompactPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
-  const channels = useDriveChannels(driveId);
+const isChannel = (thread: MessageThread): thread is ChannelThread => thread.kind === 'channel';
+
+/**
+ * The compact groups: the channels (the current drive's, or every drive's from the inbox when
+ * Messages is switched to All drives, so the list matches the head's switch), then the viewer's DMs.
+ */
+function CompactPane({ driveId, allDrives, selectedPageId, selectedConversationId }: MessagesPaneProps & { readonly allDrives: boolean }) {
+  const everyDrive = allDrives && driveId !== null;
+  const driveChannels = useDriveChannels(everyDrive ? null : driveId);
+  const inbox = useInbox(everyDrive);
+  const channels = everyDrive
+    ? { channels: inbox.threads?.filter(isChannel), error: inbox.error, retry: inbox.retry }
+    : driveChannels;
   const direct = useDirectThreads();
   return renderMessagesPane({
     channels:

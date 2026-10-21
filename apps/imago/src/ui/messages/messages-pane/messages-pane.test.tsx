@@ -11,9 +11,13 @@ import { messagePaths } from '../messages-api/messages-api';
 import { conversation, inboxChannel } from '../message-model/fixtures';
 import type { ConversationResponse, InboxItem } from '../message-model/message';
 import { MessagesPane, type MessagesPaneProps } from './messages-pane';
+import { setSectionScope } from '@/ui/frame/drives/use-section-scope';
 
 
-afterEach(unmountAll);
+afterEach(() => {
+  unmountAll();
+  setSectionScope('messages', 'drive');
+});
 
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
 const CONVERSATIONS = `GET ${messagePaths.conversations()}`;
@@ -74,7 +78,8 @@ const clickShow = (container: HTMLElement, label: string) =>
   });
 
 describe('MessagesPane on the index', () => {
-  test('the unified inbox', async () => {
+  test('the unified inbox, switched to All drives', async () => {
+    setSectionScope('messages', 'all');
     const { container, web } = show({
       [INBOX]: inbox(() => [
         inboxChannel('c1', { name: 'launch', unreadCount: 2, lastMessageAt: '2026-10-12T09:00:00.000Z', lastMessagePreview: 'ship it', lastMessageSender: 'Sam', driveId: 'd1' }),
@@ -85,7 +90,7 @@ describe('MessagesPane on the index', () => {
     await rowsLoaded(container, 3);
 
     assert({
-      given: 'a viewer with two channels in different drives and one DM with no messages',
+      given: 'Messages switched to All drives, with two channels in different drives and one DM with no messages',
       should: 'merge them in the server order, each linked to its own drive, with the unread count on the row',
       actual: [rows(container), web.count(CHANNELS), web.count(CONVERSATIONS)],
       expected: [
@@ -96,6 +101,27 @@ describe('MessagesPane on the index', () => {
         ],
         0,
         0,
+      ],
+    });
+  });
+
+  test('the inbox scoped to the drive', async () => {
+    const { container } = show({
+      [INBOX]: inbox(() => [
+        inboxChannel('c1', { name: 'launch', driveId: 'd1' }),
+        inboxChannel('c3', { name: 'other', driveId: 'd2' }),
+        { ...inboxChannel('c4', { name: 'empty' }), type: 'dm', name: 'Grace' },
+      ]),
+    });
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'Messages on its own drive, with a channel here, a channel in another drive and a DM',
+      should: 'list this drive’s channel and the DM, leaving the other drive’s channel out',
+      actual: rows(container),
+      expected: [
+        ['launch', '/d1/messages/c1'],
+        ['Grace', '/dm/c4'],
       ],
     });
   });
@@ -217,6 +243,35 @@ describe('MessagesPane with an object open or on a user-level route', () => {
             null,
           ],
           ['Direct messages', [['Grace', '/dm/m1', '1', null]], null],
+        ],
+        0,
+      ],
+    });
+  });
+
+  test('a channel open with Messages switched to All drives', async () => {
+    setSectionScope('messages', 'all');
+    const { container, web } = show(
+      {
+        [INBOX]: inbox(() => [inboxChannel('c1', { name: 'launch', driveId: 'd1' }), inboxChannel('c3', { name: 'other', driveId: 'd2' })]),
+        [CONVERSATIONS]: dms(() => []),
+      },
+      { selectedPageId: 'c1' },
+    );
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'a channel open while the head’s switch says All drives',
+      should: 'list every drive’s channels from the inbox, not only this drive’s',
+      actual: [sections(container)[0], web.count(CHANNELS)],
+      expected: [
+        [
+          'Channels',
+          [
+            ['launch', '/d1/messages/c1', null, 'page'],
+            ['other', '/d2/messages/c3', null, null],
+          ],
+          null,
         ],
         0,
       ],

@@ -7,11 +7,15 @@ import { mount, unmountAll } from '../../test-support/dom';
 import { fakeWeb } from '@/ui/test-support/fake-web';
 import { taskItem, taskListResponse } from '../task-model/fixtures';
 import { TasksPane } from './tasks-pane';
+import { setSectionScope } from '../../frame/drives/use-section-scope';
 
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
-afterEach(unmountAll);
+afterEach(() => {
+  unmountAll();
+  setSectionScope('tasks', 'drive');
+});
 
 const DRIVE = 'GET /api/drives/d1/pages?ls=true&recursive=true';
 
@@ -81,6 +85,36 @@ describe('TasksPane beside an open task', () => {
         back: true,
         listsHidden: true,
       },
+    });
+  });
+});
+
+describe('TasksPane switched to All drives', () => {
+  test('beside an open task, the drives to pick from', async () => {
+    setSectionScope('tasks', 'all');
+    const web = fakeWeb({
+      'GET /api/drives': () =>
+        Response.json([
+          { id: 'd1', name: 'Studio', kind: 'STANDARD' },
+          { id: 'd2', name: 'Ops', kind: 'STANDARD' },
+        ]),
+    });
+    const container = mount(
+      <ImagoSWRProvider client={web.client}>
+        <TasksPane driveId="d1" selectedPageId="page-p" selectedViewId={null} />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (container.querySelectorAll('a[href$="/tasks"]').length !== 2) throw new Error('drives not loaded');
+    });
+    assert({
+      given: 'Tasks switched to All drives while a task is open',
+      should: 'list the drives, the URL’s drive current, instead of the open task’s siblings',
+      actual: {
+        drives: [...container.querySelectorAll('a[href$="/tasks"]')].map((link) => [link.textContent, link.getAttribute('aria-current')]),
+        siblings: container.querySelector('[aria-label="To Do"]') === null,
+      },
+      expected: { drives: [['OOps', null], ['SStudio', 'true']], siblings: true },
     });
   });
 });

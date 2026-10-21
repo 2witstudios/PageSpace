@@ -93,9 +93,6 @@ export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPane
   const { lists, error, retry } = useDriveTaskLists(driveId);
   const { counts } = useTaskViewCounts(driveId, allDrives);
   const holder = useTaskHolder(driveId, selectedPageId);
-  if (holder !== null && selectedPageId !== null) {
-    return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
-  }
   const views = renderTaskViews({
     views: taskViews.map((entry) => ({
       id: entry.id,
@@ -108,6 +105,7 @@ export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPane
     })),
   });
   const glance = <TaskGlance driveId={driveId} />;
+  // All drives lists the drives even beside an open task: the scope, not the open list, decides the pane.
   if (allDrives) {
     return (
       <>
@@ -118,6 +116,9 @@ export function TasksPane({ driveId, selectedPageId, selectedViewId }: TasksPane
         </ListGroup>
       </>
     );
+  }
+  if (holder !== null && selectedPageId !== null) {
+    return <TaskSiblings driveId={driveId} holder={holder} pageId={selectedPageId} />;
   }
   if (lists === undefined) {
     return (
