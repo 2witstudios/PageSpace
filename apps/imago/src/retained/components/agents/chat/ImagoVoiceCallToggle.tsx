@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { Mic } from 'lucide-react';
+import { AudioLines } from 'lucide-react';
 import { toast } from 'sonner';
 import { useVoiceSession, useVoiceSessionControls } from '@/retained/contexts/VoiceSessionContext';
 import { agentTarget, isCallOnConversation } from '@/retained/lib/ai/realtime/voice-binding';
@@ -62,7 +62,7 @@ export function ImagoVoiceCallToggle({ agentId, conversationId }: {
       className={`flex h-8 w-8 items-center justify-center self-center rounded-md hover:bg-accent hover:text-foreground disabled:opacity-50 ${pressed ? 'text-primary' : 'text-muted-foreground'}`}
       onClick={press}
     >
-      <Mic className="h-4 w-4" />
+      <AudioLines className="h-4 w-4" />
     </button>
   );
 }
