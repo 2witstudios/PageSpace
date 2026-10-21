@@ -43,8 +43,14 @@ export const directThreadsFrom = (conversations: readonly ConversationResponse[]
  * drive they can read, in the order the server sent (newest post first). A channel without a drive
  * id cannot be linked, so it is left out rather than guessed at.
  */
-export const inboxThreadsFrom = (items: readonly InboxItem[]): readonly MessageThread[] =>
-  items.flatMap((item): MessageThread[] => {
+export const inboxThreadsFrom = (items: readonly InboxItem[]): readonly MessageThread[] => {
+  const seen = new Set<string>();
+  return items.flatMap((item): MessageThread[] => {
+    // Cursor pages can overlap when threads move while the inbox loads.
+    // Preserve the first occurrence and its position, with one React key per thread.
+    const key = `${item.type}:${item.id}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
     if (item.type === 'dm') {
       return [
         {
@@ -74,3 +80,4 @@ export const inboxThreadsFrom = (items: readonly InboxItem[]): readonly MessageT
       },
     ];
   });
+};

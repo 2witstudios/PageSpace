@@ -45,10 +45,10 @@ describe('renderDmIndexPane()', () => {
     const html = pane();
     assert({
       given: 'two conversations with an empty filter',
-      should: 'draw a 300px pane named Direct messages with a Filter conversations input and each row',
+      should: 'draw a pane that fills its column named Direct messages with a Filter conversations input and each row',
       actual: [
         html.includes('aria-label="Direct messages"'),
-        html.includes('w-list-pane'),
+        html.includes('w-full min-w-0 flex-1'),
         html.includes('aria-label="Filter conversations"'),
         html.includes('@dana'),
         html.includes('@sam'),
