@@ -2,7 +2,7 @@
  * Every pane is always mounted. A fixed column (the left pane, Imago docked) carries an
  * explicit width token and animates it (`pane-motion`, --ease-pane, 320ms); the middle and
  * Imago on the ground take the rest (`grow`). `overflow-clip` hides what does not fit while a
- * width moves, so the content never reflows mid-slide. While a seam drags it (`data-resizing`),
+ * width moves; its content follows the allocated width. While a seam drags it (`data-resizing`),
  * the width tracks the pointer instead of easing after it.
  */
 export const paneClass = (width: string): string =>

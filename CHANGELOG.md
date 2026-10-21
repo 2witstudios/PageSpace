@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.
+
 - The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
 - In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
 - Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.
