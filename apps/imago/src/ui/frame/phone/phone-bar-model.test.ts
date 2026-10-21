@@ -12,7 +12,7 @@ describe('phoneBarItems()', () => {
       actual: items.map((entry) => [entry.label, entry.href, entry.current]),
       expected: [
         ['Home', '/d1', false],
-        ['Files', '/d1/files', true],
+        ['Pages', '/d1/files', true],
         ['Messages', '/d1/messages', false],
         ['Tasks', '/d1/tasks', false],
       ],
@@ -21,7 +21,7 @@ describe('phoneBarItems()', () => {
 
   test('Messages carries its unread count in its name', () => {
     const named = phoneBarItems(stageFor('/d1'), 'd1', 8).map((entry) => entry.name);
-    assert({ given: '8 unread messages', should: 'name Messages with the count', actual: named, expected: ['Home', 'Files', 'Messages, 8 unread', 'Tasks'] });
+    assert({ given: '8 unread messages', should: 'name Messages with the count', actual: named, expected: ['Home', 'Pages', 'Messages, 8 unread', 'Tasks'] });
   });
 
   test('no drive: no links', () => {

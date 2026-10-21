@@ -27,7 +27,7 @@ export type PhoneDocHeadRenderProps = {
 };
 
 /**
- * The 52px head of a page on a phone (C-Resp-Phone-Doc): Back to Files, the parent folder over
+ * The 52px head of a page on a phone (C-Resp-Phone-Doc): Back to Pages, the parent folder over
  * the title, presence, the open-pages count and Page actions. Back replaces Close page, and the
  * tab strip collapses to the count.
  */
@@ -35,7 +35,7 @@ export function renderPhoneDocHead(props: PhoneDocHeadRenderProps): ReactNode {
   const { backHref, parent, title, presence, count, onOpenPages, actions } = props;
   return (
     <header className={phoneHeadClass}>
-      <Link href={backHref} prefetch={true} className={phoneHeadControlClass} aria-label="Back to Files">
+      <Link href={backHref} prefetch={true} className={phoneHeadControlClass} aria-label="Back to Pages">
         {renderIcon({ name: 'chevronLeft', size: 20 })}
       </Link>
       <div className={phoneCrumbClass}>

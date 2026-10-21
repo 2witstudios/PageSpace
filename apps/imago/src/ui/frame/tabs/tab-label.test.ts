@@ -23,7 +23,7 @@ describe('tabLabelFor() (IMC-1.5)', () => {
       should: 'label each with its section and icon, asking for no page',
       actual: ['/d1/files', '/d1/messages', '/d1/tasks'].map(tabLabelFor),
       expected: [
-        { kind: 'screen', title: 'Files', icon: 'files' },
+        { kind: 'screen', title: 'Pages', icon: 'files' },
         { kind: 'screen', title: 'Messages', icon: 'messages' },
         { kind: 'screen', title: 'Tasks', icon: 'tasks' },
       ],

@@ -9,6 +9,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
   - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.
   - **Messages** shows every drive's channels with your DMs. Set to one drive, it shows that drive's channels and your DMs, and the "Showing all drives" note under the inbox is gone.
+- In Imago, the chat now sits on the plain page background and the left sidebars (pages, messages, chat history and tool sidebars) take the light blue tint, the reverse of before.
+- In Imago, the Files section is now called Pages: in the rail, the phone's bottom bar and header, its sidebar and tab, the folder browser, the chat's context chip and prompt ("Ask across Pages"), and the "Back to Pages" links.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
   - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.

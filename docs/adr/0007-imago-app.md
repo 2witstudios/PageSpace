@@ -87,7 +87,7 @@ Every leaf PR targets `pu/imago` (DEC-1). The orchestrator merges a leaf into `p
 
 D5 puts the `⋯` overflow on the rail **below Plugins**. DEC-6 changes that for this epic:
 
-- The rail is Chat, Files, Messages (channels + DMs), Tasks, Settings.
+- The rail is Chat, Pages, Messages (channels + DMs), Tasks, Settings. (The Pages route and section id stay `files`.)
 - **Plugins is not on the rail this epic** (neither Plugins nor Console is built), so the `⋯` overflow sits **below Tasks**.
 - The overflow holds Calendar, Agents, Connections, Activity and Trash as deep links into classic for the current drive.
 
