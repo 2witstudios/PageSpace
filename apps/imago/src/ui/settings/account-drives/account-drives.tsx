@@ -110,7 +110,7 @@ export function AccountDrivesView({
   return (
     <SettingsScreen
       title="Drives"
-      lede="Every drive you can open, grouped by who owns it. Opening one lands in its Files."
+      lede="Every drive you can open, grouped by who owns it. Opening one lands in its Pages."
       actions={
         <>
           <div role="group" aria-label="View" className="flex items-center gap-1 rounded-xl border border-hairline p-px">

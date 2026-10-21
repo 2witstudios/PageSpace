@@ -35,7 +35,7 @@ export function renderPhoneDocHead(props: PhoneDocHeadRenderProps): ReactNode {
   const { backHref, parent, title, presence, count, onOpenPages, actions } = props;
   return (
     <header className={phoneHeadClass}>
-      <Link href={backHref} prefetch={true} className={phoneHeadControlClass} aria-label="Back to Files">
+      <Link href={backHref} prefetch={true} className={phoneHeadControlClass} aria-label="Back to Pages">
         {renderIcon({ name: 'chevronLeft', size: 20 })}
       </Link>
       <div className={phoneCrumbClass}>

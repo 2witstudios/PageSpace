@@ -29,7 +29,7 @@ describe('PhoneBottomBar', () => {
         view.querySelector('[aria-current="page"]')?.getAttribute('aria-label'),
         view.querySelector('button')?.getAttribute('aria-label'),
       ],
-      expected: ['Sections', ['Home', 'Files', 'Messages, 8 unread', 'Tasks'], 'Files', 'More, 3 notifications'],
+      expected: ['Sections', ['Home', 'Pages', 'Messages, 8 unread', 'Tasks'], 'Pages', 'More, 3 notifications'],
     });
   });
 });

@@ -5,6 +5,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- In Imago, the chat now sits on the plain page background and the left sidebars (files, messages, chat history and tool sidebars) take the light blue tint, the reverse of before.
+- In Imago, the Files section is now called Pages: in the rail, the phone's bottom bar, its sidebar and tab, and the phone's Back button.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
   - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.

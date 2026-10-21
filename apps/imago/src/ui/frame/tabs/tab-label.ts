@@ -22,7 +22,7 @@ const TOOLS: Readonly<Record<string, { readonly title: string; readonly icon: Ic
 
 /** A section's index, which a tab shows when the viewer is on the section itself. */
 const SECTIONS: Readonly<Record<'files' | 'messages' | 'tasks', { readonly title: string; readonly icon: IconName }>> = {
-  files: { title: 'Files', icon: 'files' },
+  files: { title: 'Pages', icon: 'files' },
   messages: { title: 'Messages', icon: 'messages' },
   tasks: { title: 'Tasks', icon: 'tasks' },
 };
