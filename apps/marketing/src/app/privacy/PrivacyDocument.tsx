@@ -276,7 +276,10 @@ export function PrivacyDocument({ embed }: { embed: boolean }) {
             <ul className="list-disc pl-6 mb-4">
               <li><strong>Email:</strong> hello@pagespace.ai</li>
               <li><strong>Support:</strong> Available through the in-app help system</li>
-              <li><strong>Community:</strong> <a href="https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t" className="text-primary hover:underline">AI Agent Hub</a></li>
+              {/* A share link into the app — off the embedded legal set. */}
+              {!embed && (
+                <li><strong>Community:</strong> <a href="https://pagespace.ai/s/ps_share_oihl5ivoscf0tzx26g0t74degxwi028t" className="text-primary hover:underline">AI Agent Hub</a></li>
+              )}
             </ul>
             <p className="mb-4">
               For data protection requests (access, deletion, portability), please use the subject line &quot;Data Protection Request&quot; in your email.
