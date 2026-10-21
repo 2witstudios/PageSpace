@@ -6,6 +6,9 @@ import type { UIMessage } from 'ai';
 import { mount, unmountAll } from '../../test-support/dom';
 import { ChipsRow, chipsRowClass } from './chips-row';
 
+const display = vi.hoisted(() => ({ showTokenCounts: true }));
+vi.mock('@/retained/hooks/useDisplayPreferences', () => ({ useDisplayPreferences: () => ({ preferences: display }) }));
+
 const rendered = vi.hoisted(() => ({ messages: [] as UIMessage[] }));
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
@@ -44,6 +47,7 @@ vi.mock('@/retained-adapters/retained-provider', () => ({
 
 afterEach(() => {
   unmountAll();
+  display.showTokenCounts = true;
   calls.plan.length = 0;
   calls.tasks.length = 0;
   calls.usage.length = 0;
@@ -71,6 +75,12 @@ describe('ChipsRow', () => {
         streams: [['a-1', 'c-1']],
       },
     });
+  });
+
+  test('does not mount context and cost usage when token counts are disabled', () => {
+    display.showTokenCounts = false;
+    mount(<ChipsRow conversationId="c-1" agentId="a-1" />);
+    assert({ given: 'token counts disabled in display settings', should: 'omit the usage monitor', actual: calls.usage, expected: [] });
   });
 
   test('keeps the row collapsible', () => {
