@@ -9,7 +9,14 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MARKETING = resolve(HERE, '../../../../marketing/src/app');
-const read = (page: string) => readFileSync(resolve(MARKETING, page, 'page.tsx'), 'utf-8');
+// Each page.tsx is a thin wrapper; the legal text lives in the page's *Document.tsx.
+const DOCUMENTS = {
+  terms: 'terms/TermsDocument.tsx',
+  privacy: 'privacy/PrivacyDocument.tsx',
+  cookies: 'cookies/CookiesDocument.tsx',
+  subprocessors: 'subprocessors/SubprocessorsDocument.tsx',
+} as const;
+const read = (page: keyof typeof DOCUMENTS) => readFileSync(resolve(MARKETING, DOCUMENTS[page]), 'utf-8');
 
 describe('legal pages for App Review', () => {
   const terms = read('terms');

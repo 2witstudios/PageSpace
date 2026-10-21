@@ -93,8 +93,8 @@ describe('UI-12 credit figures on public pages come from the money-model module'
   });
 
   it('UI-12 D-OW-18 the Terms of Service states no credit figure and refers readers to the pricing page', async () => {
-    const { default: TermsPage } = await import('../terms/page');
-    const html = renderToStaticMarkup(<TermsPage />);
+    const { TermsDocument } = await import('../terms/TermsDocument');
+    const html = renderToStaticMarkup(<TermsDocument embed={false} />);
     const text = visibleText(html);
 
     // The legal text states NO credit figure — not as a literal and not through the module
@@ -108,7 +108,7 @@ describe('UI-12 credit figures on public pages come from the money-model module'
     expect(text).toContain('These Terms state no credit figures');
     expect(html).toContain('href="/pricing"');
 
-    expect(source('terms/page.tsx')).not.toMatch(HARDCODED_CREDIT_FIGURE);
+    expect(source('terms/TermsDocument.tsx')).not.toMatch(HARDCODED_CREDIT_FIGURE);
   });
 });
 
@@ -130,12 +130,12 @@ describe('plan and seat prices on the FAQ and Terms come from the tier table', (
     expect(faq).toContain(`on Pro (${pro.price}/month)`);
     expect(faq).toContain(`on Business (${business.price}/month, the plan for an organization with ${org.includedSeats} seats included and ${seatPrice} per extra seat)`);
 
-    const { default: TermsPage } = await import('../terms/page');
-    const terms = visibleText(renderToStaticMarkup(<TermsPage />));
+    const { TermsDocument } = await import('../terms/TermsDocument');
+    const terms = visibleText(renderToStaticMarkup(<TermsDocument embed={false} />));
     expect(terms).toContain(`Pro Plan (${pro.price}/month):`);
     expect(terms).toContain(`Business Plan (${business.price}/month per organization, ${org.includedSeats} seats included, ${seatPrice} per extra seat):`);
 
     expect(source('faq/page.tsx')).not.toMatch(HARDCODED_PRICE);
-    expect(source('terms/page.tsx')).not.toMatch(HARDCODED_PRICE);
+    expect(source('terms/TermsDocument.tsx')).not.toMatch(HARDCODED_PRICE);
   });
 });
