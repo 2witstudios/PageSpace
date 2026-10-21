@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from 'react';
 import { Button } from '@/retained/components/ui/button';
 import { useDocumentStore } from '@/retained/stores/useDocumentStore';
 import { useMobile } from '@/retained/hooks/useMobile';
@@ -9,8 +10,14 @@ export function EditorToggles() {
   const activeView = useDocumentStore((state) => state.activeView);
   const setActiveView = useDocumentStore((state) => state.setActiveView);
   const isMobile = useMobile();
-  const { preferences } = useDisplayPreferences();
+  const { preferences, isLoading } = useDisplayPreferences();
   const shouldShowToggles = preferences.showCodeToggle;
+
+  useEffect(() => {
+    if (!isLoading && !shouldShowToggles && activeView === 'code') {
+      setActiveView('rich');
+    }
+  }, [isLoading, shouldShowToggles, activeView, setActiveView]);
 
   if (!shouldShowToggles || isMobile) {
     return null;

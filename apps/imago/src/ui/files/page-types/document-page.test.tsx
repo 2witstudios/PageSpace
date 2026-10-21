@@ -89,6 +89,17 @@ describe('FormattingStrip (IMC-3.1)', () => {
     });
   });
 
+  test('disabling the code toggle returns an open code editor to Rich mode', () => {
+    useDocumentStore.setState({ activeView: 'code' });
+    const root = mount(<FormattingStrip pageId={PAGE_ID} state={{ editor: null, contentMode: 'html', formatting: false }} />);
+    assert({
+      given: 'Code mode active with the code toggle disabled',
+      should: 'return to Rich mode and hide editor mode controls',
+      actual: [useDocumentStore.getState().activeView, root.querySelector('[aria-label="Editor mode"]')],
+      expected: ['rich', null],
+    });
+  });
+
   test('an active mark is pressed', () => {
     const root = mount(<FormattingStrip pageId={PAGE_ID} state={{ editor: fakeEditor(['bold']), contentMode: 'html', formatting: true }} />);
     const bold = root.querySelector('[aria-label="Bold"]');
