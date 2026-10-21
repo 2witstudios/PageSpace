@@ -203,6 +203,25 @@ describe('drive-wallet service (real Postgres)', () => {
     expect(allowed.funds.donations.find(donation => donation.driveId === personalDrive.id)).toEqual(hidden.funds.donations[0]);
   });
 
+  it('a Home drive is never funded: a wallet made there earlier can be run down, but no one funds it and it is no source to spend from', async () => {
+    if (!world) return;
+    const userId = world.ids.priya;
+    await db.insert(wallets).values({ userId, monthlyRemainingCents: 5000 });
+    const home = await factories.createDrive(userId);
+    // A wallet made before the rule: create it on a standard drive, then the drive is Home.
+    expect(await createDriveWallet(accountActor(userId), home.id, { allocationCents: 0 }, 'session')).toMatchObject({ ok: true });
+    await db.update(drives).set({ kind: 'HOME' }).where(eq(drives.id, home.id));
+
+    const read = await getDriveWallet(accountActor(userId), home.id, 'session');
+    expect(read).toMatchObject({ ok: true, viewer: 'lead', actions: ['view', 'view_spend_by_member', 'pause', 'set_rules', 'delete', 'set_caps'] });
+    expect(await topUpDriveWallet(accountActor(userId), home.id, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 403 });
+    expect(await donateToDrive(accountActor(userId), home.id, { amountCents: 100, idempotencyKey: createId() }, 'session')).toMatchObject({ ok: false, status: 403 });
+
+    const mine = await listMyWallets(accountActor(userId), 'session');
+    expect(mine.driveWallets.map((w) => w.driveId)).not.toContain(home.id);
+    expect(mine.funds.driveWallets.map((w) => w.driveId)).toContain(home.id);
+  });
+
   it('SPEND-9 (partial) X-6 (partial) a MEMBER sees the remaining amount and their own cap only — never the pool balance or another consumer\'s spend', async () => {
     if (!world) return;
     const read = await getDriveWallet(credentialActor(world.ids.marcus, null), world.productId, 'session');
