@@ -3,6 +3,8 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
 import { formatBytes } from '@pagespace/lib/client-safe';
+import { isBillingEnabled } from '@/retained/lib/deployment-mode';
+import { imagoReturnPath } from '@/lib/auth/sign-in-url';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import { uploadFileToS3, type UploadedPage } from '@/retained/lib/upload/orchestrator';
 
@@ -98,10 +100,11 @@ export function useFileDrop({
     }
 
     // Check storage quota before uploading. Per-file quota is also enforced
-    // server-side at presign time; this is an early, friendlier guard.
+    // server-side at presign time; this is an early, friendlier guard. It names
+    // the drive so an org drive is checked against the org's quota (WAL-9).
     const totalSize = files.reduce((sum, f) => sum + f.size, 0);
     try {
-      await post('/api/storage/check', { fileSize: totalSize });
+      await post('/api/storage/check', { fileSize: totalSize, driveId });
     } catch (error) {
       console.error('Storage check failed:', error);
       const errorMessage = (error as Error).message;
@@ -110,7 +113,14 @@ export function useFileDrop({
       } else if (errorMessage.includes('503')) {
         toast.error('Server is busy. Please try again later.');
       } else {
-        toast.error('Upload not allowed');
+        const denial = quotaDenial(error);
+        if (denial) {
+          toast.error(denial.reason, denial.manageHref && isBillingEnabled()
+            ? { action: { label: 'Get more storage', onClick: () => window.location.assign(imagoReturnPath(denial.manageHref as string)) } }
+            : undefined);
+        } else {
+          toast.error('Upload not allowed');
+        }
       }
       return;
     }
@@ -189,4 +199,32 @@ export function useFileDrop({
     resetDragState,
     isFileDrag
   };
+}
+
+/**
+ * The storage check's 413 refusal: its reason, and, when more storage would resolve it,
+ * where the payer can get it (their own Storage screen, or the org's billing page for an org drive).
+ */
+export function quotaDenial(error: unknown): { reason: string; manageHref: string | null } | null {
+  const { status, body } = (error ?? {}) as { status?: unknown; body?: unknown };
+  if (status !== 413 || !body || typeof body !== 'object') return null;
+  const { reason, quota, requiredBytes } = body as {
+    reason?: unknown;
+    requiredBytes?: unknown;
+    quota?: { orgId?: unknown; userId?: unknown; availableBytes?: unknown; tier?: unknown };
+  };
+  if (typeof reason !== 'string' || reason.length === 0) return null;
+  // More storage (or, on Free, a paid plan) only helps when space ran out, or when Free's
+  // file-count cap was hit. A file over the per-file limit is refused whatever the quota.
+  const outOfSpace = !reason.startsWith('File exceeds ')
+    && typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
+    && requiredBytes > quota.availableBytes;
+  const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
+  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null };
+  const manageHref = typeof quota?.orgId === 'string'
+    ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing`
+    : typeof quota?.userId === 'string'
+      ? '/account/storage'
+      : null;
+  return { reason, manageHref };
 }

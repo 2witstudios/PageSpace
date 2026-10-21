@@ -8,7 +8,6 @@ import { parseCreditInput } from '@pagespace/lib/billing/wallet-surface';
 import { DEFAULT_CONSUMER_CAPS } from '@pagespace/lib/billing/wallet-core';
 import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Checkbox } from '@/retained/components/ui/checkbox';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/retained/components/ui/dialog';
 import { Input } from '@/retained/components/ui/input';
@@ -16,6 +15,7 @@ import { Label } from '@/retained/components/ui/label';
 import { del, fetchWithAuth, put } from '@/retained/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
 import { useEditingStore } from '@/retained/stores/useEditingStore';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 /** `GET /api/drives/[driveId]/wallet/caps` (WAL-7). */
 export interface ConsumerCapView {
@@ -67,32 +67,29 @@ export function WalletCapsCard({ driveId, orgName, memberNames, editable, revisi
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return (
-    <Card data-testid="wallet-caps-card">
-      <CardHeader>
-        <CardTitle>Member caps</CardTitle>
-        <CardDescription>
-          Limit what one person can spend from this wallet. {orgName ? `On an org drive the ${orgName} Owner and Admins set caps.` : "On a personal drive, the wallet's owner sets them."}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <div className="overflow-x-auto rounded-lg border">
+    <SettingsSection
+      title="Member caps"
+      description={`Limit what one person can spend from this wallet. ${orgName ? `On an org drive the ${orgName} Owner and Admins set caps.` : "On a personal drive, the wallet's owner sets them."}`}
+    >
+      <div data-testid="wallet-caps-card" className="flex flex-col gap-4">
+        <div className="overflow-x-auto rounded-xl border">
           <table className="w-full text-sm">
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
-                <th className="px-3 py-2 font-normal">Member</th>
-                <th className="px-3 py-2 font-normal">Daily cap</th>
-                <th className="px-3 py-2 font-normal">Monthly cap</th>
-                {editable && <th className="px-3 py-2" />}
+                <th className="px-4 py-2 font-normal">Member</th>
+                <th className="px-4 py-2 font-normal">Daily cap</th>
+                <th className="px-4 py-2 font-normal">Monthly cap</th>
+                {editable && <th className="px-4 py-2" />}
               </tr>
             </thead>
             <tbody>
               {people.map((p) => (
                 <tr key={p.userId} className="border-t">
-                  <td className="px-3 py-2">{p.name}</td>
-                  <td className="px-3 py-2 tabular-nums">{p.cap?.dailyCapCredits ? `${p.cap.dailyCapCredits} credits` : <span className="text-muted-foreground">No cap</span>}</td>
-                  <td className="px-3 py-2 tabular-nums">{p.cap?.monthlyCapCredits ? `${p.cap.monthlyCapCredits} credits` : <span className="text-muted-foreground">No cap</span>}</td>
+                  <td className="px-4 py-2 text-foreground">{p.name}</td>
+                  <td className="px-4 py-2 tabular-nums">{p.cap?.dailyCapCredits ? `${p.cap.dailyCapCredits} credits` : <span className="text-muted-foreground">No cap</span>}</td>
+                  <td className="px-4 py-2 tabular-nums">{p.cap?.monthlyCapCredits ? `${p.cap.monthlyCapCredits} credits` : <span className="text-muted-foreground">No cap</span>}</td>
                   {editable && (
-                    <td className="px-3 py-2 text-right">
+                    <td className="px-4 py-2 text-right">
                       <Button variant="ghost" size="sm" onClick={() => setEditing({ userId: p.userId, name: p.name })}>
                         {p.cap ? 'Edit' : 'Set cap'}
                       </Button>
@@ -106,14 +103,14 @@ export function WalletCapsCard({ driveId, orgName, memberNames, editable, revisi
         <p className="text-xs text-muted-foreground">
           Turning a cap on without values sets {DEFAULT_DAILY_CREDITS} credits a day and {DEFAULT_MONTHLY_CREDITS} credits a month. No cap means no limit inside this wallet. A person who reaches a cap is offered their other sources.
         </p>
-        <div className="flex gap-2.5 rounded-lg bg-muted px-3.5 py-3 text-xs">
+        <div className="flex gap-2.5 rounded-xl bg-muted px-4 py-3 text-xs">
           <Bell className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span>
             Whoever funds this wallet gets an in-app alert when a member reaches 80% and 100% of a cap.{' '}
             {orgName ? `Here that is the ${orgName} Owner and Admins.` : "Here that is the drive's owner."}
           </span>
         </div>
-      </CardContent>
+      </div>
       {editing && (
         <CapEditDialog
           driveId={driveId}
@@ -126,7 +123,7 @@ export function WalletCapsCard({ driveId, orgName, memberNames, editable, revisi
           }}
         />
       )}
-    </Card>
+    </SettingsSection>
   );
 }
 

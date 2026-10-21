@@ -126,6 +126,7 @@ interface WalletAccess {
   standing: DriveWalletStanding;
   viewer: Exclude<WalletViewer, 'none'>;
   orgDrive: boolean;
+  homeDrive: boolean;
   actions: WalletAction[];
 }
 
@@ -141,12 +142,13 @@ async function walletAccess(actor: AccessActor, driveId: string, credential: Wal
   // [D-OW-26] a token reads as a consumer and may take no write, whatever the person's role.
   const viewer = viewerForCredential(role, credential);
   const orgDrive = standing.orgId !== null;
-  const actions = walletActionsFor(viewer, { orgDrive }).filter((a) => credential === 'session' || a === 'view');
-  return { ok: true, standing, viewer, orgDrive, actions };
+  const homeDrive = standing.isHome === true;
+  const actions = walletActionsFor(viewer, { orgDrive, homeDrive }).filter((a) => credential === 'session' || a === 'view');
+  return { ok: true, standing, viewer, orgDrive, homeDrive, actions };
 }
 
 function requireAction(access: WalletAccess, action: WalletAction): WalletServiceError | null {
-  return mayTakeWalletAction(access.viewer, action, { orgDrive: access.orgDrive }) ? null : forbidden(action);
+  return mayTakeWalletAction(access.viewer, action, { orgDrive: access.orgDrive, homeDrive: access.homeDrive }) ? null : forbidden(action);
 }
 
 /**

@@ -21,6 +21,10 @@
  * rules (fallback, donations on/off per WAL-4, the drive's default source per SPEND-3). On a
  * PERSONAL drive the lead's own wallet funds it, so the lead does everything. Anyone who can
  * see the drive may donate (WAL-4); the donation service re-checks visibility itself.
+ *
+ * A HOME drive is the owner's own private space (drive-guards): AI usage there is the owner's own
+ * spend, so nothing may fund it — no wallet is created, allocated, topped up or donated to. A
+ * wallet made before this rule can still be viewed, paused, ruled and deleted, so it winds down.
  */
 import { decideOrgRole, holdsOrgRole } from '../organizations/authorize-core';
 
@@ -52,6 +56,8 @@ export interface WalletStanding {
   isDriveMember: boolean;
   /** Their accepted role in the drive's org; null when not in it (a pending invite is not a role). */
   orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  /** The drive is its owner's Home drive (drives.kind === 'HOME'); absent reads as a standard drive. */
+  isHome?: boolean;
 }
 
 export function walletViewerRole(standing: WalletStanding): WalletViewer {
@@ -64,18 +70,26 @@ export function walletViewerRole(standing: WalletStanding): WalletViewer {
 
 const CONSUMER_ACTIONS: readonly WalletAction[] = ['view', 'donate'];
 const ORG_LEAD_ACTIONS: readonly WalletAction[] = ['view', 'view_spend_by_member', 'pause', 'set_rules', 'donate'];
+/** The actions that put credits INTO a wallet: refused on a Home drive, whose spend is its owner's own. */
+const FUNDING_ACTIONS: readonly WalletAction[] = ['create', 'allocate', 'top_up', 'donate'];
+
+/** The drive facts wallet access turns on. `homeDrive` absent reads as a standard drive. */
+export interface WalletDriveFacts {
+  orgDrive: boolean;
+  homeDrive?: boolean;
+}
 
 /** Every action `role` may take on a drive wallet, in WALLET_ACTIONS order. */
-export function walletActionsFor(role: WalletViewer, drive: { orgDrive: boolean }): WalletAction[] {
+export function walletActionsFor(role: WalletViewer, drive: WalletDriveFacts): WalletAction[] {
   const allowed: readonly WalletAction[] =
     role === 'org_admin' ? WALLET_ACTIONS
       : role === 'lead' ? (drive.orgDrive ? ORG_LEAD_ACTIONS : WALLET_ACTIONS)
         : role === 'member' || role === 'guest' ? CONSUMER_ACTIONS
           : [];
-  return WALLET_ACTIONS.filter((action) => allowed.includes(action));
+  return WALLET_ACTIONS.filter((action) => allowed.includes(action) && !(drive.homeDrive === true && FUNDING_ACTIONS.includes(action)));
 }
 
-export function mayTakeWalletAction(role: WalletViewer, action: WalletAction, drive: { orgDrive: boolean }): boolean {
+export function mayTakeWalletAction(role: WalletViewer, action: WalletAction, drive: WalletDriveFacts): boolean {
   return walletActionsFor(role, drive).includes(action);
 }
 

@@ -1,3 +1,4 @@
+import { formatCreditCount } from '@pagespace/lib/billing/money-model';
 import { TIER_PLAN_LIMITS, toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import type { NavGroup } from '../settings-nav/settings-nav';
 
@@ -5,7 +6,7 @@ import type { NavGroup } from '../settings-nav/settings-nav';
 export const ACCOUNT_ME = '/api/account';
 /** apps/web's subscription status: the tier that names the plan (GET /api/subscriptions/status). */
 export const SUBSCRIPTION_STATUS = '/api/subscriptions/status';
-/** apps/web's credit balance: `spendable` is the whole-number total (GET /api/credits). */
+/** apps/web's credit balance: `spendable` is the total in cents of credit value (GET /api/credits). */
 export const CREDITS = '/api/credits';
 
 export type Account = {
@@ -31,10 +32,10 @@ export const planNameOf = (body: unknown): string | null => {
   return TIER_PLAN_LIMITS[toSubscriptionTier(text(body.subscriptionTier))].name;
 };
 
-/** Spendable credits as a whole number; null when the balance is not loaded. */
-export const creditsOf = (body: unknown): number | null =>
+/** Spendable credits as a whole count with separators ("1,612"); null when the balance is not loaded. */
+export const creditsOf = (body: unknown): string | null =>
   isRecord(body) && typeof body.spendable === 'number' && Number.isFinite(body.spendable)
-    ? Math.floor(body.spendable)
+    ? formatCreditCount(body.spendable)
     : null;
 
 /** The number of drives the viewer can reach; null for an error body or nothing loaded yet. */

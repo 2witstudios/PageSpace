@@ -1,7 +1,7 @@
 'use client';
 
 import { toast } from 'sonner';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 import { post } from '@/retained/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
 import { CreditAmountField } from './CreditAmountField';
@@ -12,14 +12,11 @@ import { CreditAmountField } from './CreditAmountField';
  */
 export function CreateWalletCard({ driveId, orgName, onChanged }: { driveId: string; orgName: string | null; onChanged: () => Promise<unknown> }) {
   return (
-    <Card data-testid="wallet-create-card">
-      <CardHeader>
-        <CardTitle>Give this drive a wallet</CardTitle>
-        <CardDescription>
-          Members then spend a shared budget here instead of {orgName ? 'their seat allowance or ' : ''}their own credits. The allocation is drawn from {orgName ? `the ${orgName} pool` : 'your credits'} each month as it is spent.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SettingsSection
+      title="Give this drive a wallet"
+      description={`Members then spend a shared budget here instead of ${orgName ? 'their seat allowance or ' : ''}their own credits. The allocation is drawn from ${orgName ? `the ${orgName} pool` : 'your credits'} each month as it is spent.`}
+    >
+      <div data-testid="wallet-create-card" className="rounded-xl border p-4">
         <CreditAmountField
           editingId={`drive-wallet-create-${driveId}`}
           label="Monthly allocation"
@@ -34,20 +31,16 @@ export function CreateWalletCard({ driveId, orgName, onChanged }: { driveId: str
             }
           }}
         />
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
 /** Donate to the drive's wallet from your own balance (WAL-4). A donation is not refundable (D-OW-13). */
 export function DonateCard({ driveId, driveName, onChanged }: { driveId: string; driveName: string; onChanged: () => Promise<unknown> }) {
   return (
-    <Card data-testid="wallet-donate-card">
-      <CardHeader>
-        <CardTitle>Add to this wallet</CardTitle>
-        <CardDescription>Give credits from your own balance to everyone who spends in {driveName}. Donations are not refundable.</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SettingsSection title="Add to this wallet" description={`Give credits from your own balance to everyone who spends in ${driveName}. Donations are not refundable.`}>
+      <div data-testid="wallet-donate-card" className="rounded-xl border p-4">
         <CreditAmountField
           editingId={`drive-wallet-donate-${driveId}`}
           label="Amount"
@@ -63,7 +56,7 @@ export function DonateCard({ driveId, driveName, onChanged }: { driveId: string;
             }
           }}
         />
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }

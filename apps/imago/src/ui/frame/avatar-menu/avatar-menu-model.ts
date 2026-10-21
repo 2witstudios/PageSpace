@@ -1,10 +1,18 @@
+import { creditsFromCents } from '@pagespace/lib/billing/money-model';
 import { planNameOf } from '../../settings/account-overview/account-overview-model';
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | null =>
   typeof value === 'object' && value !== null ? (value as Readonly<Record<string, unknown>>) : null;
 
-const whole = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : null;
+/** A /api/credits amount (cents of credit value), or null when it is not a finite number. */
+const cents = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+/** Cents of credit value → the whole credit count the menu shows (MON-5: never a decimal). */
+const wholeCredits = (amount: number): number => {
+  const credits = Math.round(creditsFromCents(amount));
+  return credits === 0 ? 0 : credits;
+};
 
 /** Whole credits with thousands separators, as the account menu writes them ("1,000"). */
 export const countOf = (amount: number): string => amount.toLocaleString('en-US');
@@ -16,7 +24,7 @@ export const resetLabel = (periodEnd: unknown): string | null => {
   return Number.isNaN(date.getTime()) ? null : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 };
 
-/** The credits card's figures, from apps/web's GET /api/credits. */
+/** The credits card's figures, in whole credits, from apps/web's GET /api/credits (which sends cents). */
 export type CreditsCard = {
   /** "Pro"; null only when the tier cannot be named. */
   readonly plan: string | null;
@@ -42,20 +50,20 @@ export const creditsCardOf = (body: unknown): CreditsCard | null => {
   if (root === null || root.billingEnabled !== true) return null;
   const monthly = record(root.monthly);
   const topup = record(root.topup);
-  const spendable = whole(root.spendable);
-  const allowance = whole(monthly?.allowance);
-  const bonus = whole(topup?.remaining);
-  const reserved = whole(root.reserved);
+  const spendable = cents(root.spendable);
+  const allowance = cents(monthly?.allowance);
+  const bonus = cents(topup?.remaining);
+  const reserved = cents(root.reserved);
   if (spendable === null || allowance === null || bonus === null || reserved === null) return null;
   const left = spendable - bonus;
   const percent = allowance > 0 ? Math.min(100, Math.max(0, Math.round((left / allowance) * 100))) : 0;
   return {
     plan: planNameOf(root),
     resets: resetLabel(monthly?.periodEnd),
-    left,
-    allowance,
+    left: wholeCredits(left),
+    allowance: wholeCredits(allowance),
     percent,
-    bonus,
-    reserved,
+    bonus: wholeCredits(bonus),
+    reserved: wholeCredits(reserved),
   };
 };

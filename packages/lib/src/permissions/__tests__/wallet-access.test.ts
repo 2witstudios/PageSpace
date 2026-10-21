@@ -58,6 +58,15 @@ describe('wallet-access: what each may do', () => {
     expect(walletActionsFor('lead', { orgDrive: false })).toEqual([...WALLET_ACTIONS]);
   });
 
+  it('a Home drive is its owner\'s own spend: nothing funds it, and a wallet made earlier can only be run down', () => {
+    expect(walletActionsFor('lead', { orgDrive: false, homeDrive: true })).toEqual(['view', 'view_spend_by_member', 'pause', 'set_rules', 'delete', 'set_caps']);
+    for (const action of ['create', 'allocate', 'top_up', 'donate'] as const) {
+      expect(mayTakeWalletAction('lead', action, { orgDrive: false, homeDrive: true })).toBe(false);
+    }
+    expect(walletActionsFor('member', { orgDrive: false, homeDrive: true })).toEqual(['view']);
+    expect(walletActionsFor('lead', { orgDrive: false, homeDrive: false })).toEqual([...WALLET_ACTIONS]);
+  });
+
   it('SPEND-9 (partial) WAL-4 (partial) a member or a guest may view the consumer projection and donate, nothing else', () => {
     for (const role of ['member', 'guest'] as const) {
       for (const orgDrive of [true, false]) {

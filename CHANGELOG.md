@@ -5,6 +5,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's billing and wallet screens now match the classic ones:
+  - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
+  - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.
+  - Storage has Add storage and Change storage for extra 50 GB blocks where your plan allows them, and an upgrade link on Free. An organization's Plan & seats page shows its storage and, for the Owner, extra storage blocks.
+  - When an upload is refused because you are out of space, the message says why and offers Get more storage. Uploads to an organization drive are checked against the organization's storage, not yours.
+  - The Plan page says when your plan was bought in the App Store, and no longer offers to change, cancel or discount it here.
+- Your Home drive can no longer be funded. What you spend there is always your own credits, so its Wallet settings say so, and Fund a drive (in Imago and the classic interface) no longer lists it. No one can create, allocate, top up or donate to a wallet on a Home drive; one made earlier can still be paused or deleted.
 - The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
 - In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
 - Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.
