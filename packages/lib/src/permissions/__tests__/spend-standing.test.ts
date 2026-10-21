@@ -33,6 +33,8 @@ describe('spend-standing: which shared legs a person may draw at all', () => {
 
   it('a drive that does not exist opens nothing', () => {
     expect(sharedSpendLegsFor(null)).toEqual({ driveWallet: false, seat: false });
+    // A Home drive is never funded: even a wallet made there earlier opens to no one.
+    expect(sharedSpendLegsFor(standing({ orgId: null, isOrgMember: false, isHome: true }))).toEqual({ driveWallet: false, seat: false });
   });
 });
 

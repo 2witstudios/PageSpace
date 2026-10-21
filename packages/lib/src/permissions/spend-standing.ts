@@ -28,6 +28,8 @@ export interface DriveSpendStanding {
   isLead: boolean;
   isDriveMember: boolean;
   isOrgMember: boolean;
+  /** The drive is its owner's Home drive: its spend is always the owner's own credits, never a wallet. */
+  isHome?: boolean;
 }
 
 export async function loadDriveSpendStanding(
@@ -37,7 +39,7 @@ export async function loadDriveSpendStanding(
   executor: Pick<typeof db, 'select'> = db,
 ): Promise<DriveSpendStanding | null> {
   const [drive] = await executor
-    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility, kind: drives.kind })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
@@ -66,6 +68,7 @@ export async function loadDriveSpendStanding(
     isLead: isDriveLead(userId, drive),
     isDriveMember,
     isOrgMember,
+    isHome: isHomeDrive(drive),
   };
 }
 
@@ -81,6 +84,8 @@ export async function loadDriveSpendStanding(
  */
 export function sharedSpendLegsFor(standing: DriveSpendStanding | null): { driveWallet: boolean; seat: boolean } {
   if (standing === null || !standing.isDriveMember) return { driveWallet: false, seat: false };
+  // A Home drive is never funded (wallet-access): a wallet made there before that rule is not spent.
+  if (standing.isHome === true) return { driveWallet: false, seat: false };
   return { driveWallet: true, seat: standing.orgId !== null && standing.isOrgMember };
 }
 
