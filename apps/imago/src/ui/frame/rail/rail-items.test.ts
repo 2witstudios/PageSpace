@@ -166,6 +166,15 @@ describe('activeRailItem()', () => {
 });
 
 describe('activeRailPlace()', () => {
+  test('Calendar’s default destination and closed screen', () => {
+    assert({
+      given: 'Calendar with its screen open, then its sidebar alone',
+      should: 'mark the rail destination as the current page and the sidebar as its section',
+      actual: ['/drive-1/calendar/view', '/drive-1/calendar'].map((path) => activeRailPlace(stageFor(path))),
+      expected: ['page', 'section'],
+    });
+  });
+
   test('the active item’s own URL, or a place inside its section', () => {
     const paths = [
       '/drive-1',

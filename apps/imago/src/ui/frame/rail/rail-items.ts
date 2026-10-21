@@ -100,8 +100,11 @@ export const activeRailItem = (stage: Stage): RailItemId | null => {
  */
 export type RailPlace = 'page' | 'section';
 
-export const activeRailPlace = (stage: Stage): RailPlace =>
-  stage.driveId !== null && stage.object === null ? 'page' : 'section';
+export const activeRailPlace = (stage: Stage): RailPlace => {
+  if (stage.driveId === null) return 'section';
+  if (stage.section === 'calendar') return stage.object?.kind === 'tool' ? 'page' : 'section';
+  return stage.object === null ? 'page' : 'section';
+};
 
 const count = (value: unknown): number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
