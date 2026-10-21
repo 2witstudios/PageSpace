@@ -10,7 +10,7 @@ import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { formatDollars } from '@pagespace/lib/billing/money-model';
-import { fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
+import { ApiRequestError, fetchWithAuth, post } from '@/retained/lib/auth/auth-fetch';
 import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
 import { StorageAddonDialog, type StorageAddonState } from '@/retained/components/billing/StorageAddonDialog';
 import { SettingsGroup, SettingsRow, SettingsScreen, SettingsSection } from '../settings-screen/settings-screen';
@@ -138,6 +138,16 @@ export function AccountStorageView({ storage, isAdmin, reconciling, onRecalculat
   );
 }
 
+/**
+ * The dialog's words for a refused change: the route's own message (a decline, a plan that cannot
+ * hold blocks), never raw transport text from a network or non-JSON failure.
+ */
+export const storageAddonErrorMessage = (error: unknown): string => {
+  const body = error instanceof ApiRequestError ? error.body : undefined;
+  const message = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+  return typeof message === 'string' && message !== '' ? message : 'The storage change could not be completed. Try again.';
+};
+
 const GB = 1024 ** 3;
 const gbLabel = (bytes: number): string => `${Math.round(bytes / GB)} GB`;
 
@@ -197,7 +207,12 @@ export function AccountStorage({ isAdmin }: { readonly isAdmin: boolean }) {
   const quota = quotaBytesOf(data);
 
   const changeAddon = async (blocks: number) => {
-    const result = await post<{ charged: boolean }>(STORAGE_ADDON, { blocks });
+    let result: { charged: boolean };
+    try {
+      result = await post<{ charged: boolean }>(STORAGE_ADDON, { blocks });
+    } catch (error) {
+      throw new Error(storageAddonErrorMessage(error));
+    }
     toast.success(result.charged ? 'Storage added' : 'Storage updated');
     await Promise.all([mutate(), mutateAddon()]);
   };
