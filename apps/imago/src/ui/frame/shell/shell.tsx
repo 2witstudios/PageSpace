@@ -41,6 +41,10 @@ import { PhoneFilesHeader } from '../phone/phone-files-header';
 import { phoneDocBodyClass } from '../phone/phone-doc-class';
 import { renderPhoneShell } from '../phone/phone-shell.render';
 import { useViewportTier } from '../viewport/use-viewport-tier';
+import { ResizeHandle } from '../pane-resize/resize-handle';
+import { usePaneSizes } from '../pane-resize/use-pane-sizes';
+import { TOKEN_WIDTHS, dockedColumns } from '../pane-resize/pane-sizes';
+import { useRowWidth } from '../pane-resize/use-row-width';
 import { driveHomeHref, railDrive } from '../rail/rail-items';
 import {
   consoleStage,
@@ -242,6 +246,8 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
   // Ask on a phone page opens Imago full-screen; it is the page it was asked on, so leaving the page ends it.
   const [askedAt, setAskedAt] = useState<string | null>(null);
   const desktopFrame = useDesktopFrame();
+  const { sizes, setSize } = usePaneSizes();
+  const row = useRowWidth();
   const pageTrailing = (
     <span className="flex flex-none items-center gap-1">
       {columns.askPill ? <AskPill label={askLabelFor(stage)} /> : null}
@@ -329,11 +335,27 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
       palette: <><CommandPalette stage={routeStage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,
     })}</HomeDriveProvider>;
   }
+  // Only a docked column drags: the narrow pane sheet and the Imago overlay keep their token widths.
+  const docked = dockedColumns(sizes, row.width, {
+    left: !columns.pane || columns.paneSheet || layout.list === 'closed'
+      ? null
+      : tier === 'overlay' ? TOKEN_WIDTHS.paneOverlay : layout.list === 'list' ? TOKEN_WIDTHS.listPane : TOKEN_WIDTHS.treePane,
+    imago: columns.imago === 'docked' ? TOKEN_WIDTHS.chatPane : null,
+  });
   return <HomeDriveProvider value={homeDriveId}>{renderShell({
     stage,
     layout,
     columns,
     tier,
+    leftSize: docked.left?.size,
+    imagoSize: docked.imago?.size,
+    columnsRowRef: row.ref,
+    leftHandle: docked.left === null ? null : (
+      <ResizeHandle column="left" {...docked.left} onResize={(width) => setSize('left', width)} />
+    ),
+    imagoHandle: docked.imago === null ? null : (
+      <ResizeHandle column="imago" {...docked.imago} onResize={(width) => setSize('imago', width)} />
+    ),
     onDismissImago: () => dispatch(transactions.collapseImago, undefined),
     onDismissPane: () => {
       if (isHideableSection(stage.section)) dispatch(transactions.collapseSection, stage.section);

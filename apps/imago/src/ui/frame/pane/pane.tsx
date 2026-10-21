@@ -7,6 +7,8 @@ export type PaneProps = {
   readonly open: boolean;
   /** This stage's width token (shell-class.ts). */
   readonly width: string;
+  /** The viewer's dragged width in px (pane-resize), over the token while open. */
+  readonly size?: number;
   readonly slot?: string;
   readonly children: ReactNode;
 };
@@ -24,7 +26,7 @@ type Last = { readonly open: boolean; readonly children: ReactNode };
  * which Next's router must keep mounted). Reduced motion cuts the duration
  * to 0.01ms (globals.css), not 0s, so transitionend still fires.
  */
-export function Pane({ open, width, slot, children }: PaneProps) {
+export function Pane({ open, width, size, slot, children }: PaneProps) {
   const [held, setHeld] = useState<Held | null>(null);
   const [last, setLast] = useState<Last>({ open, children });
   // Adjusted while rendering, not in an effect: the held content must
@@ -39,5 +41,5 @@ export function Pane({ open, width, slot, children }: PaneProps) {
     if (!open && event.target === event.currentTarget) setHeld(null);
   };
   const content = !open && held !== null ? held.content : children;
-  return renderPane({ open, width, slot, content, onTransitionEnd });
+  return renderPane({ open, width, size, slot, content, onTransitionEnd });
 }

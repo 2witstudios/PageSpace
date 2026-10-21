@@ -29,6 +29,9 @@
      overlays inside the rail. */
   --z-index-rail: 10;
   --z-index-popover: 30;
+  /* A docked column's resize seam sits over the panes it straddles but
+     under the scrims and sheets. */
+  --z-index-resize: 5;
 
   /* v3 frame (IMC-1.2; SPEC v3 "Column widths", v3.3 tab bar): the spine is
      72px, the open-pages tab bar 40px over 48px column heads, a page's tool
@@ -57,6 +60,9 @@
   --spacing-chat-pane: 360px;
   --spacing-doc-min: 330px;
   --spacing-tree-step: 14px;
+  /* The resize seam's hit area, centred on the hairline it straddles. */
+  --spacing-resize-hit: 8px;
+  --spacing-resize-half: 4px;
 
   /* Stage fills. Every pane carries an explicit width and the widths of each
      stage sum to the frame, so moving between stages is one width

@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
 - Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.
 - Task lists in Imago have their own views again, in place of the classic table. Switch between Focus, Tree, Board and a new Roadmap from the list's toolbar, which also has All / Mine / Overdue filters with counts, a search box, Statuses, Workflows and + Task.
   - **Tree** is an outline of the list. Each row shows subtask progress, priority, who's on it and its due date. Drag a row to reorder it, or use its ⋯ menu to move it up or down, open it or delete it. The list's description sits folded above the outline.

@@ -459,3 +459,103 @@ describe('Shell on a phone (C-Resp-Phone-Tree)', () => {
     });
   });
 });
+
+describe('Shell resize seams (classic resizable panels)', () => {
+  const seams = () => Array.from(container.querySelectorAll('[role="separator"]')).map((seam) => seam.getAttribute('aria-label'));
+
+  test('desktop: the docked pane and docked Imago each carry a seam', () => {
+    setWidth(1440);
+    render('/drive-1/files/page-1');
+    assert({
+      given: 'a page open at 1440px',
+      should: 'offer a seam on the tree and one on Imago',
+      actual: seams(),
+      expected: ['Resize sidebar', 'Resize Imago'],
+    });
+  });
+
+  test('Imago on the ground has no seam of its own', () => {
+    setWidth(1440);
+    render('/drive-1/files');
+    assert({
+      given: 'the Files index at 1440px',
+      should: 'offer only the sidebar seam',
+      actual: seams(),
+      expected: ['Resize sidebar'],
+    });
+  });
+
+  test('1024 to 1279: the docked pane resizes, the Imago sheet does not', () => {
+    setWidth(1100);
+    render('/drive-1/files/page-1');
+    assert({ given: 'a page open at 1100px', should: 'offer only the sidebar seam', actual: seams(), expected: ['Resize sidebar'] });
+  });
+
+  test('sheets and the phone never resize', () => {
+    setWidth(800);
+    render('/drive-1/files/page-1');
+    const narrow = seams();
+    act(() => root?.unmount());
+    root = createRoot(container);
+    setWidth(390);
+    render('/drive-1/files/page-1');
+    assert({ given: 'the narrow tier, then a phone', should: 'offer no seams', actual: [narrow, seams()], expected: [[], []] });
+  });
+
+  test('a collapsed pane loses its seam', () => {
+    setWidth(1440);
+    render('/drive-1/files/page-1');
+    press('Close sidebar');
+    assert({ given: 'Close sidebar on the tree', should: 'leave only the Imago seam', actual: seams(), expected: ['Resize Imago'] });
+  });
+
+  test('a keyed resize sets the pane width and persists it', () => {
+    setWidth(1440);
+    localStorage.removeItem('imago:pane-sizes');
+    render('/drive-1/files/page-1');
+    const seam = container.querySelector('[aria-label="Resize Imago"]');
+    if (!(seam instanceof HTMLElement)) throw new Error('no seam');
+    act(() => {
+      seam.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    });
+    const after = [slot('chat').style.width, localStorage.getItem('imago:pane-sizes')];
+    const reset = container.querySelector('[aria-label="Resize Imago"]');
+    if (!(reset instanceof HTMLElement)) throw new Error('no seam');
+    act(() => {
+      reset.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    });
+    assert({
+      given: 'Home on the Imago seam, then a double-click',
+      should: 'pin Imago to its minimum and store it, then put the token width back',
+      actual: [after, slot('chat').style.width],
+      expected: [['300px', '{"left":null,"imago":300}'], ''],
+    });
+  });
+
+  test('saved widths that no longer fit give way to the middle, and the saved pair is kept', () => {
+    setWidth(1440);
+    localStorage.setItem('imago:pane-sizes', '{"left":480,"imago":720}');
+    // The columns row reports 1000px: 480 + 720 would leave the page nothing.
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        this.callback([{ contentRect: { width: 1000 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      render('/drive-1/files/page-1');
+      assert({
+        given: 'a 480px pane and 720px Imago saved, in a 1000px row',
+        should: 'draw both at their minimums so the page keeps 400px, without rewriting what was saved',
+        actual: [slot('list').style.width, slot('chat').style.width, localStorage.getItem('imago:pane-sizes')],
+        expected: ['300px', '300px', '{"left":480,"imago":720}'],
+      });
+    } finally {
+      globalThis.ResizeObserver = original;
+      localStorage.removeItem('imago:pane-sizes');
+    }
+  });
+});

@@ -8,7 +8,7 @@ describe('paneClass()', () => {
       given: 'a stage width token',
       should: 'never shrink, clip what it holds and move by width on the pane curve',
       actual: paneClass('w-list-pane'),
-      expected: 'flex h-full flex-none overflow-clip pane-motion w-list-pane',
+      expected: 'flex h-full flex-none overflow-clip pane-motion data-resizing:transition-none w-list-pane',
     });
   });
 
@@ -17,7 +17,7 @@ describe('paneClass()', () => {
       given: 'the closed width',
       should: 'keep the same base so the pane animates down to zero',
       actual: paneClass('w-0'),
-      expected: 'flex h-full flex-none overflow-clip pane-motion w-0',
+      expected: 'flex h-full flex-none overflow-clip pane-motion data-resizing:transition-none w-0',
     });
   });
 
