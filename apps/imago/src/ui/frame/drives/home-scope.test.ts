@@ -42,3 +42,25 @@ describe('isDashboard()', () => {
     });
   });
 });
+
+describe('isDashboard() with switched sections', () => {
+  test('a section switched to All drives', () => {
+    assert({
+      given: 'Tasks and Calendar switched to All drives, on a drive that is not Home',
+      should: 'claim no drive for them, while the drive’s chat and Files stay its own',
+      actual: ['/d1/tasks', '/d1/calendar', '/d1', '/d1/files'].map((path) =>
+        isDashboard(stageFor(path), 'home1', { tasks: 'all', calendar: 'all', files: 'all' }),
+      ),
+      expected: [true, true, false, false],
+    });
+  });
+
+  test('Home switched to itself', () => {
+    assert({
+      given: 'Home’s Messages switched to this drive',
+      should: 'scope Messages to Home, while Home’s chat still reads every drive',
+      actual: ['/home1/messages', '/home1'].map((path) => isDashboard(stageFor(path), 'home1', { messages: 'drive' })),
+      expected: [false, true],
+    });
+  });
+});

@@ -46,7 +46,7 @@ const labelClass = 'text-2xs font-medium text-ink-faint';
  * timeline reads the same state. On Home (`allDrives`) the timeline is the viewer's own activity
  * across every drive, so there is no one else to filter by.
  */
-export function ActivityPane({ driveId, close, variant, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
+export function ActivityPane({ driveId, close, variant, scope: scopeSwitch = null, allDrives = false }: ToolPaneProps & { readonly allDrives?: boolean }): ReactNode {
   const queryDriveId = allDrives ? null : driveId;
   const client = useApiClient();
   const screen = useToolScreen(driveId, 'activity');
@@ -89,6 +89,7 @@ export function ActivityPane({ driveId, close, variant, allDrives = false }: Too
     title: 'Activity',
     label: 'Filters',
     close,
+    scope: scopeSwitch,
     variant,
     children: (
       <div className="flex flex-col gap-4 px-1 py-2">

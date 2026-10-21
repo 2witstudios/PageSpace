@@ -17,6 +17,7 @@ vi.mock('../../tools/members/members-pane', () => ({ MembersPane: pane('members'
 vi.mock('../../files/files-pane/files-pane', () => ({ FilesPane: pane('files') }));
 
 const { ToolPane } = await import('./tool-pane');
+const { setSectionScope } = await import('../drives/use-section-scope');
 
 afterEach(unmountAll);
 
@@ -43,6 +44,20 @@ describe('ToolPane', () => {
       should: 'keep each tool scoped to that drive',
       actual: (['calendar', 'agents', 'activity'] as const).map((tool) => at(tool, 'd1')),
       expected: ['calendar:d1:one', 'agents:d1:one', 'activity:d1:one'],
+    });
+  });
+
+  test('switched scopes hold on every drive', () => {
+    setSectionScope('calendar', 'all');
+    setSectionScope('activity', 'drive');
+    const actual = [at('calendar', 'd1'), at('activity', 'home'), at('agents', 'd1')];
+    setSectionScope('calendar', 'drive');
+    setSectionScope('activity', 'all');
+    assert({
+      given: 'Calendar switched to All drives and Activity to this drive',
+      should: 'read every drive’s calendar on another drive and only Home’s activity on Home, leaving Console as it was',
+      actual,
+      expected: ['calendar:d1:all', 'activity:home:one', 'agents:d1:one'],
     });
   });
 });

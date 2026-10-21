@@ -5,7 +5,7 @@ import type { StatusGroupFilter } from '../task-model/task';
 import { localToday } from '../task-meta/task-meta';
 import { groundHeading, viewFor, type TaskViewId } from '../task-views/task-views';
 import { useDriveTasks } from '../use-tasks/use-tasks';
-import { useIsHome } from '../../frame/drives/home-drive-context';
+import { useAllDrives } from '../../frame/drives/use-section-scope';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { groundSections, listCount } from './ground-rows';
 import { renderTasksGround } from './tasks-ground.render';
@@ -37,12 +37,12 @@ const keepStatus = (status: StatusGroupFilter): void => {
 /**
  * A smart view's tasks, in the middle: the viewer's tasks in the drive, for the view picked on
  * the pane and the status group picked here (Active until the viewer picks
- * another, which is then remembered). On Home, the dashboard, it is the
+ * another, which is then remembered). With Tasks switched to All drives, it is the
  * viewer's tasks across every drive, each row naming its drive. Each row
  * ticks done in place.
  */
 export function TasksGround({ driveId, view }: { readonly driveId: string; readonly view: TaskViewId }) {
-  const allDrives = useIsHome(driveId);
+  const allDrives = useAllDrives('tasks', driveId);
   const [status, setStatus] = useState<StatusGroupFilter>('active');
   const [notice, setNotice] = useState<{ readonly at: string; readonly message: string } | null>(null);
   // Read after mount, so the server's render and the first client render agree.

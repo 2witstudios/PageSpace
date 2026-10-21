@@ -5,6 +5,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Home starts on All drives, and other drives start on themselves. In All drives:
+  - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
+  - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.
+  - **Messages** shows every drive's channels with your DMs. Set to one drive, it shows that drive's channels and your DMs, and the "Showing all drives" note under the inbox is gone.
 - The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
 - In Imago you can resize the left sidebar and the Imago panel beside a page by dragging their inner edge, as you can in the classic interface. Double-click the edge to reset it. The widths are remembered on this device, and the sidebar keeps one width across sections. With the edge focused, the arrow keys also resize, by 64px with Shift. The middle always keeps at least 400px. On smaller windows, where the sidebar or Imago opens as a sheet over the page, they keep their usual width.
 - Paid plans now include their full price in credits each month (a dollar paid is ten credits), up from 60%. Pro, Business and extra seats all include more credits; plan cards, the comparison table and the pricing page show the new amounts, and each next renewal grants them.

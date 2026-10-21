@@ -11,16 +11,19 @@ export type ListPaneRenderProps = {
   readonly actions?: ReactNode;
   /** Close sidebar: the left pane collapses, it never closes with × (SPEC v3.2). */
   readonly close: ReactNode;
+  /** The section's scope switch beside the title, when the section has one. */
+  readonly scope?: ReactNode;
   readonly children: ReactNode;
 };
 
 /** A section's left pane: its 48px head (title, actions, Close sidebar) and a scrolling body. */
 export function renderListPane(props: ListPaneRenderProps): ReactNode {
-  const { variant, title, actions = null, close, children } = props;
+  const { variant, title, actions = null, close, scope = null, children } = props;
   return (
     <section className={listPaneClass(variant)} aria-label={title}>
       {renderPaneHeader({
         title,
+        scope,
         actions: (
           <span className="flex flex-none items-center gap-1">
             {actions}

@@ -3,6 +3,7 @@
 import type { ChannelThread, DirectThread } from '../message-model/message';
 import { useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
 import { InboxPane } from './inbox-pane';
+import { useAllDrives } from '../../frame/drives/use-section-scope';
 import { renderMessagesPane, type MessageRowView, type MessagesSectionView } from './messages-pane.render';
 
 export type MessagesPaneProps = {
@@ -48,14 +49,16 @@ const sectionOf = <T,>(
 };
 
 /**
- * The Messages section's list pane. On the index it is the unified inbox (every drive's channels
- * and the viewer's DMs, with previews and times); with a channel or DM open, or on the user-level
- * /dm routes, it is the compact Channels and Direct messages groups on live unread counts.
+ * The Messages section's list pane. On the index it is the unified inbox (the drive's channels,
+ * or every drive's when Messages is switched to All drives, and the viewer's DMs, with previews
+ * and times); with a channel or DM open, or on the user-level /dm routes, it is the compact
+ * Channels and Direct messages groups on live unread counts.
  */
 export function MessagesPane({ driveId, selectedPageId, selectedConversationId }: MessagesPaneProps) {
+  const allDrives = useAllDrives('messages', driveId);
   const unified = driveId !== null && selectedPageId === null && selectedConversationId === null;
   return unified ? (
-    <InboxPane />
+    <InboxPane driveId={allDrives ? null : driveId} />
   ) : (
     <CompactPane driveId={driveId} selectedPageId={selectedPageId} selectedConversationId={selectedConversationId} />
   );
