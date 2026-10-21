@@ -5,6 +5,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's billing and wallet screens now match the classic ones:
+  - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
+  - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.
+  - Storage has Add storage and Change storage for extra 50 GB blocks where your plan allows them, and an upgrade link on Free. An organization's Plan & seats page shows its storage and, for the Owner, extra storage blocks.
+  - When an upload is refused because you are out of space, the message says why and offers Get more storage. Uploads to an organization drive are checked against the organization's storage, not yours.
+  - The Plan page says when your plan was bought in the App Store, and no longer offers to change, cancel or discount it here.
+- Your Home drive can no longer be funded. What you spend there is always your own credits, so its Wallet settings say so, and Fund a drive (in Imago and the classic interface) no longer lists it. No one can create, top up or donate to a wallet on a Home drive. A Home wallet made earlier is spent until it runs out, and its monthly allocation stops at the next renewal, so no credits already in it are lost.
 - In Imago, opening Calendar from the rail now shows the calendar beside its sidebar immediately.
 - Imago message filters now remove duplicate conversations from overlapping inbox pages so switching All, Channels and Direct does not leave stale rows behind. Segmented selectors fit their buttons without an empty tail.
 - Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.

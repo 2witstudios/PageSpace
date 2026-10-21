@@ -5,11 +5,11 @@ import { toast } from 'sonner';
 import type { FallbackRule, SpendSourceKind } from '@pagespace/lib/billing/wallet-core';
 import type { LeadWalletView, OrgAdminWalletView } from '@pagespace/lib/billing/wallet-views';
 import { Badge } from '@/retained/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/retained/components/ui/select';
 import { Switch } from '@/retained/components/ui/switch';
 import { patch } from '@/retained/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 const UNSET = 'unset';
 
@@ -61,12 +61,8 @@ export function WalletRulesCard({ driveId, orgName, wallet, editable, guestsEdit
   const fallbacks: (FallbackRule | typeof UNSET)[] = orgName ? [UNSET, 'refuse', 'seat_allowance', 'own_credits'] : [UNSET, 'refuse', 'own_credits'];
 
   return (
-    <Card data-testid="wallet-rules-card">
-      <CardHeader>
-        <CardTitle>What spends from this wallet</CardTitle>
-        <CardDescription>Deliberate by default: people see what they are spending from before they send, and can switch.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col divide-y">
+    <SettingsSection title="What spends from this wallet" description="Deliberate by default: people see what they are spending from before they send, and can switch.">
+      <div data-testid="wallet-rules-card" role="group" aria-label="Wallet rules" className="flex flex-col divide-y rounded-xl border">
         <Row title="Members' AI usage in this drive" detail="Chat, agents, page edits. Each person can switch to their seat allowance or their own credits.">
           <Select
             value={wallet.defaultSpendSource ?? UNSET}
@@ -112,16 +108,16 @@ export function WalletRulesCard({ driveId, orgName, wallet, editable, guestsEdit
             aria-label="Accept donations"
           />
         </Row>
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 
 function Row({ title, detail, children }: { title: string; detail: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-3 py-3.5 first:pt-0 last:pb-0 sm:flex-row sm:items-center">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-sm font-medium">{title}</span>
+    <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+      <div className="flex min-w-0 flex-1 flex-col gap-px">
+        <span className="text-sm font-medium text-foreground">{title}</span>
         <span className="text-xs text-muted-foreground">{detail}</span>
       </div>
       <div className="shrink-0">{children}</div>

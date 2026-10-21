@@ -352,6 +352,25 @@ describe('wallet funding against Postgres', () => {
     expect((await walletRow(personalChild)).spentCents).toBe(150);
   });
 
+  it('an old Home wallet is not refilled: its allocation ends at the reset, so it only runs down', async () => {
+    if (!dbAvailable) return;
+    const person = await user();
+    const home = await factories.createDrive(person, { kind: 'HOME' });
+    created.drives.push(home.id);
+    const personalStart = new Date(Date.UTC(2026, 8, 3));
+    const root = await personalRoot(person, 0, { start: personalStart, end: new Date(Date.UTC(2026, 9, 3)) });
+    const homeWallet = await childWallet({
+      userId: person, subjectType: 'drive', subjectId: home.id, parentWalletId: root,
+      monthlyAllowanceCents: 1000, spentCents: 900, debtCents: 0,
+      monthlyPeriodStart: new Date(Date.UTC(2026, 7, 3)),
+    });
+
+    expect((await resetDueAllocations({ now: new Date(Date.UTC(2026, 8, 20, 12)) })).failed).toBe(0);
+    const after = await walletRow(homeWallet);
+    expect(after).toMatchObject({ monthlyAllowanceCents: 0, spentCents: 0, debtCents: 0 });
+    expect(after.monthlyPeriodStart?.getTime()).toBe(personalStart.getTime());
+  });
+
   it('WAL-4 (partial) D-OW-13 two donors fund one drive wallet: legs FIFO, exact to the cent, a ledger pair each, no refund from a donation leg', async () => {
     if (!dbAvailable) return;
     const lead = await user();

@@ -24,10 +24,11 @@ const settle = (check: () => void): Promise<void> => act(() => vi.waitFor(check,
 const CREDITS_BODY = {
   billingEnabled: true,
   subscriptionTier: 'pro',
-  monthly: { remaining: 612, allowance: 900, periodEnd: '2026-11-03T12:00:00.000Z' },
+  // Cents of credit value, as /api/credits sends them: 6,120 cents is 612 credits.
+  monthly: { remaining: 6120, allowance: 9000, periodEnd: '2026-11-03T12:00:00.000Z' },
   topup: { remaining: 0 },
   debt: 0,
-  spendable: 612,
+  spendable: 6120,
   reserved: 0,
 };
 

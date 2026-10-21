@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from '@/retained-adapters/navigation';
-import { ChevronLeft } from 'lucide-react';
+import { useParams } from '@/retained-adapters/navigation';
+import Link from '@/retained-adapters/link';
 import { driveWalletPanels } from '@pagespace/lib/billing/wallet-surface';
-import { Button } from '@/retained/components/ui/button';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { Skeleton } from '@/retained/components/ui/skeleton';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useDriveWallet } from '@/retained/hooks/useDriveWallet';
@@ -15,6 +15,7 @@ import { WalletRulesCard } from '@/retained/components/wallets/drive-wallet/Wall
 import { WalletCapsCard } from '@/retained/components/wallets/drive-wallet/WalletCapsCard';
 import { WalletSpendCard } from '@/retained/components/wallets/drive-wallet/WalletSpendCard';
 import { CreateWalletCard, DonateCard } from '@/retained/components/wallets/drive-wallet/WalletFundingCards';
+import { SettingsScreen } from '@/ui/settings/settings-screen/settings-screen';
 
 /**
  * Drive Settings › Wallet (Spec UI-9, SPEND-9, SPEND-10, WAL-3, WAL-4, WAL-7; canvas v9
@@ -24,7 +25,6 @@ import { CreateWalletCard, DonateCard } from '@/retained/components/wallets/driv
  */
 export default function DriveWalletSettingsPage() {
   const params = useParams();
-  const router = useRouter();
   const driveId = params.driveId as string;
   const drive = useDriveStore((state) => state.drives.find((d) => d.id === driveId));
   const fetchDrives = useDriveStore((state) => state.fetchDrives);
@@ -43,36 +43,32 @@ export default function DriveWalletSettingsPage() {
 
   const driveName = drive?.name ?? 'This drive';
   const orgName = orgById(drive?.orgId)?.name ?? (drive?.orgId ? 'the organization' : null);
+  const isHome = drive ? isHomeDrive(drive) : false;
 
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-10 sm:px-6 lg:px-10">
-      <div className="mb-8">
-        <Button variant="ghost" size="sm" onClick={() => router.push(`/dashboard/${driveId}/settings`)} className="mb-4">
-          <ChevronLeft className="mr-1 h-4 w-4" />
-          Back to Drive Settings
-        </Button>
-        <h1 className="text-3xl font-bold">Wallet</h1>
-        <p className="text-muted-foreground">What AI usage in {driveName} spends from, and who funds it</p>
-      </div>
-
+    <SettingsScreen
+      title="Wallet"
+      lede={isHome ? 'Home is your own space: AI usage here spends your own credits, and nothing needs funding.' : `What AI usage in ${driveName} spends from, and who funds it.`}
+    >
       {isLoading ? (
-        <div className="flex flex-col gap-6">
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-32 w-full" />
-        </div>
+        <>
+          <Skeleton className="h-48 w-full rounded-xl" />
+          <Skeleton className="h-32 w-full rounded-xl" />
+        </>
       ) : !read ? (
-        <p className="text-muted-foreground">You cannot see this drive&apos;s wallet.</p>
+        <p className="text-sm text-muted-foreground">You cannot see this drive&apos;s wallet.</p>
       ) : (
-        <WalletSections driveId={driveId} driveName={driveName} orgName={orgName} read={read} memberNames={memberNames} capsRevision={capsRevision} refresh={refresh} />
+        <WalletSections driveId={driveId} driveName={driveName} orgName={orgName} isHome={isHome} read={read} memberNames={memberNames} capsRevision={capsRevision} refresh={refresh} />
       )}
-    </div>
+    </SettingsScreen>
   );
 }
 
-function WalletSections({ driveId, driveName, orgName, read, memberNames, capsRevision, refresh }: {
+function WalletSections({ driveId, driveName, orgName, isHome, read, memberNames, capsRevision, refresh }: {
   driveId: string;
   driveName: string;
   orgName: string | null;
+  isHome: boolean;
   read: NonNullable<ReturnType<typeof useDriveWallet>['read']>;
   memberNames: Record<string, string>;
   capsRevision: number;
@@ -81,11 +77,22 @@ function WalletSections({ driveId, driveName, orgName, read, memberNames, capsRe
   const panels = driveWalletPanels(read);
   const { wallet } = read;
   return (
-    <div className="flex flex-col gap-8">
+    <>
       {panels.create && <CreateWalletCard driveId={driveId} orgName={orgName} onChanged={refresh} />}
-      {!wallet && !panels.create && (
-        <p className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
+      {!wallet && isHome && (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground" data-testid="wallet-home-note">
+          Nothing here needs funding. Only you work in Home, so every call spends your own credits — see them in{' '}
+          <Link href="/settings/usage" className="text-accent-deep hover:underline">Usage</Link>.
+        </p>
+      )}
+      {!wallet && !isHome && !panels.create && (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">
           {driveName} has no wallet. AI usage here spends from {orgName ? 'your seat allowance or ' : ''}your own credits.
+        </p>
+      )}
+      {wallet && isHome && (
+        <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground" data-testid="wallet-home-legacy-note">
+          This wallet was made before Home stopped taking funding. What is left in it is spent first, then your own credits. Nothing can add to it: set its allocation to 0, or pause or delete it.
         </p>
       )}
       {wallet && (
@@ -99,6 +106,6 @@ function WalletSections({ driveId, driveName, orgName, read, memberNames, capsRe
           {panels.donate && <DonateCard driveId={driveId} driveName={driveName} onChanged={refresh} />}
         </>
       )}
-    </div>
+    </>
   );
 }

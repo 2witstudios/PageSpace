@@ -7,6 +7,7 @@ import { orgMembers } from '@pagespace/db/schema/organizations';
 import { isDriveLead, isDriveMemberRelationship } from './drive-relationship';
 import { loadUserDriveRelationships } from './drive-relationship-loader';
 import { walletViewerRole, type WalletStanding } from './wallet-access';
+import { isHomeDrive } from '../services/drive-guards';
 
 /**
  * A person's standing in the drive an AI call runs in, for the wallet-aware credit gate
@@ -109,7 +110,7 @@ export interface DriveWalletStanding extends WalletStanding {
  */
 export async function loadDriveWalletStanding(userId: string, driveId: string): Promise<DriveWalletStanding | null> {
   const [drive] = await db
-    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility, isTrashed: drives.isTrashed })
+    .select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility, isTrashed: drives.isTrashed, kind: drives.kind })
     .from(drives)
     .where(eq(drives.id, driveId))
     .limit(1);
@@ -132,6 +133,7 @@ export async function loadDriveWalletStanding(userId: string, driveId: string): 
     isLead: isDriveLead(userId, drive),
     isDriveMember: relationship ? isDriveMemberRelationship(relationship) : false,
     orgRole,
+    isHome: isHomeDrive(drive),
   };
 }
 
