@@ -36,21 +36,24 @@ export type SearchScope = {
   readonly query: string;
   /** The drive the palette searches; null on a stage with no drive and no Home drive yet. */
   readonly driveId: string | null;
-  /** "Include all workspaces": every drive the viewer can reach. */
+  /** "All workspaces": every drive the viewer can reach. */
   readonly allDrives: boolean;
 };
 
+/** With nothing typed the palette lists recent pages; people are only found by name. */
+export const RECENT_TYPES = 'page';
+
 /**
- * The search path for a query, or null when there is nothing to ask: a blank
- * query (the route would answer with recent pages, not matches), or no drive
- * to search in.
+ * The search path for a query, or null when there is nowhere to search: no
+ * drive and not every drive. A blank query asks for pages alone, which the
+ * route answers with the scope's recently updated pages.
  */
 export const searchPath = ({ query, driveId, allDrives }: SearchScope): string | null => {
   const q = query.trim();
-  if (q === '') return null;
-  if (allDrives) return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: PALETTE_TYPES, crossDrive: 'true' })}`;
+  const ask: Record<string, string> = q === '' ? { types: RECENT_TYPES } : { q, types: PALETTE_TYPES };
+  if (allDrives) return `${PALETTE_SEARCH}?${new URLSearchParams({ ...ask, crossDrive: 'true' })}`;
   if (driveId === null) return null;
-  return `${PALETTE_SEARCH}?${new URLSearchParams({ q, types: PALETTE_TYPES, driveId })}`;
+  return `${PALETTE_SEARCH}?${new URLSearchParams({ ...ask, driveId })}`;
 };
 
 const pageTypes: readonly string[] = Object.values(PageType);

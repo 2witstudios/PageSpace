@@ -429,7 +429,7 @@ describe('GET /api/mentions/search', () => {
     // `.where()` resolves to `rows` when awaited directly (the drives/users
     // lookups) AND still chains `.orderBy()/.limit()` (the page query).
     function stubPages(rows: Array<{ id: string; title: string; type: string; driveId: string; mimeType: null }>) {
-      const tail = { orderBy: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue(rows) };
+      const tail = { orderBy: vi.fn().mockReturnThis(), offset: vi.fn().mockReturnThis(), limit: vi.fn().mockResolvedValue(rows) };
       const selectChain = {
         from: vi.fn().mockReturnThis(),
         where: vi.fn().mockImplementation(() => Object.assign(Promise.resolve(rows), tail)),
@@ -529,6 +529,65 @@ describe('GET /api/mentions/search', () => {
     });
   });
 
+  // ==========================================================================
+  // Recent pages (no `q`): the view check runs per page after the fetch, so the
+  // drive's newest window can hold nothing the requester may see. The route
+  // reads windows of 50 newest first until 20 pass, at most 200 candidates.
+  // ==========================================================================
+  describe('recent pages with no query', () => {
+    const row = (n: number) => ({ id: `p-${n}`, title: `Page ${n}`, type: 'DOCUMENT', driveId: mockDriveId, mimeType: null });
+    const rows = (from: number, count: number) => Array.from({ length: count }, (_, i) => row(from + i));
+
+    function stubWindows(windows: ReturnType<typeof rows>[]) {
+      const offsets: number[] = [];
+      const chain = {
+        from: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        offset: vi.fn((offset: number) => {
+          offsets.push(offset);
+          return chain;
+        }),
+        limit: vi.fn(async () => windows[offsets.length - 1] ?? []),
+      };
+      vi.mocked(db.select).mockReturnValue(chain as unknown as ReturnType<typeof db.select>);
+      return offsets;
+    }
+
+    beforeEach(() => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(getDriveRecipientUserIds).mockResolvedValue([mockUserId]);
+    });
+
+    it('reads older windows until it finds a page the requester can view', async () => {
+      const offsets = stubWindows([rows(0, 50), rows(50, 50), rows(100, 10)]);
+      // Only page 105's grant is held: it sits in the third window.
+      vi.mocked(getUserAccessLevel).mockImplementation(async (_actor, pageId) =>
+        pageId === 'p-105' ? { canView: true, canEdit: false, canShare: false, canDelete: false } : null,
+      );
+
+      const response = await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`));
+      const body = await response.json();
+
+      expect(offsets).toEqual([0, 50, 100]);
+      expect(body.map((s: { id: string }) => s.id)).toEqual(['p-105']);
+    });
+
+    it('stops at 20 viewable pages, and after 200 candidates', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      const filled = stubWindows([rows(0, 50), rows(50, 50)]);
+      const first = await (await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`))).json();
+
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+      const capped = stubWindows([rows(0, 50), rows(50, 50), rows(100, 50), rows(150, 50), rows(200, 50)]);
+      await GET(new Request(`https://example.com/api/mentions/search?driveId=${mockDriveId}&types=page`));
+
+      // 20 found in the first window, so no second read; the answer is then cut to the route's 10.
+      expect([filled, first.length]).toEqual([[0], 10]);
+      expect(capped).toEqual([0, 50, 100, 150]);
+    });
+  });
+
   describe('excludePageTypes filter', () => {
     beforeEach(() => {
       vi.mocked(getUserDriveAccess).mockResolvedValue(true);
@@ -539,8 +598,9 @@ describe('GET /api/mentions/search', () => {
         from: vi.fn().mockReturnThis(),
         where: vi.fn().mockReturnThis(),
         // No `q=` in these requests, so the route takes the "recent pages"
-        // branch (`.orderBy(...).limit(20)`), not `.limit(50)` directly.
+        // branch (`.orderBy(...).offset(...).limit(...)`), not `.limit(50)` directly.
         orderBy: vi.fn().mockReturnThis(),
+        offset: vi.fn().mockReturnThis(),
         limit: vi.fn().mockResolvedValue([
           { id: 'doc-1', title: 'Roadmap', type: 'DOCUMENT', driveId: mockDriveId, mimeType: null },
         ]),

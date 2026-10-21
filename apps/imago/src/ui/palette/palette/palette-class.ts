@@ -7,49 +7,79 @@ import { cn } from '../../cn';
  */
 export const paletteLayerClass = 'fixed inset-0 z-popover flex items-start justify-center px-4 pt-16';
 
-/** The sheet: as wide as a document column, the ladder's sheet corner. */
+/** The sheet: narrower than a document column, the ladder's sheet corner, never taller than the viewport. */
 export const paletteSheetClass =
-  'flex w-full max-w-doc flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised';
+  'flex max-h-palette-sheet w-full max-w-palette flex-col overflow-hidden rounded-xl border border-hairline shadow-3 surface-glass-raised';
 
-/** The field row: the search icon, the input, and the scope toggle. */
-export const paletteFieldClass = 'flex items-center gap-2 border-b border-hairline px-3 text-ink-muted';
+/** The field row: the search icon, the input, and the scope switch, ruled off from the results. */
+export const paletteFieldClass = 'flex h-palette-field flex-none items-center gap-3 border-b border-hairline pr-3 pl-4';
 
-/* Borderless inside the row. Composer height, base size: this is the one field.
-   While a result is highlighted the highlight marks where the keyboard is, so
-   the field drops its halo; with nothing highlighted (idle, loading, errored,
-   no matches) the halo stays, so focus is still visible. */
-export const paletteInputClass = (hasHighlight: boolean): string =>
+export const paletteSearchIconClass = 'flex-none text-accent';
+
+/* Borderless and haloless inside the row. The sheet is modal and the caret
+   sits in the field, so focus is never in doubt; a halo here is clipped by
+   the sheet's corner and stops short of the icon, so it never reads as one
+   ring all the way round. */
+export const paletteInputClass =
+  'h-full min-w-0 flex-1 border-none bg-transparent text-md tracking-tight text-ink outline-none placeholder:text-ink-faint focus-visible:shadow-none';
+
+/** The scope switch: the open drive or every drive, a sunken track holding two segments. */
+export const paletteScopeClass = 'flex flex-none gap-1 rounded-md border border-hairline bg-surface-sunken p-1';
+
+export const paletteScopeOptionClass = (selected: boolean): string =>
   cn(
-    'h-composer-field min-w-0 flex-1 border-none bg-transparent text-base text-ink outline-none placeholder:text-ink-faint',
-    hasHighlight && 'focus-visible:shadow-none',
+    'h-6 max-w-palette-scope cursor-pointer truncate rounded-sm px-2 text-xs font-medium transition-colors duration-120 ease-standard',
+    selected ? 'bg-surface-overlay text-ink shadow-1' : 'text-ink-muted hover:text-ink',
   );
 
-/** "Include all workspaces" beside the field. */
-export const paletteScopeClass = 'flex flex-none items-center gap-2 text-xs text-ink-muted';
+/** The results take what height the sheet has left and scroll inside it. */
+export const paletteListClass = 'm-0 flex min-h-0 flex-1 list-none flex-col overflow-y-auto px-2 pt-1 pb-2';
 
-export const paletteListClass = 'm-0 flex list-none flex-col gap-1 p-1';
+/** A group's heading in the results: Pages, People, Recently updated. */
+export const paletteGroupClass = 'flex flex-none flex-col';
 
-const rowBase =
-  'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors duration-120 ease-standard';
+export const paletteGroupLabelClass = 'px-2 pt-3 pb-1 text-2xs font-semibold tracking-caps text-ink-faint uppercase';
 
 /** A result: quiet like a tree row, tinted while highlighted. */
 export const paletteRowClass = (active: boolean): string =>
-  cn(rowBase, active ? 'bg-accent-soft text-ink' : 'text-ink-muted');
+  cn(
+    'flex h-palette-row w-full cursor-pointer items-center gap-3 rounded-lg px-2 text-left text-base text-ink transition-colors duration-120 ease-standard',
+    active && 'bg-accent-soft',
+  );
 
-export const paletteTitleClass = 'min-w-0 flex-1 truncate';
+/** The tile behind a result's icon, taking the accent with its row. */
+export const paletteTileClass = (active: boolean): string =>
+  cn(
+    'flex size-palette-tile flex-none items-center justify-center rounded-md',
+    active ? 'bg-accent-soft text-accent-strong' : 'bg-surface-overlay text-ink-muted',
+  );
+
+/** A result's title over the drive it lives in. */
+export const paletteTextClass = 'flex min-w-0 flex-1 flex-col';
+
+export const paletteTitleClass = 'truncate font-medium';
+
+/** The part of a title the query matched. */
+export const paletteMatchClass = 'text-accent-strong';
 
 /** The drive a result lives in, while searching every drive. */
-export const paletteDriveClass = 'flex-none truncate text-2xs text-ink-faint';
+export const paletteDriveClass = 'truncate text-xs text-ink-faint';
 
 /** Searching, nothing found, or a failure, under the field. */
-export const paletteNoteClass = 'px-3 py-row-y text-sm text-ink-muted';
-
-/** A group's heading in the results: Pages, Users. */
-export const paletteGroupClass = 'flex flex-col';
-
-export const paletteGroupLabelClass = 'px-2 pt-2 pb-1 text-2xs font-semibold text-ink-faint';
+export const paletteNoteClass = 'flex-none px-4 py-3 text-sm text-ink-muted';
 
 /** The keyboard hints under the results. */
-export const paletteFooterClass = 'flex flex-wrap gap-3 border-t border-hairline px-3 py-row-y text-2xs text-ink-faint';
+export const paletteFooterClass =
+  'flex flex-none flex-wrap items-center gap-4 border-t border-hairline px-4 py-2 text-xs text-ink-faint';
 
-export const paletteKbdClass = 'rounded-md border border-hairline px-1 font-mono';
+export const paletteHintClass = 'flex items-center gap-1';
+
+/** The last hint, Escape, sits at the far end. */
+export const paletteHintEndClass = 'ml-auto flex items-center gap-1';
+
+/** A key cap: raised in the footer, accent on the highlighted row. */
+export const paletteKbdClass = (tone: 'key' | 'accent'): string =>
+  cn(
+    'inline-flex h-palette-kbd min-w-palette-kbd flex-none items-center justify-center rounded-sm px-1 font-mono text-2xs',
+    tone === 'accent' ? 'bg-accent-soft text-accent-strong' : 'bg-surface-overlay text-ink-muted shadow-1',
+  );
