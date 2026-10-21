@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Building2, Folder, HandCoins, Sparkles } from 'lucide-react';
 import { spendFromRowCopy, spendMeterPercent } from '@pagespace/lib/billing/wallet-surface';
 import { effectiveDefaultSpendSource } from '@pagespace/lib/billing/spend-target';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -130,7 +131,8 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
   const drives = useDriveStore((state) => state.drives);
   const funded = new Set(wallets.funds.driveWallets.map((w) => w.driveId));
   // A personal drive you own can be funded from your credits (WAL-2); its wallet page creates it.
-  const fundable = drives.filter((d) => d.isOwned && !d.orgId && !d.isTrashed && !funded.has(d.id));
+  // Never Home: AI usage there is already your own spend, so there is nothing to fund.
+  const fundable = drives.filter((d) => d.isOwned && !d.orgId && !d.isTrashed && !isHomeDrive(d) && !funded.has(d.id));
   const { funds } = wallets;
   const empty = funds.driveWallets.length === 0 && funds.pools.length === 0 && funds.donations.length === 0;
 

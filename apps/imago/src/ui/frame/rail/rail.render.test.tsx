@@ -4,7 +4,8 @@ import { describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
 import { findElement } from '../../test-support/find-element';
 import { spineDividerClass, spineScrollClass, spineTileClass } from '../rail-button/rail-button-class';
-import { moreItems, railItems, secondaryItems, settingsItem } from './rail-items';
+import { activeRailItem, activeRailPlace, moreItems, railItems, secondaryItems, settingsItem } from './rail-items';
+import { stageFor } from '../stage/stage';
 import { renderRail, type RailRenderProps } from './rail.render';
 
 const props = (overrides: Partial<RailRenderProps> = {}): RailRenderProps => ({
@@ -32,6 +33,18 @@ const names = (html: string): string[] =>
 const tools = ['Calendar', 'Console'];
 
 describe('renderRail()', () => {
+  test('Calendar’s current-page announcement follows its destination', () => {
+    assert({
+      given: 'Calendar with its screen open, then its sidebar alone',
+      should: 'announce Calendar as the current page only at its linked destination',
+      actual: ['/drive-1/calendar/view', '/drive-1/calendar'].map((path) => {
+        const stage = stageFor(path);
+        return markup({ activeId: activeRailItem(stage), activeAt: activeRailPlace(stage) }).match(/aria-current="[^"]+"/g);
+      }),
+      expected: [['aria-current="page"'], ['aria-current="true"']],
+    });
+  });
+
   test('the destinations, in order', () => {
     assert({
       given: 'the spine for a drive',
@@ -89,7 +102,7 @@ describe('renderRail()', () => {
       given: 'the tools under the divider',
       should: 'link each into the drive through the Imago router',
       actual: hrefs,
-      expected: ['/drive-1/calendar', '/drive-1/agents'],
+      expected: ['/drive-1/calendar/view', '/drive-1/agents'],
     });
   });
 

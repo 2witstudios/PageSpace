@@ -91,6 +91,7 @@ export const ORG_ERROR_COPY: Record<OrgApiErrorCode, string> = {
   no_wallet: 'This drive has no wallet.',
   wallet_exists: 'This drive already has a wallet.',
   wallet_in_use: 'This wallet has been used, so it cannot be deleted. Pause it instead.',
+  home_drive_unfunded: 'Your Home drive cannot be funded. Its wallet can only be run down, paused or deleted.',
   drive_wallet_calls_in_flight: "This drive's wallet has AI calls in progress. Try moving the drive again in a minute, once they finish.",
   wallet_not_available: 'That wallet is not available to you.',
   invalid_amount: 'Enter a whole number of credits within the allowed range for this action.',

@@ -217,6 +217,27 @@ describe('PlanPage (/account/plan)', () => {
     });
   });
 
+  test('a Pro plan bought in the App Store offers no Stripe change, cancel or promo', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/subscriptions/status') {
+        return { ok: true, json: async () => ({ subscriptionTier: 'pro', billingProvider: 'apple' }) } as unknown as Response;
+      }
+      return { ok: true, json: async () => ({}) } as unknown as Response;
+    });
+    await renderPlan();
+    assert({
+      given: 'a Pro subscriber whose plan the App Store sold',
+      should: 'say it is managed in the App Store and offer no downgrade, billing link or promo field',
+      actual: {
+        notice: screen.queryByTestId('managed-in-app-store') !== null,
+        downgrade: screen.queryByRole('button', { name: 'Downgrade to Free Plan' }) !== null,
+        manage: screen.queryByRole('button', { name: 'Manage Billing' }) !== null,
+        promo: screen.queryByRole('group', { name: 'Promo code' }) !== null,
+      },
+      expected: { notice: true, downgrade: false, manage: false, promo: false },
+    });
+  });
+
   test('offers Upgrade to Pro, and no downgrade, from the free plan', async () => {
     state.tier = 'free';
     respondWithTier('free');

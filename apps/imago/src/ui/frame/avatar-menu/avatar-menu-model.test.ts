@@ -5,11 +5,12 @@ import { countOf, creditsCardOf, resetLabel } from './avatar-menu-model';
 const balance = (overrides: Record<string, unknown> = {}) => ({
   billingEnabled: true,
   subscriptionTier: 'pro',
-  monthly: { remaining: 612, allowance: 900, periodEnd: '2026-11-03T12:00:00.000Z' },
-  topup: { remaining: 1000 },
+  // /api/credits sends cents of credit value: 10 cents to the credit.
+  monthly: { remaining: 6120, allowance: 9000, periodEnd: '2026-11-03T12:00:00.000Z' },
+  topup: { remaining: 10000 },
   debt: 0,
-  spendable: 1612,
-  reserved: 14,
+  spendable: 16120,
+  reserved: 140,
   ...overrides,
 });
 
@@ -38,8 +39,18 @@ describe('creditsCardOf()', () => {
     assert({
       given: 'a free balance with no period end',
       should: 'leave the renewal out',
-      actual: creditsCardOf(balance({ subscriptionTier: 'free', monthly: { remaining: 0, allowance: 100, periodEnd: null } }))?.resets ?? 'none',
+      actual: creditsCardOf(balance({ subscriptionTier: 'free', monthly: { remaining: 0, allowance: 1000, periodEnd: null } }))?.resets ?? 'none',
       expected: 'none',
+    });
+  });
+
+  test('a balance that is not a whole number of credits', () => {
+    const card = creditsCardOf(balance({ spendable: 16126.4, topup: { remaining: 10003 }, reserved: 7.5 }));
+    assert({
+      given: 'cents that leave a fraction of a credit',
+      should: 'round every figure to a whole credit',
+      actual: card === null ? null : [card.left, card.bonus, card.reserved],
+      expected: [612, 1000, 1],
     });
   });
 
@@ -47,7 +58,7 @@ describe('creditsCardOf()', () => {
     assert({
       given: 'monthly credits left above the allowance',
       should: 'cap the meter at 100',
-      actual: creditsCardOf(balance({ spendable: 1500, topup: { remaining: 0 }, monthly: { remaining: 1500, allowance: 900, periodEnd: null } }))?.percent,
+      actual: creditsCardOf(balance({ spendable: 15000, topup: { remaining: 0 }, monthly: { remaining: 15000, allowance: 9000, periodEnd: null } }))?.percent,
       expected: 100,
     });
   });
@@ -71,7 +82,7 @@ describe('creditsCardOf() with no monthly allowance', () => {
   });
 
   test('clamps the meter to 0-100', () => {
-    const over = creditsCardOf(balance({ spendable: 5000, topup: { remaining: 0 } }));
+    const over = creditsCardOf(balance({ spendable: 50000, topup: { remaining: 0 } }));
     assert({ given: 'more credits left than the allowance', should: 'cap at 100 percent', actual: over?.percent, expected: 100 });
   });
 });

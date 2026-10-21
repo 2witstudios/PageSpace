@@ -1,21 +1,23 @@
 "use client";
 
+import { useEffect } from 'react';
 import { Button } from '@/retained/components/ui/button';
 import { useDocumentStore } from '@/retained/stores/useDocumentStore';
 import { useMobile } from '@/retained/hooks/useMobile';
 import { useDisplayPreferences } from '@/retained/hooks/useDisplayPreferences';
 
-export type EditorTogglesProps = {
-  /** The v3 Formatting strip always shows the Rich/Markdown group; classic gates it on the preference. */
-  readonly alwaysShow?: boolean;
-};
-
-export function EditorToggles({ alwaysShow = false }: EditorTogglesProps) {
+export function EditorToggles() {
   const activeView = useDocumentStore((state) => state.activeView);
   const setActiveView = useDocumentStore((state) => state.setActiveView);
   const isMobile = useMobile();
-  const { preferences } = useDisplayPreferences();
-  const shouldShowToggles = alwaysShow || preferences.showCodeToggle;
+  const { preferences, isLoading } = useDisplayPreferences();
+  const shouldShowToggles = preferences.showCodeToggle;
+
+  useEffect(() => {
+    if (!isLoading && !shouldShowToggles && activeView === 'code') {
+      setActiveView('rich');
+    }
+  }, [isLoading, shouldShowToggles, activeView, setActiveView]);
 
   if (!shouldShowToggles || isMobile) {
     return null;
@@ -37,7 +39,7 @@ export function EditorToggles({ alwaysShow = false }: EditorTogglesProps) {
         aria-pressed={activeView === 'code'}
         onClick={() => setActiveView('code')}
       >
-        Markdown
+        Code
       </Button>
     </div>
   );

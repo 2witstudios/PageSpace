@@ -36,7 +36,7 @@ const filterClass = 'mx-px mb-2 flex h-filter flex-none items-center gap-2 round
 
 /**
  * The Files pane (IMC-1.8, SPEC v3 "Pane (Files tree pane)"): head "Files" with New page and
- * Close sidebar; "Filter pages"; then Favorites (this drive's favorite pages), Recents (with
+ * Close sidebar; "Search pages"; then Favorites (this drive's favorite pages), Recents (with
  * their ages) and Pages, classic's page tree reused as it is, each group folding under its
  * label. Switched to All drives, Favorites and Recents are every drive's, each naming its drive,
  * and Pages gives way to the drives to pick from.
@@ -62,10 +62,10 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
   const body = (
     <>
       <label className={filterClass}>
-        {renderIcon({ name: 'filter', size: 14 })}
+        {renderIcon({ name: 'search', size: 14 })}
         <input
-          aria-label={allDrives ? 'Filter drives' : 'Filter pages'}
-          placeholder={allDrives ? 'Filter drives' : 'Filter pages'}
+          aria-label={allDrives ? 'Search drives' : 'Search pages'}
+          placeholder={allDrives ? 'Search drives' : 'Search pages'}
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           className="min-w-0 flex-1 border-0 bg-transparent text-sm text-ink outline-none"

@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { toast } from 'sonner';
 import type { DriveWalletView, LeadWalletView, OrgAdminWalletView } from '@pagespace/lib/billing/wallet-views';
 import { fundedByCopy, spendMeterPercent, walletPeriodCopy, walletStatusCopy, type DriveWalletPanels } from '@pagespace/lib/billing/wallet-surface';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { Progress } from '@/retained/components/ui/progress';
 import { Separator } from '@/retained/components/ui/separator';
 import { Switch } from '@/retained/components/ui/switch';
@@ -12,6 +11,7 @@ import { patch, post } from '@/retained/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
 import { CreditAmountField } from './CreditAmountField';
 import { WalletStatusBadge } from './WalletStatusBadge';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 
 interface WalletBalanceCardProps {
   driveId: string;
@@ -61,15 +61,8 @@ export function WalletBalanceCard({ driveId, driveName, orgName, wallet, panels,
   const descParts = [funded, funder ? `${funder.allocationCredits} credits allocated each month` : null, period.resets].filter(Boolean);
 
   return (
-    <Card data-testid="wallet-balance-card">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle>{driveName} wallet</CardTitle>
-          <WalletStatusBadge status={wallet.status} />
-        </div>
-        <CardDescription>{descParts.join(' · ')}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+    <SettingsSection title={`${driveName} wallet`} description={descParts.join(' · ')} actions={<WalletStatusBadge status={wallet.status} />}>
+      <div data-testid="wallet-balance-card" className="flex flex-col gap-4 rounded-xl border p-4">
         {funder ? (
           <>
             <Progress value={spendMeterPercent(funder.spentCents, funder.allocationCents)} aria-label="Allocation spent" />
@@ -166,8 +159,8 @@ export function WalletBalanceCard({ driveId, driveName, orgName, wallet, panels,
         ) : (
           <p className="text-xs text-muted-foreground">{status.hint}</p>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }
 

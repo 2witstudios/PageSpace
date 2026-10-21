@@ -3,7 +3,7 @@
    focus halo (globals.css :focus-visible), so a focused segment trades it
    for the same 3px accent halo. */
 export const segmentedControlClass =
-  'inline-flex flex-none items-center gap-1 rounded-md bg-surface-overlay p-badge-y';
+  'inline-flex w-fit max-w-full flex-none items-center gap-1 rounded-md bg-surface-overlay p-badge-y';
 
 const base =
   'cursor-pointer rounded-sm px-2 py-1 text-xs font-medium whitespace-nowrap transition-colors duration-120 ease-standard focus-visible:shadow-focus';

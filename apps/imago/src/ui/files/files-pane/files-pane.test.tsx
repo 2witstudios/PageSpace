@@ -56,6 +56,6 @@ it('lists this drive’s favorites and recents above the pages (IMC-1.8)', async
   const rows = [...container.querySelectorAll('a')].map((link) => [link.textContent, link.getAttribute('aria-current')]);
   expect(groups).toEqual(['Favorites', 'Recents', 'Pages']);
   expect(rows).toEqual([['Q4 Launch Plan', 'page'], ['#launch-ops2h', null]]);
-  expect(container.querySelector('input')?.getAttribute('placeholder')).toBe('Filter pages');
+  expect(container.querySelector('input')?.getAttribute('placeholder')).toBe('Search pages');
   vi.useRealTimers();
 });

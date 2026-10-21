@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react';
 import Link from '@/retained-adapters/link';
 import { toast } from 'sonner';
-import { Building2, Folder, HandCoins, Sparkles } from 'lucide-react';
+import { Building2, Coins, Folder, HandCoins } from 'lucide-react';
 import { spendFromRowCopy, spendMeterPercent } from '@pagespace/lib/billing/wallet-surface';
 import { effectiveDefaultSpendSource } from '@pagespace/lib/billing/spend-target';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { Badge } from '@/retained/components/ui/badge';
 import { Button } from '@/retained/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from '@/retained/components/ui/dropdown-menu';
 import { Progress } from '@/retained/components/ui/progress';
 import { Skeleton } from '@/retained/components/ui/skeleton';
@@ -21,6 +21,7 @@ import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
 import { useMyWallets, type MyWallets } from '@/retained/hooks/useMyWallets';
 import { formatCreditCount } from '@/retained/lib/subscription/credits';
 import { cn } from '@/retained/lib/utils';
+import { SettingsGroup, SettingsRow, SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 import { WalletStatusBadge } from '../drive-wallet/WalletStatusBadge';
 
 /**
@@ -32,19 +33,19 @@ export function UsageWallets() {
   const { wallets, isLoading, refresh } = useMyWallets(true);
   if (isLoading || !wallets) {
     return (
-      <div className="flex flex-col gap-6">
-        <Skeleton className="h-40 w-full" />
-        <Skeleton className="h-32 w-full" />
-      </div>
+      <>
+        <Skeleton className="h-40 w-full rounded-xl" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+      </>
     );
   }
   return (
-    <div className="flex flex-col gap-8">
+    <>
       <SpendFromSection wallets={wallets} />
       <FundSection wallets={wallets} />
-      <DefaultSourceCard stored={wallets.personal.defaultSpendSource} onChanged={refresh} />
-      <AbsoluteOwnCreditsCard drives={wallets.driveWallets} onChanged={refresh} />
-    </div>
+      <DefaultSourceSection stored={wallets.personal.defaultSpendSource} onChanged={refresh} />
+      <AbsoluteOwnCreditsSection drives={wallets.driveWallets} onChanged={refresh} />
+    </>
   );
 }
 
@@ -59,18 +60,18 @@ function Row({ icon, title, detail, amount, meter, badge, href, testId }: {
   testId?: string;
 }) {
   const body = (
-    <div className="flex items-center gap-3 px-4 py-3.5" data-testid={testId}>
+    <div className="flex items-center gap-3 px-4 py-3" data-testid={testId}>
       <span className="shrink-0 text-muted-foreground">{icon}</span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-sm font-medium">{title}</span>
+      <div className="flex min-w-0 flex-1 flex-col gap-px">
+        <span className="truncate text-sm font-medium text-foreground">{title}</span>
         <span className="text-xs text-muted-foreground">{detail}</span>
       </div>
       {meter !== undefined && <Progress value={meter} className="hidden w-24 md:block" aria-hidden="true" />}
-      <span className="whitespace-nowrap text-sm font-medium tabular-nums">{amount}</span>
+      <span className="whitespace-nowrap text-sm font-medium tabular-nums text-foreground">{amount}</span>
       <span className="hidden w-24 justify-end sm:flex">{badge}</span>
     </div>
   );
-  return href ? <Link href={href} className="block hover:bg-accent/50">{body}</Link> : body;
+  return href ? <Link href={href} className="block first:rounded-t-xl last:rounded-b-xl hover:bg-accent/50">{body}</Link> : body;
 }
 
 function SpendFromSection({ wallets }: { wallets: MyWallets }) {
@@ -86,16 +87,16 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
     .join(' · ');
 
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="px-1 text-sm font-medium text-muted-foreground">You spend from</h2>
-      <div className="divide-y overflow-hidden rounded-lg border bg-card">
+    <SettingsSection title="You spend from" description="Every source your AI usage can draw on, and what is left in each.">
+      <SettingsGroup label="You spend from">
         <Row
           testId="usage-wallet-personal"
-          icon={<Sparkles className="h-4 w-4" />}
+          icon={<Coins className="h-4 w-4" />}
           title="My credits"
           detail={personalDetail}
           amount={`${wallets.personal.remainingCredits} credits`}
           badge={<Badge variant="secondary">Personal</Badge>}
+          href="/settings/usage"
         />
         {wallets.seats.map((seat) => (
           <Row
@@ -121,8 +122,8 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
             href={`/dashboard/${w.driveId}/settings/wallet`}
           />
         ))}
-      </div>
-    </section>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }
 
@@ -130,15 +131,16 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
   const drives = useDriveStore((state) => state.drives);
   const funded = new Set(wallets.funds.driveWallets.map((w) => w.driveId));
   // A personal drive you own can be funded from your credits (WAL-2); its wallet page creates it.
-  const fundable = drives.filter((d) => d.isOwned && !d.orgId && !d.isTrashed && !funded.has(d.id));
+  // Never Home: AI usage there is already your own spend, so there is nothing to fund.
+  const fundable = drives.filter((d) => d.isOwned && !d.orgId && !d.isTrashed && !isHomeDrive(d) && !funded.has(d.id));
   const { funds } = wallets;
   const empty = funds.driveWallets.length === 0 && funds.pools.length === 0 && funds.donations.length === 0;
 
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <h2 className="text-sm font-medium text-muted-foreground">You fund</h2>
-        {fundable.length > 0 && (
+    <SettingsSection
+      title="You fund"
+      description="Shared wallets and pools you pay for, and credits you have donated."
+      actions={fundable.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm">Fund a drive</Button>
@@ -152,9 +154,9 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-        )}
-      </div>
-      <div className="divide-y overflow-hidden rounded-lg border bg-card">
+        ) : undefined}
+    >
+      <SettingsGroup label="You fund">
         {funds.pools.map((p) => (
           <Row
             key={p.walletId}
@@ -189,15 +191,15 @@ function FundSection({ wallets }: { wallets: MyWallets }) {
             badge={<Badge variant="outline">Donation</Badge>}
           />
         ))}
-        <p className={cn('px-4 py-3.5 text-xs text-muted-foreground', empty && 'py-5')}>
-          Funding a drive you own gives its members a shared wallet instead of spending their own credits. The allocation comes out of your balance each month. As the funder you set member caps in the drive&apos;s Wallet settings and get the 80% and 100% cap alerts.
+        <p className={cn('px-4 py-3 text-xs text-muted-foreground', empty && 'py-5')}>
+          {empty ? 'You fund nothing yet. ' : ''}Funding a drive you own gives its members a shared wallet instead of spending their own credits. The allocation comes out of your balance each month. As the funder you set member caps in the drive&apos;s Wallet settings and get the 80% and 100% cap alerts. Your Home drive is never funded: what you spend there is your own credits.
         </p>
-      </div>
-    </section>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }
 
-function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal']['defaultSpendSource']; onChanged: () => Promise<unknown> }) {
+function DefaultSourceSection({ stored, onChanged }: { stored: MyWallets['personal']['defaultSpendSource']; onChanged: () => Promise<unknown> }) {
   const [pending, setPending] = useState(false);
   // SPEND-3: no saved default is the out-of-box one, which the gate preselects (chooseSource).
   const current = effectiveDefaultSpendSource(stored);
@@ -220,12 +222,7 @@ function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal'
     { value: 'own_credits' as const, label: 'My own credits', hint: 'What new conversations start on. A conversation can still switch to a wallet — the absolute switch below never can.' },
   ];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Default when you open a drive</CardTitle>
-        <CardDescription>You always see the source before you send. This only decides what is preselected.</CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SettingsSection title="Default when you open a drive" description="You always see the source before you send. This only decides what is preselected.">
         <div role="radiogroup" aria-label="Default source" className="flex flex-col gap-2">
           {options.map((o) => (
             <button
@@ -235,15 +232,14 @@ function DefaultSourceCard({ stored, onChanged }: { stored: MyWallets['personal'
               aria-checked={current === o.value}
               disabled={pending}
               onClick={() => void choose(o.value)}
-              className={cn('flex flex-col gap-0.5 rounded-lg border px-3.5 py-3 text-left transition-colors', current === o.value ? 'border-primary bg-primary/10' : 'hover:bg-accent')}
+              className={cn('flex flex-col gap-px rounded-xl border px-4 py-3 text-left transition-colors', current === o.value ? 'border-primary bg-primary/10' : 'hover:bg-accent')}
             >
-              <span className="text-sm font-medium">{o.label}</span>
+              <span className="text-sm font-medium text-foreground">{o.label}</span>
               <span className="text-xs text-muted-foreground">{o.hint}</span>
             </button>
           ))}
         </div>
-      </CardContent>
-    </Card>
+    </SettingsSection>
   );
 }
 
@@ -258,7 +254,7 @@ interface AlwaysOwnCreditsState {
  * another wallet. This is the control the old "Always my own credits" radio label promised
  * and the default never delivered.
  */
-function AbsoluteOwnCreditsCard({ drives, onChanged }: { drives: MyWallets['driveWallets']; onChanged: () => Promise<unknown> }) {
+function AbsoluteOwnCreditsSection({ drives, onChanged }: { drives: MyWallets['driveWallets']; onChanged: () => Promise<unknown> }) {
   const [state, setState] = useState<AlwaysOwnCreditsState | null>(null);
   const [selectedDriveId, setSelectedDriveId] = useState<string>(drives[0]?.driveId ?? '');
   const [pending, setPending] = useState(false);
@@ -299,17 +295,12 @@ function AbsoluteOwnCreditsCard({ drives, onChanged }: { drives: MyWallets['driv
 
   const selectedDrive = drives.find((d) => d.driveId === selectedDriveId) ?? null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Always my own credits</CardTitle>
-        <CardDescription>The absolute switch: while on, nothing you do can spend a drive wallet — calls either use your credits or are refused.</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <label className="flex items-center justify-between gap-3 rounded-lg border px-3.5 py-3">
-          <span className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium">Everywhere, always</span>
-            <span className="text-xs text-muted-foreground">No conversation, window or drive can choose anything else.</span>
-          </span>
+    <SettingsSection
+      title="Always my own credits"
+      description="The absolute switch: while on, nothing you do can spend a drive wallet — calls either use your credits or are refused."
+    >
+      <SettingsGroup label="Always my own credits">
+        <SettingsRow label="Everywhere, always" hint="No conversation, window or drive can choose anything else.">
           <Switch
             checked={state?.alwaysOwnCredits ?? false}
             disabled={pending || state === null}
@@ -317,45 +308,36 @@ function AbsoluteOwnCreditsCard({ drives, onChanged }: { drives: MyWallets['driv
             aria-label="Always my own credits, globally"
             data-testid="always-own-credits-global"
           />
-        </label>
+        </SettingsRow>
         {drives.length > 0 && (
-          <div className="flex flex-col gap-2 rounded-lg border px-3.5 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <span className="flex flex-col gap-0.5">
-                <span className="text-sm font-medium">One drive only</span>
-                <span className="text-xs text-muted-foreground">The same absolute rule, scoped to the drive you pick.</span>
-              </span>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" data-testid="always-own-credits-drive-picker">
-                    {selectedDrive?.driveName ?? 'Pick a drive'}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>Drives you can spend in</DropdownMenuLabel>
-                  {drives.map((d) => (
-                    <DropdownMenuItem key={d.driveId} onClick={() => setSelectedDriveId(d.driveId)}>
-                      {d.driveName ?? d.driveId}
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+          <SettingsRow label="One drive only" hint="The same absolute rule, scoped to the drive you pick.">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" data-testid="always-own-credits-drive-picker">
+                  {selectedDrive?.driveName ?? 'Pick a drive'}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Drives you can spend in</DropdownMenuLabel>
+                {drives.map((d) => (
+                  <DropdownMenuItem key={d.driveId} onClick={() => setSelectedDriveId(d.driveId)}>
+                    {d.driveName ?? d.driveId}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             {selectedDrive && (
-              <label className="flex items-center justify-between gap-3 rounded-md bg-accent/50 px-3 py-2.5">
-                <span className="text-sm">{selectedDrive.driveName ?? selectedDrive.driveId}</span>
-                <Switch
-                  checked={state?.alwaysOwnCreditsInDrive ?? false}
-                  disabled={pending || state === null}
-                  onCheckedChange={(enabled) => void setSwitch(selectedDrive.driveId, enabled)}
-                  aria-label={`Always my own credits in ${selectedDrive.driveName ?? 'this drive'}`}
-                  data-testid="always-own-credits-drive"
-                />
-              </label>
+              <Switch
+                checked={state?.alwaysOwnCreditsInDrive ?? false}
+                disabled={pending || state === null}
+                onCheckedChange={(enabled) => void setSwitch(selectedDrive.driveId, enabled)}
+                aria-label={`Always my own credits in ${selectedDrive.driveName ?? 'this drive'}`}
+                data-testid="always-own-credits-drive"
+              />
             )}
-          </div>
+          </SettingsRow>
         )}
-      </CardContent>
-    </Card>
+      </SettingsGroup>
+    </SettingsSection>
   );
 }

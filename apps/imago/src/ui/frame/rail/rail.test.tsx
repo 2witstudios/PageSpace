@@ -173,7 +173,7 @@ describe('Rail', () => {
           '/drive-1/files',
           '/drive-1/messages',
           '/drive-1/tasks',
-          '/drive-1/calendar',
+          '/drive-1/calendar/view',
           '/drive-1/settings',
         ],
         'true',

@@ -3,7 +3,7 @@
 import Link from '@/retained-adapters/link';
 import type { ConsumerSpendView } from '@pagespace/lib/billing/wallet-views';
 import { spendMeterPercent, spendRowDetail, spendRowLabel } from '@pagespace/lib/billing/wallet-surface';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/retained/components/ui/card';
+import { SettingsSection } from '@/ui/settings/settings-screen/settings-screen';
 import { Progress } from '@/retained/components/ui/progress';
 
 /**
@@ -22,23 +22,18 @@ export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendVie
     ...(automations > 0 ? [`${automations} ${automations === 1 ? 'automation' : 'automations'}`] : []),
   ].join(' and ');
   return (
-    <Card data-testid="wallet-spend-card">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle>Spend this month</CardTitle>
-          <Link href="/settings/usage" className="text-sm text-primary hover:underline">Full usage</Link>
-        </div>
-        <CardDescription>
-          {spentCredits} credits across {across}. Automation runs count under the member who created them, shown as via automations.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+    <SettingsSection
+      title="Spend this month"
+      description={`${spentCredits} credits across ${across}. Automation runs count under the member who created them, shown as via automations.`}
+      actions={<Link href="/settings/usage" className="text-sm text-accent-deep hover:underline">Full usage</Link>}
+    >
+      <div data-testid="wallet-spend-card">
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Nothing spent from this wallet yet this month.</p>
+          <p className="rounded-xl border px-4 py-3 text-sm text-muted-foreground">Nothing spent from this wallet yet this month.</p>
         ) : (
-          <ul className="divide-y rounded-lg border">
+          <ul className="divide-y rounded-xl border">
             {rows.map((row) => (
-              <li key={row.consumerKey} data-testid="wallet-spend-row" className="px-3 py-2.5 text-sm">
+              <li key={row.consumerKey} data-testid="wallet-spend-row" className="px-4 py-3 text-sm">
                 <div className="flex items-center gap-3">
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="truncate">{spendRowLabel({ kind: 'member', displayName: row.displayName })}</span>
@@ -66,7 +61,7 @@ export function WalletSpendCard({ rows, spentCredits }: { rows: ConsumerSpendVie
             ))}
           </ul>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </SettingsSection>
   );
 }

@@ -15,10 +15,10 @@ import { BillingGuard } from '@/retained/components/billing/BillingGuard';
 import { PromoCodeInput, type AppliedPromo } from '@/retained/components/billing/PromoCodeInput';
 import Link from '@/retained-adapters/link';
 import { useCreditBalance } from '@/retained/hooks/useCreditBalance';
-import { getPlan, getTierFromPriceId, type SubscriptionTier, type PlanDefinition } from '@/retained/lib/subscription/plans';
+import { getPlan, getTierFromPriceId, withCreditOverrides, type SubscriptionTier, type PlanDefinition } from '@/retained/lib/subscription/plans';
+import { MANAGED_IN_APP_STORE_DETAIL, MANAGED_IN_APP_STORE_TITLE, type BillingProvider } from '@/retained/lib/iap/apple-store-core';
 import {
   CREDIT_PACK_LIST,
-  MONTHLY_CREDIT_CENTS,
   centsFromCredits,
   creditsCellPhrase,
   formatCreditCount,
@@ -50,6 +50,14 @@ interface SubscriptionData {
     scheduledPriceId?: string | null;
     scheduledChangeDate?: string | null;
   };
+  /**
+   * MON-2 / D-OW-17: the server's included-credit figure per tier, in whole cents. Patched onto
+   * the columns (withCreditOverrides) so the page follows the server if that figure ever depends
+   * on something only the server knows.
+   */
+  planCredits?: Partial<Record<SubscriptionTier, number>>;
+  /** Who sells the current paid personal plan: Stripe (web), Apple (In-App Purchase), or neither. */
+  billingProvider?: BillingProvider;
 }
 
 function PlanPageContent() {
@@ -173,6 +181,8 @@ function PlanPageContent() {
 
   const handlePlanSelect = async (targetTier: SubscriptionTier) => {
     if (!subscriptionData) return;
+    // Stripe never changes a plan the App Store sold: it is managed on the iPhone or iPad.
+    if (subscriptionData.billingProvider === 'apple') return;
 
     const target = getPlan(targetTier);
     const currentTier = subscriptionData.subscriptionTier;
@@ -341,7 +351,12 @@ function PlanPageContent() {
   const scheduledTier = subscriptionData?.subscription?.scheduledPriceId
     ? getTierFromPriceId(subscriptionData.subscription.scheduledPriceId)
     : null;
-  const allowanceCents = balance?.monthly.allowance ?? MONTHLY_CREDIT_CENTS[currentTier];
+  // Bought through the App Store: Stripe must not sell, change or cancel it here.
+  const managedInAppStore = subscriptionData?.billingProvider === 'apple';
+  // Free and Pro are the personal columns. Business is an organization plan, bought from an org.
+  const tierColumns: PlanDefinition[] = withCreditOverrides([getPlan('free'), getPlan('pro')], subscriptionData?.planCredits);
+  const columnOf = (tier: SubscriptionTier): PlanDefinition => tierColumns.find((plan) => plan.id === tier) ?? getPlan(tier);
+  const allowanceCents = balance?.monthly.allowance ?? columnOf(currentTier).limits.monthlyCreditsCents;
   const renewsOn = balance?.monthly.periodEnd
     ? new Date(balance.monthly.periodEnd).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
     : null;
@@ -349,9 +364,6 @@ function PlanPageContent() {
     renewsOn ? ` · renews ${renewsOn}` : ''
   }`;
 
-  // Free and Pro are the personal columns. Business is an organization plan and is not
-  // rendered on this branch (orgs are off), so it has no column and no org note here.
-  const tierColumns: PlanDefinition[] = [getPlan('free'), getPlan('pro')];
   const proPriceId = getPlan('pro').stripePriceId ?? '';
 
   const packCredits = CREDIT_PACK_LIST.map((pack) => formatCreditCount(centsFromCredits(pack.credits)));
@@ -360,7 +372,7 @@ function PlanPageContent() {
     items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
 
   const featureRows = [
-    { label: 'Credits', values: tierColumns.map((p) => creditsCellPhrase(p.id, MONTHLY_CREDIT_CENTS[p.id])) },
+    { label: 'Credits', values: tierColumns.map((p) => creditsCellPhrase(p.id, p.limits.monthlyCreditsCents)) },
     { label: 'AI models', values: tierColumns.map((p) => (p.limits.proModels ? 'Standard + Pro' : 'Standard')) },
     { label: 'Buy more credits', values: tierColumns.map(() => topUpRatePhrase()) },
     { label: 'Storage', values: tierColumns.map((p) => p.limits.storage.formatted) },
@@ -368,6 +380,9 @@ function PlanPageContent() {
   ];
 
   const columnCta = (plan: PlanDefinition) => {
+    if (managedInAppStore) {
+      return plan.id === currentTier ? <p className="text-center text-sm text-muted-foreground">{MANAGED_IN_APP_STORE_TITLE}</p> : null;
+    }
     if (plan.id === 'free') {
       return currentTier === 'free' ? null : (
         <Button variant="outline" className="w-full" onClick={() => handlePlanSelect('free')} disabled={cancellingSchedule}>
@@ -403,7 +418,7 @@ function PlanPageContent() {
   );
 
   return (
-    <SettingsScreen title="Plan" lede={lede} actions={promoField}>
+    <SettingsScreen title="Plan" lede={lede} actions={managedInAppStore ? undefined : promoField}>
         {success && (
           <Alert className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
             <CheckCircle className="h-4 w-4 text-green-600" />
@@ -426,6 +441,14 @@ function PlanPageContent() {
           <Alert variant="destructive">
             <XCircle className="h-4 w-4" />
             <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {managedInAppStore && (
+          <Alert data-testid="managed-in-app-store">
+            <AlertDescription>
+              <span className="font-medium">{MANAGED_IN_APP_STORE_TITLE}.</span> {MANAGED_IN_APP_STORE_DETAIL}
+            </AlertDescription>
           </Alert>
         )}
 
@@ -491,7 +514,7 @@ function PlanPageContent() {
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">Included</dt>
                         <dd className="text-right font-medium">
-                          {includedCreditsPhraseForCents(plan.id, MONTHLY_CREDIT_CENTS[plan.id])}
+                          {includedCreditsPhraseForCents(plan.id, plan.limits.monthlyCreditsCents)}
                         </dd>
                       </div>
                       <div className="flex justify-between gap-2">
@@ -554,7 +577,7 @@ function PlanPageContent() {
           </div>
         )}
 
-        {targetPlan && subscriptionData && (
+        {!managedInAppStore && targetPlan && subscriptionData && (
           <PlanChangeConfirmation
             open={changePlanDialog}
             onOpenChange={setChangePlanDialog}

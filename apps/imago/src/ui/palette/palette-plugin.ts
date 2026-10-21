@@ -5,7 +5,7 @@ type PaletteResources = {
   readonly paletteOpen: boolean;
   /** What the palette's field holds. */
   readonly paletteQuery: string;
-  /** "Include all workspaces": search every drive the viewer can reach, not the open one. */
+  /** "All workspaces": search every drive the viewer can reach, not the open one. */
   readonly paletteAllDrives: boolean;
   /** The highlighted result, by its place in the list Enter would open. */
   readonly paletteActive: number;

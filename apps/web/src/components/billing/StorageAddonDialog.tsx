@@ -120,7 +120,8 @@ export function StorageAddonDialog({ open, onOpenChange, addon, baseQuotaBytes, 
         </div>
 
         <p className="text-sm text-muted-foreground">
-          {delta > 0 && `${payerLabel} card is charged now for the rest of this billing period, then ${formatDollars(monthlyCents)}/month with your plan.`}
+          {delta > 0 && target > addon.entitledBlocks && `${payerLabel} card is charged now for the rest of this billing period, then ${formatDollars(monthlyCents)}/month with your plan.`}
+          {delta > 0 && target <= addon.entitledBlocks && `This keeps storage already paid for this period, so nothing is charged now. Then ${formatDollars(monthlyCents)}/month with your plan.`}
           {delta < 0 && `You keep the storage you have paid for until ${formatDate(addon.currentPeriodEnd)}. Nothing is refunded, and no files are deleted.`}
           {delta === 0 && target >= addon.maxBlocks && 'Need more? Contact us.'}
         </p>

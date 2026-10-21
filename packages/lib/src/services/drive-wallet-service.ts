@@ -126,6 +126,7 @@ interface WalletAccess {
   standing: DriveWalletStanding;
   viewer: Exclude<WalletViewer, 'none'>;
   orgDrive: boolean;
+  homeDrive: boolean;
   actions: WalletAction[];
 }
 
@@ -141,12 +142,13 @@ async function walletAccess(actor: AccessActor, driveId: string, credential: Wal
   // [D-OW-26] a token reads as a consumer and may take no write, whatever the person's role.
   const viewer = viewerForCredential(role, credential);
   const orgDrive = standing.orgId !== null;
-  const actions = walletActionsFor(viewer, { orgDrive }).filter((a) => credential === 'session' || a === 'view');
-  return { ok: true, standing, viewer, orgDrive, actions };
+  const homeDrive = standing.isHome === true;
+  const actions = walletActionsFor(viewer, { orgDrive, homeDrive }).filter((a) => credential === 'session' || a === 'view');
+  return { ok: true, standing, viewer, orgDrive, homeDrive, actions };
 }
 
 function requireAction(access: WalletAccess, action: WalletAction): WalletServiceError | null {
-  return mayTakeWalletAction(access.viewer, action, { orgDrive: access.orgDrive }) ? null : forbidden(action);
+  return mayTakeWalletAction(access.viewer, action, { orgDrive: access.orgDrive, homeDrive: access.homeDrive }) ? null : forbidden(action);
 }
 
 /**
@@ -543,6 +545,10 @@ export async function updateDriveWallet(
     for (const action of plan.actions) {
       const denied = requireAction(access, action);
       if (denied) return denied;
+    }
+    // A Home drive is never funded: its old wallet may only be run down, so its allocation can only go to 0.
+    if (access.homeDrive && input.allocationCents !== undefined && input.allocationCents > 0) {
+      return { ok: false, status: 403, code: 'home_drive_unfunded', message: 'Your Home drive cannot be funded. Its wallet can only be run down, paused or deleted.' };
     }
     await tx.update(wallets).set(plan.set).where(eq(wallets.id, row.id));
     await audit(...orgWalletEvents(access.standing, userId, 'org.wallet.allocation_changed', { operation: 'update', changes: { ...plan.set } }));

@@ -16,6 +16,7 @@ vi.mock('@/hooks/useDrive', () => ({
       { id: 'd-research', name: 'Customer Research', orgId: 'o-northwind', isOwned: false, isTrashed: false },
       { id: 'd-side', name: 'Side project', orgId: null, isOwned: true, isTrashed: false },
       { id: 'd-reading', name: 'Reading', orgId: null, isOwned: true, isTrashed: false },
+      { id: 'd-home', name: 'Home', kind: 'HOME', orgId: null, isOwned: true, isTrashed: false },
     ],
   }),
 }));
@@ -88,6 +89,13 @@ describe('Settings › Usage › Wallets', () => {
     expect(screen.getByTestId('usage-fund-drive').textContent).toContain('Side project wallet');
     expect(screen.getByRole('button', { name: 'Fund a drive' })).toBeTruthy();
     expect(screen.queryByTestId('usage-fund-pool')).toBeNull();
+  });
+
+  it('never offers to fund Home: what I spend there is already my own credits', async () => {
+    render(<UsageWallets />);
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Fund a drive' }), { key: 'Enter' });
+    expect(await screen.findByRole('menuitem', { name: 'Reading' })).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: 'Home' })).toBeNull();
   });
 
   it('SPEND-10 (partial) an org Owner or Admin also sees the pool they fund, with what is not yet allocated', () => {

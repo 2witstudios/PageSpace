@@ -36,16 +36,17 @@ describe('planNameOf() and creditsOf() and driveCountOf()', () => {
   test('the figures read from their routes, whole numbers only', () => {
     assert({
       given: 'a subscription status, a credit balance and a drive list',
-      should: 'name the tier, floor the credits and count the drives',
+      should: 'name the tier, write the cents as whole credits and count the drives',
       actual: [
         planNameOf({ subscriptionTier: 'pro' }),
         planNameOf({ subscriptionTier: 'unknown-tier' }),
-        creditsOf({ spendable: 612.9, monthly: { remaining: 600 } }),
+        creditsOf({ spendable: 6129, monthly: { remaining: 6000 } }),
+        creditsOf({ spendable: 16120 }),
         creditsOf({ billingEnabled: false }),
         driveCountOf([{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }]),
         driveCountOf({ error: 'nope' }),
       ],
-      expected: ['Pro', 'Free', 612, null, 3, null],
+      expected: ['Pro', 'Free', '613', '1,612', null, 3, null],
     });
   });
 });
@@ -53,7 +54,7 @@ describe('planNameOf() and creditsOf() and driveCountOf()', () => {
 describe('glanceRows()', () => {
   const loaded = {
     status: { subscriptionTier: 'pro' },
-    credits: { spendable: 612 },
+    credits: { spendable: 6120 },
     drives: [{ id: 'd1' }, { id: 'd2' }, { id: 'd3' }],
   };
 
