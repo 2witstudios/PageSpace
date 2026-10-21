@@ -550,16 +550,22 @@ async function resetOne(
         status: wallets.status,
         userId: wallets.userId,
         orgId: wallets.orgId,
+        subjectType: wallets.subjectType,
+        subjectId: wallets.subjectId,
       })
       .from(wallets)
       .where(eq(wallets.id, walletId))
       .for('update');
     if (!locked) return false;
+    // A Home drive is never funded (wallet-access): an old Home wallet's allocation ends at the
+    // period it would refill, so it only runs down what is already in it.
+    const homeWallet = locked.subjectType === 'drive' && locked.subjectId !== null
+      && (await tx.select({ id: drives.id }).from(drives).where(and(eq(drives.id, locked.subjectId), eq(drives.kind, 'HOME'))).limit(1)).length > 0;
     const plan = planAllocationReset({
       wallet: {
         periodStartMs: locked.periodStart?.getTime() ?? null,
         periodEndMs: locked.periodEnd?.getTime() ?? null,
-        allocationCents: locked.allocationCents,
+        allocationCents: homeWallet ? 0 : locked.allocationCents,
         spentCents: locked.spentCents,
         debtCents: locked.debtCents,
         paused: locked.status === 'paused',
@@ -575,6 +581,7 @@ async function resetOne(
         spentCents: plan.spentCents,
         debtCents: plan.debtCents,
         status: plan.status,
+        ...(homeWallet ? { monthlyAllowanceCents: 0 } : {}),
         monthlyPeriodStart: newStart,
         monthlyPeriodEnd: new Date(plan.periodEndMs),
       })
