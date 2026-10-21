@@ -8,19 +8,19 @@ const at = (path: string) => isDashboard(stageFor(path), 'home1');
 describe('isDashboard()', () => {
   test('Home’s aggregate sections', () => {
     assert({
-      given: 'the Home drive’s chat, Messages, Tasks, Calendar, Console and Activity',
+      given: 'the Home drive’s chat, Messages, Calendar, Console and Activity',
       should: 'read across every drive',
-      actual: ['/home1', '/home1/messages', '/home1/tasks', '/home1/calendar', '/home1/agents', '/home1/activity'].map(at),
-      expected: [true, true, true, true, true, true],
+      actual: ['/home1', '/home1/messages', '/home1/calendar', '/home1/agents', '/home1/activity'].map(at),
+      expected: [true, true, true, true, true],
     });
   });
 
   test('Home’s own sections', () => {
     assert({
-      given: 'the Home drive’s Files, Members, Trash, Workflows and settings',
+      given: 'the Home drive’s Files, Tasks (never switched), Members, Trash, Workflows and settings',
       should: 'stay Home’s own',
-      actual: ['/home1/files', '/home1/members', '/home1/trash', '/home1/workflows', '/home1/settings'].map(at),
-      expected: [false, false, false, false, false],
+      actual: ['/home1/files', '/home1/tasks', '/home1/members', '/home1/trash', '/home1/workflows', '/home1/settings'].map(at),
+      expected: [false, false, false, false, false, false],
     });
   });
 

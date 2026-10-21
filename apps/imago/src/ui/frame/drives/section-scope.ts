@@ -23,11 +23,18 @@ export const NO_SCOPES: SectionScopes = {};
 export const SECTION_SCOPES_KEY = 'imago:section-scopes';
 
 /**
+ * The sections whose All drives swaps the drive's tree (Files' pages, Tasks' lists) for the drives
+ * to pick from. They open on the drive itself, even on Home, so a drive's own tree is never hidden
+ * behind a choice the viewer has not made.
+ */
+const treeSections: readonly ScopedSection[] = ['files', 'tasks'];
+
+/**
  * A section's scope: the viewer's choice, else every drive on Home (the dashboard, ADR 0007 D4)
- * and the drive itself anywhere else.
+ * for a section that only reads across drives, and the drive itself anywhere else.
  */
 export const resolveScope = (scopes: SectionScopes, section: ScopedSection, isHome: boolean): SectionScope =>
-  scopes[section] ?? (isHome ? 'all' : 'drive');
+  scopes[section] ?? (isHome && !treeSections.includes(section) ? 'all' : 'drive');
 
 const isScope = (value: unknown): value is SectionScope => value === 'drive' || value === 'all';
 

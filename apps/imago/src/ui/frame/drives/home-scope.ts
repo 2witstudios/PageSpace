@@ -4,7 +4,8 @@ import { NO_SCOPES, resolveScope, type SectionScopes } from './section-scope';
 /**
  * Every drive's view (ADR 0007 D4, amended): Messages, Tasks, Files, Calendar, Console and
  * Activity each carry a scope switch in their head, this drive or All drives, held per section
- * (section-scope.ts) and All drives on Home until the viewer picks otherwise. The chat on Home
+ * (section-scope.ts). Until the viewer picks, Home opens Messages, Calendar, Console and Activity
+ * on All drives; Files and Tasks, whose All drives is a list of drives, open on Home itself. The chat on Home
  * still reads every drive. Workflows, Members, Trash and the drive settings are always the
  * drive's own.
  *

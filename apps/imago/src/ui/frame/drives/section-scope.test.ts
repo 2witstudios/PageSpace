@@ -16,10 +16,19 @@ describe('hasScope()', () => {
 describe('resolveScope()', () => {
   test('no choice yet', () => {
     assert({
-      given: 'a section never switched, on Home and on another drive',
+      given: 'Messages never switched, on Home and on another drive',
       should: 'read every drive on Home and the drive itself elsewhere',
-      actual: [resolveScope(NO_SCOPES, 'tasks', true), resolveScope(NO_SCOPES, 'tasks', false)],
+      actual: [resolveScope(NO_SCOPES, 'messages', true), resolveScope(NO_SCOPES, 'messages', false)],
       expected: ['all', 'drive'],
+    });
+  });
+
+  test('a tree section with no choice yet', () => {
+    assert({
+      given: 'Files and Tasks never switched, on Home',
+      should: 'open on Home itself, so its pages and task lists show',
+      actual: [resolveScope(NO_SCOPES, 'files', true), resolveScope(NO_SCOPES, 'tasks', true)],
+      expected: ['drive', 'drive'],
     });
   });
 

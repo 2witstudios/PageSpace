@@ -5,7 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-- In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Home starts on All drives, and other drives start on themselves. In All drives:
+- In Imago, the Files, Messages, Tasks, Calendar, Console and Activity sidebars have a switch beside their title: the drive you're in, or All drives. It works the same on every drive, not just Home, and each section remembers its choice on this device. Until you pick, Home's Messages, Calendar, Console and Activity show All drives. Files and Tasks always start on the drive you're in, so Home's own pages and task lists stay where they were. Other drives start on themselves. In All drives:
   - **Files** shows your favorites and recent pages from every drive, each naming its drive, plus a list of your drives in place of the page tree. Pick a drive to open its Files.
   - **Tasks** shows your views and Needs attention across every drive, plus a list of your drives in place of the task lists.
   - **Messages** shows every drive's channels with your DMs. Set to one drive, it shows that drive's channels and your DMs, and the "Showing all drives" note under the inbox is gone.
