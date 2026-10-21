@@ -59,9 +59,10 @@ export const classicHref = (driveId: string, path: string): string =>
 /**
  * Under the divider: Calendar and Console (the drive's agents and their sessions), the tools that carry their own notifications or are
  * used as destinations in their own right, each a route of the current drive.
+ * Calendar opens its screen beside the sidebar by default; its bare route still closes the screen.
  */
 export const secondaryItems = (driveId: string | null): readonly SecondaryItem[] => [
-  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar') },
+  { id: 'calendar', icon: 'calendar', label: 'Calendar', href: driveHref(driveId, 'calendar/view') },
   { id: 'agents', icon: 'console', label: 'Console', href: driveHref(driveId, 'agents') },
 ];
 

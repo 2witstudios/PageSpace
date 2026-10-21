@@ -89,7 +89,7 @@ describe('renderRail()', () => {
       given: 'the tools under the divider',
       should: 'link each into the drive through the Imago router',
       actual: hrefs,
-      expected: ['/drive-1/calendar', '/drive-1/agents'],
+      expected: ['/drive-1/calendar/view', '/drive-1/agents'],
     });
   });
 

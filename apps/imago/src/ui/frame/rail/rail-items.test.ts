@@ -62,10 +62,10 @@ describe('secondaryItems() (IMC-1.4)', () => {
   test('Calendar and Agents under the divider', () => {
     assert({
       given: 'the current drive',
-      should: 'list Calendar and Agents at that drive',
+      should: 'open Calendar with its screen and leave Console sidebar-first',
       actual: secondaryItems('drive-1').map(({ id, label, href }) => [id, label, href]),
       expected: [
-        ['calendar', 'Calendar', '/drive-1/calendar'],
+        ['calendar', 'Calendar', '/drive-1/calendar/view'],
         ['agents', 'Console', '/drive-1/agents'],
       ],
     });
