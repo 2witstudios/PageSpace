@@ -52,9 +52,11 @@ it('lists this drive’s favorites and recents above the pages (IMC-1.8)', async
   });
   const container = mount(<ImagoSWRProvider client={client}><FilesPane driveId="d1" selectedPageId="plan" variant="tree" title="Files" /></ImagoSWRProvider>);
   await act(() => vi.waitFor(() => { if (!container.textContent?.includes('#launch-ops')) throw new Error('not loaded'); }, { timeout: 1000 }));
-  const groups = [...container.querySelectorAll('button[aria-expanded]')].map((button) => button.textContent);
+  // The group labels fold their groups; the head's scope switch opens a menu instead.
+  const groups = [...container.querySelectorAll('button[aria-expanded]:not([aria-haspopup])')].map((button) => button.textContent);
   const rows = [...container.querySelectorAll('a')].map((link) => [link.textContent, link.getAttribute('aria-current')]);
   expect(groups).toEqual(['Favorites', 'Recents', 'Pages']);
+  expect(container.querySelector('button[aria-haspopup="menu"]')?.getAttribute('aria-label')).toBe('Showing This drive');
   expect(rows).toEqual([['Q4 Launch Plan', 'page'], ['#launch-ops2h', null]]);
   expect(container.querySelector('input')?.getAttribute('placeholder')).toBe('Search pages');
   vi.useRealTimers();
