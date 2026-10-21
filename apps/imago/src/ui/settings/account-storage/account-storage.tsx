@@ -168,11 +168,12 @@ function ExtraStorageSection({ addon, canUpgrade, onChange }: {
       <SettingsGroup label="Extra storage">
         {addon && canBuy ? (
           <SettingsRow
-            label={addon.blocks > 0 ? `+${gbLabel(addon.blocks * addon.blockBytes)} extra` : 'No extra storage'}
+            // entitledBlocks is what the quota holds now; blocks is the (possibly lower) next-period count.
+            label={addon.entitledBlocks > 0 ? `+${gbLabel(addon.entitledBlocks * addon.blockBytes)} extra` : 'No extra storage'}
             hint={addon.graceUntil ? `Your extra storage drops to ${gbLabel(addon.blocks * addon.blockBytes)} on ${new Date(addon.graceUntil).toLocaleDateString()}.` : addon.blocks > 0 ? `${formatDollars(addon.blocks * addon.blockPriceCents)}/month` : undefined}
           >
             <button type="button" onClick={onChange} className={buttonClass}>
-              {addon.blocks > 0 ? 'Change storage' : 'Add storage'}
+              {addon.entitledBlocks > 0 || addon.blocks > 0 ? 'Change storage' : 'Add storage'}
             </button>
           </SettingsRow>
         ) : (

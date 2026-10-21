@@ -31,6 +31,16 @@ describe('StorageAddonDialog', () => {
     expect(screen.getByText(/no files are deleted/)).toBeTruthy();
   });
 
+  it('given a raise back within storage already paid for this period, should not promise a charge', () => {
+    render(<StorageAddonDialog open onOpenChange={vi.fn()} addon={addon({ blocks: 1, entitledBlocks: 3, graceUntil: '2026-11-01T00:00:00.000Z' })} baseQuotaBytes={10 * GB} payerLabel="Your" onSubmit={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a block' }));
+    expect(screen.getByText(/nothing is charged now/)).toBeTruthy();
+    expect(screen.queryByText(/card is charged now/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a block' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add a block' }));
+    expect(screen.getByText(/Your card is charged now/)).toBeTruthy();
+  });
+
   it('given a refused change, should keep the dialog open and show why', async () => {
     const onOpenChange = vi.fn();
     const onSubmit = vi.fn().mockRejectedValue(new Error('Your card was declined.'));
