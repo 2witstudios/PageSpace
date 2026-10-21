@@ -15,7 +15,7 @@ describe('segmentedControlClass', () => {
       given: 'the group around the segments',
       should: 'draw a quiet overlay track on the control radius, hugging its segments',
       actual: segmentedControlClass,
-      expected: 'inline-flex flex-none items-center gap-1 rounded-md bg-surface-overlay p-badge-y',
+      expected: 'inline-flex w-fit max-w-full flex-none items-center gap-1 rounded-md bg-surface-overlay p-badge-y',
     });
   });
 });

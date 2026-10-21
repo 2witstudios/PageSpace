@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago message filters now remove duplicate conversations from overlapping inbox pages so switching All, Channels and Direct does not leave stale rows behind. Segmented selectors fit their buttons without an empty tail.
 - Imago’s left sidebar content now resizes with its column across chat history, files, messages and tool sidebars, instead of being clipped or leaving blank space. Sidebar content also fills the narrower overlay sheets.
 
 - The Terms of Service and Privacy Policy now cover purchases made in the iOS app through Apple: subscriptions bought there are managed and cancelled in your App Store account settings, Apple handles their refunds, and Apple shares only the transaction details needed to provide what you bought. In the iOS app, the Terms, Privacy, Cookie and Subprocessors pages open without the website's navigation and footer.
