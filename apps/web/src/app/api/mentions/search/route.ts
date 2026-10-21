@@ -18,6 +18,11 @@ import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } f
 import { z } from 'zod';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
+/** With no query: how many recent pages to answer with, read in windows of RECENT_WINDOW candidates, at most RECENT_SCAN_LIMIT of them. */
+const RECENT_LIMIT = 20;
+const RECENT_WINDOW = 50;
+const RECENT_SCAN_LIMIT = 200;
+
 /**
  * Build a multi-word search condition
  * All words must be present in the title (in any order)
@@ -365,13 +370,30 @@ export async function GET(request: Request) {
         )
       );
 
-      // When query is empty, order by recently updated so user sees relevant pages
-      const pageResults = query.trim()
-        ? await pageQuery.limit(50)
-        : await pageQuery.orderBy(desc(pages.updatedAt)).limit(20);
+      const isViewable = async (page: { id: string }) => Boolean(await getPrincipalAccessLevel(auth, page.id));
+      const visiblePages: Awaited<typeof pageQuery>[number][] = [];
 
-      // Filter by permissions and requested types
-      for (const page of pageResults) {
+      if (query.trim()) {
+        for (const page of await pageQuery.limit(50)) {
+          if (await isViewable(page)) visiblePages.push(page);
+        }
+      } else {
+        // When query is empty, list the RECENT_LIMIT most recently updated
+        // pages the requester can view. The view check runs per page after
+        // the fetch, so one window of the drive's newest pages can hold none
+        // the requester may see (a guest whose only grant is an older page):
+        // read windows newest first until enough pass, up to
+        // RECENT_SCAN_LIMIT candidates.
+        for (let offset = 0; visiblePages.length < RECENT_LIMIT && offset < RECENT_SCAN_LIMIT; offset += RECENT_WINDOW) {
+          const batch = await pageQuery.orderBy(desc(pages.updatedAt)).offset(offset).limit(RECENT_WINDOW);
+          for (const page of batch) {
+            if (visiblePages.length < RECENT_LIMIT && (await isViewable(page))) visiblePages.push(page);
+          }
+          if (batch.length < RECENT_WINDOW) break;
+        }
+      }
+
+      for (const page of visiblePages) {
         // The dead 'MACHINE' pg-enum value (kept because Postgres cannot DROP
         // VALUE — see packages/db/src/schema/core.ts) can never be written by
         // the app anymore and every MACHINE page was hard-deleted in the
@@ -381,18 +403,10 @@ export async function GET(request: Request) {
         // can produce.
         if (page.type === 'MACHINE') continue;
         // excludePageTypesParam is enforced in the WHERE clause above (SQL,
-        // not here) — excluded types never occupy a row in `pageResults` at
-        // all, so the DB's own `.limit(50)`/`.limit(20)` window is composed
-        // entirely of eligible candidates, not just whatever's left of it
-        // after an after-the-fact skip.
-
-        const accessLevel = await getPrincipalAccessLevel(auth, page.id);
-        if (!accessLevel) continue;
-
-        // All page types are now under 'page' mention type
-        if (!requestedTypes.includes('page')) {
-          continue; // Skip if page type not requested
-        }
+        // not here) — excluded types never occupy a row of a fetched window
+        // at all, so each window is composed entirely of eligible
+        // candidates, not just whatever's left of it after an after-the-fact
+        // skip.
 
         const mentionType: MentionType = 'page';
 

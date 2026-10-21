@@ -81,7 +81,7 @@ describe('palettePlugin', () => {
   test('every drive', () => {
     const once = togglePaletteAllDrives(typed('road', 2), undefined);
     assert({
-      given: '"Include all workspaces" ticked, then cleared',
+      given: '"All workspaces" picked, then the drive again',
       should: 'search every drive with the highlight at the top, then the open drive again, keeping the query',
       actual: [palette(once), palette(togglePaletteAllDrives(once, undefined))],
       expected: [

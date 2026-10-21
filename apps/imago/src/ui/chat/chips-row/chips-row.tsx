@@ -3,6 +3,7 @@
 import { AiUsageMonitor } from '@/retained/components/ai/shared/AiUsageMonitor';
 import { PlanChip } from '@/retained/components/ai/shared/PlanChip';
 import { TasksDropdown } from '@/retained/components/ai/shared/TasksDropdown';
+import { useDisplayPreferences } from '@/retained/hooks/useDisplayPreferences';
 import { useRenderedMessages } from '@/retained/hooks/useRenderedMessages';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 
@@ -23,6 +24,7 @@ export type ChipsRowProps = {
 };
 
 export function ChipsRow({ conversationId, agentId, driveId }: ChipsRowProps) {
+  const { preferences } = useDisplayPreferences();
   // The same message cache the chat renders from, so the tasks follow the live turn.
   const messages = useRenderedMessages(agentId ?? '', conversationId).map((rendered) => rendered.message);
   return (
@@ -31,7 +33,7 @@ export function ChipsRow({ conversationId, agentId, driveId }: ChipsRowProps) {
         <PlanChip conversationId={conversationId} messages={messages} />
         <TasksDropdown messages={messages} driveId={driveId} />
         {/* compact: the full usage card is taller than the 28px row and would cover the thread above it. */}
-        <AiUsageMonitor conversationId={conversationId} compact />
+        {preferences.showTokenCounts && <AiUsageMonitor conversationId={conversationId} compact />}
       </div>
     </RetainedSurface>
   );

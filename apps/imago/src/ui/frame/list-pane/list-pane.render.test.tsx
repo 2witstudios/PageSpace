@@ -17,10 +17,10 @@ describe('renderListPane()', () => {
     const html = renderToString(renderListPane({ variant: 'list', title: 'Files', close, children: null }));
     assert({
       given: 'a stage-2 list',
-      should: 'be a named region at the wide width whose head ends in the close control, with no link back',
+      should: 'be a named region filling its allocated width whose head ends in the close control, with no link back',
       actual: [
         html.includes('aria-label="Files"'),
-        html.includes('w-list-pane'),
+        html.includes('w-full min-w-0 flex-1'),
         html.indexOf('aria-label="Close sidebar"') < html.indexOf('</header>'),
         html.includes('<a'),
       ],
@@ -56,8 +56,8 @@ describe('renderListPane()', () => {
     );
     assert({
       given: 'a stage-3 tree beside an object',
-      should: 'take the narrow width and render its rows in the body after the head',
-      actual: [html.includes('w-tree-pane'), html.indexOf('data-body') > html.indexOf('</header>')],
+      should: 'fill the tree column width and render its rows in the body after the head',
+      actual: [html.includes('w-full min-w-0 flex-1'), html.indexOf('data-body') > html.indexOf('</header>')],
       expected: [true, true],
     });
   });
