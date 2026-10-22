@@ -39,7 +39,7 @@ export function ConsolePane({ driveId, close, variant, scope: scopeSwitch = null
     scope: scopeSwitch,
     variant,
     children: (
-      <RetainedSurface>
+      <RetainedSurface className="bg-transparent">
         <AgentsSidebar focus={allDrives ? ALL_DRIVES : undefined} />
       </RetainedSurface>
     ),

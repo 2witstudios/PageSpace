@@ -100,7 +100,7 @@ export function FilesPane({ driveId, selectedPageId, variant, title, phoneHeader
         </PaneGroup>
       ) : (
         <PaneGroup label="Pages">
-          <RetainedSurface fill={false}>
+          <RetainedSurface fill={false} className="bg-transparent">
             <PageTree driveId={driveId} searchQuery={filter} roomyRows={phone} />
           </RetainedSurface>
         </PaneGroup>

@@ -233,7 +233,7 @@ export function SessionChatView({
     <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
     <div
       data-testid="session-chat"
-      className="@container flex h-full min-w-0 min-h-0 flex-col bg-tint"
+      className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
     >
       {imagoComposer && <VoiceCallBarForConversation conversationId={conversationId} assistantName={name} />}
       {chat.hasLoadError && (
