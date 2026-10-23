@@ -5,6 +5,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago's Messages sidebar no longer switches layouts when you open a conversation. It is always the compact list: channels first, then direct messages. Opening a thread only highlights its row. Inside a drive it lists that drive's channels; on Home and the direct-message pages it lists every drive's channels, grouped under each drive's name. Click a group's label to collapse it, for example to see only your direct messages. A collapsed group shows its unread total and stays collapsed across pages and reloads. The All / Channels / Direct filter and the separate direct-messages sidebar with search are gone.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
   - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.

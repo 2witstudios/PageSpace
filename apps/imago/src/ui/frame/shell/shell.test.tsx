@@ -60,12 +60,6 @@ vi.mock('@/ui/messages/messages-pane/messages-pane', () => ({
     }),
 }));
 
-// The DM index pane loads through SWR and realtime too; its own suite proves
-// it against the real hooks. Here it shows the open conversation it was handed.
-vi.mock('@/ui/messages/dm-index/dm-index', () => ({
-  DmIndexPane: ({ selectedConversationId }: { selectedConversationId: string | null }) =>
-    h('div', { 'data-dm-pane': '', 'data-conversation': selectedConversationId ?? '' }),
-}));
 
 // The tasks pane loads through SWR; its own suite proves it against the real
 // client. Here it only shows what the shell handed it.
@@ -389,26 +383,26 @@ describe('Shell', () => {
 
   test('the messages section fills its list', () => {
     render();
-    const pane = () => slot('list').querySelector<HTMLElement>('[data-messages-pane], [data-dm-pane]');
+    const pane = () => slot('list').querySelector<HTMLElement>('[data-messages-pane]');
     const seen = ['/drive-1/messages', '/drive-1/messages/channel-1', '/dm', '/dm/conversation-1', '/drive-1/files'].map(
       (pathname) => {
         navigate(pathname);
         const found = pane();
         return found === null
           ? null
-          : [found.dataset.messagesPane ?? 'dm', found.dataset.page ?? '', found.dataset.conversation ?? ''];
+          : [found.dataset.messagesPane ?? '', found.dataset.page ?? '', found.dataset.conversation ?? ''];
       },
     );
 
     assert({
       given: 'the Messages list, an open channel, the user-level DM index, an open DM, then Files',
-      should: 'put the channels in the list slot with the drive and open thread, the DM index for /dm, and nothing in Files',
+      should: 'put the same messages pane in the list slot with the drive (none for /dm) and open thread, and nothing in Files',
       actual: seen,
       expected: [
         ['drive-1', '', ''],
         ['drive-1', 'channel-1', ''],
-        ['dm', '', ''],
-        ['dm', '', 'conversation-1'],
+        ['', '', ''],
+        ['', '', 'conversation-1'],
         null,
       ],
     });
