@@ -284,6 +284,24 @@
   [contenteditable]:focus-visible {
     box-shadow: none;
   }
+
+  /* iOS zooms into a focused text field under 16px. On touch screens every field and editor is
+     at least 16px, so focus never zooms and pinch zoom stays free; fine pointers (the desktop)
+     keep their sizes. A field with no size utility inherits at least 16px; one with a small
+     size utility (text-sm is var(--text-sm)) reads 16px from the tokens redefined on it, and
+     larger sizes such as titles are untouched. */
+  @media (pointer: coarse) {
+    input,
+    textarea,
+    select,
+    [contenteditable]:not([contenteditable='false']) {
+      font-size: max(16px, 1em);
+      --text-2xs: 16px;
+      --text-xs: 16px;
+      --text-sm: 16px;
+      --text-base: 16px;
+    }
+  }
 }
 
 /* Reduced motion cuts every duration to 0.01ms and every delay to zero:

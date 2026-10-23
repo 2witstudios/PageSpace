@@ -34,12 +34,11 @@ export const metadata: Metadata = {
 };
 
 // viewport-fit=cover draws under the notch and home indicator so env(safe-area-inset-*) reports
-// them (the phone shell pads itself by them). maximum-scale=1 stops iOS zooming into a focused
-// input under 16px; pinch zoom still works.
+// them (the phone shell pads itself by them). No maximum-scale: users must be able to zoom any
+// page. iOS focus zoom is avoided instead by 16px text fields on touch screens (globals.css).
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
   viewportFit: 'cover',
 };
 
