@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChannelThread, DirectThread } from '../message-model/message';
-import { useDirectThreads, useDriveChannels, useInbox } from '../use-messages/use-messages';
+import { useAllChannels, useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
 import { useIsHome } from '../../frame/drives/home-drive-context';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
 import { channelsByDrive, DIRECT_GROUP, driveGroup } from './message-groups';
@@ -13,7 +13,7 @@ import {
   type MessagesGroupView,
   type MessagesSectionView,
 } from './messages-pane.render';
-import { useCollapsedGroups } from './use-collapsed-groups';
+import { useCollapsedGroups } from './useCollapsedGroups';
 
 export type MessagesPaneProps = {
   /** The current drive; null on the user-level /dm routes. */
@@ -75,16 +75,16 @@ function useDriveGroups(driveId: string, selectedPageId: string | null, fold: Fo
 }
 
 /**
- * Every drive's channels, one group per drive named for it, read from the
- * inbox (one load, live). Until the inbox answers, or when it holds no
- * channels, one Channels group says so.
+ * Every drive's channels, one group per drive named for it, from one load
+ * (live). Until it answers, or when there are no channels, one Channels group
+ * says so.
  */
 function useAllDriveGroups(selectedPageId: string | null, fold: Fold): readonly MessagesGroupView[] {
-  const { threads, error, retry } = useInbox();
+  const { channels, error, retry } = useAllChannels();
   const driveNames = useDriveNames(true);
   const placeholder = (section: MessagesSectionView) => [groupOf('channels', 'Channels', section, channelNotes, fold)];
-  if (threads === undefined) return placeholder(error === undefined ? { status: 'loading' } : { status: 'error', retry });
-  const drives = channelsByDrive(threads, driveNames ?? new Map());
+  if (channels === undefined) return placeholder(error === undefined ? { status: 'loading' } : { status: 'error', retry });
+  const drives = channelsByDrive(channels, driveNames ?? new Map());
   if (drives.length === 0) return placeholder({ status: 'ready', rows: [] });
   return drives.map((drive) =>
     groupOf(

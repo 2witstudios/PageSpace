@@ -25,7 +25,7 @@ afterEach(() => {
 
 const CHANNELS = `GET ${messagePaths.driveChannels('d1')}`;
 const CONVERSATIONS = `GET ${messagePaths.conversations()}`;
-const INBOX = `GET ${messagePaths.inbox()}`;
+const ALL_CHANNELS = `GET ${messagePaths.channels()}`;
 
 const inbox =
   (items: () => readonly InboxItem[]): FakeRoute =>
@@ -97,8 +97,8 @@ describe('MessagesPane in a drive', () => {
 
     assert({
       given: 'the Messages index of a drive, with nothing open',
-      should: 'list the drive’s channels then the DMs in the compact groups, without loading the all-drives inbox',
-      actual: [sections(container), web.count(INBOX)],
+      should: 'list the drive’s channels then the DMs in the compact groups, without loading every drive’s channels',
+      actual: [sections(container), web.count(ALL_CHANNELS)],
       expected: [
         [
           [
@@ -177,7 +177,7 @@ describe('MessagesPane across every drive', () => {
 
   test('Home: one group per drive, named for it, then the DMs', async () => {
     const { container, web } = show(
-      { [INBOX]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
       { driveId: 'home', selectedPageId: 'c1' },
     );
     await settle(() => {
@@ -209,7 +209,7 @@ describe('MessagesPane across every drive', () => {
 
   test('a user-level DM route reads the same as Home', async () => {
     const { container } = show(
-      { [INBOX]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
+      { [ALL_CHANNELS]: everyDrive(), [CONVERSATIONS]: dms(() => [conversation('m1')]) },
       { driveId: null, selectedConversationId: 'm1' },
     );
     await settle(() => {
@@ -226,13 +226,13 @@ describe('MessagesPane across every drive', () => {
   });
 
   test('no channels anywhere', async () => {
-    const { container } = show({ [INBOX]: inbox(() => []), [CONVERSATIONS]: dms(() => []) }, { driveId: null });
+    const { container } = show({ [ALL_CHANNELS]: inbox(() => []), [CONVERSATIONS]: dms(() => []) }, { driveId: null });
     await settle(() => {
       if (!container.textContent?.includes('No channels yet.')) throw new Error('not loaded');
     });
 
     assert({
-      given: 'an inbox with no channels',
+      given: 'no channels in any drive',
       should: 'keep one Channels group that says so',
       actual: sections(container).map(([label, , note]) => [label, note]),
       expected: [
@@ -300,7 +300,7 @@ describe('MessagesPane with an object open', () => {
       should: 'list the drive’s channels and DMs in the compact groups, with only the open row current',
       actual: [
         sections(container),
-        web.count(INBOX),
+        web.count(ALL_CHANNELS),
       ],
       expected: [
         [
