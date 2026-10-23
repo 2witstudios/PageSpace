@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { notFound } from 'next/navigation';
@@ -31,6 +31,16 @@ const mono = Geist_Mono({
 export const metadata: Metadata = {
   title: { default: 'Imago', template: '%s · Imago' },
   robots: { index: false, follow: false },
+};
+
+// viewport-fit=cover draws under the notch and home indicator so env(safe-area-inset-*) reports
+// them (the phone shell pads itself by them). maximum-scale=1 stops iOS zooming into a focused
+// input under 16px; pinch zoom still works.
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: 'cover',
 };
 
 export default async function RootLayout({

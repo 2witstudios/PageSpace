@@ -11,8 +11,9 @@ import { usePageTrail } from '../../tasks/use-tasks/use-tasks';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 import { PageViewers } from '@/retained/components/common/PageViewers';
 import { usePagePresence } from '@/retained/hooks/usePagePresence';
-import type { Stage } from '../stage/stage';
+import { stageTitle, type Stage } from '../stage/stage';
 import { pageTabOf } from '../tabs/tab-label';
+import { sectionPath } from '../tabs/tabs-model';
 import { useOpenTabs } from '../tabs/use-open-tabs';
 import { phoneHeadControlClass } from './phone-files-header-class';
 import { renderPhoneDocHead } from './phone-doc-head.render';
@@ -44,11 +45,12 @@ export function PhoneDocHead({ stage, pageId, driveKey }: PhoneDocHeadProps): Re
     if (next === 'add-child') openAddChild(pageId);
     else setDialog(next);
   };
-  const filesHref = stage.driveId === null ? '/' : `/${encodeURIComponent(stage.driveId)}/files`;
   return (
     <>
       {renderPhoneDocHead({
-        backHref: filesHref,
+        // A channel opened from Messages goes back to Messages, a task list to Tasks.
+        backHref: sectionPath(stage),
+        backLabel: stageTitle(stage),
         parent,
         title: page?.title ?? (settled ? (trail?.at(-1)?.title ?? '') : ''),
         presence:

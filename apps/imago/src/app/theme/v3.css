@@ -192,6 +192,32 @@
   --spacing-history-row: 36px;
 }
 
+/* The phone's safe areas (notch, status bar, home indicator). viewport-fit=cover in the root
+   layout lets the page draw under them; these keep its content out from under them. */
+@utility phone-safe-frame {
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+}
+/* The bottom bar runs its blue under the home indicator; its items stay 64px above it. */
+@utility phone-safe-bar {
+  box-sizing: content-box;
+  padding-bottom: max(4px, env(safe-area-inset-bottom, 0px));
+}
+/* A screen with no bottom bar (full-screen Imago) keeps its composer above the home indicator. */
+@utility phone-safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+/* A bottom sheet's last row clears the home indicator; past 80% of the screen its rows scroll. */
+@utility phone-safe-sheet {
+  max-block-size: 80dvh;
+  overflow-y: auto;
+  padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+}
+@utility phone-safe-ask {
+  bottom: calc(var(--spacing-phone-ask-bottom) + env(safe-area-inset-bottom, 0px));
+}
+
 /* Share in the page head (SPEC v3: outlined, 30px, radius 8, identical everywhere). The trigger
    is classic's ShareDialog button, re-skinned here rather than forked. */
 /* A page on a phone (C-Resp-Phone-Doc): the Formatting toolbar scrolls sideways and its tools are at least 38px. */

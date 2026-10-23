@@ -5,6 +5,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- Imago on phones:
+  - Headers no longer sit under the notch or status bar, and the bottom bar and Ask button sit above the home indicator. Full-screen Imago keeps its message box above the home indicator too.
+  - The screen fits Safari's visible area, so the bottom bar is no longer hidden behind Safari's toolbar.
+  - Back on a page returns to the section you opened it from. A channel goes back to Messages and a task list to Tasks, instead of always going to Files.
+  - Close sidebar, Close Imago and the Ask pill no longer show on phone screens, where they did nothing and could leave Imago or a sidebar hidden on desktop.
+  - The ⋯ menus on page, file and task rows, and Delete in Imago's chat history, now always show on touch screens.
+  - The open-pages sheet scrolls when you have many pages open.
+  - Tapping a small text field no longer zooms the page in.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
   - Wallets (Account › Wallets) and a drive's Wallet settings use Imago's settings layout instead of the classic cards. Spending your own credits now shows a coins mark instead of a sparkle, here, in the credits button and in the organization's Usage link.

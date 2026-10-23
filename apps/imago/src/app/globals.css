@@ -245,10 +245,11 @@
 @custom-variant short (@media (max-height: 660px));
 
 @layer base {
-  /* The frame owns the viewport: the page never scrolls, the panes do. */
+  /* The frame owns the viewport: the page never scrolls, the panes do. 100dvh follows iOS
+     Safari's URL bar, which 100vh sits under. */
   body {
     margin: 0;
-    height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     /* The field the glass sits on: one flat neutral, as PageSpace paints
        its canvas (myimago ADR 0029). */

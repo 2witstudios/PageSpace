@@ -173,3 +173,16 @@ describe('RootLayout providers', () => {
     });
   });
 });
+
+describe('RootLayout viewport', () => {
+  test('safe areas', async () => {
+    const { viewport } = await import('./layout');
+
+    assert({
+      given: 'the root viewport',
+      should: 'cover the notch and home indicator so env(safe-area-inset-*) reports them',
+      actual: [viewport.width, viewport.viewportFit],
+      expected: ['device-width', 'cover'],
+    });
+  });
+});
