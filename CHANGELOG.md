@@ -12,6 +12,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - Close sidebar, Close Imago and the Ask pill no longer show on phone screens, where they did nothing and could leave Imago or a sidebar hidden on desktop.
   - The ⋯ menus on page, file and task rows, and Delete in Imago's chat history, now always show on touch screens.
   - The open-pages sheet scrolls when you have many pages open.
+  - Every section's header is the same height, with the same larger buttons, and the list screens no longer show a stray border down the right edge.
+  - Rows in Messages, Tasks and Settings are taller and easier to read, and channels show a tile the same size as a person's avatar.
+  - The Ask button no longer covers the message box in channels and AI chats.
+  - A document's title lines up with its text.
+  - The channel toolbar only shows for people who can manage webhooks, and never on phones.
   - Tapping a small text field no longer zooms the page in.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.

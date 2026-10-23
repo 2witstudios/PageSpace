@@ -23,10 +23,16 @@ export function ChannelPage({ page }: PageTypeProps) {
   const stripLabel = pathname.includes('/messages/') ? 'Channel' : 'Channel tools';
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ToolbarStrip label={stripLabel}>
-        <div className="flex-1" />
-        {canManageWebhooks ? <IconButton name="webhook" label="Webhooks" onClick={() => setWebhooksOpen(true)} /> : null}
-      </ToolbarStrip>
+      {/* Webhooks is the strip's only tool: with no tool there is no strip, and a phone spends no
+          row on a drive-admin setting. */}
+      {canManageWebhooks ? (
+        <div className="contents phone:hidden">
+          <ToolbarStrip label={stripLabel}>
+            <div className="flex-1" />
+            <IconButton name="webhook" label="Webhooks" onClick={() => setWebhooksOpen(true)} />
+          </ToolbarStrip>
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         <ChannelView page={page} floatingWebhooks={false} />
       </div>

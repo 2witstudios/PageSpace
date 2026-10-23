@@ -17,7 +17,7 @@ describe('tasks pane classes', () => {
       given: 'a list row at rest and the open one',
       should: 'be the quiet sidebar row stacked over its bar, the open one on the soft accent at full ink',
       actual: [taskListRowClass(false), taskListRowClass(true)],
-      expected: [`${row} text-ink-muted hover:bg-surface-overlay hover:text-ink`, `${row} bg-accent-soft text-ink`],
+      expected: [`${row} text-ink-muted hover:bg-surface-overlay hover:text-ink phone:text-ink`, `${row} bg-accent-soft text-ink`],
     });
   });
 

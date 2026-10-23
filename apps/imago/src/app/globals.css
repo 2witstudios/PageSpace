@@ -243,6 +243,9 @@
 }
 
 @custom-variant short (@media (max-height: 660px));
+/* Inside the phone frame (data-tier="phone"): the shared column heads and rows take the phone's
+   52px heads, 40px controls and no column rules, so every phone screen reads as one app. */
+@custom-variant phone (&:where([data-tier="phone"] *));
 
 @layer base {
   /* The frame owns the viewport: the page never scrolls, the panes do. 100dvh follows iOS

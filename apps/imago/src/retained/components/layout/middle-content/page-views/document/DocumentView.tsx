@@ -349,7 +349,8 @@ const DocumentView = ({ pageId, driveId, renderToolbar, bodyHeader }: DocumentVi
         className="flex-1"
       >
         <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
-          {activeView === 'code' || !bodyHeader ? null : <div className="mx-auto w-full max-w-4xl px-4">{bodyHeader}</div>}
+          {/* px-9: the editor's p-4 plus the prose's m-5, so the title and the text share one left edge. */}
+          {activeView === 'code' || !bodyHeader ? null : <div className="mx-auto w-full max-w-4xl px-9">{bodyHeader}</div>}
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (
