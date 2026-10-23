@@ -17,6 +17,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   - The Ask button no longer covers the message box in channels and AI chats.
   - A document's title lines up with its text.
   - The channel toolbar only shows for people who can manage webhooks, and never on phones.
+  - You can pinch to zoom on any page, and tapping a text field on an iPhone no longer zooms the page in.
   - Tapping a small text field no longer zooms the page in.
 - Imago's billing and wallet screens now match the classic ones:
   - The account menu and the account overview show your credits as whole credits. Before, they showed the balance in cents, ten times too high.
