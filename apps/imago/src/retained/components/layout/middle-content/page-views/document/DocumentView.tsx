@@ -349,8 +349,13 @@ const DocumentView = ({ pageId, driveId, renderToolbar, bodyHeader }: DocumentVi
         className="flex-1"
       >
         <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
-          {/* px-9: the editor's p-4 plus the prose's m-5, so the title and the text share one left edge. */}
-          {activeView === 'code' || !bodyHeader ? null : <div className="mx-auto w-full max-w-4xl px-9">{bodyHeader}</div>}
+          {/* Mirrors the editor below: outer px-4 (the editor's p-4), then a centered max-w-4xl with px-5
+              (the prose's m-5), so the title and the text share one left edge at every width. */}
+          {activeView === 'code' || !bodyHeader ? null : (
+            <div className="px-4">
+              <div className="mx-auto w-full max-w-4xl px-5">{bodyHeader}</div>
+            </div>
+          )}
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (
