@@ -98,6 +98,7 @@ import {
   buildSandboxTools,
   productionResolveEnvironmentTarget,
   productionListReachableEnvironments,
+  ownSandboxTarget,
   type ResolveSandboxActorContextDeps,
 } from '../sandbox-tools-runtime';
 import { ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
@@ -105,6 +106,9 @@ import type { ToolExecutionContext } from '../../core/types';
 import type { AcquireSandboxRequest } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+/** The acting user every leaf C/D case below runs as. */
+const U1 = credentialActor('u1', null);
 
 function makeDeps(overrides: Partial<ResolveSandboxActorContextDeps> = {}): ResolveSandboxActorContextDeps {
   return {
@@ -955,6 +959,8 @@ describe('buildRealSandboxRunDeps({ actor, resolveSession }) — a caller that a
       driveId: 'held-drive',
       userId: 'caller',
       conversationId: 'workspace-exec:ws-held',
+      // The exec route names the workspace's own sandbox explicitly (leaf C: no fallback target).
+      environment: ownSandboxTarget({ conversationId: 'workspace-exec:ws-held', driveId: 'held-drive' }),
     });
     expect(result).toMatchObject({ ok: true, sandboxId: 'sbx-held', workspaceId: 'ws-held' });
     expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(heldSession, expect.objectContaining({ userId: 'caller' }));
@@ -991,7 +997,7 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
   });
 
   it("given the CONVERSATION's own id, should resolve its own sandbox without reading a single env row", async () => {
-    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ctx.conversationId });
+    const result = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ctx.conversationId });
     expect(result).toEqual({
       ok: true,
       target: { id: ctx.conversationId, kind: 'conversation', label: expect.any(String), driveId: 'd1' },
@@ -1005,7 +1011,7 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
   });
 
   it('given a visible environment the caller OWNS, should resolve it, with the label read from the ROW and never from the input', async () => {
-    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const result = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
     expect(result).toEqual({
       ok: true,
       target: { id: ENV_ID, kind: 'environment', label: 'jono-macstudio', driveId: 'drive-1', substrate: 'local' },
@@ -1026,20 +1032,20 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
 
   it('given the environment\'s drive has vanished, should refuse rather than bill the caller for a machine the drive was going to pay for', async () => {
     mockResolveDriveEnvPayer.mockResolvedValue(null);
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
   it('given an id that does not exist, one owned by someone else, and one that is not visible, should refuse with the SAME sentence for all three', async () => {
     mockFindEnvById.mockResolvedValue(null);
-    const missing = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const missing = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
 
     mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
     mockFindLocalByEnvId.mockResolvedValue({ envId: ENV_ID, ownerId: 'someone-else', label: 'their-box' });
-    const theirs = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const theirs = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
 
     mockFindLocalByEnvId.mockResolvedValue({ envId: ENV_ID, ownerId: 'u1', label: 'jono-macstudio' });
     mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: false });
-    const invisible = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const invisible = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
 
     expect(missing).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(theirs).toEqual(missing);
@@ -1047,7 +1053,7 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
   });
 
   it('a SPRITE env keeps its drive as the gate drive; a LOCAL env does not — the exception is for hardware somebody owns', async () => {
-    const local = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const local = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
     expect(local).toMatchObject({ ok: true, payer: { driveId: 'drive-1', gateDriveId: undefined } });
     // A visible Sprite env cannot be reached today (no owner to check), so the
     // Sprite arm is asserted where it is decided rather than end to end.
@@ -1063,13 +1069,13 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: false });
     mockFindLocalByEnvId.mockResolvedValue(null);
     mockCanRunCode.mockResolvedValue({ ok: true });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toMatchObject({
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toMatchObject({
       ok: true,
       target: { kind: 'environment', substrate: 'sprite', label: 'staging' },
     });
     // And refused the moment the drive says no — the parity runs both ways.
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
   it('given the feature flag is off, should refuse a LOCAL environment with the same sentence — after reading it, because the substrate is what the flag is about', async () => {
@@ -1080,20 +1086,20 @@ describe('productionResolveEnvironmentTarget — resolving the mandatory id (lea
     // lookup is required; the refusal is still the one message, so a caller
     // still learns nothing from it.
     mockIsLocalEnvsEnabled.mockReturnValue(false);
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(mockFindEnvById).toHaveBeenCalledWith(ENV_ID);
   });
 
   it('visibility is re-read on EVERY call, so switching it off refuses the next one rather than honouring an earlier reach', async () => {
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toMatchObject({ ok: true });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toMatchObject({ ok: true });
     mockFindEnvById.mockResolvedValue({ id: ENV_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: false });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 });
 
 describe('acquireSandbox — omission is never a default (leaf C)', () => {
   it('given NO resolved target, should refuse rather than fall back to the conversation\'s own sandbox', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     const result = await deps.acquireSandbox({ tenantId: 't1', userId: 'u1', conversationId: 'conv-1' });
     expect(result).toEqual({ ok: false, reason: 'provision_failed', cause: 'missing_environment' });
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
@@ -1132,12 +1138,12 @@ describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
   });
 
   it('should run in the ENVIRONMENT\'s own session — never this conversation\'s session re-pointed at it', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     const result = await deps.acquireSandbox(input());
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: null });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ actor: U1, envId: ENV_ID, driveId: null });
     // The conversation's own session is never consulted on this path.
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
-    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(envSession, 'u1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(envSession, U1);
     expect(result).toMatchObject({ ok: true, workspaceId: 'ws-env-1' });
   });
 
@@ -1146,7 +1152,7 @@ describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
     mockEnsureEnvironmentSession.mockImplementation(async ({ envId }: { envId: string }) =>
       envId === ENV_ID ? { ok: true, session: envSession } : { ok: true, session: second },
     );
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     const a = await deps.acquireSandbox(input());
     const b = await deps.acquireSandbox(input({ environment: { ...envTarget, id: second.envId } }));
     expect(a).toMatchObject({ workspaceId: 'ws-env-1' });
@@ -1161,7 +1167,7 @@ describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
       reason: 'spawn_failed',
       refusal: { ok: false, reason: 'env_bind_refused', refusal: 'not_connected' },
     });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.acquireSandbox(input())).toEqual({ ok: false, reason: 'local_not_connected' });
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
@@ -1172,26 +1178,26 @@ describe('acquireSandbox — routing to a NAMED environment (leaf D)', () => {
       reason: 'spawn_failed',
       refusal: { ok: false, reason: 'env_bind_refused', refusal: 'bind_policy' },
     });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.acquireSandbox(input())).toEqual({ ok: false, reason: 'local_bind_denied' });
   });
 
   it('given the owner is at their session cap, should deny with that reason as the cause', async () => {
     mockEnsureEnvironmentSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.acquireSandbox(input())).toEqual({ ok: false, reason: 'provision_failed', cause: 'session_limit_reached' });
   });
 
   it('given the runtime guardrail denies, should short-circuit BEFORE provisioning, keyed by the ENVIRONMENT session', async () => {
     mockCheckSessionRuntimeGuardrail.mockReturnValue({ allowed: false, reason: 'runtime_budget_exhausted' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.acquireSandbox(input())).toEqual({ ok: false, reason: 'runtime_budget_exhausted' });
     expect(mockCheckSessionRuntimeGuardrail).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: 'ws-env-1' }));
     expect(mockProvisionSessionSandbox).not.toHaveBeenCalled();
   });
 
   it("given a paused / revoked / policy-refusing environment at PROVISION, should keep the provisioner's typed reason", async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     // `not_connected` keeps its own word (the requester fixes it in seconds);
     // `revoked` has no tool-level word and stays a provisioning fault with its
     // detail intact — the same mapping a sidebar-spawned env session gets.
@@ -1221,9 +1227,9 @@ describe('resolveBillingSession — a named environment bills the ENVIRONMENT\'s
   };
 
   it("resolves the payer from the ENVIRONMENT's drive, not the driveless conversation, through the SAME session acquire will use", async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.resolveBillingSession?.(ctx)).toEqual({ workspaceId: 'ws-env-1', driveId: 'drive-1', ownerId: 'u1' });
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: null });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ actor: U1, envId: ENV_ID, driveId: null });
     // The conversation's own session is never resolved on this path — billing
     // and the run cannot see different sessions.
     expect(mockFindSessionForConversation).not.toHaveBeenCalled();
@@ -1231,7 +1237,7 @@ describe('resolveBillingSession — a named environment bills the ENVIRONMENT\'s
 
   it('fails CLOSED when the environment session cannot be resolved — never unmetered', async () => {
     mockEnsureEnvironmentSession.mockResolvedValue({ ok: false, reason: 'session_limit_reached' });
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     expect(await deps.resolveBillingSession?.(ctx)).toEqual({ deny: 'session_limit_reached' });
     mockEnsureEnvironmentSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     expect(await deps.resolveBillingSession?.(ctx)).toEqual({ deny: 'provision_failed' });
@@ -1254,7 +1260,7 @@ describe('a mis-addressed call lands where the owner\'s click still gates it (le
       };
     });
 
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     // The address an environment-routed acquire returns is derived, not stored
     // (invariant 9), and the registry's PARSE — not a database read — is what
     // decides which substrate answers.
@@ -1289,14 +1295,14 @@ describe('only the GLOBAL assistant reaches a persistent environment (Codex P1, 
   });
 
   it('a PAGE conversation gets the own-sandbox row and NOTHING else — it never learns a machine exists', async () => {
-    expect(await productionListReachableEnvironments(pageCtx)).toEqual([]);
+    expect(await productionListReachableEnvironments(pageCtx, U1)).toEqual([]);
     // And it does not even reach the flag or the store to find that out.
     expect(mockIsLocalEnvsEnabled).not.toHaveBeenCalled();
     expect(mockFindEnvById).not.toHaveBeenCalled();
   });
 
   it("a PAGE conversation naming a REAL visible env the actor owns is refused with the SAME sentence as an unreachable one", async () => {
-    const refused = await productionResolveEnvironmentTarget({ ctx: pageCtx, environmentId: ENV_ID });
+    const refused = await productionResolveEnvironmentTarget({ actor: U1, ctx: pageCtx, environmentId: ENV_ID });
     expect(refused).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     // Refused BEFORE the lookup, so it cannot probe for an id's existence.
     expect(mockFindEnvById).not.toHaveBeenCalled();
@@ -1304,11 +1310,11 @@ describe('only the GLOBAL assistant reaches a persistent environment (Codex P1, 
     // The very same id, from the dashboard assistant, resolves — so the refusal
     // above is the conversation kind answering and not a broken fixture.
     const globalCtx = { ...pageCtx, conversationKind: 'global' as const };
-    expect(await productionResolveEnvironmentTarget({ ctx: globalCtx, environmentId: ENV_ID })).toMatchObject({ ok: true });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx: globalCtx, environmentId: ENV_ID })).toMatchObject({ ok: true });
   });
 
   it("a PAGE conversation still reaches its OWN sandbox — this narrows persistent environments, not code execution", async () => {
-    expect(await productionResolveEnvironmentTarget({ ctx: pageCtx, environmentId: pageCtx.conversationId })).toMatchObject({
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx: pageCtx, environmentId: pageCtx.conversationId })).toMatchObject({
       ok: true,
       target: { kind: 'conversation' },
     });
@@ -1316,8 +1322,8 @@ describe('only the GLOBAL assistant reaches a persistent environment (Codex P1, 
 
   it('an actor context with NO conversation kind fails CLOSED, as a page conversation', async () => {
     const unknown = { ...pageCtx, conversationKind: undefined };
-    expect(await productionListReachableEnvironments(unknown)).toEqual([]);
-    expect(await productionResolveEnvironmentTarget({ ctx: unknown, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionListReachableEnvironments(unknown, U1)).toEqual([]);
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx: unknown, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 });
 
@@ -1366,24 +1372,24 @@ describe('a CLOUD (Sprite) env reaches by canRunCode parity (founder ruling 2026
   });
 
   it('given a drive where the user has edit access, should resolve the cloud env WITHOUT any visibility toggle', async () => {
-    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const result = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
     expect(result).toMatchObject({ ok: true, target: { id: ENV_ID, kind: 'environment', substrate: 'sprite', driveId: 'drive-1' } });
     // The authority is canRunCode for the ENV's drive — asked verbatim.
-    expect(mockCanRunCode).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', driveId: 'drive-1' }));
+    expect(mockCanRunCode).toHaveBeenCalledWith(expect.objectContaining({ actor: U1, driveId: 'drive-1' }));
     // A Sprite env has no sibling to read, and none is read.
     expect(mockFindLocalByEnvId).not.toHaveBeenCalled();
   });
 
   it('given a VIEWER (canRunCode denies insufficient_role), should refuse with the ONE message — exactly as in-drive', async () => {
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
   it('given a drive the user is NOT in, a REAL id gets the identical refusal to a guess', async () => {
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
-    const realButForbidden = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const realButForbidden = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
     mockFindEnvById.mockResolvedValue(null);
-    const guessed = await productionResolveEnvironmentTarget({ ctx, environmentId: 'dw9jthqyaza6ga3b6m5nmpqw' });
+    const guessed = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: 'dw9jthqyaza6ga3b6m5nmpqw' });
     expect(realButForbidden).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(guessed).toEqual(realButForbidden);
   });
@@ -1391,26 +1397,26 @@ describe('a CLOUD (Sprite) env reaches by canRunCode parity (founder ruling 2026
   it('given the kill switch off or an ineligible PAYER tier, should refuse — the drive\'s payer governs, not the user\'s own tier', async () => {
     for (const reason of ['kill_switch_off', 'tier_ineligible'] as const) {
       mockCanRunCode.mockResolvedValue({ ok: false, reason });
-      expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID }), reason).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+      expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID }), reason).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     }
   });
 
   it('re-checks canRunCode on EVERY call — losing edit access mid-conversation refuses the next one', async () => {
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toMatchObject({ ok: true });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toMatchObject({ ok: true });
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(mockCanRunCode).toHaveBeenCalledTimes(2);
   });
 
   it('given a PAGE conversation, a cloud env id is still refused before canRunCode is even asked', async () => {
     const page = { ...ctx, conversationKind: 'page' as const };
-    expect(await productionResolveEnvironmentTarget({ ctx: page, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx: page, environmentId: ENV_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
     expect(mockCanRunCode).not.toHaveBeenCalled();
     expect(mockFindEnvById).not.toHaveBeenCalled();
   });
 
   it("the cloud target keeps the drive on BOTH coordinates — the drive is its authority, so the gate asks about it too", async () => {
-    const result = await productionResolveEnvironmentTarget({ ctx, environmentId: ENV_ID });
+    const result = await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: ENV_ID });
     expect(result).toMatchObject({ ok: true, payer: { driveId: 'drive-1', gateDriveId: 'drive-1', ownerId: 'drive-owner' } });
   });
 });
@@ -1428,19 +1434,19 @@ describe('the cloud SESSION is bound to the ENV\'s drive (scope correction, poin
   });
 
   it("a CLOUD env's session carries the env's drive — the drive agreement is satisfied, not bypassed", async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     await deps.acquireSandbox({ tenantId: 'drive-owner', driveId: 'drive-1', userId: 'u1', conversationId: 'conv-1', environment: cloudTarget });
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: 'drive-1' });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ actor: U1, envId: ENV_ID, driveId: 'drive-1' });
   });
 
   it('a LOCAL machine keeps its DRIVELESS session — only that substrate is the exception', async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     await deps.acquireSandbox({ tenantId: 'u1', userId: 'u1', conversationId: 'conv-1', environment: localTarget });
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: localTarget.id, driveId: null });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ actor: U1, envId: localTarget.id, driveId: null });
   });
 
   it("billing for a cloud env keys on the ENV's drive and the session bound to it", async () => {
-    const deps = buildRealSandboxRunDeps();
+    const deps = buildRealSandboxRunDeps({ actor: U1 });
     const billing = await deps.resolveBillingSession?.({
       userId: 'u1',
       tenantId: 'drive-owner',
@@ -1450,7 +1456,7 @@ describe('the cloud SESSION is bound to the ENV\'s drive (scope correction, poin
       environment: cloudTarget,
     });
     expect(billing).toEqual({ workspaceId: 'ws-1', driveId: 'drive-1', ownerId: 'u1' });
-    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ ownerId: 'u1', envId: ENV_ID, driveId: 'drive-1' });
+    expect(mockEnsureEnvironmentSession).toHaveBeenCalledWith({ actor: U1, envId: ENV_ID, driveId: 'drive-1' });
   });
 });
 
@@ -1476,7 +1482,7 @@ describe('LOCAL_ENVS_ENABLED gates local machines only, at RESOLUTION too', () =
     mockIsLocalEnvsEnabled.mockReturnValue(false);
     mockFindEnvById.mockResolvedValue({ id: CLOUD_ID, name: 'staging', driveId: 'drive-1', substrate: 'sprite', visibleToGlobalAssistant: false });
     mockFindLocalByEnvId.mockResolvedValue(null);
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: CLOUD_ID })).toMatchObject({
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: CLOUD_ID })).toMatchObject({
       ok: true,
       target: { kind: 'environment', substrate: 'sprite' },
     });
@@ -1486,20 +1492,20 @@ describe('LOCAL_ENVS_ENABLED gates local machines only, at RESOLUTION too', () =
     mockIsLocalEnvsEnabled.mockReturnValue(false);
     mockFindEnvById.mockResolvedValue({ id: LOCAL_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
     mockFindLocalByEnvId.mockResolvedValue({ envId: LOCAL_ID, ownerId: 'u1', label: 'jono-macstudio' });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: LOCAL_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: LOCAL_ID })).toEqual({ ok: false, error: ENV_UNREACHABLE_MESSAGE });
   });
 
   it('given the flag ON, the same LOCAL env resolves — so the row above is the flag answering, not a broken fixture', async () => {
     mockIsLocalEnvsEnabled.mockReturnValue(true);
     mockFindEnvById.mockResolvedValue({ id: LOCAL_ID, name: 'mac', driveId: 'drive-1', substrate: 'local', visibleToGlobalAssistant: true });
     mockFindLocalByEnvId.mockResolvedValue({ envId: LOCAL_ID, ownerId: 'u1', label: 'jono-macstudio' });
-    expect(await productionResolveEnvironmentTarget({ ctx, environmentId: LOCAL_ID })).toMatchObject({ ok: true, target: { substrate: 'local' } });
+    expect(await productionResolveEnvironmentTarget({ actor: U1, ctx, environmentId: LOCAL_ID })).toMatchObject({ ok: true, target: { substrate: 'local' } });
   });
 
   it('discovery asks canRunCode with the SAME origin resolution does — no laxer list than the next call honours', async () => {
     const agentCtx = { ...ctx, requestOrigin: 'agent' as const, agentPageId: 'page-1' };
     mockListGlobalAssistantEnvironments.mockResolvedValue([]);
-    await productionListReachableEnvironments(agentCtx);
-    expect(mockListGlobalAssistantEnvironments).toHaveBeenCalledWith('u1', { requestOrigin: 'agent', agentPageId: 'page-1' });
+    await productionListReachableEnvironments(agentCtx, U1);
+    expect(mockListGlobalAssistantEnvironments).toHaveBeenCalledWith(U1, { requestOrigin: 'agent', agentPageId: 'page-1' });
   });
 });

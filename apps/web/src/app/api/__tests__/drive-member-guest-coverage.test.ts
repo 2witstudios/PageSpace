@@ -49,6 +49,10 @@ const LEDGER = new Map<string, Entry>([
     reads: 5, decision: 'excludes',
     reason: 'resolveDriveIdsForUser (a GUEST row reaches the drive only through its page grants; the org-aware form reads the row through driveMembershipRow), both usersShareDrive reads, and the batch page-permission and page-viewer joins, which resolvePagePermissionRow decides (no custom role, no rule 4 for a GUEST) after withEffectiveMembership re-reads each row through driveMembershipRow. Every other door (rule 4, custom roles, drive-root access, isUserDriveMember, getUserDriveAccess, getUserDrivePermissions, both accessible-pages listings) goes through loadEffectiveDriveMembership, which reads a GUEST row as none.',
   }],
+  ['packages/lib/src/services/drive-envs/drive-envs-store.ts', {
+    reads: 1, decision: 'neutral',
+    reason: "listSpriteEnvsInUserDrives builds the global assistant's CANDIDATE cloud environments; a GUEST row can make a candidate but grants nothing, because every candidate is put to the actor-aware canRunCode for its own drive (which reads a GUEST row as no edit access) before it is listed or reached.",
+  }],
   ['packages/lib/src/permissions/org-lapse-guard.ts', {
     reads: 1, decision: 'neutral',
     reason: '[D-OW-33] snapshotDriveAccess compares a drive before and after a write; a GUEST row is compared as a GUEST (page grants only), so a guest made a member is a loosening and a member made a guest is not. It grants nothing.',

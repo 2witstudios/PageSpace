@@ -36,6 +36,7 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs-store', () => ({
 }));
 
 import { listGlobalAssistantEnvironments } from '../drive-envs-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const PAID_DRIVE = 'drive-paid';
 const CLOUD_ENV = { id: 'j945few5ssv75k5ad0bowbb4', name: 'staging', substrate: 'sprite' as const, driveId: PAID_DRIVE };
@@ -64,16 +65,16 @@ afterEach(() => {
 describe('LOCAL_ENVS_ENABLED gates local machines only', () => {
   it('given the flag OFF (production today), should STILL list the cloud env of a drive the user can run code in', async () => {
     delete process.env.LOCAL_ENVS_ENABLED;
-    const listed = await listGlobalAssistantEnvironments('free-tier-user');
+    const listed = await listGlobalAssistantEnvironments(credentialActor('free-tier-user', null));
     expect(listed.map((row) => row.id)).toEqual([CLOUD_ENV.id]);
     expect(listed[0]).toMatchObject({ substrate: 'sprite', driveId: PAID_DRIVE, label: 'staging' });
     // The authority is the DRIVE's, asked for that drive.
-    expect(mockCanRunCode).toHaveBeenCalledWith(expect.objectContaining({ userId: 'free-tier-user', driveId: PAID_DRIVE }));
+    expect(mockCanRunCode).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: 'free-tier-user' }), driveId: PAID_DRIVE }));
   });
 
   it('given the flag OFF, a visible LOCAL machine should be neither listed nor even read', async () => {
     delete process.env.LOCAL_ENVS_ENABLED;
-    const listed = await listGlobalAssistantEnvironments('free-tier-user');
+    const listed = await listGlobalAssistantEnvironments(credentialActor('free-tier-user', null));
     expect(listed.some((row) => row.substrate === 'local')).toBe(false);
     // Nothing about someone's personal hardware is read while the opt-in is off.
     expect(mockListVisibleByOwner).not.toHaveBeenCalled();
@@ -81,7 +82,7 @@ describe('LOCAL_ENVS_ENABLED gates local machines only', () => {
 
   it('given the flag ON, should list BOTH the cloud env and the visible local machine', async () => {
     process.env.LOCAL_ENVS_ENABLED = 'true';
-    const listed = await listGlobalAssistantEnvironments('free-tier-user');
+    const listed = await listGlobalAssistantEnvironments(credentialActor('free-tier-user', null));
     expect(listed.map((row) => row.substrate).sort()).toEqual(['local', 'sprite']);
   });
 
@@ -90,7 +91,7 @@ describe('LOCAL_ENVS_ENABLED gates local machines only', () => {
     for (const flag of [undefined, 'true']) {
       if (flag === undefined) delete process.env.LOCAL_ENVS_ENABLED;
       else process.env.LOCAL_ENVS_ENABLED = flag;
-      const listed = await listGlobalAssistantEnvironments('viewer');
+      const listed = await listGlobalAssistantEnvironments(credentialActor('viewer', null));
       expect(listed.some((row) => row.substrate === 'sprite'), `flag=${flag}`).toBe(false);
     }
   });

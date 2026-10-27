@@ -22,7 +22,7 @@ const identity: LocalEnvIdentityDeps = {
 
 async function harness() {
   const fake = makeDriveEnvStore([], () => NOW);
-  const deps = { store: fake.store, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => NOW, identity };
+  const deps = { store: fake.store, getDriveOrgPolicies: async () => null, admitCreator: async () => ({ allowed: true as const }), resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' as const }), now: () => NOW, identity };
   const created = await createDriveEnv({ driveId: DRIVE_ID, name: 'mac', createdBy: 'owner-1', local: { label: 'mac', ownerId: 'owner-1', serverPolicy: { ops: ['exec'], checkpoint: false } }, deps });
   if (!created.ok) throw new Error(created.reason);
   const later = new Date(NOW.getTime() + 60_000);

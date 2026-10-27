@@ -193,9 +193,9 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
       expect(ga.code).toMatch(/CREATE TABLE "drive_env_approvals"/);
     });
 
-    it('should add exactly the three columns waves 3 and B need on drive_env_local, and no others', () => {
+    it('should add exactly the four columns waves 3 and B (and the owed-Stop marker) need on drive_env_local, and no others', () => {
       const added = [...ga.code.matchAll(/ALTER TABLE "drive_env_local" ADD COLUMN "([^"]+)"/g)].map((m) => m[1]).sort();
-      expect(added).toEqual(['daemonEpoch', 'ownerCredentials', 'pausedAt']);
+      expect(added).toEqual(['daemonEpoch', 'ownerCredentials', 'pauseOwedAt', 'pausedAt']);
       expect(ga.code).not.toMatch(/ALTER TABLE "drive_env_local" DROP COLUMN/);
       expect(ga.code).not.toMatch(/ALTER TABLE "drive_env_local" ALTER COLUMN/);
     });

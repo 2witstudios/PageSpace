@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 // context resolution + gate + environment resolution + delegation, and nothing
 // else: every access decision it makes is a pure function's, and the rows it
 // lists are already filtered by the store.
-import { createSandboxTools, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
+import { createSandboxTools, ADDRESSED_SANDBOX_TOOL_NAMES, LIST_ENVIRONMENTS_TOOL_NAME, SANDBOX_CORE_TOOL_NAMES, type ResolveEnvironmentTarget, type ResolveSandboxContext, type SandboxGate } from '../sandbox-tools';
 import type { SandboxRunDeps, SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import { ENV_UNREACHABLE_MESSAGE } from '@pagespace/lib/env-bridge/decide-env-reach';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
@@ -836,5 +836,11 @@ describe('DISCOVERY gates on where you can run, not on this conversation\'s paye
       resolveContext: okResolve,
     });
     expect(await exec(tools.list_environments, {}, {})).toEqual({ success: false, error: 'Code execution is disabled.' });
+  });
+});
+
+describe('SANDBOX_CORE_TOOL_NAMES', () => {
+  it('should be the discovery tool followed by the addressed tools — kept a literal for the Imago build script that parses it', () => {
+    expect(SANDBOX_CORE_TOOL_NAMES).toEqual([LIST_ENVIRONMENTS_TOOL_NAME, ...ADDRESSED_SANDBOX_TOOL_NAMES]);
   });
 });

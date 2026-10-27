@@ -25,6 +25,7 @@ import { driveEnvGrantAudit } from '@pagespace/db/schema/drive-env-grant-audit';
 import { driveEnvApprovals } from '@pagespace/db/schema/drive-env-approvals';
 import { factories } from '@pagespace/db/test/factories';
 import { collectUserLocalEnvActivity, collectUserLocalEnvApprovals, collectAllUserData } from '../gdpr-export';
+import { OPERATOR_EXPORT_GATE } from '../export-sign-in-gate';
 
 const createdUsers: string[] = [];
 const createdDrives: string[] = [];
@@ -116,7 +117,8 @@ describe('collectUserLocalEnvApprovals (real Postgres)', () => {
     const mine = await seedMachine(subject.drive.id, subject.user.id, 'm');
     await db.insert(driveEnvGrantAudit).values({ id: 'ga_all', envId: mine, grantId: 'g_all', userId: subject.user.id, sessionId: 's', conversationId: 'c', op: 'exec', argsHash: 'h', summary: 'exec: ls', verdict: 'signed', ts: at(0) });
     await db.insert(driveEnvApprovals).values({ id: 'ch_all', envId: mine, userId: subject.user.id, op: 'exec', summary: 'exec: ls', scope: '30d', createdAt: at(0), expiresAt: at(60) });
-    const all = await collectAllUserData(db, subject.user.id);
+    // The operator gate refuses no drive: this case is about the two categories, not sign-in policy.
+    const all = await collectAllUserData(db, subject.user.id, OPERATOR_EXPORT_GATE);
     expect(all?.localEnvironmentActivity.map((r) => r.id)).toEqual(['ga_all']);
     expect(all?.localEnvironmentApprovals.map((r) => r.id)).toEqual(['ch_all']);
   });

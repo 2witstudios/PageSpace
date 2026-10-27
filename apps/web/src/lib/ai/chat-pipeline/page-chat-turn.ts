@@ -1315,6 +1315,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     let toolDiscoveryPrompt: string;
     // The deferred-tool catalog, for Imago's Global-Assistant-shaped prompt.
     let imagoNonCoreToolNames: string[] = [];
+    // The per-agent sandbox switch (set on the page-agent arm below; Imago has the Global Assistant's tools instead).
+    let sandboxEnabled = false;
 
     if (imagoContext) {
       // The owner's Imago: the Global Assistant's tools for this user and these
@@ -1387,7 +1389,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       // this is agent configuration + UX, not authz). Short-circuited on
       // sandboxEnabled first — most agents never touch the sandbox at all, so
       // this skips the payer-tier DB round trip for the common case.
-      const sandboxEnabled = Boolean(page.sandboxEnabled);
+      sandboxEnabled = Boolean(page.sandboxEnabled);
       // Bound-session first (review #2326): a page conversation hosted in a
       // driveless Global session is paid for by the SESSION's owner, not the
       // agent's drive owner — gate exposure on the payer provisioning will use.
@@ -1643,8 +1645,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
 
     // The Tier B approval click (GA wave 2), injected by the shared helper ONLY
     // when the session is bound to a LOCAL environment (never for a page agent
-    // with the sandbox off).
-    const envApproval = await withEnvApprovalTool(filteredTools, sandboxEnabled ? conversationId : undefined);
+    // with the sandbox off). Imago is offered it exactly as the Global Assistant is.
+    const envApproval = await withEnvApprovalTool(filteredTools, imagoContext || sandboxEnabled ? conversationId : undefined);
     filteredTools = envApproval.tools as ToolSet;
     if (envApproval.injected) allowedToolNames.push(REQUEST_ENV_APPROVAL_TOOL_NAME);
     const { pauseToolNames } = envApproval;

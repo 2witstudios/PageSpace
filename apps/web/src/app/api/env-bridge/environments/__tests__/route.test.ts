@@ -38,7 +38,8 @@ it('given a signed-in user, should list by the CALLER — never a drive role —
   const r = await get();
   expect(r.status).toBe(200);
   expect(await r.json()).toEqual({ environments: [ROW] });
-  expect(listGlobalAssistantEnvironments).toHaveBeenCalledWith(OWNER);
+  // The caller's own credential actor (D-OW-45), never a drive role.
+  expect(listGlobalAssistantEnvironments).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER }));
   expect(auditRequest).toHaveBeenCalledWith(
     expect.anything(),
     expect.objectContaining({ eventType: 'data.read', userId: OWNER, details: expect.objectContaining({ route: 'env-bridge/environments', rows: 1 }) }),

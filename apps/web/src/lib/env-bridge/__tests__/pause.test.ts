@@ -177,7 +177,9 @@ describe('pauseLocalEnvMachine — the signed pause over the live socket, acked 
     expect(ws.sent).toHaveLength(1);
     getEnvBridgeClient().handleMachineResult(ws, ack(1));
     expect(await first).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 1 } });
-    row = { ...row!, pausedAt: new Date(NOW.getTime() + 60_000) };
+    const restamped = new Date(NOW.getTime() + 60_000);
+    // Resume then Stop again: the store stamps both the pause and the owed marker with the new time.
+    row = { ...row!, pausedAt: restamped, pauseOwedAt: restamped };
     const again = pauseLocalEnvMachine({ envId: ENV });
     await settle();
     expect(ws.sent).toHaveLength(2);

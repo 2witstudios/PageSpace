@@ -747,15 +747,16 @@ describe('spawnAgentSession — inside an environment', () => {
         const store = makeAgentSessionStore();
         const asked: Array<{ envId: string; requesterId: string }> = [];
         const result = await spawnAgentSession({
-          ownerId: OWNER_ID,
+          owner: credentialActor(OWNER_ID, null),
           driveId: null,
           envId: ENV_ID,
-          deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push(input); return { ok: true, envId: input.envId }; } }),
+          deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push({ envId: input.envId, requesterId: input.requester.userId }); return { ok: true, envId: input.envId }; } }),
         });
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.session.envId).toBe(ENV_ID);
-        expect(result.session.driveId).toBeNull();
+        // Driveless in MEANING: the row is filed under the owner's Home drive.
+        expect(result.session.driveId).toBe(`home-of-${OWNER_ID}`);
         // The gate was asked about THIS env and THIS requester — the ownership
         // check is real, not inferred from the drive.
         expect(asked).toEqual([{ envId: ENV_ID, requesterId: OWNER_ID }]);
@@ -764,7 +765,7 @@ describe('spawnAgentSession — inside an environment', () => {
       it('given a local env in a drive the caller has nothing to do with, should still bind IF they own the machine — it is their computer', async () => {
         const store = makeAgentSessionStore();
         const result = await spawnAgentSession({
-          ownerId: OWNER_ID,
+          owner: credentialActor(OWNER_ID, null),
           driveId: null,
           envId: ENV_ID,
           deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-someone-elses', substrate: 'local' }), gateLocalEnvBind: async (input) => ({ ok: true, envId: input.envId }) }),
@@ -780,7 +781,7 @@ describe('spawnAgentSession — inside an environment', () => {
         const store = makeAgentSessionStore();
         for (const driveId of [null, DRIVE_ID]) {
           const result = await spawnAgentSession({
-            ownerId: 'someone-else',
+            owner: credentialActor('someone-else', null),
             driveId,
             envId: ENV_ID,
             deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'bind_policy' }) }),
@@ -794,7 +795,7 @@ describe('spawnAgentSession — inside an environment', () => {
         const store = makeAgentSessionStore();
         for (const refusal of ['revoked', 'not_connected', 'no_server_ops', 'flag_disabled'] as const) {
           const result = await spawnAgentSession({
-            ownerId: OWNER_ID,
+            owner: credentialActor(OWNER_ID, null),
             driveId: null,
             envId: ENV_ID,
             deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal }) }),
@@ -807,7 +808,7 @@ describe('spawnAgentSession — inside an environment', () => {
       it('given no such env, should still refuse before the gate is consulted at all', async () => {
         const store = makeAgentSessionStore();
         const result = await spawnAgentSession({
-          ownerId: OWNER_ID,
+          owner: credentialActor(OWNER_ID, null),
           driveId: null,
           envId: ENV_ID,
           deps: makeSpawnDeps(store, {

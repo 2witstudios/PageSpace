@@ -20,6 +20,7 @@
  * a revoke it cannot prove. Every attempt is audited on the env with the id.
  */
 import { NextResponse } from 'next/server';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -40,7 +41,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: 'drive-env-approvals', operation: 'revoke', envId, approvalId } });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      // An org sign-in policy refusal is named so the person is asked to sign in again (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);

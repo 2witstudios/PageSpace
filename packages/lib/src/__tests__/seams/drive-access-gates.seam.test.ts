@@ -37,8 +37,52 @@ const ROLE_HOLDERS =
 const TEAM_ROSTER =
   "team roster for the pulse prompt: names of co-members of the caller's member drives (the drives come from getMemberDriveIds); display, grants nothing";
 const NOT_A_DRIVE = (what: string) => `not a drive: ${what}; no drive access is decided here`;
+const LOCAL_MACHINE_OWNER = (what: string) => NOT_A_DRIVE(`a local environment's ownerId is the machine owner \u2014 ${what}`);
 
 export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
+  // Local Environments: `ownerId` on a local env is the MACHINE owner (`drive_env_local.ownerId`, the
+  // person who enrolled their own computer), never a drive's lead. [D-6] makes those decisions
+  // owner-only by design; no drive access is decided at any of these sites.
+  'apps/web/src/app/api/drives/[driveId]/envs/[envId]/activity/route.ts': {
+    GET: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('the activity read is owner-only; drive membership was already checked through isPrincipalDriveMember') },
+  },
+  'apps/web/src/app/api/drives/[driveId]/envs/[envId]/approvals/[approvalId]/route.ts': {
+    DELETE: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('the machine owner may revoke; the drive-admin arm is isPrincipalDriveOwnerOrAdmin') },
+  },
+  'apps/web/src/app/api/drives/[driveId]/envs/[envId]/approvals/route.ts': {
+    GET: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('the approvals list is owner-only; drive membership was already checked through isPrincipalDriveMember') },
+  },
+  'apps/web/src/app/api/env-bridge/activity/route.ts': {
+    GET: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('account-scoped activity of the caller\u2019s own machine') },
+  },
+  'apps/web/src/app/api/env-bridge/approvals/[challengeId]/route.ts': {
+    DELETE: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('account-scoped revoke on the caller\u2019s own machine') },
+    loadForOwner: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('only the machine owner answers a frozen request on it') },
+  },
+  'apps/web/src/components/layout/left-sidebar/AgentsSidebar.tsx': {
+    DriveEnvRow: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('client display: shows the owner-only machine controls; routes re-check') },
+  },
+  'apps/web/src/components/settings/EnvironmentEditor.tsx': {
+    EnvironmentEditor: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('client display: shows the owner-only machine settings; routes re-check') },
+    ownerDisplayName: { ownerCompares: 2, reason: LOCAL_MACHINE_OWNER('display: names the machine owner from the member list') },
+  },
+  'apps/web/src/components/settings/EnvironmentsManager.tsx': {
+    EnvironmentsManager: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('client display: marks the viewer\u2019s own machines') },
+  },
+  'apps/web/src/lib/env-bridge/bridge-client.ts': {
+    recordRefusal: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('routes a refusal notice to the machine owner\u2019s room, or nobody for a dead env') },
+  },
+  'packages/cli/src/commands/env.ts': {
+    createEnvEnrollHandler: { ownerCompares: 3, reason: LOCAL_MACHINE_OWNER('the CLI scaffolds the enrolling machine\u2019s policy for its owner') },
+  },
+  'packages/lib/src/env-bridge/decide-env-reach.ts': {
+    decideEnvReach: { ownerCompares: 2, reason: LOCAL_MACHINE_OWNER('the global assistant reaches only machines the actor owns') },
+  },
+  'packages/lib/src/services/drive-envs/drive-envs.ts': {
+    setGlobalAssistantVisibility: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('owner-only machine setting ([D-6])') },
+    setLocalEnvPaused: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('owner-only Stop/Resume ([D-6])') },
+    setLocalEnvServerPolicy: { ownerCompares: 1, reason: LOCAL_MACHINE_OWNER('owner-only server policy ([D-6])') },
+  },
   // Retained Imago surfaces keep the same API authorization boundaries as their web counterparts.
   'apps/imago/src/retained/app/dashboard/[driveId]/members/[userId]/page.tsx': {
     MemberSettingsPage: { ownerCompares: 1, reason: "client display hides role controls on the lead's own member row; member routes re-check authority" },
@@ -216,6 +260,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   },
   'packages/lib/src/compliance/export/gdpr-export.ts': {
     collectUserDrives: { ownerCompares: 1, reads: 1, reason: "GDPR subject-access export of the subject's OWN drives and membership rows; pending invitations are the subject's personal data" },
+    collectUserLocalEnvApprovals: { ownerCompares: 2, reason: LOCAL_MACHINE_OWNER('GDPR export labels whether the subject owns the machine, clicked, or both') },
   },
   'packages/lib/src/onboarding/home-drive.ts': {
     provisionHomeDriveIfNeeded: { ownerCompares: 1, reason: "provisioning looks up the user's own HOME drive (never an org drive)" },
@@ -253,6 +298,7 @@ export const DRIVE_ACCESS_GATE_ALLOWLIST: AccessGateAllowlist = {
   'packages/lib/src/services/drive-envs/drive-envs-store.ts': {
     countEnvsOwnedBy: { ownerCompares: 1, reason: 'payer quota: counts environments across the drives a payer leads (billing), not an access decision' },
     createIfUnderLimit: { ownerCompares: 1, reason: 'payer quota: counts environments across the drives a payer leads inside the create transaction (billing), not an access decision' },
+    listSpriteEnvsInUserDrives: { reads: 1, ownerCompares: 1, reason: "CANDIDATE inventory for the global assistant's environment list: every cloud env it returns is put to the actor-aware canRunCode for its own drive before it is listed, so this narrows and grants nothing" },
   },
   'packages/lib/src/services/drive-member-service.ts': {
     getDriveMemberDetails: { reads: 1, reason: MEMBER_ADMIN_DISPLAY },

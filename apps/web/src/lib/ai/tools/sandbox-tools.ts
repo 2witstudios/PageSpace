@@ -290,10 +290,11 @@ export const LIST_ENVIRONMENTS_TOOL_NAME = 'list_environments';
  */
 export const ADDRESSED_SANDBOX_TOOL_NAMES: readonly string[] = ['bash', 'writeFile', 'readFile', 'editFile'];
 
-export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = [
-  LIST_ENVIRONMENTS_TOOL_NAME,
-  ...ADDRESSED_SANDBOX_TOOL_NAMES,
-];
+// A LITERAL on purpose: apps/imago/scripts/build-tool-metadata.ts parses this
+// declaration as JSON to build Imago's tool filter. It is the discovery tool
+// (LIST_ENVIRONMENTS_TOOL_NAME) followed by ADDRESSED_SANDBOX_TOOL_NAMES; the
+// sandbox-tools suite pins that it stays exactly that.
+export const SANDBOX_CORE_TOOL_NAMES: readonly string[] = ['list_environments', 'bash', 'writeFile', 'readFile', 'editFile'];
 
 export function createSandboxTools({ runDeps, resolveContext, gate, gateDiscovery, listEnvironments, resolveEnvironment }: SandboxToolsDeps): {
   list_environments: Tool;

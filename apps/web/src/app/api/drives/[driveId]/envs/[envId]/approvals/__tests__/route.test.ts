@@ -4,6 +4,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+// The org sign-in explanation is the permissions layer's; these cases are about membership and ownership.
+vi.mock('@/lib/auth/request-actor', () => ({
+  actorFromAuth: vi.fn((auth: { userId: string }) => ({ via: 'credential', userId: auth.userId, authentication: null })),
+  deniedResponse: vi.fn(async (_actor: unknown, _driveId: unknown, fallback: Response) => fallback),
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }, logger: { child: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) } }));
 vi.mock('@/lib/auth', () => ({

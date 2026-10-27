@@ -15,6 +15,7 @@
  * account page's route suite pins that by reading the source.
  */
 import { NextResponse } from 'next/server';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -33,7 +34,8 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: 'drive-env-approvals', operation: 'list', envId } });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      // An org sign-in policy refusal is named so the person is asked to sign in again (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);
