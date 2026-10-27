@@ -27,9 +27,9 @@ const dueTones: Readonly<Record<DueTone, string>> = {
 /** A due date at the row's end: amber while late, full ink when near. */
 export const treeDueClass = (tone: DueTone): string => cn('w-16 flex-none text-right text-xs tabular-nums', dueTones[tone]);
 
-/* The ⋯ trigger: quiet until its row is hovered or it holds focus. */
+/* The ⋯ trigger: quiet until its row is hovered or it holds focus; always shown on touch. */
 export const treeMenuTriggerClass =
-  'inline-flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md text-ink-muted opacity-0 group-hover/row:opacity-100 hover:bg-surface-overlay hover:text-ink focus-visible:opacity-100 aria-expanded:opacity-100';
+  'inline-flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md text-ink-muted opacity-0 group-hover/row:opacity-100 hover:bg-surface-overlay hover:text-ink focus-visible:opacity-100 aria-expanded:opacity-100 pointer-coarse:opacity-100';
 
 /* The rail overflow's glass menu (rail-button-class.ts). */
 export const treeMenuClass =

@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
+import { usePage } from '../../files/page-object/page-object';
+import { pageTabOf } from '../tabs/tab-label';
 import { phoneAskClass } from './phone-shell-class';
 
 export type PhoneAskProps =
@@ -31,4 +33,13 @@ export function PhoneAsk({ href, onPress }: PhoneAskProps): ReactNode {
       {content}
     </Link>
   );
+}
+
+/** Pages that bring their own composer: a floating Ask there would sit on top of it. */
+export const hasOwnComposer = (type: string | undefined): boolean => type === 'CHANNEL' || type === 'AI_CHAT';
+
+/** Ask over a page, unless the page already has a message box of its own. */
+export function PhonePageAsk({ pageId, onPress }: { readonly pageId: string; readonly onPress: () => void }): ReactNode {
+  const { data } = usePage(pageId);
+  return hasOwnComposer(pageTabOf(data)?.type) ? null : <PhoneAsk onPress={onPress} />;
 }

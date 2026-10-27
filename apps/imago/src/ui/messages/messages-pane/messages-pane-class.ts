@@ -5,12 +5,12 @@ import { cn } from '../../cn';
    thread. Hover brings a row to full ink; the open thread takes the soft
    accent tint at full ink. The ink never turns blue. */
 const base =
-  'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm no-underline transition-colors duration-120 ease-standard hover:no-underline';
+  'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm no-underline transition-colors duration-120 ease-standard hover:no-underline phone:h-phone-row';
 
 const state = (selected: boolean, unread: boolean): string => {
   if (selected) return 'bg-accent-soft font-normal text-ink';
   if (unread) return 'font-medium text-ink hover:bg-surface-overlay';
-  return 'font-normal text-ink-muted hover:bg-surface-overlay hover:text-ink';
+  return 'font-normal text-ink-muted hover:bg-surface-overlay hover:text-ink phone:text-ink';
 };
 
 /**
