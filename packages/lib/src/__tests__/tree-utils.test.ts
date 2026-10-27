@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree } from '../content/tree-utils'
+import { buildTree, calculateSafeDepth, formatTreeAsMarkdown, filterToSubtree, filterTreeNodesByAccess } from '../content/tree-utils'
 
 describe('tree-utils', () => {
   describe('buildTree', () => {
@@ -635,6 +635,199 @@ describe('tree-utils', () => {
       expect(result).toContain('    ')
       expect(result).toContain('Sub')
       expect(result).toContain('Sub2')
+    })
+  })
+
+  describe('filterTreeNodesByAccess', () => {
+    const set = (...ids: string[]) => new Set(ids)
+
+    it('returns empty array for empty input', () => {
+      expect(filterTreeNodesByAccess([], set('1'))).toEqual([])
+    })
+
+    it('keeps every node when all are accessible', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+        { id: '3', parentId: '2' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('1', '2', '3'))
+
+      expect(result.map(n => n.id)).toEqual(['1', '2', '3'])
+    })
+
+    it('drops every node when none are accessible', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+
+      expect(filterTreeNodesByAccess(nodes, set())).toEqual([])
+    })
+
+    it('drops an inaccessible root and its entire (orphaned) subtree even when descendants are individually accessible', () => {
+      const nodes = [
+        { id: 'private-root', parentId: null },
+        { id: 'child', parentId: 'private-root' },
+        { id: 'grandchild', parentId: 'child' },
+      ]
+
+      // child + grandchild are in the accessible set, but their ancestor is not.
+      const result = filterTreeNodesByAccess(nodes, set('child', 'grandchild'))
+
+      expect(result).toEqual([])
+    })
+
+    it('drops a leaf whose intermediate ancestor is inaccessible (ancestor-gated policy)', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        { id: 'middle', parentId: 'root' },
+        { id: 'leaf', parentId: 'middle' },
+      ]
+
+      // root and leaf accessible, but the middle ancestor is not.
+      const result = filterTreeNodesByAccess(nodes, set('root', 'leaf'))
+
+      expect(result.map(n => n.id)).toEqual(['root'])
+    })
+
+    it('keeps only the accessible sibling', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        { id: 'public-child', parentId: 'root' },
+        { id: 'private-child', parentId: 'root' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('root', 'public-child'))
+
+      expect(result.map(n => n.id)).toEqual(['root', 'public-child'])
+    })
+
+    it('treats a node whose parent is absent from the list as a root boundary', () => {
+      // parentId points outside the provided node set (e.g. trashed/other-drive parent).
+      const nodes = [
+        { id: 'directly-shared', parentId: 'parent-not-in-set' },
+        { id: 'child', parentId: 'directly-shared' },
+      ]
+
+      const result = filterTreeNodesByAccess(nodes, set('directly-shared', 'child'))
+
+      // Only self + present ancestors are required; the absent parent is a boundary.
+      expect(result.map(n => n.id)).toEqual(['directly-shared', 'child'])
+    })
+
+    it('preserves the original parent/child shape after buildTree (no re-rooting of orphans)', () => {
+      const nodes = [
+        { id: 'r', parentId: null, title: 'Root', position: 0 },
+        { id: 'a', parentId: 'r', title: 'A', position: 0 },
+        { id: 'b', parentId: 'r', title: 'B (private)', position: 1 },
+        { id: 'b1', parentId: 'b', title: 'B child', position: 0 },
+        { id: 'a1', parentId: 'a', title: 'A child', position: 0 },
+      ]
+
+      // 'b' is private; 'b1' is accessible but should be dropped with its parent.
+      const filtered = filterTreeNodesByAccess(nodes, set('r', 'a', 'a1', 'b1'))
+      const tree = buildTree(filtered)
+
+      expect(tree).toHaveLength(1)
+      expect(tree[0].id).toBe('r')
+      expect(tree[0].children.map(c => c.id)).toEqual(['a'])
+      expect(tree[0].children[0].children.map(c => c.id)).toEqual(['a1'])
+    })
+
+    it('does not mutate the input array', () => {
+      const nodes = [
+        { id: '1', parentId: null },
+        { id: '2', parentId: '1' },
+      ]
+      const snapshot = [...nodes]
+
+      filterTreeNodesByAccess(nodes, set('1'))
+
+      expect(nodes).toEqual(snapshot)
+    })
+
+    it('fails closed on a parentId cycle (no infinite loop)', () => {
+      const nodes = [
+        { id: 'x', parentId: 'y' },
+        { id: 'y', parentId: 'x' },
+      ]
+
+      // Even though both ids are "accessible", a cycle has no real root → drop both.
+      const result = filterTreeNodesByAccess(nodes, set('x', 'y'))
+
+      expect(result).toEqual([])
+    })
+
+    it('drops a node that is its own parent (self-cycle)', () => {
+      const nodes = [{ id: 'self', parentId: 'self' }]
+
+      expect(filterTreeNodesByAccess(nodes, set('self'))).toEqual([])
+    })
+
+    it('handles a deep fully-accessible chain', () => {
+      const nodes = Array.from({ length: 50 }, (_, i) => ({
+        id: `n${i}`,
+        parentId: i === 0 ? null : `n${i - 1}`,
+      }))
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(50)
+    })
+
+    it('keeps many siblings that share one accessible ancestor (memoized path)', () => {
+      const nodes = [
+        { id: 'root', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'root' })),
+      ]
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(101)
+    })
+
+    it('drops a whole wide subtree under one inaccessible ancestor', () => {
+      const nodes = [
+        { id: 'private', parentId: null },
+        ...Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, parentId: 'private' })),
+      ]
+      // children are accessible, ancestor is not.
+      const accessible = new Set(nodes.filter(n => n.id !== 'private').map(n => n.id))
+
+      expect(filterTreeNodesByAccess(nodes, accessible)).toEqual([])
+    })
+
+    it('resolves a large deep+wide forest in linear time (no O(n^2) blowup)', () => {
+      // 2000-deep spine; each spine node also has one leaf child.
+      const nodes: { id: string; parentId: string | null }[] = []
+      for (let i = 0; i < 2000; i++) {
+        nodes.push({ id: `s${i}`, parentId: i === 0 ? null : `s${i - 1}` })
+        nodes.push({ id: `leaf${i}`, parentId: `s${i}` })
+      }
+      const accessible = new Set(nodes.map(n => n.id))
+
+      const result = filterTreeNodesByAccess(nodes, accessible)
+
+      expect(result).toHaveLength(4000)
+    })
+
+    it('hides accessible descendants beneath a mid-spine inaccessible node in a deep tree', () => {
+      const nodes = Array.from({ length: 100 }, (_, i) => ({
+        id: `n${i}`,
+        parentId: i === 0 ? null : `n${i - 1}`,
+      }))
+      // Everything accessible EXCEPT the node at depth 50.
+      const accessible = new Set(nodes.map(n => n.id))
+      accessible.delete('n50')
+
+      const result = filterTreeNodesByAccess(nodes, accessible).map(n => n.id)
+
+      // n0..n49 visible; n50 (inaccessible) and all below hidden.
+      expect(result).toEqual(Array.from({ length: 50 }, (_, i) => `n${i}`))
     })
   })
 })

@@ -13,7 +13,7 @@ import type {
 
 export type ConsumeMembershipReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED' | 'ALREADY_MEMBER'
+  'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED'
 >;
 
 export type ConsumeMembershipResult =
@@ -29,7 +29,7 @@ export type ConsumeMembershipResult =
 //
 // Pre-commit ports (loadInvite, findExistingMembership,
 // consumeInviteAndCreateMember, loadUserByEmail, createTokenAndPersist,
-// sendMagicLinkEmail, loadPendingInviteForDrive, findActorMembership,
+// sendMagicLinkEmail, loadPendingInviteForDrive, findActorDriveRole,
 // deletePendingInviteForDrive) MAY throw — the pipe needs the route to
 // surface a 5xx so the user can retry. Routes that wrap pipes are expected
 // to catch.
@@ -38,7 +38,7 @@ export interface AcceptancePorts {
   findExistingMembership: (input: {
     driveId: string;
     userId: string;
-  }) => Promise<{ acceptedAt: Date | null } | null>;
+  }) => Promise<{ acceptedAt: Date | null; role: string } | null>;
   consumeInviteAndCreateMember: (input: {
     invite: Invite;
     userId: string;
@@ -65,7 +65,7 @@ export interface MagicLinkPorts {
   createTokenAndPersist: (input: {
     userId: string;
     expiresAt: Date;
-    platform?: 'web' | 'desktop' | 'ios';
+    platform?: 'web' | 'desktop' | 'ios' | 'android';
     deviceId?: string;
     deviceName?: string;
     // Invite token bound to this magic-link at mint time. Persisted in the
@@ -78,6 +78,13 @@ export interface MagicLinkPorts {
     email: string;
     token: string;
     next?: string;
+    // Which shell asked for the link, and which device. The adapter picks the
+    // URL from the pair: a native shell that named a device gets a universal
+    // link that opens the app, everything else the plain verify endpoint.
+    // Both are needed because a link is only device-bound when both are
+    // present, and that must be the same judgement the token metadata made.
+    platform?: 'web' | 'desktop' | 'ios' | 'android';
+    deviceId?: string;
   }) => Promise<void>;
 }
 
@@ -86,10 +93,14 @@ export interface RevokePorts {
     inviteId: string;
     driveId: string;
   }) => Promise<{ id: string; email: string; role: Role; driveId: string } | null>;
-  findActorMembership: (input: {
+  /**
+   * The actor's effective role on the drive: OWNER for its lead, else the org-aware membership's
+   * role (ACCEPTED rows only, so a pending invitation is null), else null.
+   */
+  findActorDriveRole: (input: {
     driveId: string;
     actorId: string;
-  }) => Promise<{ role: Role; acceptedAt: Date | null } | null>;
+  }) => Promise<Role | null>;
   deletePendingInviteForDrive: (input: {
     inviteId: string;
     driveId: string;
@@ -107,7 +118,7 @@ export interface RevokePorts {
 
 export type ConsumePagePermissionReason = Extract<
   InviteAcceptanceErrorCode,
-  'TOKEN_CONSUMED'
+  'TOKEN_CONSUMED' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED'
 > | 'ALREADY_HAS_PERMISSION';
 
 export type ConsumePagePermissionResult =

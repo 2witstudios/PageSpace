@@ -3,8 +3,9 @@
 
 FROM alpine:3.21
 
-# Install curl for making HTTP requests
-RUN apk add --no-cache curl openssl
+# curl/openssl for HMAC-signed requests; flock (util-linux) so entries that
+# must not overlap themselves (e.g. reconcile-machine-storage) can serialize
+RUN apk add --no-cache curl openssl flock
 
 # Create log directory
 RUN mkdir -p /var/log/cron

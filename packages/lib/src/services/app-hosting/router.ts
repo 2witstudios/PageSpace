@@ -1,0 +1,463 @@
+/**
+ * router — the imperative shell of the published-app serving edge.
+ *
+ * Hostname in, {@link AppRouteDecision} out. Everything that touches the world —
+ * the `published_apps` read, resolving who pays, the balance read, deriving the
+ * replay key — happens here; every rule about what those facts MEAN lives in the
+ * pure `router-core.ts` next door.
+ *
+ * WHERE THIS RUNS, and why it is an app endpoint rather than proxy config: the
+ * decision needs a database row and a credit balance, and the edge is Caddy. So
+ * the proxy forwards published-app requests to the web app's router route, which
+ * calls this, and answers either with a `fly-replay` header (Fly then replays the
+ * ORIGINAL request to the target app — the proxy's rewrite to the router path is
+ * not what gets replayed) or with the parked/unavailable page itself.
+ *
+ * THE COST OF THAT SHAPE IS REAL AND DELIBERATE: with no replay cache on the
+ * metered tier, EVERY request to a published app — every asset, not just the
+ * document — pays one hop to the web app plus, for a servable metered app, three
+ * single-row indexed reads: the `published_apps` lookup, the payer's tier, and
+ * the payer's funded balance. No aggregates: `hasSpendableBalance` deliberately
+ * does NOT go through `getCreditBalance`, which would add a `SUM` over active
+ * `credit_holds` whose result the gate discards. A refusal costs fewer — an app
+ * refused on status alone never reaches the ledger at all.
+ *
+ * That is the price of the enforcement property (see `router-core.ts`), and it is
+ * bounded by the fact that the replayed response never returns through us: only
+ * the decision is ours, the bytes are not.
+ *
+ * ⚠️ A REPLAYED RESPONSE BYPASSES THE EDGE ENTIRELY. Fly's proxy hands the
+ * request straight to the target app and returns its response to the client, so
+ * NONE of the Caddyfile's header stanzas apply to a published app's own output.
+ * A published app owns its security headers. Nothing at this layer can add,
+ * strip, or sanitize them — do not add a header here expecting it to reach a
+ * served app's pages, because it never will.
+ */
+
+import { db } from '@pagespace/db/db';
+import { and, eq, isNull, or, sql } from '@pagespace/db/operators';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { hasSpendableComputeBalance } from '../../billing/compute-gate';
+import { errorLogFields } from '../../logging/error-cause';
+import { loggers } from '../../logging/logger-config';
+import { defaultAppBillingDeps } from './app-billing';
+import type { ComputeCharge } from '../../billing/compute-charge';
+import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
+import {
+  DAILY_CAP_PARK_REASON,
+  MEMBER_CAP_PARK_REASON,
+  wakePublishedAppSerialized,
+  type WakePublishedAppRunResult,
+} from './app-lifecycle-metering';
+import { derivePublishedAppReplayKey } from './app-replay-key';
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { publishedAppsDecision } from '../../organizations/org-action-decisions';
+import { resolveAppReplaySecret, resolvePublishedAppsApex } from './routing-env';
+import {
+  decideAppRoute,
+  parseAppHost,
+  type AppRouteDecision,
+  type RoutableApp,
+} from './router-core';
+
+/** What the router needs from the world, injected so the shell is testable. */
+export interface AppRouterDeps {
+  isEnabled: () => boolean;
+  /** The published-apps apex the hostname is resolved against. */
+  apex: () => string;
+  /** Server secret the per-app replay `state` key is derived from. */
+  replaySecret: () => string;
+  /** `published_apps` row for a subdomain, or null. */
+  findAppBySubdomain: (subdomain: string) => Promise<PublishedAppRouteRow | null>;
+  /**
+   * The `published_apps` row a custom hostname targets, or null when the
+   * hostname isn't one of our custom domains, or when it is but its
+   * `publishedAppId` is NULL — the caller reads null as "fall through to the
+   * static-site path", exactly as an unrecognized custom host always has.
+   */
+  findAppByCustomHost: (hostname: string) => Promise<PublishedAppRouteRow | null>;
+  /**
+   * Who pays — resolved the SAME way the awake-seconds meter resolves it
+   * (the drive's payer, via `resolveEnvPayer`). Null means unresolvable (a stale
+   * read of a drive mid-delete); the caller refuses rather than substituting a
+   * payer or falling back to a denormalized column the meter does not charge.
+   * An org drive's charge is the org pool (WAL-9), whose balance is what is asked.
+   */
+  resolveCharge: (input: { driveId: string; costOwnerId: string | null }) => Promise<ComputeCharge | null>;
+  /**
+   * Whether the charge's wallet can still spend: the payer's personal balance
+   * (judged against their tier), or the org pool (missing or paused = no).
+   * Read-only — this edge never holds.
+   */
+  hasSpendableBalance: (charge: ComputeCharge) => Promise<boolean>;
+  /**
+   * Record that this app was just served — the idle reaper's only evidence of
+   * demand. Throttled inside; see {@link stampAppHit}.
+   */
+  stampHit: (publishedAppId: string) => Promise<void>;
+  /**
+   * POL-10: may published apps run in this drive's org right now? Read live on every request
+   * (no cache), so turning the policy off stops traffic at once; the row and machine are kept.
+   */
+  publishedAppsAllowed: (driveId: string) => Promise<boolean>;
+  /**
+   * Start a STOPPED app's machine through the metering seam, opening an awake
+   * window — see {@link resolveAppRoute} for why the edge, and only the edge, can
+   * do this.
+   */
+  wake: (publishedAppId: string) => Promise<WakePublishedAppRunResult>;
+  /**
+   * When an app parked on its creator's member cap comes back by itself at the latest: the drive's
+   * org pool's next refill, when every member's allowance renews (D-OW-12) and the hourly sweep
+   * un-parks it (app-unpark). Null for a drive with no org pool or period. Read only for that page.
+   */
+  memberCapReturnsBy: (driveId: string) => Promise<Date | null>;
+}
+
+/** The columns the routing decision reads. Narrower than the row on purpose. */
+export interface PublishedAppRouteRow {
+  id: string;
+  flyAppName: string;
+  status: string;
+  tier: string;
+  machineId: string | null;
+  /**
+   * The app's owning drive — NOT `published_apps.ownerId`. The balance gate must
+   * ask about the SAME payer the awake-seconds meter charges, and the meter
+   * charges `drives.ownerId` (via `resolveEnvPayer`), never the denormalized
+   * `ownerId` column, which exists only for indexing and cascade reach and can
+   * drift from the drive's real owner (a transfer, a stale write). Gating on the
+   * wrong payer would decide admission against one person's balance while the
+   * charge lands on another's.
+   */
+  driveId: string;
+  /** `published_apps.envId` — echoed onward exactly like `driveId`, see `RoutableApp.envId`. */
+  envId: string;
+  /** [D-OW-28] Whose cap the app's compute counts against: its publisher, else (null) the drive lead. */
+  costOwnerId: string | null;
+  /** Why it was last parked (`parked: <reason>`), read only to name a member-cap park to a visitor. */
+  lastError: string | null;
+}
+
+const ROUTE_ROW_COLUMNS = {
+  id: publishedApps.id,
+  flyAppName: publishedApps.flyAppName,
+  status: publishedApps.status,
+  tier: publishedApps.tier,
+  machineId: publishedApps.machineId,
+  driveId: publishedApps.driveId,
+  envId: publishedApps.envId,
+  costOwnerId: publishedApps.costOwnerId,
+  lastError: publishedApps.lastError,
+} as const;
+
+async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
+  const [row] = await db
+    .select(ROUTE_ROW_COLUMNS)
+    .from(publishedApps)
+    .where(eq(publishedApps.subdomain, subdomain))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Resolve a custom hostname to the `published_apps` row it targets.
+ *
+ * Returns null when the hostname is not a `custom_domains` row at all, when it
+ * is one but `publishedAppId` is NULL, AND when its `status` is not `active` —
+ * the caller cannot and must not tell any of those apart, because all three
+ * answer the same way: fall through to the drive's static published site,
+ * exactly as every custom host has always been served. A `pending`,
+ * `provisioning`, `dns_failed`, `cert_failed`, `verified`-but-not-yet-`active`,
+ * or `failed` domain has not finished proving it is safe to route traffic to
+ * (DNS/cert are unconfirmed), so it must not gain app-routing power just
+ * because someone set a `publishedAppId` on it — that column records intent,
+ * `status = 'active'` is what makes the intent servable. Only a domain that is
+ * ours, explicitly pointed at an app, AND active reaches the published-app
+ * routing decision at all.
+ */
+async function findAppByCustomHostRow(hostname: string): Promise<PublishedAppRouteRow | null> {
+  const [row] = await db
+    .select(ROUTE_ROW_COLUMNS)
+    .from(customDomains)
+    .innerJoin(publishedApps, eq(customDomains.publishedAppId, publishedApps.id))
+    .where(and(eq(customDomains.hostname, hostname), eq(customDomains.status, 'active')))
+    .limit(1);
+  return row ?? null;
+}
+
+export const defaultAppRouterDeps: AppRouterDeps = {
+  isEnabled: isAppHostingEnabled,
+  apex: resolvePublishedAppsApex,
+  replaySecret: resolveAppReplaySecret,
+  findAppBySubdomain: findAppBySubdomainRow,
+  findAppByCustomHost: findAppByCustomHostRow,
+  // The SAME resolver `app-billing.ts`'s `defaultAppBillingDeps` hands the meter
+  // and the wake gate — not an equivalent, the identical function — so a drift
+  // between "who the router asks" and "who the meter charges" is structurally
+  // impossible rather than merely kept in sync by convention.
+  resolveCharge: defaultAppBillingDeps.resolveCharge,
+  hasSpendableBalance: hasSpendableComputeBalance,
+  stampHit: stampAppHit,
+  publishedAppsAllowed: async (driveId) =>
+    publishedAppsDecision((await getDrivePolicies(driveId))?.policies ?? null).ok,
+  wake: (publishedAppId) => wakePublishedAppSerialized(publishedAppId),
+  // Loaded on first use, like the payer lookup: the router's package graph stays free of the
+  // credit gate, and only a member-cap paused page ever asks.
+  memberCapReturnsBy: async (driveId) => {
+    const { lookupDriveBillingFacts } = await import('../../billing/sandbox-payer');
+    const facts = await lookupDriveBillingFacts(driveId);
+    if (!facts?.orgId) return null;
+    const { findOrgPoolPeriodEnd } = await import('../../billing/credit-gate');
+    return findOrgPoolPeriodEnd(facts.orgId);
+  },
+};
+
+/**
+ * Stamp `lastHitAt`, at most once per app per throttle interval.
+ *
+ * THE THROTTLE IS THE POINT, not an optimization. This runs once per ASSET of every
+ * published page, so an unconditional write would turn a single page load into
+ * dozens of updates to one row — every one of them contending with the awake
+ * meter's own writes to that row, on the hottest path in the system. The age
+ * predicate makes all but one of them a statement that matches nothing.
+ *
+ * `now()` is used rather than a JS clock deliberately: every reader of this column
+ * (the reaper's cutoff, this predicate) then compares instants from the same
+ * source, and the column is `timestamptz`, so there is no wall-clock/UTC hazard to
+ * work around.
+ *
+ * The interval is read per call so an operator can retune it without a deploy; at
+ * 0 every replayed request stamps.
+ */
+async function stampAppHit(publishedAppId: string): Promise<void> {
+  const intervalSeconds = resolveHitStampIntervalSeconds();
+  const stale = sql`${publishedApps.lastHitAt} < now() - make_interval(secs => ${intervalSeconds})`;
+  await db
+    .update(publishedApps)
+    .set({ lastHitAt: sql`now()` })
+    .where(
+      and(
+        eq(publishedApps.id, publishedAppId),
+        // A never-stamped row always writes: NULL fails every comparison, so the
+        // age predicate alone would leave `lastHitAt` NULL forever on exactly the
+        // apps that have never been reaped and most need the stamp.
+        intervalSeconds > 0 ? or(isNull(publishedApps.lastHitAt), stale) : undefined,
+      ),
+    );
+}
+
+/**
+ * What the edge should answer when a wake did not straightforwardly succeed, or
+ * `null` to carry on and replay.
+ *
+ * TWO outcomes carry on. `woken` is the ordinary one. `wake_in_progress` is the
+ * cold-start burst: a page's other twenty requests arrive while the first is still
+ * starting the machine, and the honest answer for them is the same as for the
+ * winner — the app is starting, replay and let Fly's proxy hold the request for it.
+ * `not_wakeable` is the same fact seen a moment later (the winner's status write
+ * already landed, so the row is `running` and this wake has nothing to do), and it
+ * is the DOMINANT path on a cold app, which is why it may not be treated as a
+ * failure.
+ *
+ * Everything else refuses. Each is a state where replaying would hand Fly a request
+ * for a machine we have decided not to pay for — the unmetered start this whole
+ * wiring exists to close.
+ */
+function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId: string): AppRouteDecision | null {
+  switch (wake.outcome) {
+    case 'woken':
+    case 'wake_in_progress':
+      return null;
+    case 'parked':
+      // The gate refused, and the app is now genuinely parked. `daily_cap` is told
+      // apart from an empty balance because the two ask different things of the
+      // owner (top up, versus wait for tomorrow).
+      return {
+        kind: 'parked',
+        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : wake.reason === MEMBER_CAP_PARK_REASON ? 'member_cap' : 'out_of_credits',
+        driveId,
+        envId,
+      };
+    case 'start_failed':
+      // Fly refused the start. Nothing is billed and nothing is stamped; replaying
+      // would ask the proxy to start the same machine outside the seam.
+      return { kind: 'unavailable', reason: 'failed', driveId, envId };
+    case 'refused':
+      switch (wake.reason) {
+        case 'not_wakeable':
+          return null;
+        case 'not_found':
+          // The row was deleted between our read and the wake.
+          return { kind: 'not_found', reason: 'no_such_app' };
+        case 'no_machine':
+          // Mid blue/green swap: there is nothing to start yet, and the next
+          // deploy finishes in seconds.
+          return { kind: 'unavailable', reason: 'deploying', driveId, envId };
+        case 'disabled':
+          return { kind: 'unavailable', reason: 'hosting_disabled', driveId, envId };
+        case 'org_policy':
+          return { kind: 'unavailable', reason: 'org_policy', driveId, envId };
+        case 'unresolved_payer':
+          // No honest payer, so no start. Refusing costs one visitor a page;
+          // serving would bill a machine to somebody who may not own the drive.
+          return { kind: 'unavailable', reason: 'failed', driveId, envId };
+      }
+  }
+}
+
+/**
+ * Resolve one request hostname to a routing decision.
+ *
+ * Never throws for an ordinary miss — an unknown host, a disabled feature, a
+ * hostname that is not ours — because each of those is a normal answer at a
+ * serving edge, not an exception. A genuine failure (the database is down)
+ * still propagates: the caller turns it into a 503, which is honest, whereas
+ * swallowing it here would present an outage as "no such app".
+ */
+export async function resolveAppRoute(
+  rawHost: string,
+  deps: AppRouterDeps = defaultAppRouterDeps,
+): Promise<AppRouteDecision> {
+  // The kill switch is checked FIRST, before anything reads the database. While
+  // hosting is dark, this endpoint must be inert rather than merely fruitless.
+  if (!deps.isEnabled()) return { kind: 'unavailable', reason: 'hosting_disabled' };
+
+  const host = parseAppHost(rawHost, deps.apex());
+  if (host.kind === 'apex') return { kind: 'not_found', reason: 'apex' };
+  if (host.kind === 'foreign') {
+    // A custom domain reaches the edge as a hostname that is not under our apex.
+    // `findAppByCustomHost` answers null both for "not our domain" and "ours but
+    // pointed at the static site" — both fall through to `custom_host`, which is
+    // exactly the answer that keeps the EXISTING static-published-site behaviour
+    // intact (those hosts are served by the proxy's own custom-domain block and
+    // never reach a replay decision). Only a domain explicitly pointed at a
+    // published app (a non-null `publishedAppId`) is decided here, through the
+    // SAME gate/replay logic a subdomain hit gets — no shortcuts, no cache.
+    const app = await deps.findAppByCustomHost(host.hostname);
+    if (!app) return { kind: 'not_found', reason: 'custom_host' };
+    return withReturnsBy(await decideForRow(app, deps), app.driveId, deps);
+  }
+
+  const app = await deps.findAppBySubdomain(host.subdomain);
+  if (!app) return { kind: 'not_found', reason: 'no_such_app' };
+  return withReturnsBy(await decideForRow(app, deps), app.driveId, deps);
+}
+
+/**
+ * A member-cap park names the date it comes back by (review 5407898542 P1c). A failed read only
+ * drops the date — the paused page is the one response that has to render when things are broken.
+ */
+async function withReturnsBy(decision: AppRouteDecision, driveId: string, deps: AppRouterDeps): Promise<AppRouteDecision> {
+  if (decision.kind !== 'parked' || decision.reason !== 'member_cap') return decision;
+  try {
+    const returnsBy = await deps.memberCapReturnsBy(driveId);
+    return returnsBy ? { ...decision, returnsBy: returnsBy.toISOString() } : decision;
+  } catch (error) {
+    loggers.ai.warn('Paused-page refill date could not be read; the page is served without it', { driveId, ...errorLogFields(error) });
+    return decision;
+  }
+}
+
+async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Promise<AppRouteDecision> {
+  const routable: RoutableApp = {
+    flyAppName: app.flyAppName,
+    status: app.status,
+    tier: app.tier,
+    hasMachine: app.machineId !== null,
+    driveId: app.driveId,
+    envId: app.envId,
+    parkedForMemberCap: app.lastError === `parked: ${MEMBER_CAP_PARK_REASON}`,
+  };
+
+  // POL-10: an org that turned published apps off serves nothing, and nothing is woken. Asked
+  // before the balance and before any wake, so a refused app costs no ledger read and no start.
+  if (!(await deps.publishedAppsAllowed(app.driveId))) {
+    return { kind: 'unavailable', reason: 'org_policy', driveId: app.driveId, envId: app.envId };
+  }
+
+  // Decide as far as the ROW alone allows, with the balance optimistically OK.
+  // Anything already refused at this point — parked, destroying, failed, an
+  // unknown status, no machine yet — never reaches the ledger. That is not only
+  // an optimization: a parked app is exactly the one that keeps receiving
+  // crawler and monitor traffic, and charging each of those requests a balance
+  // read would make the cheapest possible answer the most expensive one.
+  const preliminary = decideAppRoute({ app: routable, balanceOk: true, replayState: 'pending' });
+  if (preliminary.kind !== 'replay') return preliminary;
+
+  // Only a servable METERED app is worth asking the ledger about; a dedicated
+  // app is billed flat and has no gate. The refusal returns from inside the
+  // branch, so past this block the payer is known to be able to spend — which is
+  // what lets the final decision below pass `balanceOk: true` as a fact rather
+  // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
+  // here can never quietly become the policy.
+  if (app.tier === 'metered') {
+    const charge = await deps.resolveCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId });
+    // An unresolvable drive fails CLOSED here: the router has nobody to ask, so it
+    // refuses exactly as the wake gate does, rather than assuming a balance nobody can
+    // vouch for. An org drive asks the ORG POOL (WAL-9), never the lead's balance.
+    const balanceOk = charge ? await deps.hasSpendableBalance(charge) : false;
+    if (!balanceOk) {
+      return decideAppRoute({ app: routable, balanceOk: false, replayState: 'pending' });
+    }
+  }
+
+  // Derive the state key only once the route is otherwise decided-servable: an
+  // unset or too-short `APP_REPLAY_SECRET` throws, and a router that cannot
+  // authenticate its replays must refuse to emit them rather than send traffic
+  // to a published app with a blank state it has no way to distinguish from a
+  // direct 6PN caller.
+  let replayState: string;
+  try {
+    replayState = derivePublishedAppReplayKey({
+      flyAppName: app.flyAppName,
+      secret: deps.replaySecret(),
+    });
+  } catch {
+    return { kind: 'unavailable', reason: 'failed', driveId: app.driveId, envId: app.envId };
+  }
+
+  const decision = decideAppRoute({ app: routable, balanceOk: true, replayState });
+
+  // A STOPPED app is servable, and serving it means STARTING ITS MACHINE. Fly's
+  // proxy does that by itself the moment a replay reaches it — which is exactly the
+  // problem: a machine started that way opens an awake window nobody recorded, on a
+  // row that still says `stopped`, so the heartbeat never bills it (it lists
+  // `running` rows) and the reaper never stops it (so does it). The app would run
+  // free, forever, from its first visit after any idle stop.
+  //
+  // So the wake goes through the metering seam HERE, at the only place that knows a
+  // stopped app is about to be served. That is also where the credit gate was
+  // always meant to consume its hold: `wakePublishedApp` gates the payer, places
+  // the reservation, starts the machine and moves the row to `running` with its
+  // boundary stamped.
+  //
+  // A wake that does NOT succeed must not fall through to a replay, because a
+  // replay is exactly the unmetered start this exists to prevent.
+  if (app.status === 'stopped' && decision.kind === 'replay') {
+    const wake = await deps.wake(app.id);
+    const refusal = refusalForWake(wake, app.driveId, app.envId);
+    if (refusal) return refusal;
+  }
+
+  // Recorded ONLY for a request that is actually being served. A refusal is not
+  // demand: stamping one would keep a parked app's machine — and every crawler that
+  // keeps hitting it — looking busy to the reaper forever.
+  if (decision.kind === 'replay') {
+    try {
+      await deps.stampHit(app.id);
+    } catch (error) {
+      // A recency stamp is not worth a failed page. The cost of losing one is that
+      // the app looks idle up to one throttle interval earlier than it is, and the
+      // next served request corrects it — whereas a 503 here would take a working
+      // app off the internet because a bookkeeping write failed.
+      loggers.api.warn('Published-app router could not stamp last-hit recency', {
+        publishedAppId: app.id,
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+    }
+  }
+
+  return decision;
+}

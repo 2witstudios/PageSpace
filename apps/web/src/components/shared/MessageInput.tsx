@@ -27,7 +27,8 @@ export type MessageInputSource = 'channel' | 'dm';
 
 export interface MessageInputSubmit {
   content: string;
-  attachment?: FileAttachment;
+  /** Every file the composer is holding, in display order. May be empty. */
+  attachments: FileAttachment[];
   alsoSendToParent: boolean;
 }
 
@@ -91,12 +92,17 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
     ref,
   ) {
     const handleSend = useCallback(
-      (attachment?: FileAttachment, options?: ChannelInputSendOptions) => {
+      (attachments?: FileAttachment[], options?: ChannelInputSendOptions) => {
         const content = value;
-        if (!content.trim() && !attachment) return;
+        if (!content.trim() && (!attachments || attachments.length === 0)) return;
+
+        // One send is one message, however many files it carries. This used to
+        // fan out into N messages — the first with the text, the rest with
+        // empty content — which is why a batch of photos never grouped, and
+        // why every optimistic row in the batch was created in the same tick.
         onSubmit({
           content,
-          attachment,
+          attachments: attachments ?? [],
           alsoSendToParent: Boolean(options?.alsoSendToParent),
         });
       },
@@ -126,5 +132,3 @@ export const MessageInput = forwardRef<ChannelInputRef, MessageInputProps>(
     );
   },
 );
-
-export default MessageInput;

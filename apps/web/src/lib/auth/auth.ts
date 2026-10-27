@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
-import { authenticateSessionRequest, isAuthError } from './index';
+import { authenticateSessionRequest, isAuthError, type SessionAuthResult } from './index';
+import { SESSION_TOKEN_PREFIX } from './token-prefixes';
 import { validateAdminAccess, type AdminValidationResult } from './admin-role';
 import { validateCSRF } from './csrf-validation';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 export interface VerifiedUser {
+  authentication?: SessionAuthResult['authentication'];
   id: string;
   role: 'user' | 'admin';
   tokenVersion: number;
@@ -25,10 +27,11 @@ export async function verifyAuth(request: Request): Promise<VerifiedUser | null>
   }
 
   const authHeader = request.headers.get('authorization');
-  const hasSessionBearerToken = authHeader?.startsWith('Bearer ps_sess_') ?? false;
+  const hasSessionBearerToken = authHeader?.startsWith(`Bearer ${SESSION_TOKEN_PREFIX}`) ?? false;
 
   return {
     id: result.userId,
+    authentication: result.authentication,
     role: result.role,
     tokenVersion: result.tokenVersion,
     adminRoleVersion: result.adminRoleVersion,

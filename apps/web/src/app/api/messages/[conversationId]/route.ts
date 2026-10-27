@@ -2,18 +2,95 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { createOrUpdateMessageNotification } from '@pagespace/lib/notifications/notifications'
+import { createOrUpdateMessageNotification, markDmConversationNotificationsRead } from '@pagespace/lib/notifications/notifications'
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
+import { buildLastMessagePreview } from '@pagespace/lib/services/message-derived-state';
 import { attachQuotedMessages } from '@pagespace/lib/services/quote-enrichment';
 import { broadcastInboxEvent, broadcastThreadReplyCountUpdated } from '@/lib/websocket/socket-utils';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { extractMentionedUserIds } from '@/lib/channels/extract-user-mentions';
-import type { AttachmentMeta } from '@pagespace/lib/types';
+import { MAX_MESSAGE_ATTACHMENTS, parseMessageAttachments } from '@pagespace/lib/services/attachment-upload-core';
+import { isBlockedBetween } from '@/lib/repositories/user-block-repository';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+/**
+ * Shared error mapping for the two attachment-validation call sites (the
+ * thread-reply and top-level insert discriminated results) — both surface
+ * the same rejection kinds against the same attachments/conversationId pair,
+ * just from different call shapes.
+ */
+function attachmentValidationErrorResponse(
+  request: Request,
+  kind: 'not_found' | 'wrong_owner' | 'not_linked' | 'too_many_attachments',
+  ctx: { userId: string; fileIds: string[]; conversationId: string }
+): NextResponse {
+  if (kind === 'not_found') {
+    return NextResponse.json({ error: 'File not found' }, { status: 404 });
+  }
+  if (kind === 'too_many_attachments') {
+    return NextResponse.json(
+      { error: `A message may carry at most ${MAX_MESSAGE_ATTACHMENTS} attachments` },
+      { status: 400 }
+    );
+  }
+  const isOwnerMismatch = kind === 'wrong_owner';
+  auditRequest(request, {
+    eventType: 'authz.access.denied',
+    userId: ctx.userId,
+    resourceType: 'dm_message',
+    // Only name a resource when the request referenced exactly one, since the
+    // repository reports which CHECK failed but not which file failed it.
+    // Pinning resourceId to attachments[0] on a batch would put an innocent
+    // file's id in a security audit record; the full list below is the honest
+    // statement of what the denied request referenced.
+    resourceId: ctx.fileIds.length === 1 ? ctx.fileIds[0] : undefined,
+    details: {
+      reason: isOwnerMismatch ? 'file_owner_mismatch' : 'file_not_linked_to_conversation',
+      conversationId: ctx.conversationId,
+      fileIds: ctx.fileIds,
+    },
+  });
+  return NextResponse.json(
+    { error: isOwnerMismatch ? 'You do not own this file' : 'File is not linked to this conversation' },
+    { status: 403 }
+  );
+}
+
+/**
+ * Shared by the GET side-effect and the explicit PATCH.
+ *
+ * The notification clear runs on every call, independent of `markedCount` — a
+ * NEW_DIRECT_MESSAGE notification can be unread even when its underlying
+ * message row was already marked read (e.g. by a build predating this fix),
+ * so gating the clear on `markedCount` would leave it orphaned forever.
+ *
+ * The inbox broadcast stays gated on `markedCount > 0` — a no-op poll must
+ * not emit socket traffic (GET-path noise) — and runs AFTER the notification
+ * write resolves, so a listener like `useSidebarBadges` that revalidates on
+ * this event observes the post-write state rather than racing it.
+ */
+async function markDmConversationReadAndNotify(
+  userId: string,
+  conversationId: string,
+  markedCount: number
+): Promise<number> {
+  const notificationsMarkedRead = await markDmConversationNotificationsRead(userId, conversationId);
+
+  if (markedCount > 0) {
+    await broadcastInboxEvent(userId, {
+      operation: 'read_status_changed',
+      type: 'dm',
+      id: conversationId,
+      unreadCount: 0,
+    });
+  }
+
+  return notificationsMarkedRead;
+}
 
 // GET /api/messages/[conversationId] - Get messages in a conversation
 export async function GET(
@@ -137,7 +214,7 @@ export async function GET(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -150,6 +227,8 @@ export async function GET(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     // Show oldest first in the response payload.
     messages.reverse();
 
@@ -159,7 +238,7 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'message', resourceId: conversationId });
 
-    return NextResponse.json({ messages: enriched });
+    return NextResponse.json({ messages: enriched, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error fetching messages:', error as Error);
     return NextResponse.json(
@@ -167,34 +246,6 @@ export async function GET(
       { status: 500 }
     );
   }
-}
-
-function isValidAttachmentMeta(value: unknown): value is AttachmentMeta {
-  if (typeof value !== 'object' || value === null) return false;
-  const m = value as Record<string, unknown>;
-  return (
-    typeof m.originalName === 'string' &&
-    typeof m.size === 'number' &&
-    typeof m.mimeType === 'string' &&
-    typeof m.contentHash === 'string'
-  );
-}
-
-function buildLastMessagePreview(
-  content: string,
-  attachmentMeta: AttachmentMeta | null
-): string {
-  const trimmed = content.trim();
-  if (trimmed.length > 0) {
-    return trimmed.length > 100 ? trimmed.substring(0, 100) + '...' : trimmed;
-  }
-  if (attachmentMeta) {
-    const isImage = attachmentMeta.mimeType.startsWith('image/');
-    return isImage
-      ? `[image: ${attachmentMeta.originalName}]`
-      : `[file: ${attachmentMeta.originalName}]`;
-  }
-  return '';
 }
 
 // POST /api/messages/[conversationId] - Send a message
@@ -226,42 +277,39 @@ export async function POST(
       parentId?: unknown;
       alsoSendToParent?: unknown;
       quotedMessageId?: unknown;
+      attachments?: unknown;
+      clientNonce?: unknown;
     };
 
     const rawContent = typeof body.content === 'string' ? body.content : '';
     const content = rawContent.trim().length > 0 ? rawContent : '';
-    const fileId = typeof body.fileId === 'string' && body.fileId.length > 0 ? body.fileId : null;
-    const rawAttachmentMeta = body.attachmentMeta ?? null;
+    const clientNonce = typeof body.clientNonce === 'string' ? body.clientNonce : undefined;
+
+    // Accepts the new attachments array and the legacy singular fileId +
+    // attachmentMeta pair, so the published SDK and CLI keep working.
+    const parsedAttachments = parseMessageAttachments(body);
+    if (parsedAttachments.kind === 'invalid') {
+      return NextResponse.json({ error: parsedAttachments.error }, { status: 400 });
+    }
+    const attachments = parsedAttachments.attachments;
+    const attachmentFileIds = attachments.map((attachment) => attachment.fileId);
+
     const trimmedParent = typeof body.parentId === 'string' ? body.parentId.trim() : '';
     const parentId = trimmedParent.length > 0 ? trimmedParent : null;
     const alsoSendToParent = body.alsoSendToParent === true;
     const trimmedQuoted = typeof body.quotedMessageId === 'string' ? body.quotedMessageId.trim() : '';
     const quotedMessageId = trimmedQuoted.length > 0 ? trimmedQuoted : null;
 
-    if (content.length === 0 && !fileId) {
+    if (content.length === 0 && attachments.length === 0) {
       return NextResponse.json(
         { error: 'Message content or file is required' },
         { status: 400 }
       );
     }
 
-    if (fileId && rawAttachmentMeta === null) {
-      return NextResponse.json(
-        { error: 'attachmentMeta required when fileId is provided' },
-        { status: 400 }
-      );
-    }
-
-    let attachmentMeta: AttachmentMeta | null = null;
-    if (fileId) {
-      if (!isValidAttachmentMeta(rawAttachmentMeta)) {
-        return NextResponse.json(
-          { error: 'Invalid attachmentMeta shape' },
-          { status: 400 }
-        );
-      }
-      attachmentMeta = rawAttachmentMeta;
-    }
+    // Preview/notification payloads below describe the whole batch, so a
+    // five-photo DM reads "[5 images]" rather than one arbitrary filename.
+    const attachmentMetas = attachments.map((a) => a.attachmentMeta);
 
     const conversation = await dmMessageRepository.findConversationForParticipant(
       conversationId,
@@ -275,42 +323,13 @@ export async function POST(
       );
     }
 
-    if (fileId) {
-      const validation = await dmMessageRepository.validateAttachmentForDm({
-        fileId,
-        conversationId,
-        senderId: userId,
-      });
-
-      if (validation.kind === 'not_found') {
-        return NextResponse.json({ error: 'File not found' }, { status: 404 });
-      }
-      if (validation.kind === 'wrong_owner') {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId,
-          resourceType: 'dm_message',
-          resourceId: fileId,
-          details: { reason: 'file_owner_mismatch', conversationId },
-        });
-        return NextResponse.json(
-          { error: 'You do not own this file' },
-          { status: 403 }
-        );
-      }
-      if (validation.kind === 'not_linked') {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId,
-          resourceType: 'dm_message',
-          resourceId: fileId,
-          details: { reason: 'file_not_linked_to_conversation', conversationId },
-        });
-        return NextResponse.json(
-          { error: 'File is not linked to this conversation' },
-          { status: 403 }
-        );
-      }
+    // A block stops messages in a conversation that already exists, not only the
+    // creation of a new one (App Review Guideline 1.2).
+    const otherParticipantId = conversation.participant1Id === userId
+      ? conversation.participant2Id
+      : conversation.participant1Id;
+    if (await isBlockedBetween(userId, otherParticipantId)) {
+      return NextResponse.json({ error: 'You can\'t message this user' }, { status: 403 });
     }
 
     // Quote-reply validation. Quotes are top-level only — the quoted DM must
@@ -349,11 +368,22 @@ export async function POST(
         conversationId,
         senderId: userId,
         content,
-        fileId,
-        attachmentMeta,
+        attachments,
         alsoSendToParent,
       });
 
+      if (
+        result.kind === 'not_found' ||
+        result.kind === 'wrong_owner' ||
+        result.kind === 'not_linked' ||
+        result.kind === 'too_many_attachments'
+      ) {
+        return attachmentValidationErrorResponse(request, result.kind, {
+          userId,
+          fileIds: attachmentFileIds,
+          conversationId,
+        });
+      }
       if (result.kind === 'parent_not_found') {
         return NextResponse.json({ error: 'Parent message not found' }, { status: 404 });
       }
@@ -371,17 +401,20 @@ export async function POST(
         resourceId: result.reply.id,
       });
 
-      // Mirror row, when present, behaves as a top-level message — it should
-      // bump the conversation preview/inbox just like a regular send. The
-      // thread-only reply does NOT touch the inbox preview here; PR 5 wires
-      // the inbox bump for thread followers separately.
+      // insertDmThreadReply returns the bare inserted row, so — as on the
+      // top-level path — the attachment rows have to be put back on before
+      // the payload goes out over the socket or the response.
+      const replyPayload = { ...result.reply, attachments: result.replyAttachments };
+
+      // Mirror row, when present, behaves as a top-level message — it bumps
+      // the conversation preview/inbox just like a regular send.
+      // insertDmThreadReply already recomputed the stored preview from the
+      // mirror row (#2153); this local copy is only for the
+      // notification/broadcast payloads below. The thread-only reply does
+      // NOT touch the inbox preview here; PR 5 wires the inbox bump for
+      // thread followers separately.
       if (result.mirror) {
-        const previewSource = buildLastMessagePreview(content, attachmentMeta);
-        await dmMessageRepository.updateConversationLastMessage({
-          conversationId,
-          lastMessageAt: result.mirror.createdAt,
-          lastMessagePreview: previewSource,
-        });
+        const previewSource = buildLastMessagePreview(content, attachmentMetas);
 
         const recipientId = conversation.participant1Id === userId
           ? conversation.participant2Id
@@ -400,7 +433,7 @@ export async function POST(
           id: conversationId,
           lastMessageAt: result.mirror.createdAt.toISOString(),
           lastMessagePreview: previewSource,
-          attachmentMeta,
+          attachmentMeta: attachmentMetas[0] ?? null,
         });
       }
 
@@ -413,7 +446,11 @@ export async function POST(
           const threadBody = JSON.stringify({
             channelId: `dm:${conversationId}`,
             event: 'new_dm_message',
-            payload: result.reply,
+            // clientNonce rides the wire only — never a column. It lets the
+            // sender retire exactly its own optimistic row instead of guessing
+            // from (content, fileId), which cannot tell two attachment-only
+            // messages apart.
+            payload: { ...replyPayload, ...(clientNonce ? { clientNonce } : {}) },
           });
           await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
             method: 'POST',
@@ -426,7 +463,9 @@ export async function POST(
             const mirrorBody = JSON.stringify({
               channelId: `dm:${conversationId}`,
               event: 'new_dm_message',
-              payload: result.mirror,
+              // A different row than the one optimistically inserted, so it
+              // deliberately carries no nonce.
+              payload: { ...result.mirror, attachments: result.mirrorAttachments },
             });
             await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
               method: 'POST',
@@ -452,7 +491,7 @@ export async function POST(
       // mention" path is rare but kept for symmetry. Failures are logged and
       // swallowed; the DB commit is durable.
       try {
-        const previewSource = buildLastMessagePreview(content, attachmentMeta);
+        const previewSource = buildLastMessagePreview(content, attachmentMetas);
         const replyCreatedAt = result.lastReplyAt.toISOString();
         const replySender = {
           id: userId,
@@ -507,7 +546,7 @@ export async function POST(
                 id: conversationId,
                 lastMessageAt: replyCreatedAt,
                 lastMessagePreview: previewSource,
-                attachmentMeta,
+                attachmentMeta: attachmentMetas[0] ?? null,
               })
             )
           );
@@ -516,17 +555,40 @@ export async function POST(
         loggers.realtime.error('Failed to broadcast DM thread inbox update:', error as Error);
       }
 
-      return NextResponse.json({ message: result.reply });
+      return NextResponse.json({
+        message: { ...replyPayload, ...(clientNonce ? { clientNonce } : {}) },
+      });
     }
 
-    const baseMessage = await dmMessageRepository.insertDmMessage({
+    // Validates the attachment (if any) and inserts the message atomically —
+    // see insertDmMessageWithAttachment's doc comment for why the split
+    // validate-then-insert this replaces was unsafe.
+    const insertResult = await dmMessageRepository.insertDmMessageWithAttachment({
       conversationId,
       senderId: userId,
       content,
-      fileId,
-      attachmentMeta,
+      attachments,
       quotedMessageId,
     });
+
+    if (insertResult.kind !== 'ok') {
+      return attachmentValidationErrorResponse(request, insertResult.kind, {
+        userId,
+        fileIds: attachmentFileIds,
+        conversationId,
+      });
+    }
+
+    // The insert returns the bare row, so — unlike the channel route, which
+    // re-loads through the shared `with` clause — the attachment rows have to
+    // be put back on by hand here. Without this the recipient's socket payload
+    // would carry an empty bubble until they refreshed.
+    //
+    // These rows carry no joined `file`, and deliberately so: every field the
+    // renderer needs (mime type, size, name) is in attachmentMeta, and
+    // re-reading each file to populate a relation nothing reads would add a
+    // round trip after the commit for no gain.
+    const baseMessage = { ...insertResult.message, attachments: insertResult.attachments };
     // Enrich with the quote snapshot so the realtime payload and the JSON
     // response carry the same denormalized shape the GET list returns.
     const [newMessage] = await attachQuotedMessages([baseMessage], 'dm');
@@ -538,13 +600,10 @@ export async function POST(
       resourceId: newMessage.id,
     });
 
-    const messagePreview = buildLastMessagePreview(content, attachmentMeta);
-
-    await dmMessageRepository.updateConversationLastMessage({
-      conversationId,
-      lastMessageAt: newMessage.createdAt,
-      lastMessagePreview: messagePreview,
-    });
+    // insertDmMessageWithAttachment already recomputed the stored preview
+    // (#2153); this local copy is only for the notification/broadcast
+    // payloads below.
+    const messagePreview = buildLastMessagePreview(content, attachmentMetas);
 
     const recipientId = conversation.participant1Id === userId
       ? conversation.participant2Id
@@ -564,7 +623,7 @@ export async function POST(
         const requestBody = JSON.stringify({
           channelId: `dm:${conversationId}`,
           event: 'new_dm_message',
-          payload: newMessage,
+          payload: clientNonce ? { ...newMessage, clientNonce } : newMessage,
         });
 
         await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
@@ -584,7 +643,7 @@ export async function POST(
       id: conversationId,
       lastMessageAt: newMessage.createdAt.toISOString(),
       lastMessagePreview: messagePreview,
-      attachmentMeta,
+      attachmentMeta: attachmentMetas[0] ?? null,
     });
 
     auditRequest(request, {
@@ -594,7 +653,9 @@ export async function POST(
       resourceId: conversationId,
     });
 
-    return NextResponse.json({ message: newMessage });
+    return NextResponse.json({
+      message: clientNonce ? { ...newMessage, clientNonce } : newMessage,
+    });
   } catch (error) {
     loggers.api.error('Error sending message:', error as Error);
     return NextResponse.json(
@@ -633,7 +694,7 @@ export async function PATCH(
       : conversation.participant1Id;
 
     const readAt = new Date();
-    await Promise.all([
+    const [markedCount] = await Promise.all([
       dmMessageRepository.markActiveMessagesRead({
         conversationId,
         otherUserId,
@@ -646,9 +707,11 @@ export async function PATCH(
       }),
     ]);
 
+    const notificationsMarkedRead = await markDmConversationReadAndNotify(userId, conversationId, markedCount);
+
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'message', resourceId: conversationId, details: { operation: 'mark_read' } });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, notificationsMarkedRead });
   } catch (error) {
     loggers.api.error('Error marking messages as read:', error as Error);
     return NextResponse.json(

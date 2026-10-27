@@ -1,12 +1,18 @@
 import path from 'path';
 import fs from 'fs';
 
+import type { NorthwindSeed } from './northwind';
+
 export interface SeedState {
   userId: string;
   driveId: string;
+  /** Northwind Labs fixture ids (Sequence Spec Part 2); absent only in seed files written before lane A4. */
+  northwind?: NorthwindSeed;
 }
 
-function loadSeedState(): SeedState {
+let cachedSeedState: SeedState | null = null;
+
+export function loadSeedState(): SeedState {
   const filePath = path.resolve(__dirname, '../.seed-state.json');
   if (!fs.existsSync(filePath)) {
     throw new Error('.seed-state.json not found — did global-setup run?');
@@ -18,4 +24,7 @@ function loadSeedState(): SeedState {
   return parsed as SeedState;
 }
 
-export const seedState: SeedState = loadSeedState();
+export function getSeedState(): SeedState {
+  cachedSeedState ??= loadSeedState();
+  return cachedSeedState;
+}

@@ -127,8 +127,15 @@ describe('POST /api/auth/apple/signin', () => {
 
       expect(response.status).toBe(400);
       expect(body.errors.platform).toEqual([
-        'Invalid option: expected one of "web"|"desktop"|"ios"',
+        'Invalid option: expected one of "web"|"desktop"|"ios"|"android"',
       ]);
+    });
+
+    it('accepts android as a platform', async () => {
+      const request = createPostRequest({ platform: 'android' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
     });
 
     it('accepts valid optional fields', async () => {

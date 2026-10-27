@@ -1,0 +1,266 @@
+import { describe, it, expect } from 'vitest';
+import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from '../sandbox-eligibility-by-drive';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+
+/** An actor who can edit everywhere it matters — the default for payer-tier-focused cases. */
+function editorOf(...driveIds: string[]) {
+  return { userId: 'requester-1', editableDriveIds: new Set(driveIds), codeExecutionEnabled: true };
+}
+
+describe('computeSandboxEligibilityByDrive', () => {
+  it('marks a drive eligible when its owner is on a paying tier and the requester can edit it', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(true);
+  });
+
+  it("WAL-9 (partial) marks an ORG drive eligible on the org's tier even when its lead is free-tier — the org pays", () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
+      [{ id: 'owner-1', subscriptionTier: 'free' }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(true);
+  });
+
+  it("SEAT-9 (partial) WAL-8 (partial) a LAPSED org's drive advertises no sandbox, whatever its lead's plan (review #2761)", () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }, { id: 'drive-2', ownerId: 'owner-1', orgId: 'org-paid' }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      editorOf('drive-1', 'drive-2'),
+      new Set(['org-northwind']),
+    );
+    expect(result.get('drive-1')).toBe(false);
+    expect(result.get('drive-2')).toBe(true);
+  });
+
+  it('WAL-9 (partial) an ORG drive still needs the requester to hold edit access', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: 'org-northwind' }],
+      [{ id: 'owner-1', subscriptionTier: 'free' }],
+      editorOf('some-other-drive'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it('marks a drive ineligible when its owner is free-tier', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier: 'free' }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it.each(['business', 'founder'])('does not grant personal sandbox access for retired %s rows', (subscriptionTier) => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it('defaults to free (ineligible) when the owner row is missing entirely', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-missing', orgId: null }],
+      [],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it('coerces an unrecognized/malformed tier string to free (ineligible), never throws', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier: 'not-a-real-tier' }],
+      editorOf('drive-1'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it('marks a Pro drive ineligible for a VIEWER-role requester — payer tier alone must not advertise shell affordances (review #2326)', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it("treats the requester's OWN drive as editable without a membership row", () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'requester-1', orgId: null }],
+      [{ id: 'requester-1', subscriptionTier: 'pro' }],
+      { userId: 'requester-1', editableDriveIds: new Set(), codeExecutionEnabled: true },
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(true);
+  });
+
+  it('marks everything ineligible while the code-execution kill switch is off', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [{ id: 'drive-1', ownerId: 'owner-1', orgId: null }],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      { userId: 'requester-1', editableDriveIds: new Set(['drive-1']), codeExecutionEnabled: false },
+      new Set<string>(),
+    );
+    expect(result.get('drive-1')).toBe(false);
+  });
+
+  it('resolves each drive independently — a free-tier owner does not poison a co-owned Pro drive, or vice versa', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [
+        { id: 'drive-free', ownerId: 'owner-free', orgId: null },
+        { id: 'drive-pro', ownerId: 'owner-pro', orgId: null },
+      ],
+      [
+        { id: 'owner-free', subscriptionTier: 'free' },
+        { id: 'owner-pro', subscriptionTier: 'pro' },
+      ],
+      editorOf('drive-free', 'drive-pro'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-free')).toBe(false);
+    expect(result.get('drive-pro')).toBe(true);
+  });
+
+  it('dedupes correctly when several drives share the same owner — one owner row covers them all', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [
+        { id: 'drive-a', ownerId: 'owner-1', orgId: null },
+        { id: 'drive-b', ownerId: 'owner-1', orgId: null },
+        { id: 'drive-c', ownerId: 'owner-1', orgId: null },
+      ],
+      [{ id: 'owner-1', subscriptionTier: 'pro' }],
+      editorOf('drive-a', 'drive-b', 'drive-c'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-a')).toBe(true);
+    expect(result.get('drive-b')).toBe(true);
+    expect(result.get('drive-c')).toBe(true);
+  });
+
+  it('mixes the axes per drive — editable Pro yes, viewer Pro no, editable Free no', () => {
+    const result = computeSandboxEligibilityByDrive(
+      [
+        { id: 'drive-editable-pro', ownerId: 'owner-pro', orgId: null },
+        { id: 'drive-viewer-pro', ownerId: 'owner-pro', orgId: null },
+        { id: 'drive-editable-free', ownerId: 'owner-free', orgId: null },
+      ],
+      [
+        { id: 'owner-pro', subscriptionTier: 'pro' },
+        { id: 'owner-free', subscriptionTier: 'free' },
+      ],
+      editorOf('drive-editable-pro', 'drive-editable-free'),
+      new Set<string>(),
+    );
+    expect(result.get('drive-editable-pro')).toBe(true);
+    expect(result.get('drive-viewer-pro')).toBe(false);
+    expect(result.get('drive-editable-free')).toBe(false);
+  });
+
+  it('given no drives at all, returns an empty map', () => {
+    const result = computeSandboxEligibilityByDrive([], [], editorOf(), new Set<string>());
+    expect(result.size).toBe(0);
+  });
+});
+
+describe('resolveEditableDriveIds', () => {
+  const member = (driveId: string, role: string, customRoleId: string | null = null, openDriveFloor: 'view' | 'edit' | null = null) =>
+    ({ driveId, role, customRoleId, openDriveFloor });
+
+  it('grants plain MEMBER and ADMIN memberships', () => {
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER'), member('d2', 'ADMIN')], []);
+    expect(result).toEqual(new Set(['d1', 'd2']));
+  });
+
+  it('bounds a MEMBER by their custom role: drive-wide canEdit must be explicitly true (codex round 13)', () => {
+    const roles = [
+      { id: 'r-yes', driveId: 'd1', driveWidePermissions: { canEdit: true } },
+      { id: 'r-no', driveId: 'd2', driveWidePermissions: { canEdit: false } },
+      { id: 'r-none', driveId: 'd3', driveWidePermissions: null },
+    ];
+    const result = resolveEditableDriveIds(
+      [member('d1', 'MEMBER', 'r-yes'), member('d2', 'MEMBER', 'r-no'), member('d3', 'MEMBER', 'r-none')],
+      roles,
+    );
+    expect(result).toEqual(new Set(['d1']));
+  });
+
+  it('fails closed on an unresolvable custom role', () => {
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER', 'r-stale')], []);
+    expect(result).toEqual(new Set());
+  });
+
+  it('never applies a role outside its own drive', () => {
+    // The role grants edit, but for a DIFFERENT drive than the membership's.
+    const roles = [{ id: 'r1', driveId: 'other-drive', driveWidePermissions: { canEdit: true } }];
+    const result = resolveEditableDriveIds([member('d1', 'MEMBER', 'r1')], roles);
+    expect(result).toEqual(new Set());
+  });
+
+  it('lets an ADMIN bypass their custom role', () => {
+    const roles = [{ id: 'r-no', driveId: 'd1', driveWidePermissions: { canEdit: false } }];
+    const result = resolveEditableDriveIds([member('d1', 'ADMIN', 'r-no')], roles);
+    expect(result).toEqual(new Set(['d1']));
+  });
+
+  it('POL-6 (partial) an implicit Open-drive member edits drive-wide under an edit floor, whatever the default role grants; a view floor adds no edit', () => {
+    const roles = [{ id: 'r-view', driveId: 'd1', driveWidePermissions: { canEdit: false } }];
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', 'edit')], roles)).toEqual(new Set(['d1']));
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-stale', 'edit')], [])).toEqual(new Set(['d1']));
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', 'view')], roles)).toEqual(new Set());
+    expect(resolveEditableDriveIds([member('d1', 'MEMBER', 'r-view', null)], roles)).toEqual(new Set());
+  });
+});
+
+describe('membershipRowsOf (B7c)', () => {
+  const rel = (
+    role: 'OWNER' | 'ADMIN' | 'MEMBER',
+    customRoleId: string | null = null,
+    source: 'invite' | 'org' = 'invite',
+    openDriveFloor: 'view' | 'edit' | null = null,
+  ): DriveRelationship => ({
+    isOwner: false,
+    membership: { role, customRoleId, source, auditOrgAdminPrivateAccess: false, openDriveFloor },
+  });
+
+  it('ORG-4 (partial) DRV-5 (partial) X-6 (partial) turns the org-aware relationships into the membership rows the edit rule reads: an org Admin is ADMIN, an implicit Open member carries the default role, a stale org row and the lead yield no row', () => {
+    const relationships = new Map<string, DriveRelationship>([
+      ['finance', rel('ADMIN', null, 'org')],
+      ['product', rel('MEMBER', 'default-role', 'org', 'edit')],
+      ['research', { isOwner: false, membership: null }],
+      ['led', { isOwner: true, membership: null }],
+    ]);
+
+    expect(membershipRowsOf(relationships)).toEqual([
+      { driveId: 'finance', role: 'ADMIN', customRoleId: null, openDriveFloor: null },
+      { driveId: 'product', role: 'MEMBER', customRoleId: 'default-role', openDriveFloor: 'edit' },
+    ]);
+  });
+
+  it('the implicit member\'s default role then bounds drive-wide edit exactly like an explicit custom role', () => {
+    // Under the view floor (the default) a view-only default role grants no drive-wide edit.
+    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org', 'view')]]));
+    const editable = resolveEditableDriveIds(rows, [{ id: 'viewer', driveId: 'product', driveWidePermissions: { canEdit: false } }]);
+    expect(editable).toEqual(new Set());
+  });
+
+  it('POL-6 (partial) the implicit member\'s org floor reaches the edit rule: an edit floor lifts a view-only default role', () => {
+    const rows = membershipRowsOf(new Map([['product', rel('MEMBER', 'viewer', 'org', 'edit')]]));
+    const editable = resolveEditableDriveIds(rows, [{ id: 'viewer', driveId: 'product', driveWidePermissions: { canEdit: false } }]);
+    expect(editable).toEqual(new Set(['product']));
+  });
+});

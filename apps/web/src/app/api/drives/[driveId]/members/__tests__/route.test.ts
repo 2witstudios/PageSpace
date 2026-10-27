@@ -14,12 +14,17 @@ import type { DriveAccessResult, MemberWithDetails } from '@pagespace/lib/servic
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
   listDriveMembers: vi.fn(),
+  getDriveOwnerAsMember: vi.fn(),
 }));
 
 vi.mock('@/lib/repositories/drive-invite-repository', () => ({
   driveInviteRepository: {
     findUnconsumedInvitesByDrive: vi.fn().mockResolvedValue([]),
   },
+}));
+
+vi.mock('@pagespace/lib/permissions/drive-member-labels', () => ({
+  listDrivePageLinkGuests: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -37,13 +42,16 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 import { GET } from '../route';
-import { checkDriveAccess, listDriveMembers } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { listDrivePageLinkGuests } from '@pagespace/lib/permissions/drive-member-labels';
 
 // ============================================================================
 // Test Fixtures
@@ -76,6 +84,16 @@ const createDriveFixture = (overrides: {
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({
@@ -94,6 +112,8 @@ const createMemberFixture = (overrides: {
   id: overrides.id,
   userId: overrides.userId,
   role: overrides.role,
+  source: 'invite',
+  isGuest: false,
   invitedBy: null,
   invitedAt: new Date('2024-01-01'),
   acceptedAt: new Date('2024-01-01'),
@@ -116,6 +136,30 @@ const createMemberFixture = (overrides: {
   },
 });
 
+const createOwnerMemberFixture = (userId: string): MemberWithDetails => ({
+  id: `owner-${userId}`,
+  userId,
+  role: 'OWNER',
+  source: 'lead',
+  isGuest: false,
+  invitedBy: null,
+  invitedAt: null,
+  acceptedAt: null,
+  lastAccessedAt: null,
+  user: {
+    id: userId,
+    email: `${userId}@example.com`,
+    name: `User ${userId}`,
+  },
+  profile: {
+    username: userId,
+    displayName: `User ${userId}`,
+    avatarUrl: null,
+  },
+  customRole: null,
+  permissionCounts: { view: 0, edit: 0, share: 0 },
+});
+
 const createContext = (driveId: string) => ({
   params: Promise.resolve({ driveId }),
 });
@@ -132,7 +176,9 @@ describe('GET /api/drives/[driveId]/members', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
     vi.mocked(driveInviteRepository.findUnconsumedInvitesByDrive).mockResolvedValue([]);
+    vi.mocked(getDriveOwnerAsMember).mockResolvedValue(null);
   });
 
   describe('authentication', () => {
@@ -161,7 +207,7 @@ describe('GET /api/drives/[driveId]/members', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -206,7 +252,7 @@ describe('GET /api/drives/[driveId]/members', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveMembers with driveId', async () => {
@@ -329,18 +375,97 @@ describe('GET /api/drives/[driveId]/members', () => {
     });
   });
 
+  // ==========================================================================
+  // Owner inclusion + unaccepted-invitee exclusion — regression coverage for
+  // #1771: the owner has no drive_members row, and pending invites must not
+  // be indistinguishable from accepted members.
+  // ==========================================================================
+  describe('owner inclusion and unaccepted-invitee exclusion', () => {
+    it('prepends the OWNER, who has no drive_members row, ahead of regular members', async () => {
+      const owner = createOwnerMemberFixture('owner_1');
+      const admin = createMemberFixture({ id: 'mem_1', userId: 'user_456', role: 'ADMIN' });
+
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: false,
+        isAdmin: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'owner_1' }),
+      }));
+      vi.mocked(listDriveMembers).mockResolvedValue([admin]);
+      vi.mocked(getDriveOwnerAsMember).mockResolvedValue(owner);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.members).toHaveLength(2);
+      expect(body.members[0]).toMatchObject({ userId: 'owner_1', role: 'OWNER' });
+      expect(body.members[1]).toMatchObject({ userId: 'user_456', role: 'ADMIN' });
+    });
+
+    it('excludes drive_members rows without acceptedAt (pending invites are not members)', async () => {
+      const owner = createOwnerMemberFixture('owner_1');
+      const accepted = createMemberFixture({ id: 'mem_1', userId: 'user_456', role: 'MEMBER' });
+      const unaccepted = { ...createMemberFixture({ id: 'mem_2', userId: 'user_789', role: 'MEMBER' }), acceptedAt: null };
+
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'owner_1' }),
+      }));
+      vi.mocked(listDriveMembers).mockResolvedValue([accepted, unaccepted]);
+      vi.mocked(getDriveOwnerAsMember).mockResolvedValue(owner);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      const userIds = body.members.map((m: { userId: string }) => m.userId);
+      expect(userIds).toEqual(['owner_1', 'user_456']);
+      expect(userIds).not.toContain('user_789');
+    });
+
+    it('does not double-count the owner if they also have an accepted drive_members row', async () => {
+      const owner = createOwnerMemberFixture('owner_1');
+      const ownerAsMemberRow = createMemberFixture({ id: 'mem_owner', userId: 'owner_1', role: 'OWNER' });
+      const regular = createMemberFixture({ id: 'mem_1', userId: 'user_456', role: 'MEMBER' });
+
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'owner_1' }),
+      }));
+      vi.mocked(listDriveMembers).mockResolvedValue([ownerAsMemberRow, regular]);
+      vi.mocked(getDriveOwnerAsMember).mockResolvedValue(owner);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      const ownerEntries = body.members.filter((m: { userId: string }) => m.userId === 'owner_1');
+      expect(ownerEntries).toHaveLength(1);
+    });
+  });
+
   describe('pendingInvites field', () => {
     const samplePending = [{
       id: 'inv_1',
       email: 'invitee@example.com',
       role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      customRoleColor: null,
       driveId: 'drive_abc',
       invitedByName: 'Alice',
       createdAt: new Date('2024-02-01'),
-      expiresAt: new Date('2024-02-03'),
+      expiresAt: new Date('2024-02-03') as Date | null,
     }];
 
     it('returns populated pendingInvites for OWNER', async () => {
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true, isMember: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
@@ -363,6 +488,7 @@ describe('GET /api/drives/[driveId]/members', () => {
     });
 
     it('returns populated pendingInvites for ADMIN', async () => {
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: false, isAdmin: true, isMember: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
@@ -375,6 +501,21 @@ describe('GET /api/drives/[driveId]/members', () => {
       const body = await response.json();
 
       expect(body.pendingInvites).toHaveLength(1);
+    });
+
+    it('UI-5 (partial) the lead sees D-OW-24 page-link guests listed apart, by name; a plain member gets an empty list', async () => {
+      const pia = { userId: 'u-pia', displayName: 'Pia Page', username: null, avatarUrl: null, acceptedAt: null, source: 'invite' as const, pageGrantCount: 1, pages: [{ pageId: 'p-roadmap', title: 'Roadmap', role: 'view' as const, expiresAt: null }] };
+      vi.mocked(listDrivePageLinkGuests).mockResolvedValue([pia]);
+      vi.mocked(listDriveMembers).mockResolvedValue([]);
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: true, isMember: true, drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }) }));
+      const lead = await (await GET(new Request(`https://example.com/api/drives/${mockDriveId}/members`), createContext(mockDriveId))).json();
+      expect(lead.guests).toEqual([pia]);
+
+      vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ isOwner: false, isAdmin: false, isMember: true, drive: createDriveFixture({ id: mockDriveId, name: 'Test' }) }));
+      const member = await (await GET(new Request(`https://example.com/api/drives/${mockDriveId}/members`), createContext(mockDriveId))).json();
+      expect(member.guests).toEqual([]);
     });
 
     it('returns empty pendingInvites for regular MEMBER (no leak)', async () => {

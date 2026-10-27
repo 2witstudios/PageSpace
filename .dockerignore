@@ -10,6 +10,8 @@ pnpm-debug.log*
 .pnpm-store/
 **/.pnpm-store
 **/.pnpm-store/
+bun.lockb
+.bun/
 
 # Build outputs
 .next/
@@ -22,6 +24,8 @@ dist/
 **/dist/
 .turbo/
 **/.turbo/
+# Marketing hero variants: the image build encodes its own, never a local copy
+apps/marketing/public/_marketing/hero/
 
 # Internal package builds are needed by some Docker builds (e.g. Next.js subpath exports)
 !packages/**/dist/
@@ -109,9 +113,12 @@ pids/
 # Documentation (not needed in container)
 docs/
 
-# Non-server apps (not needed for these images)
-apps/desktop/
-apps/ios/
+# Non-server apps (not needed for these images) — exclude contents but keep package.json
+# so bun sees a complete workspace during --frozen-lockfile install
+apps/desktop/**
+!apps/desktop/package.json
+apps/ios/**
+!apps/ios/package.json
 
 # Docker files themselves
 Dockerfile*

@@ -58,6 +58,7 @@ describe('activityLogRepository.anonymizeForUser', () => {
     expect(setFn).toHaveBeenCalledWith({
       actorEmail: 'anon@anonymized.invalid',
       actorDisplayName: 'Deleted User',
+      resourceTitle: null,
     });
   });
 

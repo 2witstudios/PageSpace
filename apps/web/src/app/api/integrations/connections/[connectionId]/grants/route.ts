@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getConnectionById } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { listGrantsByConnection } from '@pagespace/lib/integrations/repositories/grant-repository';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -17,6 +19,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
   if (isAuthError(auth)) return auth.error;
@@ -34,9 +37,9 @@ export async function GET(
       }
     } else if (connection.driveId) {
       // Drive-scoped: only drive members can view grants
-      const access = await getDriveAccess(connection.driveId, auth.userId);
+      const access = await getDriveAccess(connection.driveId, actorFromAuth(auth));
       if (!access.isMember) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), connection.driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     } else {
       // Reject connections with no scope

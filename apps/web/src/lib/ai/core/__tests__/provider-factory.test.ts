@@ -31,28 +31,18 @@ vi.mock('@pagespace/db/operators', () => ({
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' },
 }));
+// Every cloud vendor is served through OpenRouter. The mock returns a chat()
+// factory whose result carries the model id we asked for, so we can assert the
+// model is forwarded verbatim.
+const mockOpenRouterChat = vi.fn((model: string) => ({ modelId: model }));
 vi.mock('@openrouter/ai-sdk-provider', () => ({
-  createOpenRouter: vi.fn(() => ({
-    chat: vi.fn(() => ({ modelId: 'openrouter-model' })),
-  })),
-}));
-vi.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: vi.fn(() => vi.fn(() => ({ modelId: 'google-model' }))),
-}));
-vi.mock('@ai-sdk/openai', () => ({
-  createOpenAI: vi.fn(() => vi.fn(() => ({ modelId: 'openai-model' }))),
+  createOpenRouter: vi.fn(() => ({ chat: mockOpenRouterChat })),
 }));
 vi.mock('@ai-sdk/openai-compatible', () => ({
-  createOpenAICompatible: vi.fn(() => vi.fn(() => ({ modelId: 'openai-compatible-model' }))),
-}));
-vi.mock('@ai-sdk/anthropic', () => ({
-  createAnthropic: vi.fn(() => vi.fn(() => ({ modelId: 'anthropic-model' }))),
-}));
-vi.mock('@ai-sdk/xai', () => ({
-  createXai: vi.fn(() => vi.fn(() => ({ modelId: 'xai-model' }))),
+  createOpenAICompatible: vi.fn(() => vi.fn((m: string) => ({ modelId: m }))),
 }));
 vi.mock('ollama-ai-provider-v2', () => ({
-  createOllama: vi.fn(() => vi.fn(() => ({ modelId: 'ollama-model' }))),
+  createOllama: vi.fn(() => vi.fn((m: string) => ({ modelId: m }))),
 }));
 
 vi.mock('@pagespace/lib/security/url-validator', () => ({
@@ -63,22 +53,18 @@ vi.mock('@pagespace/lib/deployment-mode', () => ({
   isOnPrem: vi.fn(() => false),
 }));
 
-vi.mock('../ai-providers-config', async () => {
-  const actual = await vi.importActual<typeof import('../ai-providers-config')>('../ai-providers-config');
-  return {
-    ...actual,
-    resolvePageSpaceModel: vi.fn((m: string) => {
-      const aliases: Record<string, string> = { standard: 'glm-4.7', pro: 'glm-5' };
-      return aliases[m?.toLowerCase()] || m;
-    }),
-  };
-});
-
 vi.mock('@/lib/fetch-bridge', () => ({
   isFetchBridgeInitialized: vi.fn(() => false),
   getFetchBridge: vi.fn(() => ({ isUserConnected: vi.fn(() => false) })),
 }));
 
+// POL-8: the factory asks the drive's org policies when a drive is named; the default here is "no org".
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+const getOrgPolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies, getOrgPolicies }));
+
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER } from '@pagespace/lib/ai/model-defaults';
 import {
   createAIProvider,
   isProviderError,
@@ -86,28 +72,18 @@ import {
 } from '../provider-factory';
 import { db } from '@pagespace/db/db';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 import { validateLocalProviderURL } from '@pagespace/lib/security/url-validator';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const ENV_KEYS = [
-  'ANTHROPIC_DEFAULT_API_KEY',
-  'OPENAI_DEFAULT_API_KEY',
-  'GOOGLE_AI_DEFAULT_API_KEY',
-  'XAI_DEFAULT_API_KEY',
   'OPENROUTER_DEFAULT_API_KEY',
-  'GLM_CODER_DEFAULT_API_KEY',
-  'MINIMAX_DEFAULT_API_KEY',
+  'OPENROUTER_BASE_URL',
   'OLLAMA_BASE_URL',
   'LMSTUDIO_BASE_URL',
   'AZURE_OPENAI_API_KEY',
   'AZURE_OPENAI_ENDPOINT',
-  'GLM_DEFAULT_API_KEY',
 ] as const;
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -123,7 +99,10 @@ const mockDb = vi.mocked(db) as unknown as MockDb;
 describe('provider-factory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockOpenRouterChat.mockImplementation((model: string) => ({ modelId: model }));
     vi.mocked(isOnPrem).mockReturnValue(false);
+    getDrivePolicies.mockResolvedValue(null);
+    getOrgPolicies.mockResolvedValue(DEFAULT_ORG_POLICIES);
     mockDb.where.mockResolvedValue([
       { id: 'user-123', currentAiProvider: null, currentAiModel: null },
     ]);
@@ -140,133 +119,254 @@ describe('provider-factory', () => {
   });
 
   describe('createAIProvider', () => {
-    describe('pagespace provider', () => {
-      it('uses GLM backend when GLM_DEFAULT_API_KEY is set', async () => {
-        process.env.GLM_DEFAULT_API_KEY = 'glm-managed';
+    describe('the org model and provider allowlists', () => {
+      const orgPolicies = (over: Partial<typeof DEFAULT_ORG_POLICIES>) => ({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, ...over } });
 
-        const result = await createAIProvider('user-123', {});
+      it('Given retained org provenance with a forbidden model, should refuse before constructing any provider', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'fake-test-key';
+        getOrgPolicies.mockResolvedValue({ ...DEFAULT_ORG_POLICIES, providerAllowlist: [] });
+        const result = await createAIProvider('user-123', {}, { driveId: null, contentOrgIds: ['retained-org'] });
+        expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'providerAllowlist' });
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
+      it('Given retained org provenance with an allowed model, should construct the admitted provider', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'fake-test-key';
+        const result = await createAIProvider('user-123', {}, { driveId: null, contentOrgIds: ['retained-org'] });
+        expect(isProviderError(result)).toBe(false);
+        expect(getOrgPolicies).toHaveBeenCalledWith('retained-org');
+        expect(createOpenRouter).toHaveBeenCalledTimes(1);
+      });
+
+      it('POL-8 (partial) a model the org does not allow is REFUSED 403 with the policy named, and no provider client is built', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['some/other-model'] }));
+
+        const result = await createAIProvider('user-123', {}, { driveId: 'drive-1' });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+        expect(createOpenRouter).not.toHaveBeenCalled();
+        expect(getDrivePolicies).toHaveBeenCalledWith('drive-1');
+      });
+
+      it('POL-8 (partial) an agent run in a session of another drive is judged by BOTH drives\' orgs: the agent\'s org refusing is enough, whatever the session drive allows (D-OW-64)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockImplementation(async (driveId: string) => (driveId === 'agent-drive' ? orgPolicies({ modelAllowlist: ['some/other-model'] }) : null));
+
+        const result = await createAIProvider('user-123', {}, { driveId: 'session-drive', contentDriveIds: ['agent-drive'] });
+
+        expect(isProviderError(result)).toBe(true);
+        if (isProviderError(result)) expect(result).toMatchObject({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+        expect(getDrivePolicies).toHaveBeenCalledWith('session-drive');
+        expect(getDrivePolicies).toHaveBeenCalledWith('agent-drive');
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
+      it('POL-8 (partial) a provider the org does not allow is refused, independently of the model list', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ providerAllowlist: ['google'] }));
+        const result = await createAIProvider('user-123', {}, { driveId: 'drive-1' });
+        expect(isProviderError(result) && result.policy).toBe('providerAllowlist');
+      });
+
+      it('POL-8 (partial) an allowed model runs, and an empty allowlist allows none', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [DEFAULT_AI_MODEL] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
+      });
+
+      it('POL-8 (partial) a disallowed SELECTION is refused, never silently replaced by an allowed default (the resolver would have swapped it)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        // The default is allowed; the asked-for model is not in the catalog, so the resolver substitutes the default.
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: [DEFAULT_AI_MODEL] }));
+
+        const result = await createAIProvider('user-123', { selectedProvider: DEFAULT_AI_PROVIDER, selectedModel: 'not/allowed-model' }, { driveId: 'drive-1' });
+
+        expect(isProviderError(result) && result.code).toBe('org_policy');
+        expect(createOpenRouter).not.toHaveBeenCalled();
+      });
+
+      it('POL-8 (partial) no drive, or a drive with no org, is never restricted and reads no policy when no drive is named', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: null }))).toBe(false);
+        expect(getDrivePolicies).not.toHaveBeenCalled();
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'personal-drive' }))).toBe(false);
+      });
+
+      it('POL-8 (partial) the allowlist is read on every call: a change applies to the next call without a restart', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: ['x/y'] }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(true);
+        getDrivePolicies.mockResolvedValue(orgPolicies({ modelAllowlist: null }));
+        expect(isProviderError(await createAIProvider('user-123', {}, { driveId: 'drive-1' }))).toBe(false);
+      });
+    });
+
+    describe('default routing', () => {
+      it('routes the unset default through OpenRouter with the default model', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.provider).toBe('pagespace');
-          expect(createOpenAICompatible).toHaveBeenCalledWith({
-            name: 'glm',
-            apiKey: 'glm-managed',
-            baseURL: 'https://api.z.ai/api/coding/paas/v4',
-          });
+          // DEFAULT_PROVIDER / DEFAULT_MODEL
+          expect(result.provider).toBe('openai');
+          expect(result.modelName).toBe('openai/gpt-6-luna');
+          expect(createOpenRouter).toHaveBeenCalled();
         }
       });
 
-      it('falls back to Google when only GOOGLE_AI_DEFAULT_API_KEY is set', async () => {
-        process.env.GOOGLE_AI_DEFAULT_API_KEY = 'google-managed';
-
-        const result = await createAIProvider('user-123', {});
-
-        expect(isProviderError(result)).toBe(false);
-        if (!isProviderError(result)) {
-          expect(result.provider).toBe('pagespace');
-          expect(createGoogleGenerativeAI).toHaveBeenCalledWith({ apiKey: 'google-managed' });
-        }
-      });
-
-      it('returns 503 when no managed PageSpace key is configured', async () => {
-        const result = await createAIProvider('user-123', {});
+      it('returns 503 when OPENROUTER_DEFAULT_API_KEY is unset', async () => {
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
           expect(result.status).toBe(503);
-          expect(result.error).toContain('PageSpace AI');
+          expect(result.error).toContain('OpenRouter');
         }
       });
     });
 
-    describe('cloud providers', () => {
+    describe('cloud providers (all OpenRouter-backed)', () => {
       it.each([
-        ['openrouter', 'OPENROUTER_DEFAULT_API_KEY', 'or-key'],
-        ['google', 'GOOGLE_AI_DEFAULT_API_KEY', 'g-key'],
-        ['openai', 'OPENAI_DEFAULT_API_KEY', 'oai-key'],
-        ['anthropic', 'ANTHROPIC_DEFAULT_API_KEY', 'ant-key'],
-        ['xai', 'XAI_DEFAULT_API_KEY', 'xai-key'],
-        ['glm', 'GLM_CODER_DEFAULT_API_KEY', 'glm-key'],
-        ['minimax', 'MINIMAX_DEFAULT_API_KEY', 'mm-key'],
-      ])('%s resolves from %s env var', async (provider, envVar, key) => {
-        process.env[envVar] = key;
+        ['openai', 'openai/gpt-5.4'],
+        ['anthropic', 'anthropic/claude-opus-4.8'],
+        ['google', 'google/gemini-2.5-flash'],
+        ['xai', 'x-ai/grok-4.3'],
+        ['minimax', 'minimax/minimax-m2.5'],
+        ['deepseek', 'deepseek/deepseek-v4-pro'],
+      ])('%s routes %s through OpenRouter and forwards the model verbatim', async (provider, model) => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
         const result = await createAIProvider('user-123', {
           selectedProvider: provider,
-          selectedModel: 'some-model',
-        });
+          selectedModel: model,
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe(provider);
+          expect(result.modelName).toBe(model);
+          expect(createOpenRouter).toHaveBeenCalled();
+          // model id forwarded as-is to openrouter.chat with usage accounting +
+          // tool-capable provider routing on
+          expect(mockOpenRouterChat).toHaveBeenCalledWith(model, {
+            usage: { include: true },
+            extraBody: {
+              provider: {
+                require_parameters: true,
+                allow_fallbacks: true,
+              },
+            },
+          });
         }
       });
 
       it.each([
-        ['openrouter', 'OpenRouter'],
-        ['google', 'Google AI'],
-        ['openai', 'OpenAI'],
-        ['anthropic', 'Anthropic'],
-        ['xai', 'xAI'],
-        ['glm', 'GLM Coder Plan'],
-        ['minimax', 'MiniMax'],
-      ])('%s returns 503 when env var is unset', async (provider, displayName) => {
+        ['openai', 'openai/gpt-5.4'],
+        ['anthropic', 'anthropic/claude-opus-4.8'],
+        ['google', 'google/gemini-2.5-flash'],
+        ['xai', 'x-ai/grok-4.3'],
+      ])('%s returns 503 (OpenRouter) when OPENROUTER_DEFAULT_API_KEY is unset', async (provider, model) => {
         const result = await createAIProvider('user-123', {
           selectedProvider: provider,
-          selectedModel: 'some-model',
-        });
+          selectedModel: model,
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
           expect(result.status).toBe(503);
-          expect(result.error).toContain(displayName);
+          expect(result.error).toContain('OpenRouter');
         }
       });
 
-      it('openrouter_free shares the OpenRouter env var', async () => {
+      it('creates the OpenRouter client with the env key and the response-cache header', async () => {
         process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-
-        const result = await createAIProvider('user-123', {
-          selectedProvider: 'openrouter_free',
-          selectedModel: 'meta-llama/llama-3-8b:free',
-        });
-
-        expect(isProviderError(result)).toBe(false);
-        expect(createOpenRouter).toHaveBeenCalledWith({ apiKey: 'or-key' });
-      });
-
-      it('anthropic instantiates createAnthropic with the env key', async () => {
-        process.env.ANTHROPIC_DEFAULT_API_KEY = 'ant-managed';
 
         await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
-          selectedModel: 'claude-sonnet-4-6',
-        });
+          selectedModel: 'anthropic/claude-opus-4.7',
+        }, { driveId: null });
 
-        expect(createAnthropic).toHaveBeenCalledWith({ apiKey: 'ant-managed' });
+        expect(createOpenRouter).toHaveBeenCalledWith({
+          apiKey: 'or-key',
+          headers: { 'X-OpenRouter-Cache': 'true' },
+        });
       });
 
-      it('openai instantiates createOpenAI with the env key', async () => {
-        process.env.OPENAI_DEFAULT_API_KEY = 'oai-managed';
+      it('substitutes the default for an unknown provider (graceful, never forwards arbitrary)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        mockOpenRouterChat.mockClear();
+
+        const result = await createAIProvider('user-123', {
+          selectedProvider: 'totally-unknown',
+          selectedModel: 'totally-unknown/model',
+        }, { driveId: null });
+
+        expect(isProviderError(result)).toBe(false);
+        if (!isProviderError(result)) {
+          expect(result.provider).toBe('openai');
+          expect(result.modelName).toBe('openai/gpt-6-luna');
+        }
+        // the arbitrary model is never sent — only the default is
+        expect(mockOpenRouterChat).toHaveBeenCalledWith('openai/gpt-6-luna', expect.anything());
+        expect(mockOpenRouterChat).not.toHaveBeenCalledWith('totally-unknown/model', expect.anything());
+      });
+
+      it('substitutes the default for an off-catalog model on a known vendor', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        mockOpenRouterChat.mockClear();
+
+        const result = await createAIProvider('user-123', {
+          selectedProvider: 'openai',
+          selectedModel: 'openai/not-a-real-model',
+        }, { driveId: null });
+
+        expect(isProviderError(result)).toBe(false);
+        if (!isProviderError(result)) {
+          expect(result.modelName).toBe('openai/gpt-6-luna');
+        }
+        expect(mockOpenRouterChat).not.toHaveBeenCalledWith('openai/not-a-real-model', expect.anything());
+      });
+
+      it('enables usage accounting and tool-capable provider routing on the chat model', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        mockOpenRouterChat.mockClear();
+
+        await createAIProvider('user-123', {
+          selectedProvider: 'anthropic',
+          selectedModel: 'anthropic/claude-opus-4.7',
+        }, { driveId: null });
+
+        expect(mockOpenRouterChat).toHaveBeenCalledWith('anthropic/claude-opus-4.7', {
+          usage: { include: true },
+          extraBody: {
+            provider: {
+              require_parameters: true,
+              allow_fallbacks: true,
+            },
+          },
+        });
+      });
+
+      it('passes OPENROUTER_BASE_URL through when set (e.g. e2e stub)', async () => {
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+        process.env.OPENROUTER_BASE_URL = 'http://localhost:9999/v1';
 
         await createAIProvider('user-123', {
           selectedProvider: 'openai',
-          selectedModel: 'gpt-5',
+          selectedModel: 'openai/gpt-5.4',
+        }, { driveId: null });
+
+        expect(createOpenRouter).toHaveBeenCalledWith({
+          apiKey: 'or-key',
+          baseURL: 'http://localhost:9999/v1',
+          headers: { 'X-OpenRouter-Cache': 'true' },
         });
-
-        expect(createOpenAI).toHaveBeenCalledWith({ apiKey: 'oai-managed' });
-      });
-
-      it('xai instantiates createXai with the env key', async () => {
-        process.env.XAI_DEFAULT_API_KEY = 'xai-managed';
-
-        await createAIProvider('user-123', {
-          selectedProvider: 'xai',
-          selectedModel: 'grok-4',
-        });
-
-        expect(createXai).toHaveBeenCalledWith({ apiKey: 'xai-managed' });
       });
     });
 
@@ -277,7 +377,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOllama).toHaveBeenCalledWith(expect.objectContaining({
@@ -288,7 +388,7 @@ describe('provider-factory', () => {
       it('ollama returns 503 when OLLAMA_BASE_URL is unset', async () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.status).toBe(503);
@@ -300,7 +400,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'lmstudio',
           selectedModel: 'local-model',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOpenAICompatible).toHaveBeenCalledWith(expect.objectContaining({
@@ -316,7 +416,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'azure_openai',
           selectedModel: 'gpt-4',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         expect(createOpenAICompatible).toHaveBeenCalledWith(expect.objectContaining({
@@ -332,7 +432,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'azure_openai',
           selectedModel: 'gpt-4',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.status).toBe(503);
@@ -348,7 +448,7 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) expect(result.error).toContain('blocked');
@@ -358,12 +458,12 @@ describe('provider-factory', () => {
     describe('onprem defense in depth', () => {
       it('rejects cloud providers in onprem mode even when env keys are present', async () => {
         vi.mocked(isOnPrem).mockReturnValue(true);
-        process.env.ANTHROPIC_DEFAULT_API_KEY = 'ant-key';
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
         const result = await createAIProvider('user-123', {
           selectedProvider: 'anthropic',
-          selectedModel: 'claude-sonnet-4-6',
-        });
+          selectedModel: 'anthropic/claude-sonnet-4.6',
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
@@ -379,22 +479,22 @@ describe('provider-factory', () => {
         const result = await createAIProvider('user-123', {
           selectedProvider: 'ollama',
           selectedModel: 'llama3.2',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
       });
 
-      it('blocks pagespace in onprem mode when its backend resolves to a cloud provider', async () => {
+      it('blocks the default (cloud) provider in onprem mode', async () => {
         vi.mocked(isOnPrem).mockReturnValue(true);
-        process.env.GLM_DEFAULT_API_KEY = 'glm-managed';
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-        const result = await createAIProvider('user-123', {});
+        // No selectedProvider → falls back to DEFAULT_PROVIDER (openai), a cloud vendor.
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
           expect(result.status).toBe(403);
           expect(result.error).toContain('on-premise');
-          expect(result.error).toContain('glm');
         }
       });
     });
@@ -402,28 +502,29 @@ describe('provider-factory', () => {
     describe('user defaults and unsupported providers', () => {
       it('falls back to user.currentAiProvider when not specified', async () => {
         mockDb.where.mockResolvedValue([
-          { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
+          { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'google/gemini-2.5-pro' },
         ]);
-        process.env.GOOGLE_AI_DEFAULT_API_KEY = 'g-key';
+        process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
 
-        const result = await createAIProvider('user-123', {});
+        const result = await createAIProvider('user-123', {}, { driveId: null });
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           expect(result.provider).toBe('google');
-          expect(result.modelName).toBe('gemini-pro');
+          expect(result.modelName).toBe('google/gemini-2.5-pro');
         }
       });
 
-      it('returns 400 for unknown provider names', async () => {
+      it('rejects an unknown provider in onprem mode (not on the allowlist)', async () => {
+        vi.mocked(isOnPrem).mockReturnValue(true);
+
         const result = await createAIProvider('user-123', {
           selectedProvider: 'totally-not-a-provider',
-        });
+        }, { driveId: null });
 
         expect(isProviderError(result)).toBe(true);
         if (isProviderError(result)) {
-          expect(result.status).toBe(400);
-          expect(result.error).toContain('Unsupported AI provider');
+          expect(result.status).toBe(403);
         }
       });
     });
@@ -437,12 +538,69 @@ describe('provider-factory', () => {
 
     it('updates user when provider differs from stored value', async () => {
       mockDb.where.mockResolvedValue([
-        { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'gemini-pro' },
+        { id: 'user-123', currentAiProvider: 'google', currentAiModel: 'google/gemini-2.5-pro' },
       ]);
 
-      await updateUserProviderSettings('user-123', 'anthropic', 'claude-sonnet-4-6');
+      await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6');
 
       expect(mockDb.update).toHaveBeenCalled();
+    });
+
+    describe('when a pre-loaded user row is provided', () => {
+      it('skips the DB select for the user', async () => {
+        const preloaded = { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-5.4-nano' };
+
+        await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6', {
+          user: preloaded,
+        });
+
+        // select() should NOT have been called for user look-up
+        expect(mockDb.select).not.toHaveBeenCalled();
+        // But update() IS called because provider changed
+        expect(mockDb.update).toHaveBeenCalled();
+      });
+
+      it('does not update when pre-loaded provider/model already match', async () => {
+        const preloaded = { currentAiProvider: 'anthropic', currentAiModel: 'anthropic/claude-sonnet-4.6' };
+
+        await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6', {
+          user: preloaded,
+        });
+
+        expect(mockDb.select).not.toHaveBeenCalled();
+        expect(mockDb.update).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('createAIProvider — user row threading', () => {
+    it('skips the DB select when a pre-loaded user row is provided', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      const preloaded = { currentAiProvider: 'anthropic', currentAiModel: 'anthropic/claude-sonnet-4.6' };
+
+      const result = await createAIProvider('user-123', {
+        selectedProvider: 'anthropic',
+        selectedModel: 'anthropic/claude-sonnet-4.6',
+      }, { user: preloaded, driveId: null });
+
+      expect(isProviderError(result)).toBe(false);
+      // The DB should not have been queried for the user row
+      expect(mockDb.select).not.toHaveBeenCalled();
+    });
+
+    it('still resolves provider correctly from pre-loaded user defaults', async () => {
+      process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+      // Pre-loaded row has google as the user's current provider
+      const preloaded = { currentAiProvider: 'google', currentAiModel: 'google/gemini-2.5-pro' };
+
+      // No selectedProvider/model → falls back to user defaults
+      const result = await createAIProvider('user-123', {}, { user: preloaded, driveId: null });
+
+      expect(isProviderError(result)).toBe(false);
+      if (!isProviderError(result)) {
+        expect(result.provider).toBe('google');
+        expect(result.modelName).toBe('google/gemini-2.5-pro');
+      }
     });
   });
 });

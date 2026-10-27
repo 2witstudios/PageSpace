@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import {
   ArrowLeft, Upload,
   FileText, FileCode, FileSpreadsheet, FileImage, File,
-  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig,
   type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { uploadFileToS3 } from '@/lib/upload/orchestrator';
 import { useUIStore } from '@/stores/useUIStore';
 import { usePageNavigation } from '@/hooks/usePageNavigation';
 import { useBreadcrumbs } from '@/hooks/useBreadcrumbs';
@@ -29,6 +30,7 @@ import { useDisplayPreferences } from '@/hooks/useDisplayPreferences';
 import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
 import { isEditingActive } from '@/stores/useEditingStore';
 import { findNodeAndParent } from '@/lib/tree/tree-utils';
+import { resolveSidebarVariant } from '@/components/layout/left-sidebar/sidebar-routes';
 import type { TreePage } from '@/hooks/usePageTree';
 import {
   PageType,
@@ -50,12 +52,11 @@ const PAGE_TYPE_COLORS: Partial<Record<PageType, string>> = {
   [PageType.CANVAS]:    '#f472b6',
   [PageType.CODE]:      '#a78bfa',
   [PageType.FILE]:      '#94a3b8',
-  [PageType.TERMINAL]:  '#6ee7b7',
 };
 
 const PAGE_TYPE_ICON_COMPONENTS: Record<string, LucideIcon> = {
   FileText, FileCode, FileSpreadsheet, FileImage, File,
-  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig, SquareTerminal,
+  Folder, BotMessageSquare, MessagesSquare, SquareCheckBig,
 };
 
 function getPageTypeIconData(type: PageType): { Icon: LucideIcon; color: string } {
@@ -124,6 +125,14 @@ export default function QuickCreatePalette() {
     : Array.isArray(rawPath) ? rawPath[0]
     : undefined;
 
+  const pathname = usePathname();
+  // The Agents routes bind this hotkey to their OWN palette — the spawn
+  // selector, which is what "new" means there (a session, or an environment to
+  // run one in), not a page type. `AgentsSidebar` owns that handler, so this
+  // one must stand down or both would fire on the same keystroke. The matcher
+  // is the sidebar's own, rather than a second regex that could drift from it.
+  const onAgentsRoute = resolveSidebarVariant(pathname ?? '') === 'agents';
+
   const quickCreateOpen = useUIStore((s) => s.quickCreateOpen);
   const quickCreateParentOverride = useUIStore((s) => s.quickCreateParentOverride);
   const openQuickCreate = useUIStore((s) => s.openQuickCreate);
@@ -162,14 +171,14 @@ export default function QuickCreatePalette() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const binding = getEffectiveBinding('pages.quick-create');
-      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen) {
+      if (matchesKeyEvent(binding, e) && !isEditingActive() && driveId && !quickCreateOpen && !onAgentsRoute) {
         e.preventDefault();
         openQuickCreate(null);
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [driveId, openQuickCreate, quickCreateOpen]);
+  }, [driveId, openQuickCreate, quickCreateOpen, onAgentsRoute]);
 
   // Reset when palette closes
   useEffect(() => {
@@ -212,21 +221,14 @@ export default function QuickCreatePalette() {
       }
       setIsCreating(true);
       try {
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('driveId', driveId);
-        if (effectiveParentId) formData.append('parentId', effectiveParentId);
-        if (name.trim()) formData.append('title', name.trim());
-
-        const response = await fetchWithAuth('/api/upload', { method: 'POST', body: formData });
-        if (!response.ok) {
-          const err = (await response.json()) as { error?: string };
-          throw new Error(err.error ?? 'Failed to upload file');
-        }
-        const result = (await response.json()) as { page: Page };
+        const page = await uploadFileToS3(selectedFile, {
+          driveId,
+          parentId: effectiveParentId,
+          title: name.trim() || undefined,
+        });
         closeQuickCreate();
         await swrMutate(`/api/drives/${driveId}/pages`);
-        await navigateToPage(result.page.id, driveId);
+        await navigateToPage(page.id, driveId);
       } catch (error) {
         toast.error((error as Error).message);
       } finally {
@@ -257,7 +259,7 @@ export default function QuickCreatePalette() {
     } finally {
       setIsCreating(false);
     }
-  }, [driveId, selectedType, isCreating, selectedFile, name, effectiveParentId, preferences, closeQuickCreate, navigateToPage]);
+  }, [driveId, selectedType, isCreating, selectedFile, name, effectiveParentId, preferences, closeQuickCreate, swrMutate, navigateToPage]);
 
   const handleKeyDownNameEntry = useCallback(
     (e: React.KeyboardEvent) => {
@@ -272,7 +274,7 @@ export default function QuickCreatePalette() {
     [handleCreate]
   );
 
-  const creatableTypes = getCreatablePageTypes();
+  const creatableTypes = useMemo(() => getCreatablePageTypes(), []);
 
   if (!quickCreateOpen) return null;
 

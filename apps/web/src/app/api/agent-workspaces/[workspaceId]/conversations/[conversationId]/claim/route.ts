@@ -1,0 +1,157 @@
+/**
+ * Claim ONE never-session-bound conversation INTO this session's listing —
+ * the "open into a session" affordance for a conversation an owner opened
+ * outside the Agents console (a page-agent or global-assistant chat that
+ * never had a sandbox), and for a pane's own History tab picking a past
+ * conversation that turns out to be unbound rather than closed-in-THIS-
+ * session (the reopen route's job).
+ *
+ * POST → 200 { ok: true, alreadyInSession: boolean } — wraps
+ * `claimConversationInSession` (`claim-conversation-in-workspace.ts`), which
+ * ADMITS the thread: one node in `agent_workspace_nodes`. Membership IS that
+ * row. It used to be `conversations.workspaceId`, which nothing writes now.
+ *
+ * `checkSessionAccess` below authorizes the SESSION — drive-membership-wide,
+ * so any drive member reaches another member's session. That is NOT
+ * ownership of the CONVERSATION: the claim primitive refuses a row whose
+ * `userId` is not the caller's (`claim-conversation-in-workspace.ts`, the
+ * `row.userId !== userId` gate, answering `not_found` so an id-guessing caller
+ * cannot tell "not yours" from "not there"). That gate used to be a `userId =
+ * :caller` predicate in the WHERE of the membership UPDATE; the membership
+ * write is a node now, so the check is stated in the decider instead of being
+ * a side-effect of the row it updated. Neither check substitutes for the other.
+ */
+
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkSessionAccess, claimConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+const ROUTE = 'agent-workspaces/[workspaceId]/conversations/[conversationId]/claim';
+
+type RouteContext = { params: Promise<{ workspaceId: string; conversationId: string }> };
+
+export async function POST(request: Request, context: RouteContext) {
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+  if (isAuthError(auth)) return auth.error;
+  const { workspaceId, conversationId } = await context.params;
+
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
+  if (!access.allowed) {
+    return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
+  }
+
+  // A `type: 'page'` row's agent-view permission can have been revoked since
+  // the conversation was created — the claim primitive only checks agent
+  // EXISTENCE and drive match (its pure DB-fact scope deliberately excludes
+  // auth, same as create/reopen/close never take a permission dependency
+  // either). `firstThing: 'claim'` on `POST /api/agent-workspaces` already
+  // enforces this in its own route-level preflight; mirror it here so THIS
+  // route can't permanently bind a conversation the caller can no longer
+  // view (review finding — chatgpt-codex-connector). Ownership/state
+  // mismatches are still the claim call's own job below — this only ever
+  // adds a 403 on TOP of what claim would otherwise allow, never replaces
+  // its checks.
+  const row = await conversationRepository.getConversation(conversationId);
+  if (row && row.userId === auth.userId && row.isActive && row.type === 'page' && row.contextId) {
+    const canView = await canPrincipalViewPage(auth, row.contextId);
+    if (!canView) {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'page_agent_conversation',
+        resourceId: row.contextId,
+        details: { reason: 'no_view_permission', method: 'POST', route: ROUTE },
+        riskScore: 0.5,
+      });
+      return NextResponse.json({ error: 'Insufficient permissions to use this agent' }, { status: 403 });
+    }
+  }
+
+  // WHERE the caller wants it, when a human picked a pane. A preference only —
+  // the placement policy still refuses a pane it may not give up, and an id
+  // naming nothing in this tree loses to the default. The claim admits the
+  // thread, and admitting PLACES, so without one a History pick lands in
+  // whichever pane qualifies first rather than the one it was opened from. An
+  // absent or unusable body is not an error: this route has never required one.
+  let body: unknown = {};
+  try {
+    body = await request.json();
+  } catch {
+    // No body at all is the pre-existing shape, and still a valid claim.
+  }
+  const rawActiveNodeId =
+    body !== null && typeof body === 'object' ? (body as { activeNodeId?: unknown }).activeNodeId : undefined;
+  const activeNodeId = typeof rawActiveNodeId === 'string' && rawActiveNodeId.length > 0 ? rawActiveNodeId : null;
+
+  let outcome: Awaited<ReturnType<typeof claimConversationInSession>>;
+  try {
+    outcome = await claimConversationInSession({
+      conversationId,
+      actor: actorFromAuth(auth),
+      workspaceId,
+      ...(activeNodeId === null ? {} : { activeNodeId }),
+    });
+  } catch (error) {
+    loggers.api.error(
+      'Session conversation claim failed',
+      error instanceof Error ? error : undefined,
+      { workspaceId, conversationId },
+    );
+    return NextResponse.json({ error: 'Could not move this conversation into the session' }, { status: 500 });
+  }
+
+  if (outcome === 'not_found') {
+    // Same "nothing here" shape whether the id never existed, belongs to
+    // someone else, was history-deleted, or is already bound to some OTHER
+    // session — an id-guessing caller learns nothing either way.
+    return NextResponse.json({ error: 'That conversation is not available' }, { status: 404 });
+  }
+
+  if (outcome === 'cross_drive_denied') {
+    return NextResponse.json(
+      { error: 'That conversation belongs to a different drive than this session' },
+      { status: 400 },
+    );
+  }
+
+  if (outcome === 'session_full') {
+    return sessionConversationLimitExceeded(request, auth.userId, workspaceId, ROUTE);
+  }
+
+  if (outcome === 'claimed') {
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: auth.userId,
+      resourceType: 'agent_session',
+      resourceId: workspaceId,
+      details: { op: 'claim_conversation', conversationId },
+    });
+  }
+
+  // EXHAUSTIVENESS BACKSTOP. Everything below this line is a SUCCESS response,
+  // so a refusal that reaches it is answered `200 {ok: true}` — the server
+  // reporting success for a write it declined. This route dispatches with an
+  // `if`-chain, which TypeScript cannot check for completeness on its own, so
+  // the narrowing is written down instead: adding a refusal to
+  // `ClaimConversationOutcome` without an arm above is a COMPILE error here.
+  //
+  // This used to be pinned by a test asserting the 503 arm's status ("deleting
+  // the 503 block lets the request fall through to 200 OK"). That arm and its
+  // test went with the `awaiting_backfill` refusal at migration 0256, taking the
+  // guarantee with them for every code that remains — hence stating it in the
+  // types, where it cannot be deleted by removing a test.
+  const settled: 'claimed' | 'already_in_session' = outcome;
+
+  // `alreadyInSession`: this call did NOT transition anything — same reasoning
+  // as the reopen route's `alreadyOpen`, so a caller superseded mid-flight
+  // knows whether it's safe to roll the listing back out.
+  return NextResponse.json({ ok: true, alreadyInSession: settled === 'already_in_session' });
+}

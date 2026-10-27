@@ -14,6 +14,28 @@ export interface ConversationMessage extends UIMessage {
   isActive?: boolean;
   editedAt?: Date;
   createdAt?: Date;
+  userName?: string | null;
+  /**
+   * Lifecycle state of an assistant row (see chat_messages.status / messages.status).
+   * `'interrupted'` means the generation died mid-flight and this is a real, partial
+   * reply, terminal and never resumed on its own — MessageRenderer badges it and
+   * surfaces a retry hint. Absent on rows saved before this column existed, which
+   * read as `'complete'` server-side by default.
+   */
+  status?: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * The TRANSPORT this row was authored over (see `messages.source`) —
+   * `'voice'` for a turn spoken into a live realtime call, null/absent for a
+   * typed one.
+   *
+   * Rendered as a mic glyph rather than left invisible because a thread that
+   * mixes spoken and typed turns without saying which is which is a thread that
+   * misrepresents itself: the phrasing, the length and the errors of a spoken
+   * sentence are all different, and a reader who does not know it was dictated
+   * reads it as sloppy typing. Compared through {@link MESSAGE_SOURCE_VOICE},
+   * never a bare string literal.
+   */
+  source?: string | null;
 }
 
 /**
@@ -75,9 +97,50 @@ export interface ProcessedToolPart {
 }
 
 /**
+ * Universal Commands execution feedback part (UX spec §7): streamed at
+ * response start and persisted with the message. `data` is validated by
+ * the indicator's view-model, not trusted here.
+ */
+export interface CommandExecutionPart {
+  type: 'data-command-execution';
+  id?: string;
+  data: unknown;
+}
+
+/**
+ * SPEND-4: the drive's fallback rule moved this reply to another source (`data-spend-fallback`,
+ * written first by the chat turn). `data` is validated by the notice, not trusted here.
+ */
+export interface SpendFallbackPart {
+  type: 'data-spend-fallback';
+  id?: string;
+  data: unknown;
+}
+
+/**
+ * A run of 1+ consecutive non-diff tool calls, rendered through one
+ * persistent component (ToolRunGroup/CompactToolRunGroup) regardless of
+ * length. Diff-producing tool calls (see tool-calls/tool-significance.ts)
+ * always break a run and render standalone instead.
+ */
+export interface ToolRunGroupPart {
+  type: 'tool-run-group';
+  /**
+   * Derived from the first call's toolCallId inside useGroupedParts. Stays
+   * identical for as long as this is "the same run" (parts.length may grow
+   * from 1 to N across re-renders as more calls stream in) and changes only
+   * when a new run starts (e.g. a standalone/diff tool split it). Consumers
+   * must use this — not array index — as the React key AND as the
+   * useToolCallOpenState lookup key for the run's own header open state.
+   */
+  runKey: string;
+  parts: ProcessedToolPart[];
+}
+
+/**
  * Union type for processed message parts
  */
-export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart;
+export type GroupedPart = TextGroupPart | FileGroupPart | ProcessedToolPart | CommandExecutionPart | SpendFallbackPart | ToolRunGroupPart;
 
 /**
  * Valid tool states for type checking
@@ -110,5 +173,24 @@ export function isFileGroupPart(part: GroupedPart): part is FileGroupPart {
  * Type guard for ProcessedToolPart
  */
 export function isProcessedToolPart(part: GroupedPart): part is ProcessedToolPart {
-  return part.type.startsWith('tool-');
+  return part.type !== 'tool-run-group' && part.type.startsWith('tool-');
+}
+
+/** Type guard for SpendFallbackPart (SPEND-4). */
+export function isSpendFallbackPart(part: GroupedPart): part is SpendFallbackPart {
+  return part.type === 'data-spend-fallback';
+}
+
+/**
+ * Type guard for CommandExecutionPart
+ */
+export function isCommandExecutionPart(part: GroupedPart): part is CommandExecutionPart {
+  return part.type === 'data-command-execution';
+}
+
+/**
+ * Type guard for ToolRunGroupPart
+ */
+export function isToolRunGroupPart(part: GroupedPart): part is ToolRunGroupPart {
+  return part.type === 'tool-run-group';
 }

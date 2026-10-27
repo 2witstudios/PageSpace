@@ -1,0 +1,1142 @@
+/**
+ * AgentPageView — the page with NO chrome of its own.
+ *
+ * The properties worth pinning: the page renders **no header and no tabs** —
+ * a session-bound conversation is handed whole to the pane grid, whose panes
+ * carry the only Chat/History/Settings strip there is; and the session-LESS
+ * conversation wears that same pane bar directly, strip included, so History
+ * and Settings stay reachable for a thread that can never join a workspace.
+ * Save and "Open in Agents" live in that bar too. All IO hooks and the
+ * re-hosted settings/history components are mocked; this suite covers the
+ * page's own wiring.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useSearchParams } from 'next/navigation';
+import type { TreePage } from '@/hooks/usePageTree';
+import type { ResolvedConversation } from '../useResolvedConversation';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
+
+const resolvedConversation = vi.hoisted(() => ({
+  current: { resolved: null as ResolvedConversation | null, isLoading: true },
+}));
+const mockCreatePageConversation = vi.hoisted(() => vi.fn());
+vi.mock('../useResolvedConversation', () => ({
+  useResolvedConversation: () => resolvedConversation.current,
+  createPageConversation: (...args: unknown[]) => mockCreatePageConversation(...args),
+}));
+
+const mockMutate = vi.hoisted(() => vi.fn());
+// Defaults to "not yet loaded" (`data: undefined`) so `panesDriveId` falls
+// back to `page.driveId` — identical to every pre-existing test's behavior.
+// One dedicated test below overrides this to pin the cross-drive-session
+// correction (the session's OWN driveId, not the hosted agent page's). Shape
+// matches `useSessionRecord`'s raw session-record result, not a pre-coalesced
+// driveId.
+type MockSessionRecordData = { session: { driveId: string | null } | null } | undefined;
+const mockUseSWR = vi.hoisted(() => vi.fn((..._args: unknown[]) => ({ data: undefined as MockSessionRecordData })));
+vi.mock('swr', () => ({
+  default: (...args: unknown[]) => mockUseSWR(...args),
+  mutate: (...args: unknown[]) => mockMutate(...args),
+}));
+
+const DEFAULT_AGENT = { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' };
+const resolvedAgent = vi.hoisted(() => ({
+  current: {
+    agent: { id: 'agent-1', title: 'My Agent', driveId: 'drive-1', driveName: 'Drive' } as
+      | { id: string; title: string; driveId: string; driveName: string }
+      | null,
+    isLoading: false,
+    error: undefined as Error | undefined,
+    retry: vi.fn(),
+  },
+}));
+vi.mock('../useResolvedAgent', () => ({
+  useResolvedAgent: () => resolvedAgent.current,
+}));
+
+vi.mock('../chat/SessionChat', () => ({
+  default: ({ conversationId, isReadOnly }: { conversationId: string; isReadOnly?: boolean }) => (
+    <div data-testid="plain-chat" data-readonly={String(!!isReadOnly)}>
+      {conversationId}
+    </div>
+  ),
+}));
+
+const agentPanesState = vi.hoisted(() => ({
+  lastOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
+  // Captured ONCE, on the first render that supplies a callback — models the
+  // closure a real in-flight `closeConversationListing` call would hold,
+  // unaffected by whatever `onConversationClosed` a LATER render passes
+  // (e.g. after the user picks a different conversation while a close DELETE
+  // is still pending).
+  firstOnConversationClosed: null as
+    | ((event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void)
+    | null,
+}));
+
+vi.mock('../panes/AgentPanes', () => ({
+  default: ({
+    sessionId,
+    driveId,
+    initialConversation,
+    chatContext,
+    hostConversationId,
+    isReadOnly,
+    onConversationClosed,
+  }: {
+    sessionId: string;
+    driveId: string | null;
+    initialConversation: { conversationId: string };
+    chatContext?: string;
+    hostConversationId?: string | null;
+    isReadOnly?: boolean;
+    onConversationClosed?: (event: { conversationId: string; next: string | null; nextAgentPageId: string | null }) => void;
+  }) => {
+    agentPanesState.lastOnConversationClosed = onConversationClosed ?? null;
+    if (agentPanesState.firstOnConversationClosed === null) {
+      agentPanesState.firstOnConversationClosed = onConversationClosed ?? null;
+    }
+    return (
+      <div
+        data-testid="agent-panes"
+        data-chat-context={chatContext}
+        data-host-conversation-id={hostConversationId ?? ''}
+        data-readonly={String(!!isReadOnly)}
+        data-drive-id={driveId ?? ''}
+      >
+        {sessionId}/{initialConversation.conversationId}
+      </div>
+    );
+  },
+}));
+
+const { mockFetchWithAuth } = vi.hoisted(() => ({ mockFetchWithAuth: vi.fn() }));
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: mockFetchWithAuth,
+  post: vi.fn(),
+}));
+
+// Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
+// every authenticated user now, so every test relying on this default
+// doubles as proof a non-admin gets full access too. `user` is nullable —
+// some tests exercise the genuinely-signed-out case. `isLoading` is modeled
+// because `useAuthStore` persists `user`: a stale hydrated row plus a still-
+// resolving auth check is a real state the component must treat as not yet
+// authenticated (review #2326).
+const authState = vi.hoisted(() => ({
+  current: {
+    user: { id: 'user-1', role: 'user' } as { id: string; role: string } | null,
+    isLoading: false,
+  },
+}));
+vi.mock('@/hooks/useAuth', () => ({ useAuth: () => authState.current }));
+
+vi.mock('@/lib/ai/shared/hooks/useProviderSettings', () => ({
+  useProviderSettings: () => ({
+    selectedProvider: 'anthropic',
+    setSelectedProvider: vi.fn(),
+    selectedModel: 'claude-sonnet-5',
+    setSelectedModel: vi.fn(),
+    isProviderConfigured: () => true,
+  }),
+}));
+
+const conversationsState = vi.hoisted(() => ({
+  current: {
+    conversations: [] as Array<{ id: string; sessionId: string | null }>,
+    isLoading: false,
+    deleteConversation: vi.fn(async () => {}),
+    refreshConversations: vi.fn(),
+  },
+  // Captured so tests can trigger `onConversationDelete` directly — the real
+  // hook fires it when the deleted id is the current conversation; this mock
+  // stands in for the hook's own logic, not the callback wiring under test.
+  lastOnConversationDelete: null as ((conversationId: string) => void) | null,
+  /** Whether the page asked the hook to actually FETCH on the latest render. */
+  lastEnabled: null as boolean | null,
+}));
+vi.mock('@/lib/ai/shared/hooks/useConversations', () => ({
+  useConversations: (opts: { onConversationDelete?: (conversationId: string) => void; enabled?: boolean }) => {
+    conversationsState.lastOnConversationDelete = opts.onConversationDelete ?? null;
+    conversationsState.lastEnabled = opts.enabled ?? null;
+    return conversationsState.current;
+  },
+}));
+
+// The hook's OWN fetch/shared-cache behavior is covered by useAgentConfig.test.ts
+// directly — this suite only needs to verify AgentPageView WIRES it correctly
+// (calls it with page.id, passes the result through to the Settings tab).
+const mockUseAgentConfig = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/ai/shared/hooks/useAgentConfig', () => ({
+  useAgentConfig: (...args: unknown[]) => mockUseAgentConfig(...args),
+}));
+
+vi.mock('@/components/ai/page-agents', () => ({
+  PageAgentSettingsTab: ({
+    config,
+    onDirtyChange,
+    onSaved,
+  }: {
+    config: unknown;
+    onDirtyChange?: (isDirty: boolean) => void;
+    onSaved?: () => void;
+  }) => (
+    <div data-testid="page-agent-settings-tab" data-has-config={String(config !== null)}>
+      <button onClick={() => onDirtyChange?.(true)}>mark-dirty</button>
+      {/* Named to avoid the substring "save" — it would otherwise collide
+          with `getByRole('button', { name: /save/i })` queries for the
+          host's real Save button. Mirrors the real component: a successful
+          save resets dirty around the same time onSaved fires. */}
+      <button
+        onClick={() => {
+          onDirtyChange?.(false);
+          onSaved?.();
+        }}
+      >
+        finish-config-update
+      </button>
+    </div>
+  ),
+  PageAgentHistoryTab: ({
+    onSelectConversation,
+    onCreateNew,
+    createDisabled,
+  }: {
+    onSelectConversation: (id: string) => void;
+    onCreateNew: () => void;
+    createDisabled?: boolean;
+  }) => (
+    <div data-testid="history-tab">
+      <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
+        conv-2
+      </button>
+      <button data-testid="history-create-new" onClick={onCreateNew} disabled={createDisabled}>
+        New
+      </button>
+    </div>
+  ),
+}));
+
+import AgentPageView from '../AgentPageView';
+import {
+  useAgentWorkspaceStore,
+  __resetWorkspaceQueuesForTests,
+} from '@/stores/agent-workspace/useAgentWorkspaceStore';
+
+function pageFixture(): TreePage {
+  return {
+    id: 'agent-1',
+    title: 'My Agent',
+    type: 'AI_CHAT',
+    driveId: 'drive-1',
+    children: [],
+    aiChat: null,
+    messages: [],
+  } as unknown as TreePage;
+}
+
+const jsonResponse = (body: unknown, ok = true) => ({ ok, json: async () => body });
+
+const resolveTo = (resolved: ResolvedConversation) => {
+  resolvedConversation.current = { resolved, isLoading: false };
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // `vi.clearAllMocks()` clears call/result history but NOT a persistent
+  // `mockReturnValue` override — re-establish the documented default here so
+  // one test's override (the global-assistant-session test below) can never
+  // leak into whichever test happens to run next.
+  mockUseSWR.mockReturnValue({ data: undefined });
+  mockUseAgentConfig.mockReturnValue({ config: null, setConfig: vi.fn() });
+  resolvedAgent.current = { agent: DEFAULT_AGENT, isLoading: false, error: undefined, retry: vi.fn() };
+  resolvedConversation.current = { resolved: null, isLoading: true };
+  authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: false };
+  conversationsState.current = {
+    conversations: [],
+    isLoading: false,
+    deleteConversation: vi.fn(async () => {}),
+    refreshConversations: vi.fn(),
+  };
+  conversationsState.lastOnConversationDelete = null;
+  conversationsState.lastEnabled = null;
+  agentPanesState.lastOnConversationClosed = null;
+  agentPanesState.firstOnConversationClosed = null;
+  __resetWorkspaceQueuesForTests();
+  usePendingStreamsStore.setState({ streams: new Map() });
+  mockFetchWithAuth.mockImplementation(async (url: string) => {
+    if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
+    if (url.endsWith('/agent-config'))
+      return jsonResponse({ systemPrompt: '', enabledTools: [], availableTools: [] });
+    return jsonResponse({});
+  });
+});
+
+describe('AgentPageView', () => {
+  it('shows a loading state until the conversation resolves', async () => {
+    render(<AgentPageView page={pageFixture()} />);
+    expect(screen.getByTestId('agent-page-view-loading')).toBeInTheDocument();
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+  });
+
+  it('the session-less chat carries Chat | History | Settings in its PANE BAR', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    const bar = screen.getByTestId('pane-bar');
+    expect(within(bar).getByRole('tab', { name: /chat/i })).toBeInTheDocument();
+    expect(within(bar).getByRole('tab', { name: /history/i })).toBeInTheDocument();
+    expect(within(bar).getByRole('tab', { name: /settings/i })).toBeInTheDocument();
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalled());
+  });
+
+  it('adds NO tabs of its own above the grid — the pane bar is the only one', async () => {
+    // The regression this whole change exists to prevent: the page used to
+    // render a full-size Chat|History|Settings header AND mount the grid, whose
+    // host pane's bar carried the same three tabs for the same conversation.
+    // `AgentPanes` is mocked here, so any tab found is necessarily the page's.
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByRole('tablist')).toBeNull();
+  });
+
+  it('a session-bound conversation renders the PANE GRID with the page renderer', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1'));
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-chat-context', 'page');
+    // The page's own current conversation — lets the grid tell "the pane
+    // showing exactly this conversation" (duplicate chrome, dropped) apart
+    // from any other pane (a split on a different conversation — even of the
+    // SAME agent — which keeps its own selector/tabs).
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-host-conversation-id', 'conv-1');
+    // Defaults to the agent page's own drive while the session record is
+    // unresolved — correct for the overwhelming common case.
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-1');
+    expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('a session-less conversation wears the SAME pane bar, carrying the new-conversation control', async () => {
+    // The whole point: which branch the user lands on is a property of the
+    // conversation they cannot see (binding is congenital and permanent), so
+    // the chrome must not differ. Before this, the plain branch rendered no
+    // header at all and the only way to start a conversation was the History
+    // tab.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.getByTestId('pane-bar')).toBeInTheDocument();
+    // The agent names the bar, exactly as a bound pane's identity does.
+    expect(screen.getByTestId('pane-bar')).toHaveTextContent('My Agent');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+      ),
+    );
+    // The same act the History tab's "New Conversation" performs — it lands on
+    // the Chat tab showing the mint, without the user ever visiting History.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+  });
+
+  it('the bar\'s "+" cannot double-mint — the second click of a pair is swallowed', async () => {
+    // The mint has no idempotency key server-side, so two clicks would be two
+    // conversations. That was survivable while this action lived only behind
+    // the History tab; it now sits permanently beside the chat.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    let release: (value: { conversationId: string; sessionId: string | null }) => void = () => {};
+    mockCreatePageConversation.mockImplementation(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    const plus = screen.getByRole('button', { name: 'Start a new conversation' });
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+
+    expect(mockCreatePageConversation).toHaveBeenCalledTimes(1);
+
+    release({ conversationId: 'conv-2', sessionId: null });
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+
+    // And the guard RELEASES: a mint that finished must not leave the control
+    // dead for the rest of the session.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
+  it('a mint that FAILS releases the control and says so, rather than rejecting into nothing', async () => {
+    // Every caller fires this as `void handleCreateNew()`. Without the catch,
+    // the rejection is unhandled — which in this repo fails the CI job while
+    // every test still reports passing — and the user sees a button that simply
+    // does nothing.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockRejectedValue(new Error('spawn refused'));
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalled());
+    // Still on the conversation it had, and the control is usable again.
+    expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
+  it('the "+" mints INTO the session when this branch is showing a BOUND conversation', async () => {
+    // The plain branch is not exclusively session-less: it is also where a
+    // bound conversation lands whenever `canUseSessions` goes momentarily
+    // false, which it does on every routine background auth recheck of an
+    // already-signed-in session. Minting without the id there would hand back a
+    // permanently session-less replacement and abandon a live workspace — the
+    // exact loss `mintReplacementForCurrent` passes its own id to prevent.
+    authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: true };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    // No pane grid: canUseSessions is false, so the bound conversation renders plain.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+      ),
+    );
+  });
+
+  it('mid-stream, BOTH new-conversation controls refuse VISIBLY rather than no-op', async () => {
+    // The stream guard lives in the shared handler, which History's button
+    // reaches too. Guarding there without disabling here is a button that looks
+    // live and does nothing — the failure the grid avoids by pairing the same
+    // guard with a visible disabled state.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    act(() => {
+      usePendingStreamsStore.getState().addStream({
+        messageId: 'msg-1',
+        // The channel an agent's own stream is tagged with is its page id,
+        // which for this fixture IS the agent id.
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+        triggeredBy: { userId: 'user-1', displayName: 'Tester' },
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).toBeDisabled(),
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    // The mock forwards `createDisabled`, so this asserts the PROP reached the
+    // shared tab — which is the whole fix; the real button's `disabled` is
+    // PageAgentHistoryTab's own concern and is covered there.
+    expect(await screen.findByTestId('history-create-new')).toBeDisabled();
+    expect(mockCreatePageConversation).not.toHaveBeenCalled();
+  });
+
+  it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
+    // Reachable now that a global session can host any accessible agent's
+    // conversation (create-conversation-in-workspace.ts): this agent page's
+    // most-recent conversation can be bound to a global session. AgentPanes
+    // must scope to the session's OWN drive (null), never `page.driveId` —
+    // otherwise `agentWorkspacesKey`/the picker look in the wrong workspace.
+    // The raw session-record shape `useSessionRecord` resolves to (not a
+    // pre-coalesced driveId) — a RESOLVED global session, session.driveId null.
+    mockUseSWR.mockReturnValue({ data: { session: { driveId: null } } });
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-global' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-global/conv-1'));
+    expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', '');
+  });
+
+  it('a signed-out visitor gets the plain chat even for a session-bound conversation (review M2)', async () => {
+    // A shared session-bound thread can be reached by a visitor whose auth
+    // hasn't resolved yet (or has none); a grid whose every affordance 403s
+    // — except the destructive last-pane-close — is worse than the chat
+    // they can actually use. Sessions/chat/panes are open to every
+    // AUTHENTICATED user now (not just admins), so this only still applies
+    // when there's no user at all.
+    authState.current = { user: null, isLoading: false };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('a STALE persisted user with auth still resolving gets the plain chat, not the pane grid (review #2326)', async () => {
+    // `useAuthStore` persists `user`, so after an expired session a hydrated
+    // stale row coexists with a still-in-flight /api/auth/me. The grid (and
+    // its session actions) must wait for resolution, not trust the stale row.
+    authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: true };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('a non-admin authenticated user gets the real pane grid for a session-bound conversation', async () => {
+    authState.current = { user: { id: 'user-2', role: 'user' }, isLoading: false };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('the grid receives the read-only verdict (review M2)', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-readonly', 'true'));
+  });
+
+  it('a pre-session conversation renders the plain chat — no grid, no splits', async () => {
+    resolveTo({ conversationId: 'conv-old', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-old'));
+    expect(screen.queryByTestId('agent-panes')).not.toBeInTheDocument();
+  });
+
+  it('marks the chat read-only when the permission check says canEdit: false', async () => {
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
+  });
+
+  it('a read-only viewer still gets the "+" — the create route gates on VIEW, not edit', async () => {
+    // `isReadOnly` here means "can view, cannot edit". Creating a conversation
+    // is gated server-side on `canPrincipalViewPage`, so a viewer starting
+    // their own conversation with someone else's agent is a supported act.
+    // Pinned so a later "tidy-up" does not gate this control on isReadOnly and
+    // silently take the affordance away from every viewer.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
+    expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled();
+  });
+
+  it('History is a full-height TAB, not a popover', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+
+    expect(await screen.findByTestId('history-tab')).toBeInTheDocument();
+    // The one structural fact that made the popover broken: the tab content is
+    // a flexing region the h-full component can resolve against.
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('selecting a conversation from History opens it in Chat, carrying its session', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-2' }];
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    fireEvent.click(await screen.findByTestId('history-select-conv-2'));
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-2/conv-2'));
+  });
+
+  it('Save appears in the PANE BAR while the settings tab is showing', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.queryByRole('button', { name: /^save$/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+
+    // In the bar, not a header of its own — the page has none.
+    expect(await within(screen.getByTestId('pane-bar')).findByRole('button', { name: /^save$/i }))
+      .toBeInTheDocument();
+    expect(screen.getByTestId('page-agent-settings-tab')).toBeInTheDocument();
+  });
+
+  it('disables Save until PageAgentSettingsTab reports a dirty change', async () => {
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    const saveButton = await screen.findByRole('button', { name: /^save$/i });
+    expect(saveButton).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+
+    expect(saveButton).not.toBeDisabled();
+  });
+
+  it('shows an inline "Saved" confirmation after a save, then reverts to disabled', async () => {
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    await userEvent.click(screen.getByRole('button', { name: 'mark-dirty' }));
+    const saveButton = screen.getByRole('button', { name: /^save$/i });
+    expect(saveButton).not.toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'finish-config-update' }));
+
+    expect(await screen.findByRole('button', { name: /^saved$/i })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled(), {
+      timeout: 3000,
+    });
+  });
+
+  it('loads the agent config so the Settings tab has data, not an eternal spinner', async () => {
+    // The rewrite once dropped this fetch entirely — PageAgentSettingsTab
+    // shows its loading state until config arrives, so a page that never
+    // fetches it has a Settings tab that never works (codex review, P1).
+    // Now sourced from the SWR-backed useAgentConfig hook (shared with every
+    // pane showing this agent's Settings tab, see useAgentConfig.test.ts for
+    // its own fetch/cache-sharing behavior) — this suite only verifies
+    // AgentPageView wires it with the right pageId and threads the result
+    // through to the Settings tab.
+    mockUseAgentConfig.mockReturnValue({
+      config: { systemPrompt: '', enabledTools: [], availableTools: [] },
+      setConfig: vi.fn(),
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(mockUseAgentConfig).toHaveBeenCalledWith('agent-1');
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId('page-agent-settings-tab')).toHaveAttribute('data-has-config', 'true'),
+    );
+  });
+
+  it('cross-links to the Agents console from the pane bar, naming the conversation and agent', async () => {
+    // Icon-only now: it sits in the 30px bar beside the pane's other controls,
+    // where the old header's text label would not fit. The session-BOUND case
+    // is the grid's — see AgentPanes' own suite for the per-pane link, which
+    // carries `workspace=` too.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.getByLabelText('Open in Agents')).toHaveAttribute(
+      'href',
+      '/dashboard/drive-1/agents?c=conv-1&agent=agent-1',
+    );
+  });
+
+  it('hides the console cross-link from a signed-out visitor — the console would refuse them', async () => {
+    authState.current = { user: null, isLoading: false };
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.queryByLabelText('Open in Agents')).not.toBeInTheDocument();
+  });
+
+  it('keeps the bar — and so Settings — when the AGENT record fails to load', async () => {
+    // The old page header's tabs made this work for free: Settings is keyed by
+    // `page`, not by the agent record, so a user whose agent could not be
+    // fetched could still open Settings and fix it. Dropping the header must
+    // not take that away, so the error replaces the CHAT BODY only.
+    resolvedAgent.current = {
+      agent: null,
+      isLoading: false,
+      error: new Error('nope'),
+      retry: vi.fn(),
+    };
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    expect(screen.getByTestId('agent-page-view-error')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: /settings/i }));
+    expect(await screen.findByTestId('page-agent-settings-tab')).toBeInTheDocument();
+    expect(screen.queryByTestId('agent-page-view-error')).not.toBeInTheDocument();
+  });
+
+  it('contains NONE of the removed chrome: no status chip, no Add shell, no history popover', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(screen.queryByTestId('sandbox-status-chip')).not.toBeInTheDocument();
+    expect(screen.queryByText(/add shell/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Conversation history')).not.toBeInTheDocument();
+    // Deliberately NOT asserting the absence of 'Open in Agents' here: it is
+    // mocked away with `AgentPanes`, so the assertion would be vacuous — and
+    // it would state the OPPOSITE of what ships, since every page-hosted pane
+    // renders that link from its own bar. See AgentPanes' suite for the real
+    // assertion.
+  });
+
+  it('does not fetch the agent history for a session-bound conversation — nothing there reads it', async () => {
+    // `activeTab` is the SESSION-LESS branch's state. The grid keeps it on
+    // 'chat' forever, so the old `enabled: history || chat` meant every
+    // session-bound page load pulled the agent's whole conversation list for a
+    // branch that renders no History and cannot reach `handleSelectConversation`.
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+    expect(conversationsState.lastEnabled).toBe(false);
+  });
+
+  it('fetches the agent history exactly when the session-less History tab shows it', async () => {
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await screen.findByTestId('pane-bar');
+    expect(conversationsState.lastEnabled).toBe(false);
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    await screen.findByTestId('history-tab');
+    expect(conversationsState.lastEnabled).toBe(true);
+  });
+
+  it('the webhooks entry point is no longer page chrome — it moved into Settings', async () => {
+    // Asserted on the SESSION-LESS branch, where the page's own bar really is
+    // the whole surface, so the absence means something. In the grid branch it
+    // would be vacuous (AgentPanes is mocked).
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await screen.findByTestId('pane-bar');
+    expect(screen.queryByLabelText('Incoming Webhooks')).not.toBeInTheDocument();
+  });
+
+  describe('deleting the current conversation (issue #2263, finding 4)', () => {
+    // A note on the channel these drive. `onConversationDelete` fires from
+    // `useConversations.deleteConversation`, and the page hands that to exactly
+    // one place: the SESSION-LESS branch's History. So a signed-in, session-bound
+    // fixture (the grid) could not reach it through the UI.
+    //
+    // They use one anyway, deliberately: the handler under test is
+    // `mintReplacementForCurrent`, which the GRID reaches too — via
+    // `onConversationClosed` when a listing closes with no replacement — and the
+    // session-bound branches of that handler (mint into the same session, patch
+    // the listing cache, prune the stale pane) only exist when `current` is
+    // bound. Driving it through `onConversationDelete` is the smaller door onto
+    // shared logic, not a claim that History is reachable here. The close
+    // channel's own entry point is covered by the `onConversationClosed`
+    // describe below.
+
+    it('when session-bound, mints the replacement INTO that session — never a new one', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('inserts the replacement into the sessions-listing cache LOCALLY, not just a background revalidate', async () => {
+      // A background revalidate alone leaves a real window: closing the
+      // replacement pane before that GET resolves (or it failing outright)
+      // would still read the brand-new row as absent from `AgentPanes`' own
+      // cache and take the pure layout-close path instead of DELETE — or
+      // even offer to end the session on a grid whose only cached listing is
+      // stale (the same class of bug `handlePickAgent` already guards
+      // against via its own local `recordMintedConversation`, not merely a
+      // revalidate — caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1', expect.any(Function), { revalidate: false }));
+      const [, updater] = mockMutate.mock.calls.find(([key]) => key === '/api/agent-workspaces?driveId=drive-1')!;
+      const updated = (updater as (current: unknown) => unknown)({
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [] }],
+      });
+      expect(updated).toEqual({
+        sessions: [{ workspaceId: 'ses-1', sessionId: 'ses-1', conversations: [{ conversationId: 'conv-2', agentPageId: 'agent-1', lastMessageAt: null }] }],
+      });
+    });
+
+    it('also revalidates the sessions-listing cache after minting the replacement, so a fast re-close sees the new row', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(mockMutate.mock.calls.some(([key]) => typeof key === 'function')).toBe(true));
+      const predicate = mockMutate.mock.calls.find(([key]) => typeof key === 'function')![0] as (
+        key: unknown,
+      ) => boolean;
+      expect(predicate('/api/agent-workspaces?driveId=drive-1')).toBe(true);
+      expect(predicate('/api/pages/agent-1')).toBe(false);
+    });
+
+    it('prunes the pane that was showing the deleted conversation, wherever it lived in the grid', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // A grid where the deleted conversation is NOT the focused pane — the
+      // replacement must land where the thread actually WAS, not "wherever the
+      // user happens to be looking".
+      useAgentWorkspaceStore.getState().hydrateFromServer('ses-1', {
+        rev: 1,
+        nodes: [
+          { nodeType: 'root', id: 'ses-1', parentId: null, position: 0, axis: 'row' },
+          { nodeType: 'pane', id: 'n-stale', parentId: 'ses-1', position: 0, target: { kind: 'chat', id: 'conv-1' } },
+          { nodeType: 'pane', id: 'n-other', parentId: 'ses-1', position: 1, target: { kind: 'chat', id: 'conv-9' } },
+        ],
+        targets: [],
+      });
+      useAgentWorkspaceStore.getState().selectNode('ses-1', 'n-other');
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      // A binding is for life, so this is a PLACEMENT, not a rebind: the
+      // replacement takes a node of its own where the stale one was, and the
+      // stale node is DESTROYED. It used to park — a member off the screen —
+      // which is the state this correction removes; a node showing a thread
+      // whose history is gone has nothing left to be a member for.
+      await waitFor(() => {
+        const nodes = useAgentWorkspaceStore.getState().workspaces['ses-1'].nodes;
+        const replacement = nodes.find(
+          (node) => node.nodeType === 'pane' && node.target?.kind === 'chat' && node.target.id === 'conv-2',
+        );
+        expect(replacement?.parentId).toBe('ses-1');
+        expect(nodes.find((node) => node.id === 'n-stale')).toBeUndefined();
+      });
+    });
+
+    it('when NOT session-bound, falls back to the plain new-conversation path unaffected', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: null });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+    });
+
+    it('a session-less mint that comes back session-bound switches to the pane grid with the REAL new session, not null', async () => {
+      // The stale conversation had no session (sessionId: null), so the mint
+      // call passes sessionId: null too — but createPageConversation is free
+      // to spawn a brand-new session on that path (canUseSessions), and the
+      // override must reflect what it actually returned, not the pre-mint
+      // guess (a stale-outer-variable regression caught in adversarial
+      // review after the round-2 async-gap fix).
+      resolveTo({ conversationId: 'conv-1', sessionId: null });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-new' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-new'));
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+      expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+    });
+
+    it('a stale History delete (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      // `useConversations` binds `onConversationDelete` to whichever id WAS
+      // current at click time (conv-1) and fires it whenever that DELETE
+      // resolves, however late — even after the user has already switched to
+      // a different thread. The callback must recover using conv-1, not
+      // whatever `current` has since become, or it mints a replacement into
+      // the WRONG (newly-current) conversation's session (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // `current` moves to a different thread WHILE conv-1's own DELETE is
+      // still in flight. The page has no History tab of its own any more, so
+      // this is how a session-bound conversation actually moves now: the grid
+      // closes conv-1's listing and rebinds to another OPEN thread of the same
+      // agent, and the page follows it rather than minting.
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the late-arriving delete must be a no-op.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+
+    it('reports an error rather than crashing when the replacement mint itself fails', async () => {
+      // The listing close already succeeded server-side by the time this
+      // runs — only the replacement POST fails (network, lost permission, a
+      // concurrent cap fill). Without a catch this was an unhandled
+      // rejection (caught in review).
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockRejectedValue(new Error('quota exceeded'));
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      conversationsState.lastOnConversationDelete?.('conv-1');
+
+      await waitFor(() => expect(consoleErrorSpy).toHaveBeenCalled());
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('the History tab "New" button is unaffected — it always spawns a fresh session, never reuses', async () => {
+      // Pinned on the SESSION-LESS surface, which is the only place the page
+      // still owns a History tab: for a session-bound conversation the grid's
+      // own History now answers, and it reuses. A signed-out visitor is how a
+      // BOUND conversation lands here, which is what makes this assertion
+      // sharp — the bar's "+" beside it passes `reuseSessionId: 'ses-1'`,
+      // History's "New" deliberately does not.
+      authState.current = { user: null, isLoading: false };
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-new' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('plain-chat')).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+      await userEvent.click(await screen.findByTestId('history-create-new'));
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+        ),
+      );
+    });
+  });
+
+  describe('onConversationClosed — a session-grid listing close, not a history delete', () => {
+    it("mints a fresh replacement for THIS agent when the grid closed current's listing", async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it('follows the grid rebind instead of minting when it already points at another OPEN conversation of THIS agent', async () => {
+      // The grid closed conv-1's listing but it was grid-last with another
+      // open conversation (conv-2) of the SAME agent still available — it
+      // rebound the pane to that rather than ending the session. This tab
+      // should follow the same rebind rather than minting a third,
+      // redundant conversation and leaving conv-2 an orphaned empty thread.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-2'));
+    });
+
+    it("still mints when the grid's rebind target belongs to a DIFFERENT agent", async () => {
+      // `next` exists, but for another agent's conversation — not something
+      // this page can show as its own `current`, so it must mint its own
+      // replacement exactly as when there was no rebind at all.
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'other-agent',
+      });
+
+      await waitFor(() =>
+        expect(mockCreatePageConversation).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+        ),
+      );
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-3'));
+    });
+
+    it('ignores a close for a conversation that is not the currently tracked one', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-other', next: null, nextAgentPageId: null });
+
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('ses-1/conv-1');
+    });
+
+    it('a stale close (captured before the user selected a different thread) does not mint an unwanted replacement', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+      const staleCallback = agentPanesState.firstOnConversationClosed;
+
+      // `current` moves on WHILE a close DELETE for conv-1 is still in flight —
+      // before that request's own callback (captured on the earlier render)
+      // ever fires. The page has no History tab of its own any more, so this is
+      // the grid rebinding conv-1's listing to conv-2 and the page following.
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      staleCallback?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+
+      // 'conv-1' no longer matches the CURRENT tracked conversation
+      // ('conv-2'), so the stale callback must be a no-op — not mint an
+      // unnecessary replacement and not disturb the user's newer selection.
+      expect(mockCreatePageConversation).not.toHaveBeenCalled();
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+
+    it('a SECOND async gap — switching selection while the replacement mint itself is in flight — does not clobber the newer pick', async () => {
+      resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+      conversationsState.current.conversations = [{ id: 'conv-2', sessionId: 'ses-1' }];
+      let resolveCreate!: (value: { conversationId: string; sessionId: string | null }) => void;
+      mockCreatePageConversation.mockReturnValue(
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+      );
+      render(<AgentPageView page={pageFixture()} />);
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+      // The grid closes conv-1's listing (still the CURRENT conversation) —
+      // this starts the replacement mint, deliberately left pending.
+      agentPanesState.lastOnConversationClosed?.({ conversationId: 'conv-1', next: null, nextAgentPageId: null });
+      await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalledTimes(1));
+
+      // WHILE that mint's own network call is still in flight, the grid reports
+      // a rebind for the same listing and the page follows it to conv-2 — the
+      // newer selection the pending mint must not clobber.
+      agentPanesState.lastOnConversationClosed?.({
+        conversationId: 'conv-1',
+        next: 'conv-2',
+        nextAgentPageId: 'agent-1',
+      });
+      await waitFor(() => expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2'));
+
+      // The mint finally resolves.
+      resolveCreate({ conversationId: 'conv-3', sessionId: 'ses-1' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The user's newer pick (conv-2) survives — not clobbered by conv-3,
+      // the replacement for a conversation the user already moved on from.
+      expect(screen.getByTestId('agent-panes')).toHaveTextContent('conv-2');
+    });
+  });
+
+  describe('the past-conversations deep link (?conversationId=&sessionId=) is consumed exactly once', () => {
+    // Left in the URL, a later refresh (after the user switches to a
+    // different conversation via the History tab) would remount this
+    // component, re-read the same stale params, and silently reopen the
+    // original deep-linked thread instead of wherever the user actually
+    // navigated to (review finding — a real bug on refresh, not cosmetic).
+    it('strips conversationId/sessionId from the URL right after capturing them', () => {
+      vi.mocked(useSearchParams).mockReturnValue(
+        new URLSearchParams('conversationId=conv-deep-link&sessionId=ses-deep-link') as ReturnType<typeof useSearchParams>,
+      );
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1?conversationId=conv-deep-link&sessionId=ses-deep-link');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      // Assert the user-visible CONTRACT (the final URL) rather than spying
+      // on replaceState call details — a call-history assertion would pass
+      // even if a LATER call re-added the params, and fail for an unrelated
+      // history write elsewhere in the render path (review finding).
+      const currentParams = new URL(window.location.href).searchParams;
+      expect(currentParams.has('conversationId')).toBe(false);
+      expect(currentParams.has('sessionId')).toBe(false);
+    });
+
+    it('does nothing when there was no deep-link conversationId to begin with', () => {
+      vi.mocked(useSearchParams).mockReturnValue(new URLSearchParams() as ReturnType<typeof useSearchParams>);
+      window.history.replaceState({}, '', '/dashboard/drive-1/page-1');
+
+      render(<AgentPageView page={pageFixture()} />);
+
+      expect(window.location.pathname).toBe('/dashboard/drive-1/page-1');
+      expect(window.location.search).toBe('');
+    });
+  });
+});

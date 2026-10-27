@@ -70,11 +70,14 @@ vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id' } }));
 vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id', sourceTable: 'sourceTable', sourceId: 'sourceId' } }));
 
 vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
-  createCalendarTriggerWorkflow: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
+  // POST route uses upsertCalendarTriggerWorkflowInTx (not createCalendarTriggerWorkflow)
+  // since recurring and one-shot events share the same upsert path in this branch.
+  upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn().mockResolvedValue(true),
   getDriveIdsForUser: vi.fn().mockResolvedValue(['drive-1']),
   canUserViewPage: vi.fn().mockResolvedValue(true),
@@ -89,6 +92,18 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
   checkMCPCreateScope: vi.fn(() => null),
   filterDrivesByMCPScope: vi.fn((_: unknown, ids: string[]) => ids),
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
+  }),
+  getPrincipalDriveIds: vi.fn(async (auth: { userId: string }) => {
+    const { getDriveIdsForUser } = await import('@pagespace/lib/permissions/permissions');
+    return getDriveIdsForUser(credentialActor(auth.userId, null));
+  }),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 vi.mock('@/lib/websocket/calendar-events', () => ({
@@ -99,10 +114,9 @@ vi.mock('@/lib/integrations/google-calendar/push-service', () => ({
   pushEventToGoogle: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('@/lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure and cheap; these cases all pass absolute (Z) datetimes,
+// so the real parser is used rather than a stub that would have to fake the
+// naive-datetime rule.
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
@@ -124,9 +138,10 @@ import { POST } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import {
-  createCalendarTriggerWorkflow,
+  upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user-1';
 const DRIVE_ID = 'drive-1';
@@ -177,7 +192,7 @@ describe('POST /api/calendar/events — agent trigger context', () => {
     });
   });
 
-  it('forwards agentTrigger.instructionPageId and contextPageIds to createCalendarTriggerWorkflow', async () => {
+  it('forwards agentTrigger.instructionPageId and contextPageIds to upsertCalendarTriggerWorkflowInTx', async () => {
     const res = await POST(makeRequest({
       driveId: DRIVE_ID,
       title: 'Standup with prep',
@@ -206,7 +221,8 @@ describe('POST /api/calendar/events — agent trigger context', () => {
       }),
     );
 
-    expect(createCalendarTriggerWorkflow).toHaveBeenCalledWith(
+    expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         driveId: DRIVE_ID,
         agentTrigger: expect.objectContaining({

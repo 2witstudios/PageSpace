@@ -1,29 +1,37 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql, inArray, asc } from '@pagespace/db/operators'
-import { pages, drives, chatMessages } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, getUserAccessiblePagesInDriveWithDetails } from '@pagespace/lib/permissions/permissions';
-import { type ToolExecutionContext } from '../core';
+import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
+import { pages, drives } from '@pagespace/db/schema/core';
+import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
+import { sheetMatchingRowsByPage, type MatchingRowText } from '@pagespace/lib/sheets/store';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
+import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
+import type { ToolExecutionContext } from '../core/types';
+import { resolveDriveScope } from './drive-context-defaults';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 export const searchTools = {
   /**
    * Search page content and conversations using regular expressions
    */
   regex_search: tool({
-    description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference.',
+    description: 'Search page content and conversation messages using regular expression patterns. Searches both documents and conversations by default. Returns matches with IDs, titles, and context for reference. Also use to recover earlier tool results or conversation context that has been condensed or elided from the active context window.',
     inputSchema: z.object({
-      driveId: z.string().describe('The unique ID of the drive to search in'),
+      driveId: z.string().optional().describe('The unique ID of the drive to search in. Omit to search the workspace currently in view (see LOCATION context).'),
       pattern: z.string().describe('Regular expression pattern to search for (e.g., "TODO.*urgent", "\\d{4}-\\d{2}-\\d{2}", "deprecated.*API")'),
       searchIn: z.enum(['content', 'title', 'both']).default('content').describe('Where to search: content only, title only, or both'),
       maxResults: z.number().optional().default(50).describe('Maximum number of results to return'),
       contentTypes: z.array(z.enum(['documents', 'conversations'])).optional().default(['documents', 'conversations']).describe('What content to search: documents, conversations, or both'),
     }),
-    execute: async ({ driveId, pattern, searchIn, maxResults = 50, contentTypes = ['documents', 'conversations'] }, { experimental_context: context }) => {
+    execute: async ({ driveId: driveIdArg, pattern, searchIn, maxResults = 50, contentTypes = ['documents', 'conversations'] }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
+
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
 
       try {
         // Validate regex pattern to prevent ReDoS attacks
@@ -40,9 +48,7 @@ export const searchTools = {
           throw new Error(`Invalid regex pattern: ${(e as Error).message}`);
         }
 
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -61,19 +67,25 @@ export const searchTools = {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
-            sql`${pages.content} ~ ${pgPattern}`
+            eq(pages.excludeFromSearch, false),
+            // A sheet's text is in its rows; `pages.content` is empty for a
+            // materialised one, so matching the column alone made every
+            // spreadsheet invisible to an agent's search.
+            sql`(${pages.content} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         } else if (searchIn === 'title') {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
+            eq(pages.excludeFromSearch, false),
             sql`${pages.title} ~ ${pgPattern}`
           );
         } else {
           whereConditions = and(
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
-            sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+            eq(pages.excludeFromSearch, false),
+            sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         }
 
@@ -92,7 +104,7 @@ export const searchTools = {
         const matchingPages = await query.limit(maxResults);
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
         const pageMap = new Map(accessiblePages.map(p => [p.id, p]));
 
@@ -106,6 +118,24 @@ export const searchTools = {
           conversationId?: string;
           suggestedLineRange?: { start: number; end: number };
         }> = [];
+
+        // One query for every visible sheet's matching rows, not one per sheet.
+        //
+        // Skipped entirely when no excerpt will be read from it — a title-only
+        // search, or a call that asked for conversations and not documents.
+        const sheetExcerpts = searchIn === 'title' || !contentTypes.includes('documents')
+          ? new Map<string, MatchingRowText[]>()
+          : await sheetMatchingRowsByPage(
+              matchingPages
+                .filter(page => isSheetType(page.type as PageType) && accessiblePageIds.has(page.id))
+                .map(page => page.id),
+              { regex: pgPattern },
+              // Bounded at 50 rather than the 5 the list shows, so
+              // `totalMatches` is not silently pinned to the display cap — the
+              // document branch below counts every matching line and slices
+              // afterwards.
+              { limit: 50 },
+            );
 
         // Search documents if requested
         if (contentTypes.includes('documents')) {
@@ -133,16 +163,32 @@ export const searchTools = {
               // Extract matching lines if searching content
               const matchingLines: Array<{ lineNumber: number; content: string }> = [];
               if (searchIn !== 'title') {
-                const lines = page.content.split('\n');
-                // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
-                lines.forEach((line, index) => {
-                  if (jsRegex.test(line)) {
-                    matchingLines.push({
-                      lineNumber: index + 1,
-                      content: line.substring(0, 200), // Truncate long lines
-                    });
+                if (isSheetType(page.type as PageType)) {
+                  // Quote the rows that MATCHED, found by the same predicate
+                  // that made the page a hit.
+                  //
+                  // A sheet's text is in its rows, so `page.content` is empty
+                  // and a spreadsheet came back as a hit with a blank excerpt.
+                  // A bounded preview does not fix that either: a match at row
+                  // 5,000, on a later tab, or past the character cap falls
+                  // outside the preview, and the result still reports zero
+                  // matching lines for a page the database says matched.
+                  for (const row of sheetExcerpts.get(page.id) ?? []) {
+                    // The spreadsheet row number, not an offset into a preview.
+                    matchingLines.push({ lineNumber: row.rowIndex + 1, content: row.text });
                   }
-                });
+                } else {
+                  const lines = page.content.split('\n');
+                  // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
+                  lines.forEach((line, index) => {
+                    if (jsRegex.test(line)) {
+                      matchingLines.push({
+                        lineNumber: index + 1,
+                        content: line.substring(0, 200), // Truncate long lines
+                      });
+                    }
+                  });
+                }
               }
 
               results.push({
@@ -165,22 +211,32 @@ export const searchTools = {
           if (aiChatPages.length > 0) {
             const aiChatPageIds = aiChatPages.map(p => p.id);
 
-            // Search conversation messages
+            // Search conversation messages.
+            //
+            // Reads the unified `messages` table since the message-table merge
+            // (epic "Agent-Session Single Source of Truth", Phase 4 / D6).
+            // Page scope comes from the JOIN — `conversations.type = 'page'`
+            // AND `conversations.contextId = <pageId>` — not from
+            // `messages.pageId`: `contextId` is the end-state authority and is
+            // indexed (`conversations_context_id_idx`), while `messages.pageId`
+            // is transitional and dropped at the contract PR.
             const conversationMatches = await db
               .select({
-                id: chatMessages.id,
-                pageId: chatMessages.pageId,
-                conversationId: chatMessages.conversationId,
-                content: chatMessages.content,
-                createdAt: chatMessages.createdAt,
+                id: messages.id,
+                pageId: sql<string>`${conversations.contextId}`,
+                conversationId: messages.conversationId,
+                content: messages.content,
+                createdAt: messages.createdAt,
               })
-              .from(chatMessages)
+              .from(messages)
+              .innerJoin(conversations, eq(conversations.id, messages.conversationId))
               .where(and(
-                inArray(chatMessages.pageId, aiChatPageIds),
-                eq(chatMessages.isActive, true),
-                sql`${chatMessages.content} ~ ${pgPattern}`
+                eq(conversations.type, 'page'),
+                inArray(conversations.contextId, aiChatPageIds),
+                eq(messages.isActive, true),
+                sql`${messages.content} ~ ${pgPattern}`
               ))
-              .orderBy(asc(chatMessages.createdAt))
+              .orderBy(asc(messages.createdAt), asc(messages.id))
               .limit(maxResults);
 
             // Group by conversation and build results
@@ -201,16 +257,22 @@ export const searchTools = {
             const allConvMessages = matchingConversationIds.length > 0
               ? await db
                   .select({
-                    id: chatMessages.id,
-                    pageId: chatMessages.pageId,
-                    conversationId: chatMessages.conversationId,
-                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${chatMessages.pageId}, ${chatMessages.conversationId} ORDER BY ${chatMessages.createdAt})`.as('line_number'),
+                    id: messages.id,
+                    pageId: sql<string>`${conversations.contextId}`,
+                    conversationId: messages.conversationId,
+                    lineNumber: sql<number>`ROW_NUMBER() OVER (PARTITION BY ${conversations.contextId}, ${messages.conversationId} ORDER BY ${messages.createdAt}, ${messages.id})`.as('line_number'),
                   })
-                  .from(chatMessages)
+                  .from(messages)
+                  .innerJoin(conversations, eq(conversations.id, messages.conversationId))
                   .where(and(
-                    inArray(chatMessages.pageId, matchingPageIds),
-                    inArray(chatMessages.conversationId, matchingConversationIds),
-                    eq(chatMessages.isActive, true)
+                    eq(conversations.type, 'page'),
+                    inArray(conversations.contextId, matchingPageIds),
+                    inArray(messages.conversationId, matchingConversationIds),
+                    eq(messages.isActive, true),
+                    // A 'streaming' placeholder is hidden from every other reader — if it
+                    // participates in this ROW_NUMBER() partition, computed line numbers shift
+                    // by one relative to what the client actually displays.
+                    ne(messages.status, 'streaming')
                   ))
               : [];
 
@@ -306,6 +368,8 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
+          searchedDrive: { id: driveId, name: drive.name },
+          scopeSource,
           pattern,
           searchIn,
           contentTypes,
@@ -319,7 +383,7 @@ export const searchTools = {
             ? `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}" (truncated from ${totalBeforeTruncation})`
             : `Found ${truncatedResults.length} result${truncatedResults.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
-            pagesScanned: matchingPages.length,
+            pagesScanned: matchingPages.filter(p => accessiblePageIds.has(p.id)).length,
             documentsFound: truncatedResults.filter(r => r.type !== 'AI_CHAT').length,
             conversationsFound: truncatedResults.filter(r => r.type === 'AI_CHAT').length,
             documentTypes: [...new Set(truncatedResults.map(r => r.type))],
@@ -348,21 +412,24 @@ export const searchTools = {
   glob_search: tool({
     description: 'Find pages using glob-style patterns for titles and paths. Useful for discovering structural patterns like "README*", "*/meeting-notes/*", or "**/*.test".',
     inputSchema: z.object({
-      driveId: z.string().describe('The unique ID of the drive to search in'),
+      driveId: z.string().optional().describe('The unique ID of the drive to search in. Omit to search the workspace currently in view (see LOCATION context).'),
       pattern: z.string().describe('Glob pattern to match page titles/paths (e.g., "**/README*", "docs/**/*.md", "meeting-*")'),
-      includeTypes: z.array(z.enum(['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE'])).optional().describe('Filter by page types'),
+      // Derived from the canonical PageType enum: a hand-written list here
+      // omitted FILE, so agents filtering for that page type were rejected by
+      // zod before execute() ever ran (#2150).
+      includeTypes: z.array(z.enum(PageType)).optional().describe('Filter by page types'),
       maxResults: z.number().optional().default(100).describe('Maximum number of results to return'),
     }),
-    execute: async ({ driveId, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {
+    execute: async ({ driveId: driveIdArg, pattern, includeTypes, maxResults = 100 }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
       }
 
+      const { driveId, scopeSource } = resolveDriveScope(driveIdArg, context as ToolExecutionContext);
+
       try {
-        // Check drive access
-        const hasDriveAccess = await getUserDriveAccess(userId, driveId);
-        if (!hasDriveAccess) {
+        if (!await canActorAccessDrive(context as ToolExecutionContext, driveId)) {
           throw new Error('You don\'t have access to this drive');
         }
 
@@ -377,11 +444,13 @@ export const searchTools = {
           ? and(
               eq(pages.driveId, driveId),
               eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false),
               inArray(pages.type, includeTypes)
             )
           : and(
               eq(pages.driveId, driveId),
-              eq(pages.isTrashed, false)
+              eq(pages.isTrashed, false),
+              eq(pages.excludeFromSearch, false)
             );
 
         // Get all pages in drive
@@ -399,7 +468,7 @@ export const searchTools = {
         const allPages = await query;
 
         // Get all accessible pages upfront to avoid N+1 queries
-        const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, driveId);
+        const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, driveId);
         const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
         // Build page hierarchy with paths
@@ -463,12 +532,14 @@ export const searchTools = {
         return {
           success: true,
           driveSlug: drive.slug,
+          searchedDrive: { id: driveId, name: drive.name },
+          scopeSource,
           pattern,
           results,
           totalResults: results.length,
           summary: `Found ${results.length} page${results.length === 1 ? '' : 's'} matching pattern "${pattern}"`,
           stats: {
-            totalPagesScanned: allPages.length,
+            totalPagesScanned: accessiblePageIds.size,
             matchingPages: results.length,
             documentTypes: [...new Set(results.map(r => r.type))],
             matchTypes: {
@@ -523,9 +594,7 @@ export const searchTools = {
         const results = [];
 
         for (const drive of userDrives) {
-          // Check drive access
-          const hasDriveAccess = await getUserDriveAccess(userId, drive.id);
-          if (!hasDriveAccess) continue;
+          if (!await canActorAccessDrive(context as ToolExecutionContext, drive.id)) continue;
 
           // Build search conditions
           let searchWhereConditions;
@@ -534,14 +603,16 @@ export const searchTools = {
             searchWhereConditions = and(
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
-              sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+              eq(pages.excludeFromSearch, false),
+              sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
             );
           } else {
             const searchPattern = `%${searchQuery}%`;
             searchWhereConditions = and(
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
-              sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`
+              eq(pages.excludeFromSearch, false),
+              sql`(${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)})`
             );
           }
 
@@ -559,7 +630,7 @@ export const searchTools = {
           const drivePages = await driveQuery.limit(maxResultsPerDrive);
 
           // Get all accessible pages upfront to avoid N+1 queries
-          const accessiblePages = await getUserAccessiblePagesInDriveWithDetails(userId, drive.id);
+          const accessiblePages = await getActorAccessiblePagesInDrive(context as ToolExecutionContext, drive.id);
           const accessiblePageIds = new Set(accessiblePages.map(p => p.id));
 
           // Filter by permissions using O(1) Set lookup

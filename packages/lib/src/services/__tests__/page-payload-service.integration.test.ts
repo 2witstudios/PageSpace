@@ -4,24 +4,25 @@
  * Requires a running Postgres database with the latest migrations applied.
  * Run via:
  *   ./scripts/test-with-db.sh
- *   pnpm --filter @pagespace/lib test -- src/services/__tests__/page-payload-service.integration.test.ts
+ *   bun run --filter '@pagespace/lib' test -- src/services/__tests__/page-payload-service.integration.test.ts
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, ne, desc } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
+import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadPagePayload } from '../page-payload-service';
+import { setCells } from '../../sheets/store';
 import { PageType } from '../../utils/enums';
+import { credentialActor } from '../../permissions/access-actor';
 
 describe('loadPagePayload (integration)', () => {
   beforeEach(async () => {
     await db.delete(channelMessages);
-    await db.delete(chatMessages);
     await db.delete(connections);
     await db.delete(pagePermissions);
     await db.delete(pages);
@@ -41,7 +42,7 @@ describe('loadPagePayload (integration)', () => {
       position: 1,
     });
 
-    const payload = await loadPagePayload(owner.id, doc.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), doc.id);
 
     expect(payload.page.id).toBe(doc.id);
     expect(payload.page.title).toBe('Doc');
@@ -62,7 +63,7 @@ describe('loadPagePayload (integration)', () => {
       { content: 'second', pageId: channel.id, userId: owner.id, createdAt: later },
     ]);
 
-    const payload = await loadPagePayload(owner.id, channel.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), channel.id);
 
     expect(payload.context.channelMessages?.map((m) => m.content)).toEqual(['first', 'second']);
   });
@@ -75,10 +76,37 @@ describe('loadPagePayload (integration)', () => {
     await factories.createChatMessage(chat.id, { content: 'kept', isActive: true });
     await factories.createChatMessage(chat.id, { content: 'dropped', isActive: false });
 
-    const payload = await loadPagePayload(owner.id, chat.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), chat.id);
 
     expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['kept']);
     expect(payload.context.chatMessages?.[0].role).toBeDefined();
+  });
+
+  /**
+   * `fetchChatMessages` reads the one `messages` table, scoped by
+   * `conversations.type='page' AND contextId = pageId` — the join that
+   * replaced `chat_messages.pageId` (epic "Agent-Session Single Source of
+   * Truth", Phase 4 / D6). What it must return is the page's ACTIVE,
+   * non-streaming rows, oldest-first, each carrying its derived page.
+   */
+  it('returns the AI_CHAT page\'s active history, oldest first, with the page derived', async () => {
+    const owner = await factories.createUser();
+    const drive = await factories.createDrive(owner.id);
+    const chat = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'AI parity' });
+
+    await factories.createChatMessage(chat.id, { content: 'oldest', userId: owner.id, createdAt: new Date('2026-01-01T10:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'newest', userId: owner.id, createdAt: new Date('2026-01-01T11:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: 'tombstoned', userId: owner.id, isActive: false, createdAt: new Date('2026-01-01T12:00:00Z') });
+    await factories.createChatMessage(chat.id, { content: '', userId: owner.id, status: 'streaming', createdAt: new Date('2026-01-01T13:00:00Z') });
+
+    const payload = await loadPagePayload(credentialActor(owner.id, null), chat.id);
+
+    // The tombstone and the mid-flight placeholder are excluded; what remains
+    // is oldest-first.
+    expect(payload.context.chatMessages?.map((m) => m.content)).toEqual(['oldest', 'newest']);
+    // `pageId` is DERIVED from the conversation now — there is no per-row page
+    // column left to read it from.
+    expect(payload.context.chatMessages?.every((m) => m.pageId === chat.id)).toBe(true);
   });
 
   it('returns FILE context with metadata for FILE pages', async () => {
@@ -92,7 +120,7 @@ describe('loadPagePayload (integration)', () => {
       originalFileName: 'cat.png',
     });
 
-    const payload = await loadPagePayload(owner.id, file.id);
+    const payload = await loadPagePayload(credentialActor(owner.id, null), file.id);
 
     expect(payload.context.file?.fileSize).toBe(1234);
     expect(payload.context.file?.mimeType).toBe('image/png');
@@ -105,7 +133,7 @@ describe('loadPagePayload (integration)', () => {
     const drive = await factories.createDrive(owner.id);
     const page = await factories.createPage(drive.id);
 
-    await expect(loadPagePayload(stranger.id, page.id)).rejects.toThrow(/not accessible/);
+    await expect(loadPagePayload(credentialActor(stranger.id, null), page.id)).rejects.toThrow(/not accessible/);
   });
 
   it('respects expired explicit grants (denies access)', async () => {
@@ -118,7 +146,7 @@ describe('loadPagePayload (integration)', () => {
       expiresAt: new Date(Date.now() - 60_000),
     });
 
-    await expect(loadPagePayload(grantee.id, page.id)).rejects.toThrow(/not accessible/);
+    await expect(loadPagePayload(credentialActor(grantee.id, null), page.id)).rejects.toThrow(/not accessible/);
   });
 
   it('redacts title and type for breadcrumb ancestors the caller cannot view', async () => {
@@ -145,7 +173,7 @@ describe('loadPagePayload (integration)', () => {
       canDelete: false,
     });
 
-    const payload = await loadPagePayload(grantee.id, grantedDoc.id);
+    const payload = await loadPagePayload(credentialActor(grantee.id, null), grantedDoc.id);
 
     expect(payload.breadcrumb.map((b) => b.id)).toEqual([secretFolder.id, grantedDoc.id]);
     const ancestor = payload.breadcrumb[0];
@@ -169,7 +197,7 @@ describe('loadPagePayload (integration)', () => {
     // runs until Postgres' internal recursion safeguards trip, which is far
     // slower than a bounded walk.
     const payload = await Promise.race([
-      loadPagePayload(owner.id, a.id),
+      loadPagePayload(credentialActor(owner.id, null), a.id),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('breadcrumb timed out')), 5_000),
       ),
@@ -179,6 +207,52 @@ describe('loadPagePayload (integration)', () => {
     // bounded walk tops out at the cap + 1 (seed row + cap recursive steps).
     expect(payload.breadcrumb.length).toBeLessThanOrEqual(256);
     expect(payload.breadcrumb[payload.breadcrumb.length - 1]?.id).toBe(a.id);
+  });
+
+  describe('sheets are served from rows, not from pages.content', () => {
+    it('materialises an unmigrated sheet and serves the projection', async () => {
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      const sheet = await factories.createPage(drive.id, {
+        type: 'SHEET',
+        title: 'Orders',
+        position: 0,
+        content:
+          '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "from document"\n',
+      });
+
+      const payload = await loadPagePayload(credentialActor(owner.id, null), sheet.id);
+      expect(payload.page.content).toContain('from document');
+    });
+
+    it('shows a row write that never touched pages.content', async () => {
+      // THE failure this cutover exists to close. A form submission wrote to
+      // `sheet_rows` while the editor read `pages.content`, so the owner of the
+      // sheet could not see the submission — and their next save re-serialised
+      // a document that had never contained it.
+      const owner = await factories.createUser();
+      const drive = await factories.createDrive(owner.id);
+      const sheet = await factories.createPage(drive.id, {
+        type: 'SHEET',
+        title: 'Responses',
+        position: 0,
+      });
+
+      await setCells({ pageId: sheet.id }, [{ address: 'A1', value: 'submitted' }], {
+        userId: owner.id,
+      });
+
+      const payload = await loadPagePayload(credentialActor(owner.id, null), sheet.id);
+      expect(payload.page.content).toContain('submitted');
+
+      // And the column itself is not what answered.
+      const [row] = await db
+        .select({ content: pages.content })
+        .from(pages)
+        .where(eq(pages.id, sheet.id))
+        .limit(1);
+      expect(row.content).not.toContain('submitted');
+    });
   });
 
   it('grants access to a user with a future-expiring view grant', async () => {
@@ -191,7 +265,7 @@ describe('loadPagePayload (integration)', () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    const payload = await loadPagePayload(grantee.id, page.id);
+    const payload = await loadPagePayload(credentialActor(grantee.id, null), page.id);
     expect(payload.page.id).toBe(page.id);
     expect(payload.page.type).toBe(PageType.DOCUMENT);
   });

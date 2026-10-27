@@ -179,10 +179,12 @@ vi.mock('../workers/queue-manager', () => ({
 }));
 
 vi.mock('../api/optimize', () => ({ imageRouter: 'mock-image-router' }));
-vi.mock('../api/upload', () => ({ uploadRouter: 'mock-upload-router' }));
 vi.mock('../api/serve', () => ({ cacheRouter: 'mock-cache-router' }));
 vi.mock('../api/ingest', () => ({ ingestRouter: 'mock-ingest-router' }));
+vi.mock('../api/verify', () => ({ verifyRouter: 'mock-verify-router' }));
 vi.mock('../api/avatar', () => ({ default: 'mock-avatar-router' }));
+vi.mock('../api/org-avatar', () => ({ default: 'mock-org-avatar-router' }));
+vi.mock('../api/drive-avatar', () => ({ default: 'mock-drive-avatar-router' }));
 vi.mock('../api/delete-file', () => ({ deleteFileRouter: 'mock-delete-file-router' }));
 
 vi.mock('../middleware/auth', () => ({
@@ -202,7 +204,11 @@ vi.mock('../middleware/resource-binding', () => ({
   ),
 }));
 
-vi.mock('../services/siem-adapter', () => ({
+vi.mock('../services/siem-adapter', async (importOriginal) => ({
+  // Spread the real module so exports the health builder relies on (notably
+  // SAFE_DELIVERY_ERROR_CLASSES, used by its read-time redaction guard) stay in
+  // sync automatically; only the config accessors are stubbed. See #989.
+  ...(await importOriginal<typeof import('../services/siem-adapter')>()),
   loadSiemConfig: vi.fn(() => ({ enabled: false, type: 'webhook' })),
   validateSiemConfig: vi.fn(() => ({ valid: true, errors: [] })),
 }));
@@ -213,6 +219,9 @@ vi.mock('../db', () => ({
   setPageFailed: vi.fn(),
   setPageVisual: vi.fn(),
   getPoolForWorker: vi.fn(),
+  // Unreached in this suite: no ADMIN_DATABASE_URL in the test env, so the
+  // SIEM pool routing resolves every read to the main pool.
+  getAdminPoolForWorker: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -238,6 +247,18 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  setupErrorHandlers: vi.fn(),
+}));
+
+// instrument.ts (Sentry init) is a side-effecting module-load-time import —
+// stub it so `import './instrument'` in server.ts doesn't hit the real SDK
+// (whose default integrations reach for setInterval(...).unref, unavailable
+// under this suite's fake/mocked timer environment).
+vi.mock('../instrument', () => ({}));
+vi.mock('@sentry/node', () => ({
+  captureException: vi.fn(),
+  flush: vi.fn(async () => true),
+  setupExpressErrorHandler: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -320,10 +341,25 @@ beforeEach(() => {
   delete process.env.CORS_ORIGIN;
   delete process.env.WEB_APP_URL;
   delete process.env.ADDITIONAL_ALLOWED_ORIGINS;
+  // This suite asserts the MAIN-pool SIEM routing, and said so only in a
+  // comment ("no ADMIN_DATABASE_URL in the test env") — an assumption about
+  // the ambient environment rather than something the suite established. The
+  // moment CI began providing ADMIN_DATABASE_URL, routing resolved to the
+  // admin pool, whose `getAdminPoolForWorker` is a bare stub here, and eight
+  // tests failed for a reason unrelated to what they assert.
+  //
+  // `stubEnv`, not `delete`: this package runs single-fork, so a raw delete
+  // leaks out of this file and the admin-DB integration suites then find the
+  // variable missing at module scope.
+  vi.stubEnv('ADMIN_DATABASE_URL', undefined as unknown as string);
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Hand ADMIN_DATABASE_URL back to whatever set it — under single-fork the
+  // next test FILE shares this process, and the admin-DB integration suites
+  // read it at module scope.
+  vi.unstubAllEnvs();
 });
 
 // ===========================================================================
@@ -637,10 +673,10 @@ describe('Express middleware registration', () => {
     expect(jsonArgs).toBeDefined();
   });
 
-  it('should mount upload router at /api/upload', () => {
-    const mount = capturedUse.find((args) => args[0] === '/api/upload');
+  it('should mount verify router at /api/verify', () => {
+    const mount = capturedUse.find((args) => args[0] === '/api/verify');
     expect(mount).toBeDefined();
-    expect(mount).toContain('mock-upload-router');
+    expect(mount).toContain('mock-verify-router');
   });
 
   it('should mount optimize router at /api/optimize', () => {
@@ -659,6 +695,24 @@ describe('Express middleware registration', () => {
     const mount = capturedUse.find((args) => args[0] === '/api/avatar');
     expect(mount).toBeDefined();
     expect(mount).toContain('mock-avatar-router');
+  });
+
+  it('ORG-1 (partial) should mount the org avatar router at /api/org-avatar behind service auth and the org-avatars:write scope', async () => {
+    const { authenticateService, requireScope } = await import('../middleware/auth');
+    const mount = capturedUse.find((args) => args[0] === '/api/org-avatar');
+    expect(mount).toBeDefined();
+    expect(mount).toContain('mock-org-avatar-router');
+    expect(mount).toContain(authenticateService);
+    expect((requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain('org-avatars:write');
+  });
+
+  it('should mount the drive avatar router at /api/drive-avatar behind service auth and the drive-avatars:write scope', async () => {
+    const { authenticateService, requireScope } = await import('../middleware/auth');
+    const mount = capturedUse.find((args) => args[0] === '/api/drive-avatar');
+    expect(mount).toBeDefined();
+    expect(mount).toContain('mock-drive-avatar-router');
+    expect(mount).toContain(authenticateService);
+    expect((requireScope as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])).toContain('drive-avatars:write');
   });
 
   it('should mount cache router at /cache', () => {
@@ -842,6 +896,64 @@ describe('GET /health', () => {
     // Receipts table missing — lastReceipt must be omitted
     expect(siem.sources.activity_logs.lastReceipt).toBeUndefined();
     expect(siem.sources.security_audit_log.lastReceipt).toBeUndefined();
+  });
+
+  it('given a cursor row holding a raw webhook body, should never surface it on unauthenticated /health (redacts to unclassified_error)', async () => {
+    // Acceptance test for #989: even if a legacy cursor row still contains a
+    // raw, customer-controlled webhook response body (secrets, PII, stack
+    // traces), the unauthenticated /health endpoint must expose only the safe
+    // classification marker — never the raw string.
+    const rawBody =
+      'HTTP 500: {"error":"invalid token: sk-live-abc123","user":"u_42","stack":"at h (/srv/app.js:9)"}';
+
+    const { loadSiemConfig } = await import('../services/siem-adapter');
+    const { getPoolForWorker } = await import('../db');
+    const { refreshSiemCursorCache } = await import('../server');
+
+    (loadSiemConfig as ReturnType<typeof vi.fn>).mockReturnValue({ enabled: true, type: 'webhook' });
+
+    const mockRelease = vi.fn();
+    const mockQuery = vi.fn().mockImplementation((sql: string) => {
+      if (sql.includes('siem_delivery_cursors')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: 'activity_logs',
+              lastDeliveredId: null,
+              lastDeliveredAt: null,
+              lastError: rawBody,
+              lastErrorAt: new Date('2026-04-10T12:05:00Z'),
+              deliveryCount: 0,
+              updatedAt: new Date('2026-04-10T12:05:05Z'),
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (sql.includes('siem_delivery_receipts')) {
+        const err: Error & { code?: string } = Object.assign(
+          new Error('relation "siem_delivery_receipts" does not exist'),
+          { code: '42P01' },
+        );
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    (getPoolForWorker as ReturnType<typeof vi.fn>).mockReturnValue({
+      connect: vi.fn().mockResolvedValue({ query: mockQuery, release: mockRelease }),
+    });
+
+    await refreshSiemCursorCache();
+
+    const { req, res, jsonMock } = makeReqRes();
+    await getHealthHandler()(req, res);
+
+    const { siem } = jsonMock.mock.calls[0][0];
+    // Status still reflects the error…
+    expect(siem.sources.activity_logs.status).toBe('error');
+    // …but the message is the safe marker, and the raw secret is gone.
+    expect(siem.sources.activity_logs.lastError).toBe('unclassified_error');
+    expect(JSON.stringify(jsonMock.mock.calls[0][0])).not.toContain('sk-live-abc123');
   });
 
   it('given a SIEM section DB error, should return 200 with a siem.error field instead of 500', async () => {

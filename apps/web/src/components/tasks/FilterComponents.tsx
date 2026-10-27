@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { TaskStatus, TaskPriority } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import type { Drive } from './types';
 
 export type DueDateFilter = 'all' | 'overdue' | 'today' | 'this_week' | 'upcoming';
 export type AssigneeFilter = 'mine' | 'all';
@@ -19,82 +18,9 @@ export type StatusGroupFilter = 'all' | 'active' | 'completed';
 export interface FilterValues {
   status?: TaskStatus;
   priority?: TaskPriority;
-  driveId?: string;
   dueDateFilter?: DueDateFilter;
   assigneeFilter?: AssigneeFilter;
   statusGroup?: StatusGroupFilter;
-}
-
-export interface FilterSelectProps {
-  value: string;
-  onValueChange: (value: string) => void;
-  placeholder: string;
-  options: Array<{ value: string; label: string }>;
-  className?: string;
-  triggerClassName?: string;
-}
-
-export function FilterSelect({
-  value,
-  onValueChange,
-  placeholder,
-  options,
-  className,
-  triggerClassName,
-}: FilterSelectProps) {
-  return (
-    <Select value={value} onValueChange={onValueChange}>
-      <SelectTrigger className={triggerClassName}>
-        <SelectValue placeholder={placeholder} />
-      </SelectTrigger>
-      <SelectContent className={className}>
-        {options.map((opt) => (
-          <SelectItem key={opt.value} value={opt.value}>
-            {opt.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
-export interface DriveSelectProps {
-  context: 'user' | 'drive';
-  drives: Drive[];
-  selectedDriveId: string | undefined;
-  driveFilterId: string | undefined;
-  onDriveChange: (driveId: string) => void;
-  triggerClassName?: string;
-}
-
-export function DriveSelect({
-  context,
-  drives,
-  selectedDriveId,
-  driveFilterId,
-  onDriveChange,
-  triggerClassName,
-}: DriveSelectProps) {
-  const value = context === 'drive' ? selectedDriveId : (driveFilterId || 'all');
-
-  return (
-    <Select
-      value={value}
-      onValueChange={(v) => onDriveChange(v === 'all' ? '' : v)}
-    >
-      <SelectTrigger className={triggerClassName}>
-        <SelectValue placeholder="All drives" />
-      </SelectTrigger>
-      <SelectContent>
-        {context === 'user' && <SelectItem value="all">All drives</SelectItem>}
-        {drives.map((drive) => (
-          <SelectItem key={drive.id} value={drive.id}>
-            {drive.name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
 }
 
 export interface StatusSelectProps {

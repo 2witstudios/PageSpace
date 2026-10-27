@@ -1,8 +1,9 @@
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { z } from 'zod/v4';
-import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
+import { atomicDeviceTokenRotation, type DeviceRotationResult } from '@pagespace/db/transactions/auth-transactions';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionRepository } from '@/lib/repositories/session-repository';
 import { validateDeviceToken, updateDeviceTokenActivity, generateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
+import { shouldAllowDeviceRefresh } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import {
   checkDistributedRateLimit,
@@ -14,7 +15,16 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP, appendSessionCookie, getSessionFromCookies } from '@/lib/auth';
+import { retireReplacedSession } from '@/lib/auth/session-retirement';
+import { selectDeviceTokenForResponse } from '@/lib/auth/device-refresh-token-selection';
+
+// Grace window for retiring the session a device refresh replaces. The old
+// session is expired ~60s out (not hard-revoked) so in-flight requests carrying
+// the old Bearer token — notably the 1s active-streams poll — keep validating
+// until the client has switched to the new token. 60s comfortably outlasts the
+// client token switch plus the 5s post-refresh cooldown.
+const REPLACED_SESSION_GRACE_MS = 60 * 1000;
 
 const deviceRefreshSchema = z.object({
   deviceToken: z.string().min(1, { message: 'Device token is required' }),
@@ -35,6 +45,22 @@ export async function POST(req: Request) {
     const { deviceToken, deviceId, userAgent, appVersion } = validation.data;
 
     const clientIP = getClientIP(req);
+
+    // The session cookie the desktop/web client is carrying is the one this
+    // refresh replaces. Capture it now so we can retire it after the new session
+    // is created — proactive refreshes fire every ~15 min and, left unretired,
+    // pile up thousands of live sessions per account (turning a single login into
+    // a "revocation storm"). Retirement is best-effort and never fails the refresh.
+    const replacedSessionToken = getSessionFromCookies(req.headers.get('cookie'));
+    const retireReplaced = (userId: string): Promise<unknown> =>
+      retireReplacedSession(replacedSessionToken, userId, {
+        getSessionOwnerId: async (token) =>
+          (await sessionService.validateSession(token))?.userId ?? null,
+        hashToken,
+        graceExpireByHash: (tokenHash) =>
+          sessionService.expireSessionByHashSoon(tokenHash, REPLACED_SESSION_GRACE_MS),
+        logWarn: (message, meta) => loggers.auth.warn(message, meta),
+      });
 
     // Distributed rate limiting by IP address for device refresh attempts
     const distributedIpLimit = await checkDistributedRateLimit(
@@ -61,51 +87,41 @@ export async function POST(req: Request) {
 
     const deviceRecord = await validateDeviceToken(deviceToken);
     if (!deviceRecord) {
-      return Response.json({ error: 'Invalid or expired device token.' }, { status: 401 });
+      return Response.json(
+        { error: 'Invalid or expired device token.', reason: 'invalid_device_token' },
+        { status: 401 }
+      );
     }
 
-    if (deviceRecord.deviceId !== deviceId) {
-      // Check if this is a legacy device from OAuth with 'unknown' deviceId
-      // Allow one-time correction if the device token is otherwise valid
-      if (deviceRecord.deviceId === 'unknown' || !deviceRecord.deviceId) {
-        loggers.auth.warn('Correcting device token deviceId from OAuth migration', {
+    // SECURITY (L4): strict device-binding check. A stored deviceId that is
+    // missing or the legacy 'unknown' sentinel is a HARD failure — we force a
+    // full re-auth rather than silently rebinding the token to whatever deviceId
+    // the request supplies (which would defeat the stolen-token binding check).
+    const refreshDecision = shouldAllowDeviceRefresh(deviceRecord, deviceId);
+    if (!refreshDecision.ok) {
+      if (refreshDecision.reason === 'unknown_stored_device') {
+        loggers.auth.warn('Device token has no bound deviceId - forcing re-auth', {
           deviceTokenId: deviceRecord.id,
-          oldDeviceId: deviceRecord.deviceId,
-          newDeviceId: deviceId,
-          userId: deviceRecord.userId,
-        });
-
-        // Update device record with correct deviceId (one-time migration)
-        try {
-          const updatedDevice = await sessionRepository.updateDeviceTokenDeviceId(
-            deviceRecord.id,
-            deviceId
-          );
-
-          if (!updatedDevice) {
-            loggers.auth.error('Failed to update device token deviceId', {
-              deviceTokenId: deviceRecord.id,
-            });
-            return Response.json({ error: 'Failed to update device.' }, { status: 500 });
-          }
-
-          // Update local deviceRecord for continued processing
-          deviceRecord.deviceId = deviceId;
-        } catch (error) {
-          loggers.auth.error('Error correcting device token deviceId', { error: error as Error });
-          return Response.json({ error: 'Failed to update device.' }, { status: 500 });
-        }
-
-        // Continue with refresh using corrected device
-      } else {
-        // Strict mismatch - different device attempting to use this token
-        loggers.auth.warn('Device token mismatch detected - possible stolen token', {
-          tokenDeviceId: deviceRecord.deviceId,
+          storedDeviceId: deviceRecord.deviceId,
           providedDeviceId: deviceId,
           userId: deviceRecord.userId,
         });
-        return Response.json({ error: 'Device token does not match this device.' }, { status: 401 });
+        return Response.json(
+          { error: 'Device must be re-registered. Please sign in again.', reason: 'unknown_stored_device' },
+          { status: 401 }
+        );
       }
+
+      // Mismatch (or missing supplied id) - different device attempting to use this token
+      loggers.auth.warn('Device token mismatch detected - possible stolen token', {
+        tokenDeviceId: deviceRecord.deviceId,
+        providedDeviceId: deviceId,
+        userId: deviceRecord.userId,
+      });
+      return Response.json(
+        { error: 'Device token does not match this device.', reason: 'device_id_mismatch' },
+        { status: 401 }
+      );
     }
 
     const user = await authRepository.findUserById(deviceRecord.userId);
@@ -116,14 +132,13 @@ export async function POST(req: Request) {
 
     // Rotate device token if it is within 60 days of expiration
     // Increased from 30 to 60 days to ensure proactive rotation with overlap
-    let activeDeviceToken = deviceToken;
-    let activeDeviceTokenId = deviceRecord.id;
     const sixtyDaysMs = 60 * 24 * 60 * 60 * 1000;
+    let rotation: DeviceRotationResult | null = null;
 
     if (deviceRecord.expiresAt && deviceRecord.expiresAt.getTime() - Date.now() < sixtyDaysMs) {
       // SECURITY: Atomic device token rotation with FOR UPDATE locking
       // Prevents race conditions in concurrent rotation attempts
-      const rotated = await atomicDeviceTokenRotation(
+      rotation = await atomicDeviceTokenRotation(
         deviceToken,
         {
           userAgent: userAgent ?? req.headers.get('user-agent') ?? undefined,
@@ -134,25 +149,26 @@ export async function POST(req: Request) {
         generateDeviceToken
       );
 
-      if (!rotated.success) {
+      if (!rotation.success) {
         // SECURITY: Rotation failed - do not continue with potentially revoked token
         // Token may have been revoked, expired, or already rotated by concurrent request
         loggers.auth.warn('Device token rotation failed - aborting refresh', {
           userId: deviceRecord.userId,
           deviceId: deviceRecord.deviceId,
-          error: rotated.error,
+          error: rotation.error,
         });
         return Response.json(
-          { error: rotated.error ?? 'Device token rotation failed. Please re-authenticate.' },
+          { error: rotation.error ?? 'Device token rotation failed. Please re-authenticate.', reason: 'rotation_failed' },
           { status: 401 }
         );
       }
-
-      if (rotated.newToken && rotated.deviceTokenId) {
-        activeDeviceToken = rotated.newToken;
-        activeDeviceTokenId = rotated.deviceTokenId;
-      }
     }
+
+    // Choose which token to return to the client. On a grace-period rotation
+    // retry this yields NO token (the old one is revoked; the client keeps its
+    // good token) — the fix for the device-token grace-clobber logout.
+    const { deviceToken: activeDeviceToken, activeDeviceTokenId } =
+      selectDeviceTokenForResponse(deviceToken, deviceRecord.id, rotation);
 
     const normalizedIP = clientIP === 'unknown' ? undefined : clientIP;
 
@@ -182,6 +198,10 @@ export async function POST(req: Request) {
     // Web platform: Create session and set cookie (no JWT tokens in response)
     if (deviceRecord.platform === 'web') {
       const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
         userId: user.id,
         type: 'user',
         scopes: ['*'],
@@ -196,6 +216,11 @@ export async function POST(req: Request) {
         loggers.auth.error('Failed to validate newly created session during web device refresh');
         return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
       }
+
+      // Retire the session this refresh just replaced (best-effort; the new
+      // session already exists, so a failure here never breaks the refresh).
+      await retireReplaced(user.id);
+
       const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
       const headers = new Headers();
@@ -212,6 +237,10 @@ export async function POST(req: Request) {
 
     // Mobile/desktop: Return session token in JSON (no refresh token - devices use device tokens)
     const sessionToken = await sessionService.createSession({
+      authentication: parseVerifiedAuthentication({
+        authenticatedAtMs: deviceRecord.authenticatedAt?.getTime(),
+        assurance: deviceRecord.authenticationAssurance,
+      }, Date.now()),
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -227,15 +256,33 @@ export async function POST(req: Request) {
       return Response.json({ error: 'Failed to generate session.' }, { status: 500 });
     }
 
+    // Retire the session this refresh just replaced (best-effort; the new
+    // session already exists, so a failure here never breaks the refresh).
+    await retireReplaced(user.id);
+
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
 
     const headers = new Headers();
     headers.set('X-RateLimit-Limit', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
     headers.set('X-RateLimit-Remaining', String(DISTRIBUTED_RATE_LIMITS.REFRESH.maxAttempts));
 
-    // Desktop needs a session cookie so Next.js middleware allows page route requests.
-    // Desktop primarily uses Bearer tokens for API calls, but middleware checks cookies.
-    if (deviceRecord.platform === 'desktop' || deviceRecord.platform === 'ios') {
+    // Desktop and the native shells need a session cookie so Next.js middleware
+    // allows page route requests. They primarily use Bearer tokens for API
+    // calls, but middleware checks cookies.
+    //
+    // 'android' belongs here for the same reason 'ios' does: a device row is
+    // only stamped 'android' by the native sign-in routes, which append a
+    // session cookie themselves. Omitting it here would leave the WebView
+    // holding the cookie of the session this refresh just replaced, so page
+    // navigation would start failing on the first rotation while API calls kept
+    // working — a split-brain that only appears once native sign-in exists.
+    // (Devices registered by the in-WebView *web* flow are stamped 'web' and
+    // return from the branch above, which sets its own cookie.)
+    if (
+      deviceRecord.platform === 'desktop' ||
+      deviceRecord.platform === 'ios' ||
+      deviceRecord.platform === 'android'
+    ) {
       appendSessionCookie(headers, sessionToken);
     }
 

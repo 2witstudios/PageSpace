@@ -15,13 +15,14 @@ on:
         required: false
         default: '30s'
 
-env:
-  NODE_VERSION: '20'
-
 jobs:
   load-test:
     name: Auth Baseline Load Test
     runs-on: ubuntu-latest
+
+    env:
+      # Builds apps/web — see the NODE_OPTIONS note on the lint job in ci.yml.
+      NODE_OPTIONS: --max-old-space-size=6144
 
     services:
       postgres:
@@ -38,35 +39,28 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'pnpm'
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build packages
-        run: pnpm build
+        run: bun run build
 
       - name: Setup test database
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: pnpm --filter @pagespace/db db:migrate
+        run: bun run --filter '@pagespace/db' db:migrate
 
       - name: Start web server
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
           NODE_ENV: test
         run: |
-          pnpm --filter web build
-          pnpm --filter web start &
+          bun run --filter 'web' build
+          bun run --filter 'web' start &
 
           # Health check loop - wait for server to be ready
           MAX_ATTEMPTS=30
@@ -86,7 +80,7 @@ jobs:
       - name: Seed load-test user
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: npx tsx tests/load/scripts/seed-load-user.ts
+        run: bun tests/load/scripts/seed-load-user.ts
 
       - name: Run k6 load test
         env:
@@ -105,7 +99,7 @@ jobs:
             grafana/k6 run /scripts/tests/load/auth-baseline.k6.js
 
       - name: Upload load test results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: load-test-results-${{ github.run_id }}
@@ -116,4 +110,4 @@ jobs:
         if: always()
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
-        run: npx tsx tests/load/scripts/cleanup-load-user.ts
+        run: bun tests/load/scripts/cleanup-load-user.ts

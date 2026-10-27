@@ -1,0 +1,1 @@
+ALTER TABLE "machine_sessions" ADD COLUMN "egressPolicyToken" text;

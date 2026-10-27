@@ -8,6 +8,7 @@ import {
   pickInitialFilters,
   toStoredDashboardFilters,
   fromStoredOrDefaults,
+  forFocus,
   DEFAULT_DASHBOARD_FILTERS,
 } from '../dashboardFiltersPersistence';
 import type { StoredDashboardFilters } from '@/stores/useLayoutStore';
@@ -83,13 +84,12 @@ describe('pickInitialFilters', () => {
     expect(result).toEqual(DEFAULT_DASHBOARD_FILTERS);
   });
 
-  it('given URL has driveId param, should treat that as a persistable param triggering URL precedence', () => {
+  it('given URL has only a driveId param, should not let it override stored preferences — the drive is the focus, not a filter', () => {
     const stored: StoredDashboardFilters = { assigneeFilter: 'all' };
 
     const result = pickInitialFilters(params({ driveId: 'd1' }), stored);
 
-    expect(result.driveId).toBe('d1');
-    expect(result.assigneeFilter).toBe('mine');
+    expect(result).toEqual(fromStoredOrDefaults(stored));
   });
 
   it('given URL has only assigneeFilter=mine, should still treat as URL precedence (explicit)', () => {
@@ -132,7 +132,6 @@ describe('toStoredDashboardFilters', () => {
     const result = toStoredDashboardFilters({
       status: 'pending',
       priority: 'high',
-      driveId: 'd1',
       search: 'budget',
       dueDateFilter: 'overdue',
       assigneeFilter: 'all',
@@ -153,5 +152,53 @@ describe('toStoredDashboardFilters', () => {
     const result = toStoredDashboardFilters({ assigneeFilter: 'mine' });
 
     expect(result).toEqual({ assigneeFilter: 'mine' });
+  });
+});
+
+describe('pickInitialFilters across all drives', () => {
+  it('given ?status= outside a drive, should ignore it and not widen the status group on its behalf', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done&priority=high'), undefined, false);
+    expect(result.status).toBeUndefined();
+    expect(result.statusGroup).toBe('active');
+    expect(result.priority).toBe('high');
+  });
+
+  it('given a URL carrying only keys this focus discards, should keep the stored preferences', () => {
+    const stored = { assigneeFilter: 'all', statusGroup: 'completed', priority: 'high' } as const;
+    expect(pickInitialFilters(new URLSearchParams('status=done'), stored, false)).toEqual(fromStoredOrDefaults(stored));
+    expect(pickInitialFilters(new URLSearchParams('driveId=d1'), stored, true)).toEqual(fromStoredOrDefaults(stored));
+  });
+
+  it('given ?status= with the group it widened, outside a drive, should drop both', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done&statusGroup=all&search=x'), undefined, false);
+    expect(result).toEqual({ statusGroup: 'active', assigneeFilter: 'mine', search: 'x', priority: undefined, dueDateFilter: undefined });
+  });
+
+  it('given ?status= inside a drive, should read it and let the group fall to all', () => {
+    const result = pickInitialFilters(new URLSearchParams('status=done'), undefined, true);
+    expect(result.status).toBe('done');
+    expect(result.statusGroup).toBe('all');
+  });
+});
+
+describe('forFocus', () => {
+  it('given a drive focus, should keep the slug status', () => {
+    expect(forFocus({ status: 'in_progress', priority: 'high' }, true)).toEqual({
+      status: 'in_progress',
+      priority: 'high',
+    });
+  });
+
+  it('given the All drives focus, should drop the slug status the UI cannot show, and the group it widened', () => {
+    expect(forFocus({ status: 'in_progress', statusGroup: 'all', search: 'x' }, false)).toEqual({
+      statusGroup: 'active',
+      search: 'x',
+    });
+    expect(forFocus({ status: 'in_progress', statusGroup: 'completed' }, false)).toEqual({ statusGroup: 'completed' });
+    expect(forFocus({ statusGroup: 'all' }, false)).toEqual({ statusGroup: 'all' });
+  });
+
+  it('given nothing to drop, should return an equal object', () => {
+    expect(forFocus({ priority: 'low', assigneeFilter: 'all' }, false)).toEqual({ priority: 'low', assigneeFilter: 'all' });
   });
 });

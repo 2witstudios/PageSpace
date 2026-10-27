@@ -1,0 +1,169 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0b0d12;
+  color: #e6e8ec;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+}
+
+header h1 {
+  font-size: 1.4rem;
+  margin-bottom: 4px;
+}
+
+header .sub {
+  color: #8b93a1;
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+
+header .sub code {
+  background: #1a1e27;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+section.config,
+section.mutation {
+  background: #12151c;
+  border: 1px solid #232833;
+  border-radius: 10px;
+  padding: 18px;
+  margin: 20px 0;
+}
+
+section.mutation h2 {
+  font-size: 1rem;
+  margin-top: 0;
+}
+
+section.mutation p {
+  color: #8b93a1;
+  font-size: 0.85rem;
+}
+
+label {
+  display: block;
+  font-size: 0.8rem;
+  color: #8b93a1;
+  margin-bottom: 12px;
+}
+
+input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 10px;
+  background: #0b0d12;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  color: #e6e8ec;
+  font-size: 0.9rem;
+}
+
+button {
+  background: #4f7cff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result {
+  border-radius: 8px;
+  padding: 10px 14px;
+  border: 1px solid #232833;
+  background: #12151c;
+}
+
+.result-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.result .name {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.result .ms {
+  margin-left: auto;
+  color: #5c6472;
+  font-size: 0.75rem;
+}
+
+.badge {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.result-pass .badge {
+  background: #16351f;
+  color: #4ade80;
+}
+
+.result-fail .badge {
+  background: #3a1720;
+  color: #f87171;
+}
+
+.env-token-badge {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.env-token-badge code {
+  font-size: 0.8rem;
+  color: #a9b0bd;
+}
+
+.badge-env {
+  background: #1a2e4a;
+  color: #7dabff;
+}
+
+.result-running .badge {
+  background: #26314a;
+  color: #7dabff;
+}
+
+.result-skipped .badge {
+  background: #33301a;
+  color: #eab308;
+}
+
+.result pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+  color: #a9b0bd;
+}

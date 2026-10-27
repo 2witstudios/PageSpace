@@ -4,6 +4,8 @@ import { buildPasskeyExchangeDeepLink } from './passkeyExternal';
 export interface RunPasskeyExternalCeremonyInput {
   deviceId: string;
   deviceName: string;
+  /** Which desktop app to hand the exchange code back to. */
+  shell?: unknown;
   fetchImpl?: typeof fetch;
 }
 
@@ -80,5 +82,8 @@ export async function runPasskeyExternalCeremony(
     return { ok: false, error: 'Missing desktop exchange code in response' };
   }
 
-  return { ok: true, deepLink: buildPasskeyExchangeDeepLink(verifyBody.desktopExchangeCode) };
+  return {
+    ok: true,
+    deepLink: buildPasskeyExchangeDeepLink(verifyBody.desktopExchangeCode, input.shell),
+  };
 }

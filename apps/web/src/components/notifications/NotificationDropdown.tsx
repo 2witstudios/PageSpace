@@ -10,51 +10,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { isConnectionRequest } from '@pagespace/lib/notifications/guards';
-import { type LegacyNotification } from '@pagespace/lib/notifications/types';
 import { patch } from '@/lib/auth/auth-fetch';
+import { resolveDestination, type StoredNotification } from '@/lib/notifications/resolve-destination';
 import { NotificationItem } from './NotificationItem';
-
-type StoredNotification = LegacyNotification & { title: string; message: string };
-
-function resolveDestination(notification: StoredNotification): string | null {
-  if (notification.type === 'EMAIL_VERIFICATION_REQUIRED') {
-    return '/settings/account';
-  }
-
-  if (
-    notification.type === 'TOS_PRIVACY_UPDATED' &&
-    notification.metadata &&
-    typeof notification.metadata === 'object' &&
-    'documentUrl' in notification.metadata &&
-    typeof notification.metadata.documentUrl === 'string'
-  ) {
-    return notification.metadata.documentUrl;
-  }
-
-  if (
-    notification.type === 'NEW_DIRECT_MESSAGE' &&
-    notification.metadata &&
-    typeof notification.metadata === 'object' &&
-    'conversationId' in notification.metadata &&
-    typeof notification.metadata.conversationId === 'string'
-  ) {
-    return `/dashboard/dms/${notification.metadata.conversationId}`;
-  }
-
-  if (
-    (notification.type === 'MENTION' || notification.type === 'TASK_ASSIGNED') &&
-    notification.pageId &&
-    notification.driveId
-  ) {
-    return `/dashboard/${notification.driveId}/${notification.pageId}`;
-  }
-
-  if (notification.drive?.id) {
-    return `/dashboard/${notification.drive.id}`;
-  }
-
-  return null;
-}
 
 export default function NotificationDropdown() {
   const router = useRouter();

@@ -1,0 +1,309 @@
+// Errors — the taxonomy every SDK/CLI/MCP consumer catches. `classifyHttpError`
+// is the pure classification core (status/headers/body -> typed error).
+export {
+  AuthenticationError,
+  classifyHttpError,
+  HttpError,
+  IncompatibleServerError,
+  isAuthenticationError,
+  isHttpError,
+  isIncompatibleServerError,
+  isNetworkError,
+  isNotFoundError,
+  isPageSpaceError,
+  isPermissionDeniedError,
+  isRateLimitError,
+  isResponseValidationError,
+  isServerError,
+  isTimeoutError,
+  isValidationError,
+  NetworkError,
+  NotFoundError,
+  orgSignInRequirementOf,
+  PageSpaceError,
+  PermissionDeniedError,
+  RateLimitError,
+  ResponseValidationError,
+  ServerError,
+  TimeoutError,
+  ValidationError,
+} from './errors.js';
+export type {
+  CompatibilityResult,
+  HttpErrorHeaders,
+  IncompatibilityReason,
+  NetworkErrorOptions,
+  OrgSignInRequirement,
+  PageSpaceErrorCode,
+  TimeoutErrorOptions,
+  ValidationIssue,
+} from './errors.js';
+
+// Versioning (ADR 0001) — the server-compatibility handshake the facade runs lazily.
+export { checkServerCompatibility, compareApiVersions, MIN_SERVER_API_VERSION, parseApiVersion, SDK_VERSION } from './version.js';
+export type { ParsedVersion } from './version.js';
+
+// Auth providers — the credential sources every PageSpaceClient accepts.
+export type { AuthProvider } from './auth/provider.js';
+export { StaticTokenProvider } from './auth/static.js';
+export { OAuthTokenProvider } from './auth/oauth.js';
+export type { OAuthTokenProviderOptions, OAuthTokens, RefreshAccessToken } from './auth/oauth.js';
+
+// PKCE (RFC 7636) — client-side math for the authorization-code + PKCE flow.
+// Consumed by `pagespace login` (packages/cli/src/auth/loopback-flow.ts) so
+// the CLI never needs to runtime-import `@pagespace/lib`.
+export { deriveCodeChallenge, generateCodeVerifier } from './auth/pkce.js';
+
+// Operation registry — the source of truth SDK resource methods, CLI verbs,
+// and MCP tool definitions all derive from.
+export { defineOperation } from './registry/define.js';
+export type { Operation, OperationConfig, PathParamNames, RequiredScope, ValidOperationConfig } from './registry/define.js';
+export { createRegistry, getOperation, hasOperation, listOperations } from './registry/registry.js';
+export type { OperationRegistry } from './registry/registry.js';
+
+// Domain operations (Phase 3), alphabetical by domain.
+
+// Activity (Phase 3 task 9).
+export { getActivity } from './operations/activity.js';
+
+// Agents (Phase 3 task 5).
+export {
+  askAgent,
+  filterModelCatalog,
+  listAgents,
+  listModels,
+  multiDriveListAgents,
+  updateAgentConfig,
+} from './operations/agents.js';
+export type { CatalogModel, CatalogProvider, ModelCatalogFilter } from './operations/agents.js';
+
+// Calendar (Phase 3 task 6).
+export {
+  computeFreeSlots,
+  createCalendarEvent,
+  deleteCalendarEvent,
+  deleteCalendarTrigger,
+  getCalendarEvent,
+  inviteCalendarAttendees,
+  listCalendarEvents,
+  removeCalendarAttendee,
+  rsvpCalendarEvent,
+  setCalendarTrigger,
+  updateCalendarEvent,
+} from './operations/calendar.js';
+export type { FreeSlot } from './operations/calendar.js';
+
+// Channels (Phase 3 task 9).
+export { deleteChannelMessage, sendChannelMessage } from './operations/channels.js';
+
+// Collaborators (Phase 3 task 1).
+export { listCollaborators } from './operations/collaborators.js';
+
+// Commands (Phase 3 task 8).
+export { createCommand, deleteCommand, listCommands, updateCommand } from './operations/commands.js';
+
+// Conversations (Phase 3 task 5).
+export { listConversations, readConversation } from './operations/conversations.js';
+
+// Documents / content (Phase 3 task 2) — full pagespace-mcp document.js parity.
+export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+
+// Sheet rows and sheet formatting (POST /api/mcp/sheets) — a SHEET page as a
+// table, and as a styled document.
+export {
+  appendRows,
+  applySheetFormat,
+  deleteRows,
+  describeSheet,
+  getRows,
+  queryRows,
+  readSheetFormatting,
+  updateCells,
+} from './operations/sheets.js';
+export type {
+  SheetConditionalRuleInput,
+  SheetFormatOpInput,
+  SheetRegionInput,
+  SheetWhereInput,
+} from './operations/sheets.js';
+
+// Export (Phase 3 task 10) — page -> Markdown, sheet -> CSV text exports.
+export { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
+
+// Drives (Phase 2 seed op + Phase 3 task 1 — full pagespace-mcp drive.js parity).
+export { listDrives } from './operations/drives.js';
+export {
+  assertDriveNameConfirmed,
+  createDrive,
+  renameDrive,
+  restoreDrive,
+  setHomePage,
+  trashDrive,
+  updateDriveContext,
+} from './operations/drives.js';
+// Org ownership of a drive and join requests (X-1; DRV-1..DRV-4, DRV-6).
+export {
+  answerDriveJoinRequest,
+  IMPLICIT_MEMBERS_CHOICES,
+  JOIN_REQUEST_DECISIONS,
+  listDriveJoinRequests,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  requestToJoinDrive,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  withdrawDriveJoinRequest,
+} from './operations/drives.js';
+export type { ConfirmMismatch, Result } from './operations/drives.js';
+
+// Members (Phase 3 task 1).
+export { listDriveMembers } from './operations/members.js';
+
+// MCP tokens (Phase 4 task 6) — CLI `pagespace keys list/revoke`. These require
+// a `ps_at_` OAuth access token (or web session); there is no `tokens.create` —
+// key minting is session-only server-side (OAuth consent flow or web UI).
+export { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+
+// Pages (Phase 3 task 2) — full pagespace-mcp page.js parity.
+export {
+  createPage,
+  getPageDetails,
+  listPages,
+  listTrash,
+  movePage,
+  pageTypeSchema,
+  renamePage,
+  restorePage,
+  trashPage,
+} from './operations/pages.js';
+
+// Roles & permissions (Phase 3 task 7).
+export {
+  buildRemoveRolePagePermissionsInput,
+  buildSetRoleDriveWidePermissionsInput,
+  buildSetRolePagePermissionsInput,
+  createDriveRole,
+  deleteDriveRole,
+  getDriveRole,
+  listDriveRoles,
+  removeRolePagePermissions,
+  setRoleDriveWidePermissions,
+  setRolePagePermissions,
+  updateDriveRole,
+} from './operations/roles.js';
+export type {
+  RemoveRolePagePermissionsArgs,
+  SetRoleDriveWidePermissionsArgs,
+  SetRolePagePermissionsArgs,
+} from './operations/roles.js';
+
+// Search (Phase 3 task 3).
+export { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+
+// Tasks & statuses (Phase 3 task 4).
+export {
+  classifyTaskCompletionGate,
+  createTask,
+  createTaskStatus,
+  deleteTask,
+  deleteTaskTrigger,
+  getAssignedTasks,
+  priorityEnum,
+  reorderTask,
+  setTaskTrigger,
+  statusGroupEnum,
+  updateTask,
+} from './operations/tasks.js';
+export type { TaskCompletionGatedError } from './operations/tasks.js';
+
+// Workflows (Phase 3 task 8).
+export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
+export { execInWorkspace, listWorkspaces } from './operations/workspaces.js';
+
+// Organizations (X-1, ORG-5): every org read and write the web exposes to a key. Card-checkout
+// create, org delete, ownership transfer, seat caps and admin money views stay session-only ([D-OW-26]).
+export {
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  getOrgPolicies,
+  getOrganization,
+  GUEST_APPROVAL_DECISIONS,
+  inviteToOrganization,
+  leaveOrganization,
+  listMyOrganizations,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgDriveDirectory,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgMembers,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  ORG_POLICY_KEYS,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  updateOrgPolicies,
+  updateOrganization,
+  verifyOrgDomain,
+} from './operations/organizations.js';
+
+// Wallet reads (X-1, [D-OW-26]: reads only — a key never moves money or changes a spend source).
+export {
+  CONSUMER_WALLET_VIEW_KEYS,
+  getAlwaysOwnCredits,
+  getConversationSpendSource,
+  getDriveSpendSource,
+  getDriveWallet,
+  listMyWallets,
+} from './operations/wallets.js';
+export type { CallSpendDecision, ConsumerWalletView, MyWallets } from './operations/wallets.js';
+
+// Uploads — the two API legs of a direct-to-storage upload, plus the slot release.
+export { cancelUpload, completeUpload, needsUpload, presignUpload } from './operations/uploads.js';
+export type { PresignFastPath, PresignPutTarget, PresignResult, UploadedFilePage } from './operations/uploads.js';
+
+// `uploadFile` composes presign -> PUT -> complete, including the binary leg
+// that cannot travel through the SDK transport. This is what callers holding
+// bytes should use; the three operations above are the building blocks.
+export {
+  assertSecureStorageUrl,
+  computeContentHash,
+  InsecureStorageTargetError,
+  StorageUploadError,
+  uploadFile,
+  UploadSlotLostError,
+} from './uploads/upload-file.js';
+export type {
+  OperationInvoker,
+  UploadBytes,
+  UploadFileInput,
+  UploadFileOptions,
+  UploadFileResult,
+} from './uploads/upload-file.js';
+
+
+// Transport primitive types needed to declare custom operations. buildRequest/
+// parseResponse/executeRequest stay internal — the facade is the only caller.
+export type { HttpMethod } from './transport/types.js';
+
+// Retry policy shape + default, for callers customizing PageSpaceClientOptions.retryPolicy.
+export { DEFAULT_RETRY_POLICY } from './retry.js';
+export type { Jitter, RetryPolicy } from './retry.js';
+
+// The facade.
+export { PageSpaceClient, resolveTimeoutMs } from './client.js';
+export type { ClientNamespaces, PageSpaceClientOptions } from './client.js';

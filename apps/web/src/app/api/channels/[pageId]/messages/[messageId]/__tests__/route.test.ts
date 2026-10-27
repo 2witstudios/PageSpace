@@ -14,9 +14,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
+  canPrincipalEditPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -45,8 +47,9 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
 }));
 
 import { DELETE } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalEditPage } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const PAGE_ID = 'page_chan';
 const MESSAGE_ID = 'msg_1';
@@ -79,6 +82,7 @@ describe('DELETE /api/channels/[pageId]/messages/[messageId]', () => {
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
     mockFindChannelMessageInPage.mockResolvedValue({ id: MESSAGE_ID, pageId: PAGE_ID, userId: USER_ID, isActive: true });
   });
 
@@ -119,4 +123,13 @@ describe('DELETE /api/channels/[pageId]/messages/[messageId]', () => {
     const broadcasts = fetchMock.mock.calls.filter(([url]) => typeof url === 'string' && url.includes('/api/broadcast'));
     expect(broadcasts).toHaveLength(0);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

@@ -3,10 +3,13 @@ import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, count, gte, lt, inArray } from '@pagespace/db/operators'
 import { activityLogs } from '@pagespace/db/schema/monitoring';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, getAllowedDriveIds } from '@/lib/auth';
-import { canUserViewPage, isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
+import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { activitySignInCondition } from '@/lib/activities/activity-sign-in-filter';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -16,8 +19,9 @@ const querySchema = z.object({
   driveId: z.string().optional(),
   pageId: z.string().optional(),
   // Filter parameters
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),
@@ -45,6 +49,8 @@ export async function GET(request: Request) {
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
+  // Kept raw: only exclusiveEndBound can tell a date-only bound from an instant.
+  const rawEndDate = searchParams.get('endDate');
 
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'activities', resourceId: 'self' });
 
@@ -93,12 +99,12 @@ export async function GET(request: Request) {
           const scopeError = checkMCPDriveScope(auth, params.driveId);
           if (scopeError) return scopeError;
 
-          const canViewDrive = await isUserDriveMember(userId, params.driveId);
+          const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
           if (!canViewDrive) {
-            return NextResponse.json(
+            return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
               { error: 'Unauthorized - you do not have access to this drive' },
               { status: 403 }
-            );
+            ));
           }
           userConditions.push(eq(activityLogs.driveId, params.driveId));
         } else {
@@ -126,13 +132,13 @@ export async function GET(request: Request) {
         const scopeError = checkMCPDriveScope(auth, params.driveId);
         if (scopeError) return scopeError;
 
-        // Verify user can view drive
-        const canViewDrive = await isUserDriveMember(userId, params.driveId);
+        // Verify principal can view drive
+        const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(
@@ -155,13 +161,13 @@ export async function GET(request: Request) {
         const scopeError = await checkMCPPageScope(auth, params.pageId);
         if (scopeError) return scopeError;
 
-        // Verify user can view page
-        const canViewPage = await canUserViewPage(userId, params.pageId);
+        // Verify principal can view page
+        const canViewPage = await canPrincipalViewPage(auth, params.pageId);
         if (!canViewPage) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.pageId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this page' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(
@@ -187,10 +193,9 @@ export async function GET(request: Request) {
       filterConditions.push(gte(activityLogs.timestamp, params.startDate));
     }
     if (params.endDate) {
-      // Add one day to endDate to include the full day
-      const endOfDay = new Date(params.endDate);
-      endOfDay.setDate(endOfDay.getDate() + 1);
-      filterConditions.push(lt(activityLogs.timestamp, endOfDay));
+      // A date-only bound covers the whole day; an explicit instant means that
+      // instant. See exclusiveEndBound.
+      filterConditions.push(lt(activityLogs.timestamp, exclusiveEndBound(rawEndDate, params.endDate)));
     }
     // actorId filter only applies in drive/page context (user context already filters by authenticated user)
     if (params.actorId && params.context !== 'user') {
@@ -202,6 +207,11 @@ export async function GET(request: Request) {
     if (params.resourceType) {
       filterConditions.push(eq(activityLogs.resourceType, params.resourceType as typeof activityLogs.resourceType._.data));
     }
+
+    // SEC-2/3 (D-OW-45, D-OW-62): rows the credential may not read (an org drive its sign-in policy refuses, a memory
+    // page a contributing org withholds) are left out in SQL, so pages and counts stay exact.
+    const signIn = await activitySignInCondition(actorFromAuth(auth), filterConditions.length > 0 ? and(...filterConditions) : undefined);
+    if (signIn) filterConditions.push(signIn);
 
     const finalWhereCondition = filterConditions.length > 0
       ? and(...filterConditions)
@@ -233,8 +243,15 @@ export async function GET(request: Request) {
       resultCount: activities.length,
     } });
 
+    // Dedup: many activity rows commonly share the same actor, so decrypt
+    // each unique user once instead of once per row.
+    const decryptedUsersById = await decryptUsersByIdOnce(activities.map((activity) => activity.user));
+    const decryptedActivities = activities.map((activity) =>
+      activity.user ? { ...activity, user: decryptedUsersById.get(activity.user.id) ?? activity.user } : activity
+    );
+
     return NextResponse.json({
-      activities,
+      activities: decryptedActivities,
       pagination: {
         total,
         limit: params.limit,

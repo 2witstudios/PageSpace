@@ -53,7 +53,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -133,8 +134,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -158,7 +159,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -182,7 +183,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { createId } from '@paralleldrive/cuid2';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -309,7 +310,7 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(createId).mockReturnValue('mock-cuid');
 
     // Default provisioning mock
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
@@ -322,7 +323,7 @@ describe('GET /api/auth/google/callback', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -334,7 +335,8 @@ describe('GET /api/auth/google/callback', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -486,10 +488,20 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
       );
+    });
+
+    it('SEC-2 (partial) a Google callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await GET(createCallbackRequest({ code: 'valid-code', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
 
     it('uses data.returnUrl default when missing from signed state', async () => {
@@ -625,7 +637,8 @@ describe('GET /api/auth/google/callback', () => {
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -636,7 +649,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('updates existing user without name', async () => {
       const userWithoutName = { ...mockExistingUser, name: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -648,7 +662,8 @@ describe('GET /api/auth/google/callback', () => {
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -667,7 +682,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('updates existing user with unverified email when email_verified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userUnverified as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -687,7 +703,8 @@ describe('GET /api/auth/google/callback', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
       await GET(request);
@@ -697,7 +714,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('handles re-fetch returning null after update (falls back to original user)', async () => {
       const existingUser = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -709,7 +727,7 @@ describe('GET /api/auth/google/callback', () => {
 
   describe('drive provisioning', () => {
     it('redirects to provisioned drive when newly created', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -722,7 +740,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('uses original returnUrl when drive already exists', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'existing-drive',
         created: false,
       });
@@ -736,14 +754,14 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createCallbackRequest({ code: 'valid-code' });
       const response = await GET(request);
 
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: mockNewUser.id, provider: 'google' }
       );
@@ -890,7 +908,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('includes isNewUser flag in deep link for newly provisioned drives', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -934,6 +952,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -1047,6 +1066,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })
@@ -1054,7 +1074,7 @@ describe('GET /api/auth/google/callback', () => {
     });
 
     it('includes isNewUser flag for newly provisioned iOS users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -1088,6 +1108,7 @@ describe('GET /api/auth/google/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'iOS App',
         })
       );
@@ -1256,7 +1277,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('masks email in "Updating existing user" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -1270,7 +1292,8 @@ describe('GET /api/auth/google/callback', () => {
 
     it('does not include name in "User updated" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createCallbackRequest({ code: 'valid-code' });
@@ -1329,7 +1352,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
         drivesAccepted: 0,
@@ -1343,7 +1366,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-789',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1362,15 +1385,32 @@ describe('GET /api/auth/google/callback', () => {
       expect(location).toContain('invited=1');
     });
 
+    it('ORG-3 (partial) an org invitation accepted at sign-in lands on the org hub; a refused one returns to its invite page', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'org', invitedDriveId: null, invitedPageId: null, connectionId: null,
+        invitedOrgId: 'org_nw', orgLandingPath: '/orgs/org_nw/settings',
+      });
+      const joined = await GET(createCallbackRequest({ code: 'valid-code', state: stateWithInvite() }));
+      expect(new URL(joined.headers.get('Location')!).pathname).toBe('/orgs/org_nw/settings');
+
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'org', invitedDriveId: null, invitedPageId: null, connectionId: null,
+        invitedOrgId: null, orgLandingPath: '/invite/ps_orginv_abc', inviteError: 'EMAIL_MISMATCH',
+      });
+      const refused = await GET(createCallbackRequest({ code: 'valid-code', state: stateWithInvite() }));
+      expect(new URL(refused.headers.get('Location')!).pathname).toBe('/invite/ps_orginv_abc');
+    });
+
     it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
 
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
         kind: 'drive',
         invitedDriveId: 'drive-existing',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createCallbackRequest({ code: 'valid-code', state: stateWithInvite() });
@@ -1399,7 +1439,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -1417,7 +1457,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -1433,7 +1473,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-desktop-1',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1457,7 +1497,7 @@ describe('GET /api/auth/google/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-ios-1',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({

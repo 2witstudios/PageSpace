@@ -14,32 +14,40 @@ import type { IntegrationProviderConfig, ToolCallResult } from '../types';
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe('buildIntegrationToolName', () => {
-  it('should build a namespaced tool name', () => {
-    const result = buildIntegrationToolName('github', 'abc123def456', 'list_repos');
-    expect(result).toBe('int__github__abc123de__list_repos');
+  it('should build a compact namespaced tool name without a connection segment', () => {
+    const result = buildIntegrationToolName('github', 'list_repos');
+    expect(result).toBe('int__github__list_repos');
   });
 
-  it('should truncate connectionId to 8 chars', () => {
-    const result = buildIntegrationToolName('slack', 'longconnectionidhere', 'send_message');
-    expect(result).toContain('__longconn__');
+  it('should append an 8-char connection-id segment when a connectionId is given', () => {
+    const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
+    expect(result).toBe('int__github__list_repos__abc123de');
+  });
+
+  it('should produce only provider-safe characters when disambiguating', () => {
+    const result = buildIntegrationToolName('github', 'list_repos', 'abc123def456');
+    expect(result).toMatch(/^[a-zA-Z0-9_-]+$/);
+  });
+
+  it('should truncate the disambiguator connectionId to 8 chars', () => {
+    const result = buildIntegrationToolName('slack', 'send_message', 'longconnectionidhere');
+    expect(result).toContain('__longconn');
   });
 });
 
 describe('parseIntegrationToolName', () => {
-  it('should parse a valid integration tool name', () => {
-    const result = parseIntegrationToolName('int__github__abc123de__list_repos');
+  it('should parse a compact integration tool name', () => {
+    const result = parseIntegrationToolName('int__github__list_repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionShortId: 'abc123de',
       toolId: 'list_repos',
     });
   });
 
   it('should handle tool IDs with double underscores', () => {
-    const result = parseIntegrationToolName('int__github__abc123de__list__all__repos');
+    const result = parseIntegrationToolName('int__github__list__all__repos');
     expect(result).toEqual({
       providerSlug: 'github',
-      connectionShortId: 'abc123de',
       toolId: 'list__all__repos',
     });
   });
@@ -57,7 +65,7 @@ describe('parseIntegrationToolName', () => {
 
 describe('isIntegrationTool', () => {
   it('should return true for integration tools', () => {
-    expect(isIntegrationTool('int__github__abc__list_repos')).toBe(true);
+    expect(isIntegrationTool('int__github__list_repos')).toBe(true);
   });
 
   it('should return false for non-integration tools', () => {
@@ -211,8 +219,57 @@ describe('convertIntegrationToolsToAISDK', () => {
     expect(Object.keys(tools)).toHaveLength(2);
 
     const toolNames = Object.keys(tools);
-    expect(toolNames[0]).toMatch(/^int__github__conn1234__list_repos$/);
-    expect(toolNames[1]).toMatch(/^int__github__conn1234__create_issue$/);
+    expect(toolNames[0]).toBe('int__github__list_repos');
+    expect(toolNames[1]).toBe('int__github__create_issue');
+  });
+
+  it('should disambiguate tool names when an agent has two connections for the same provider', () => {
+    const secondConnection: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      id: 'grant-2',
+      connectionId: 'conn99998888zzzz',
+      connection: {
+        ...mockGrant.connection!,
+        id: 'conn99998888zzzz',
+        name: 'Other GitHub',
+      },
+    };
+
+    const mockExecutor = vi.fn();
+    const tools = convertIntegrationToolsToAISDK(
+      [mockGrant, secondConnection],
+      executorContext,
+      mockExecutor
+    );
+
+    const toolNames = Object.keys(tools);
+    // Two connections × two tools, all uniquely named via the connection-id segment.
+    expect(toolNames).toHaveLength(4);
+    expect(new Set(toolNames).size).toBe(4);
+    expect(toolNames).toContain('int__github__list_repos__conn1234');
+    expect(toolNames).toContain('int__github__list_repos__conn9999');
+    // All generated names must satisfy the AI-provider tool-name charset.
+    expect(toolNames.every((n) => /^[a-zA-Z0-9_-]+$/.test(n))).toBe(true);
+  });
+
+  it('should only expose tools the grant explicitly allows', () => {
+    const restrictedGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      allowedTools: ['list_repos'],
+    };
+    const tools = convertIntegrationToolsToAISDK([restrictedGrant], executorContext, vi.fn());
+    expect(Object.keys(tools)).toEqual(['int__github__list_repos']);
+  });
+
+  it('should exclude write tools when the grant is read-only', () => {
+    const readOnlyGrant: GrantWithConnectionAndProvider = {
+      ...mockGrant,
+      readOnly: true,
+    };
+    const tools = convertIntegrationToolsToAISDK([readOnlyGrant], executorContext, vi.fn());
+    const names = Object.keys(tools);
+    expect(names).toContain('int__github__list_repos');
+    expect(names).not.toContain('int__github__create_issue');
   });
 
   it('should prefix descriptions with provider name', () => {

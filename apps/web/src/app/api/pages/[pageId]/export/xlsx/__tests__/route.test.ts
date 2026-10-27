@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -48,6 +49,19 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
   parseSheetContent: vi.fn(),
   sanitizeSheetData: vi.fn((data: unknown) => data),
   evaluateSheet: vi.fn(),
+  // The route resolves each cell's underlying value and number format so the
+  // workbook carries real numbers; these are pure helpers, so the real
+  // implementations are the right thing to use here.
+  encodeCellAddress: (row: number, column: number) => {
+    let letters = '';
+    let remaining = column;
+    do {
+      letters = String.fromCharCode(65 + (remaining % 26)) + letters;
+      remaining = Math.floor(remaining / 26) - 1;
+    } while (remaining >= 0);
+    return `${letters}${row + 1}`;
+  },
+  numberFormatToExcelCode: () => undefined,
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -58,6 +72,10 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 import { db } from '@pagespace/db/db';
@@ -66,6 +84,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateExcel, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -118,6 +137,12 @@ const mockEvaluation = {
     ['John', '30'],
   ],
   errors: {},
+  byAddress: {
+    A1: { value: 'Name', display: 'Name' },
+    B1: { value: 'Age', display: 'Age' },
+    A2: { value: 'John', display: 'John' },
+    B2: { value: 30, display: '30' },
+  },
 };
 
 describe('GET /api/pages/[pageId]/export/xlsx', () => {
@@ -230,7 +255,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         mockEvaluation.display,
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: expect.any(Array) })
       );
     });
 
@@ -340,6 +366,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [['10', '20', '30']],
         errors: {},
+        byAddress: {},
       } as never);
 
       await GET(createRequest(), { params: mockParams });
@@ -347,7 +374,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         [['10', '20', '30']],
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: expect.any(Array) })
       );
     });
 
@@ -361,6 +389,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [],
         errors: {},
+        byAddress: {},
       } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
@@ -369,7 +398,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         [],
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: [] })
       );
     });
 
@@ -381,6 +411,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: largeDisplay,
         errors: {},
+        byAddress: {},
       } as never);
       vi.mocked(generateExcel).mockReturnValue(Buffer.alloc(100000) as never);
 

@@ -1,0 +1,570 @@
+import { db } from '@pagespace/db/db';
+import { eq, and, inArray } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { mcpTokenDrives } from '@pagespace/db/schema/members';
+import { mcpTokens } from '@pagespace/db/schema/auth';
+import {
+  getUserAccessLevel,
+  getUserDrivePermissions,
+  isUserDriveMember,
+  getUserAccessiblePagesInDriveWithDetails,
+} from './permissions';
+import { fetchCustomRolePermissions, resolveCustomRolePermissions, type CustomRolePerms, type PagePerm } from './membership-queries';
+import type { PermissionLevel, PageWithPermissions } from './permissions';
+import type { DriveScopeRow } from '../auth/oauth/scopes';
+import type { AccessActor } from './access-actor';
+
+/**
+ * App-member permission resolution for MCP tokens.
+ *
+ * Model: a key is the user it belongs to, narrowed by scope, optionally
+ * weakened by an explicit role.
+ *  - role === NULL  → INHERIT: the token resolves with its OWNER's access in
+ *    that drive (a scoped key "is me, only here").
+ *  - explicit role  → means EXACTLY what the same role means for a human
+ *    drive member (parity oracle: getUserAccessLevel) — channels editable by
+ *    members, drive-root creation for members, admin sees private pages, etc.
+ */
+
+export type AppMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+/**
+ * A key never reaches past its OWNER (review #2849, P1): an explicit role is a narrowing, so what the key resolves
+ * to is the INTERSECTION of the role's access and the owner's own access to the same target. A key minted while the
+ * owner had more (or by an owner a custom role restricts) reads only what the owner can read now. Null when either
+ * side grants nothing. Pure.
+ */
+export function intersectPermissionLevels(role: PermissionLevel | null, owner: PermissionLevel | null): PermissionLevel | null {
+  if (!role || !owner) return null;
+  const both = {
+    canView: role.canView && owner.canView,
+    canEdit: role.canEdit && owner.canEdit,
+    canShare: role.canShare && owner.canShare,
+    canDelete: role.canDelete && owner.canDelete,
+  };
+  return both.canView || both.canEdit || both.canShare || both.canDelete ? both : null;
+}
+
+interface AppMembershipContext {
+  role: AppMemberRole | null;
+  customRoleId: string | null;
+  /** The key's owner, as the credential presenting it: every owner bound below is asked through it. */
+  owner: AccessActor;
+}
+
+/**
+ * The key's row in the drive, for the ACTOR presenting it: a key is its owner narrowed, so the actor must BE the
+ * key's owner. Any other actor gets nothing (fail closed) rather than the owner's access under someone else's
+ * credential.
+ */
+async function fetchAppMembershipContext(
+  actor: AccessActor,
+  tokenId: string,
+  driveId: string,
+): Promise<AppMembershipContext | null> {
+  const rows = await db
+    .select({
+      role: mcpTokenDrives.role,
+      customRoleId: mcpTokenDrives.customRoleId,
+      ownerUserId: mcpTokens.userId,
+    })
+    .from(mcpTokenDrives)
+    .innerJoin(mcpTokens, eq(mcpTokenDrives.tokenId, mcpTokens.id))
+    .where(and(eq(mcpTokenDrives.tokenId, tokenId), eq(mcpTokenDrives.driveId, driveId)))
+    .limit(1);
+  const row = rows[0];
+  if (!row || row.ownerUserId !== actor.userId) return null;
+  return { role: row.role, customRoleId: row.customRoleId, owner: actor };
+}
+
+interface PageTarget {
+  driveId: string;
+  isPrivate: boolean;
+  pageType: string | null;
+  /** No page row matched — the id is treated as a drive id (drive-as-root-node). */
+  isDriveRoot: boolean;
+}
+
+export async function fetchPageTarget(targetPageId: string): Promise<PageTarget> {
+  const rows = await db
+    .select({ driveId: pages.driveId, isPrivate: pages.isPrivate, type: pages.type })
+    .from(pages)
+    .where(eq(pages.id, targetPageId))
+    .limit(1);
+  if (rows.length === 0) {
+    return { driveId: targetPageId, isPrivate: false, pageType: null, isDriveRoot: true };
+  }
+  return {
+    driveId: rows[0].driveId,
+    isPrivate: rows[0].isPrivate ?? false,
+    pageType: rows[0].type,
+    isDriveRoot: false,
+  };
+}
+
+/**
+ * Pure parity resolver for EXPLICIT roles. Mirrors getUserAccessLevel
+ * (permissions.ts:92-280) cell for cell:
+ *  - drive-root target: ANY membership → view+edit (members may create root
+ *    pages); share/delete only for ADMIN/OWNER; customRoleId is not consulted
+ *    at the drive root, same as the user branch.
+ *  - ADMIN/OWNER → full access, including private pages.
+ *  - custom role: per-page grant wins; driveWidePermissions fallback (never on
+ *    private pages); no grant at all → all-false; canDelete always false.
+ *  - plain MEMBER: private → null; otherwise view-only EXCEPT channels, which
+ *    grant canEdit so members can post ("Discord/Slack semantics").
+ */
+export function resolveExplicitAppRoleAccess(input: {
+  role: AppMemberRole;
+  customRole: { permissions: CustomRolePerms; driveWidePermissions: PagePerm | null } | null;
+  /** True when the custom role id was set but did not resolve to a role in this drive. */
+  customRoleUnresolved: boolean;
+  targetPageId: string;
+  pageType: string | null;
+  isPrivate: boolean;
+  isDriveRoot: boolean;
+}): PermissionLevel | null {
+  const { role, customRole, customRoleUnresolved, targetPageId, pageType, isPrivate, isDriveRoot } = input;
+  const isAdminLike = role === 'ADMIN' || role === 'OWNER';
+
+  if (isDriveRoot) {
+    return { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike };
+  }
+
+  if (isAdminLike) {
+    return { canView: true, canEdit: true, canShare: true, canDelete: true };
+  }
+
+  if (customRole) {
+    const resolved = resolveCustomRolePermissions(customRole, targetPageId);
+    if (resolved !== null) {
+      // driveWidePermissions fallback must not grant access to private pages
+      if (isPrivate && customRole.permissions[targetPageId] === undefined) return null;
+      return resolved.canView ? { ...resolved, canDelete: false } : null;
+    }
+    // No per-page or drive-wide grant — custom roles limit access to explicitly listed pages
+    return { canView: false, canEdit: false, canShare: false, canDelete: false };
+  }
+  if (customRoleUnresolved) {
+    // Custom role id set but not resolvable in this drive ⇒ no access.
+    return { canView: false, canEdit: false, canShare: false, canDelete: false };
+  }
+
+  // Plain MEMBER: mirrors the user member rule — no private pages, view-only,
+  // channels editable so members can post.
+  if (isPrivate) return null;
+  return { canView: true, canEdit: pageType === 'CHANNEL', canShare: false, canDelete: false };
+}
+
+export async function getAppAccessLevel(
+  actor: AccessActor,
+  tokenId: string,
+  targetPageId: string,
+): Promise<PermissionLevel | null> {
+  const target = await fetchPageTarget(targetPageId);
+  const membership = await fetchAppMembershipContext(actor, tokenId, target.driveId);
+  if (!membership) return null;
+
+  // Inherit: the token acts as its owner in this drive.
+  if (membership.role === null) {
+    return getUserAccessLevel(membership.owner, targetPageId);
+  }
+
+  const customRole = membership.customRoleId
+    ? await fetchCustomRolePermissions(membership.customRoleId, target.driveId)
+    : null;
+
+  return intersectPermissionLevels(
+    resolveExplicitAppRoleAccess({
+      role: membership.role,
+      customRole,
+      customRoleUnresolved: !!membership.customRoleId && !customRole,
+      targetPageId,
+      pageType: target.pageType,
+      isPrivate: target.isPrivate,
+      isDriveRoot: target.isDriveRoot,
+    }),
+    await getUserAccessLevel(membership.owner, targetPageId),
+  );
+}
+
+/**
+ * Whether the token has usable access to the drive. Any row, inherit or explicit, counts only while its OWNER still
+ * has drive access — a dangling row (owner removed from the drive) grants nothing.
+ */
+export async function hasAppDriveMembership(actor: AccessActor, tokenId: string, driveId: string): Promise<boolean> {
+  const membership = await fetchAppMembershipContext(actor, tokenId, driveId);
+  if (!membership) return false;
+  // Review #2849 r4 (P1): EVERY key, inherit or explicit, is a drive member only while its owner is a CURRENT member
+  // of the drive (a direct row or org-derived). An owner who left takes their keys' membership with them, so no
+  // scope revocation on member removal is needed.
+  return isUserDriveMember(membership.owner, driveId);
+}
+
+export interface AppDriveMembership {
+  /** NULL = inherit the owner's access. */
+  role: AppMemberRole | null;
+  customRoleId: string | null;
+  ownerUserId: string;
+}
+
+/**
+ * Review #2849 r3 (P1-B): a key's stored OWNER/ADMIN role is AUTHORITY only while its owner holds that authority on
+ * the drive now. An explicit OWNER counts as OWNER only for the drive's lead (else ADMIN for a current admin), an
+ * explicit ADMIN only for a current owner or admin; otherwise the key is a plain MEMBER (its access is then bounded
+ * by the owner's own: intersectPermissionLevels). So a demoted admin's key loses admin immediately.
+ */
+async function clampExplicitRoleToOwner(role: AppMemberRole | null, ownerActor: AccessActor, driveId: string): Promise<AppMemberRole | null> {
+  if (role !== 'OWNER' && role !== 'ADMIN') return role;
+  const owner = await getUserDrivePermissions(ownerActor, driveId);
+  if (role === 'OWNER' && owner?.isOwner) return 'OWNER';
+  return owner?.isOwner || owner?.isAdmin ? 'ADMIN' : 'MEMBER';
+}
+
+/**
+ * The key's membership on the drive, its explicit role CLAMPED to its owner's current authority (clampExplicitRoleToOwner).
+ * Every authority check (owner/admin gates, the AI tools' manage ceiling, bulk move/copy, restore, agent create)
+ * reads this, never the stored role. Review #2849 r6: null unless the owner is a CURRENT member of the drive (as
+ * hasAppDriveMembership), so no caller can read a dangling row's role as membership.
+ */
+export async function getAppDriveMembership(
+  actor: AccessActor,
+  tokenId: string,
+  driveId: string,
+): Promise<AppDriveMembership | null> {
+  const membership = await fetchAppMembershipContext(actor, tokenId, driveId);
+  if (!membership) return null;
+  if (!(await isUserDriveMember(membership.owner, driveId))) return null;
+  return {
+    role: await clampExplicitRoleToOwner(membership.role, membership.owner, driveId),
+    customRoleId: membership.customRoleId ?? null,
+    ownerUserId: membership.owner.userId,
+  };
+}
+
+/**
+ * Drive-level access. Inherit → the owner's drive-root access (user rule);
+ * explicit → user drive-root parity: any membership gets view+edit, ADMIN/
+ * OWNER add share+delete.
+ */
+export async function getAppDriveAccessLevel(
+  actor: AccessActor,
+  tokenId: string,
+  driveId: string,
+): Promise<PermissionLevel | null> {
+  const membership = await fetchAppMembershipContext(actor, tokenId, driveId);
+  if (!membership) return null;
+
+  if (membership.role === null) {
+    return getUserAccessLevel(membership.owner, driveId);
+  }
+
+  const isAdminLike = membership.role === 'ADMIN' || membership.role === 'OWNER';
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(membership.owner, driveId),
+  );
+}
+
+/**
+ * All pages in a drive visible to the token, with the token's own permissions.
+ * Inherit → exactly the owner's accessible set. Explicit roles mirror the
+ * corresponding user role (plain MEMBER additionally gets canEdit on channels,
+ * matching getAppAccessLevel — the user-side LISTING function lacks that
+ * exception, but access-level semantics are what gate actions).
+ */
+export async function getAppAccessiblePagesInDrive(
+  actor: AccessActor,
+  tokenId: string,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  const membership = await fetchAppMembershipContext(actor, tokenId, driveId);
+  if (!membership) return [];
+  return resolveAccessiblePagesForMembership(membership, driveId);
+}
+
+/**
+ * Shared body for {@link getAppAccessiblePagesInDrive} (MCP token, membership
+ * sourced from a `mcp_token_drives` DB row) and
+ * {@link getScopedAccessiblePagesInDrive} (OAuth token, membership sourced
+ * from a parsed `ScopeSet` — no DB row exists for it). Both entry points
+ * resolve membership their own way, then defer to this one body so the
+ * listing logic (drive-wide fallback, per-page overrides, etc.) is never
+ * duplicated between token types.
+ */
+async function resolveAccessiblePagesForMembership(
+  membership: AppMembershipContext,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  if (membership.role === null) {
+    return getUserAccessiblePagesInDriveWithDetails(membership.owner, driveId);
+  }
+  // An explicit role never reaches past the owner: keep only the pages the owner reaches, at the weaker of the two.
+  const [rolePages, ownerPages] = await Promise.all([
+    resolveExplicitRolePages(membership, driveId),
+    getUserAccessiblePagesInDriveWithDetails(membership.owner, driveId),
+  ]);
+  const ownerById = new Map(ownerPages.map((p) => [p.id, p.permissions]));
+  return rolePages.flatMap((p) => {
+    const permissions = intersectPermissionLevels(p.permissions, ownerById.get(p.id) ?? null);
+    return permissions ? [{ ...p, permissions }] : [];
+  });
+}
+
+/** What an explicit role alone reaches in the drive, before the owner bound. */
+async function resolveExplicitRolePages(
+  membership: AppMembershipContext,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  const { role, customRoleId } = membership;
+
+  if (role === 'ADMIN' || role === 'OWNER') {
+    const allPages = await db
+      .select({
+        id: pages.id,
+        title: pages.title,
+        type: pages.type,
+        parentId: pages.parentId,
+        position: pages.position,
+        isTrashed: pages.isTrashed,
+      })
+      .from(pages)
+      .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+
+    return allPages.map((p) => ({
+      ...p,
+      permissions: { canView: true, canEdit: true, canShare: true, canDelete: true },
+    }));
+  }
+
+  if (customRoleId) {
+    const customRole = await fetchCustomRolePermissions(customRoleId, driveId);
+    if (customRole) {
+      const { permissions: rolePerms, driveWidePermissions } = customRole;
+
+      if (driveWidePermissions?.canView) {
+        // Drive-wide view access: start with all non-private pages at the drive-wide level
+        const nonPrivatePages = await db
+          .select({
+            id: pages.id,
+            title: pages.title,
+            type: pages.type,
+            parentId: pages.parentId,
+            position: pages.position,
+            isTrashed: pages.isTrashed,
+          })
+          .from(pages)
+          .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), eq(pages.isPrivate, false)));
+
+        const pageMap = new Map<string, PageWithPermissions>();
+        for (const p of nonPrivatePages) {
+          pageMap.set(p.id, { ...p, permissions: { ...driveWidePermissions, canDelete: false } });
+        }
+
+        // Per-page explicit entries add private pages and override drive-wide perms
+        const explicitIds = Object.entries(rolePerms).filter(([, p]) => p.canView).map(([id]) => id);
+        if (explicitIds.length > 0) {
+          const explicitPages = await db
+            .select({
+              id: pages.id,
+              title: pages.title,
+              type: pages.type,
+              parentId: pages.parentId,
+              position: pages.position,
+              isTrashed: pages.isTrashed,
+            })
+            .from(pages)
+            .where(and(inArray(pages.id, explicitIds), eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+          for (const p of explicitPages) {
+            pageMap.set(p.id, { ...p, permissions: { ...rolePerms[p.id]!, canDelete: false } });
+          }
+        }
+        // Explicit denials remove pages even if covered by drive-wide
+        for (const [id, p] of Object.entries(rolePerms)) {
+          if (!p.canView) pageMap.delete(id);
+        }
+
+        return Array.from(pageMap.values());
+      }
+
+      // No drive-wide view: only per-page explicit entries
+      const visiblePageIds = Object.entries(rolePerms)
+        .filter(([, p]) => p.canView)
+        .map(([id]) => id);
+
+      if (visiblePageIds.length === 0) return [];
+
+      const visiblePages = await db
+        .select({
+          id: pages.id,
+          title: pages.title,
+          type: pages.type,
+          parentId: pages.parentId,
+          position: pages.position,
+          isTrashed: pages.isTrashed,
+        })
+        .from(pages)
+        .where(and(inArray(pages.id, visiblePageIds), eq(pages.driveId, driveId), eq(pages.isTrashed, false)));
+
+      return visiblePages.map((p) => ({
+        ...p,
+        permissions: { ...rolePerms[p.id]!, canDelete: false },
+      }));
+    }
+    // Custom role with no resolvable permissions ⇒ no access.
+    return [];
+  }
+
+  // Plain MEMBER: the drive's non-private pages, view-only except channels
+  // (canEdit so members can post — parity with getAppAccessLevel).
+  const memberPages = await db
+    .select({
+      id: pages.id,
+      title: pages.title,
+      type: pages.type,
+      parentId: pages.parentId,
+      position: pages.position,
+      isTrashed: pages.isTrashed,
+    })
+    .from(pages)
+    .where(and(eq(pages.driveId, driveId), eq(pages.isTrashed, false), eq(pages.isPrivate, false)));
+
+  return memberPages.map((p) => ({
+    ...p,
+    permissions: { canView: true, canEdit: p.type === 'CHANNEL', canShare: false, canDelete: false },
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// OAuth-token entry points (Phase 1 task 10, ADR 0002 Decision 2).
+//
+// An OAuth access token's drive scope is a parsed `ScopeSet`, bridged to
+// `DriveScopeRow[]` by `scopeSetToDriveScopes` — the exact `mcp_token_drives`
+// row shape, but there is no DB row: the token id has no corresponding
+// `mcp_token_drives` foreign key (that table's `tokenId` FK only points at
+// `mcp_tokens`). These entry points source membership from the in-memory
+// array instead of a DB join, then defer to the SAME resolver
+// (`resolveExplicitAppRoleAccess`) and DB helpers (`fetchPageTarget`,
+// `fetchCustomRolePermissions`, `getUserAccessLevel`) the MCP-token path
+// uses, so a drive-narrowed OAuth token is indistinguishable in capability
+// from an equivalent scoped MCP token.
+// ---------------------------------------------------------------------------
+
+function findScopeRow(driveScopes: DriveScopeRow[], driveId: string): DriveScopeRow | null {
+  return driveScopes.find((row) => row.driveId === driveId) ?? null;
+}
+
+export async function getScopedAccessLevel(
+  driveScopes: DriveScopeRow[],
+  owner: AccessActor,
+  targetPageId: string,
+): Promise<PermissionLevel | null> {
+  const target = await fetchPageTarget(targetPageId);
+  const row = findScopeRow(driveScopes, target.driveId);
+  if (!row) return null;
+
+  if (row.role === null) {
+    return getUserAccessLevel(owner, targetPageId);
+  }
+
+  const customRole = row.customRoleId
+    ? await fetchCustomRolePermissions(row.customRoleId, target.driveId)
+    : null;
+
+  return intersectPermissionLevels(
+    resolveExplicitAppRoleAccess({
+      role: row.role,
+      customRole,
+      customRoleUnresolved: !!row.customRoleId && !customRole,
+      targetPageId,
+      pageType: target.pageType,
+      isPrivate: target.isPrivate,
+      isDriveRoot: target.isDriveRoot,
+    }),
+    await getUserAccessLevel(owner, targetPageId),
+  );
+}
+
+/**
+ * Whether the scope has usable access to the drive. An inherit row counts
+ * only while its OWNER still has drive access — mirrors hasAppDriveMembership.
+ */
+export async function hasScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  owner: AccessActor,
+  driveId: string,
+): Promise<boolean> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return false;
+  // Review #2849 r4 (P1): inherit or explicit, the scope counts only while its owner is a current member.
+  return isUserDriveMember(owner, driveId);
+}
+
+/**
+ * The OAuth scope's membership with its explicit role CLAMPED to the owner's current authority (review #2849 r3,
+ * P1-B; see clampExplicitRoleToOwner). Authority checks read this, not the raw scope. Review #2849 r6: null unless the
+ * owner is a CURRENT member of the drive (as hasScopedDriveMembership).
+ */
+export async function getEffectiveScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  owner: AccessActor,
+  driveId: string,
+): Promise<{ role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+  if (!(await isUserDriveMember(owner, driveId))) return null;
+  if (row.role !== 'ADMIN') return { role: row.role, customRoleId: row.customRoleId };
+  const clamped = await clampExplicitRoleToOwner(row.role, owner, driveId);
+  return { role: clamped === 'MEMBER' ? 'MEMBER' : 'ADMIN', customRoleId: row.customRoleId };
+}
+
+/** Pure array lookup — no DB, unlike getAppDriveMembership. */
+export function getScopedDriveMembership(
+  driveScopes: DriveScopeRow[],
+  driveId: string,
+): { role: 'ADMIN' | 'MEMBER' | null; customRoleId: string | null } | null {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+  return { role: row.role, customRoleId: row.customRoleId };
+}
+
+/**
+ * Drive-level access. Inherit → the owner's drive-root access (user rule);
+ * explicit → user drive-root parity: any membership gets view+edit, ADMIN
+ * adds share+delete. Mirrors getAppDriveAccessLevel (OAuth's grammar has no
+ * OWNER role — scopeSetToDriveScopes only ever emits 'ADMIN' | 'MEMBER' | null).
+ */
+export async function getScopedDriveAccessLevel(
+  driveScopes: DriveScopeRow[],
+  owner: AccessActor,
+  driveId: string,
+): Promise<PermissionLevel | null> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return null;
+
+  if (row.role === null) {
+    return getUserAccessLevel(owner, driveId);
+  }
+
+  const isAdminLike = row.role === 'ADMIN';
+  return intersectPermissionLevels(
+    { canView: true, canEdit: true, canShare: isAdminLike, canDelete: isAdminLike },
+    await getUserAccessLevel(owner, driveId),
+  );
+}
+
+/**
+ * All pages in a drive visible to the OAuth-scoped principal. Delegates to
+ * the same body getAppAccessiblePagesInDrive uses once membership is resolved.
+ */
+export async function getScopedAccessiblePagesInDrive(
+  driveScopes: DriveScopeRow[],
+  owner: AccessActor,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  const row = findScopeRow(driveScopes, driveId);
+  if (!row) return [];
+
+  const membership: AppMembershipContext = { role: row.role, customRoleId: row.customRoleId, owner };
+  return resolveAccessiblePagesForMembership(membership, driveId);
+}

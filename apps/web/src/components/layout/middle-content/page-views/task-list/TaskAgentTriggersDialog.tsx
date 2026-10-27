@@ -1,5 +1,6 @@
 'use client';
 
+import { AutomationSkipNote, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { useEffect, useRef, useState } from 'react';
 import { AlertCircle, Bot, Zap } from 'lucide-react';
 import { toast } from 'sonner';
@@ -116,11 +117,11 @@ export function TaskAgentTriggersDialog({
   const triggersKey = open ? `/api/tasks/${taskId}/triggers` : null;
   const agentsKey = open && driveId ? `/api/drives/${driveId}/agents` : null;
 
-  // Pause background revalidation while any editing session is active so a remote
+  // Pause background revalidation during document/form editing so a remote
   // task_updated broadcast cannot refetch this dialog and clobber in-progress prompt
   // typing. Initial load and explicit mutate() (e.g. refetchTriggers after save) are
   // unaffected because *LoadedRef gates the pause until first success.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const triggersLoadedRef = useRef(false);
   const agentsLoadedRef = useRef(false);
 
@@ -129,7 +130,7 @@ export function TaskAgentTriggersDialog({
     triggersFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => triggersLoadedRef.current && isAnyActive,
+      isPaused: () => triggersLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         triggersLoadedRef.current = true;
       },
@@ -140,7 +141,7 @@ export function TaskAgentTriggersDialog({
     agentsFetcher,
     {
       revalidateOnFocus: false,
-      isPaused: () => agentsLoadedRef.current && isAnyActive,
+      isPaused: () => agentsLoadedRef.current && isAnyEditing,
       onSuccess: () => {
         agentsLoadedRef.current = true;
       },
@@ -240,8 +241,8 @@ export function TaskAgentTriggersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-lg flex flex-col max-h-[85vh]">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-amber-500" />
             Agent triggers
@@ -254,7 +255,7 @@ export function TaskAgentTriggersDialog({
         {triggersLoading ? (
           <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
         ) : (
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 overflow-y-auto space-y-4 pr-1">
             {noAgents && (
               <p className="text-xs text-muted-foreground">
                 No agents in this drive. Create an AI Chat page first.
@@ -262,6 +263,7 @@ export function TaskAgentTriggersDialog({
             )}
 
             {TRIGGER_TYPES.map(({ ui, label, help }) => {
+              const switchId = `trigger-switch-${ui}`;
               const section = sections[ui];
               const existing = (triggersData?.triggers ?? []).find(
                 (t) => t.triggerType === ui,
@@ -273,9 +275,10 @@ export function TaskAgentTriggersDialog({
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
                       <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <Label className="font-medium cursor-pointer truncate">{label}</Label>
+                      <Label htmlFor={switchId} className="font-medium cursor-pointer truncate">{label}</Label>
                     </div>
                     <Switch
+                      id={switchId}
                       checked={section.enabled}
                       disabled={disabled}
                       onCheckedChange={(checked) => updateSection(ui, { enabled: checked })}
@@ -309,7 +312,9 @@ export function TaskAgentTriggersDialog({
                         }
                       />
 
-                      {existingStatus && existingStatus !== 'never_run' && (
+                      {existing && isSpendSkip(existing.lastFireError) ? (
+                        <AutomationSkipNote error={existing.lastFireError} driveId={driveId} />
+                      ) : existingStatus && existingStatus !== 'never_run' && (
                         <p className={statusToneClass(existingStatus)}>
                           {existingStatus === 'error' && (
                             <AlertCircle className="h-3 w-3 inline mr-1" aria-hidden="true" />
@@ -350,7 +355,7 @@ export function TaskAgentTriggersDialog({
           </div>
         )}
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Done
           </Button>

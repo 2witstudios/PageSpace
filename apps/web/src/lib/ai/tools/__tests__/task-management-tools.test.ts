@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -36,7 +44,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
-  taskItems: { id: 'id', taskListId: 'taskListId', position: 'position' },
+  taskItems: { id: 'id', position: 'position' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   taskAssignees: { taskId: 'taskId' },
 }));
@@ -66,6 +74,7 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserEditPage: vi.fn(),
   canUserViewPage: vi.fn(),
   getUserDriveAccess: vi.fn(),
@@ -89,10 +98,22 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(),
 }));
 
+vi.mock('@/lib/tasks/completion-guard', () => ({
+  checkSubTasksComplete: vi.fn().mockResolvedValue(null),
+  toToolFailure: (p: { code: string; error: string; pending: number; total: number }) => ({
+    success: false,
+    ...p,
+  }),
+}));
+
 import { taskManagementTools } from '../task-management-tools';
 import { db } from '@pagespace/db/db';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import type { ToolExecutionContext } from '../../core/types';
+import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
+import { syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockCanUserEditPage = vi.mocked(canUserEditPage);
@@ -132,10 +153,10 @@ describe('task-management-tools', () => {
       ).rejects.toThrow('User authentication required');
     });
 
-    it('requires taskId or pageId', async () => {
+    it('rejects when taskId is missing, pointing callers to create_task', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -143,21 +164,7 @@ describe('task-management-tools', () => {
           { status: 'completed' },
           context
         )
-      ).rejects.toThrow('Either taskId (to update) or pageId (to create) must be provided');
-    });
-
-    it('requires title when creating new task', async () => {
-      const context = {
-        toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-      };
-
-      await expect(
-        taskManagementTools.update_task.execute!(
-          { pageId: 'page-1' },
-          context
-        )
-      ).rejects.toThrow('Title is required when creating a new task');
+      ).rejects.toThrow('taskId is required to update a task. To create a new task, use create_task.');
     });
 
     it('throws error when task not found for update', async () => {
@@ -165,7 +172,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -193,7 +200,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -213,7 +220,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -238,7 +245,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -262,7 +269,7 @@ describe('task-management-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -273,37 +280,55 @@ describe('task-management-tools', () => {
       ).rejects.toThrow('You do not have permission to update this task');
     });
 
-    it('throws error when page is not TASK_LIST type', async () => {
-      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({
-        id: 'page-1',
-        type: 'DOCUMENT',
-        title: 'Regular Doc',
-        driveId: 'drive-1',
-      });
-      mockCanUserEditPage.mockResolvedValue(true);
-
-      const context = {
-        toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-      };
-
-      await expect(
-        taskManagementTools.update_task.execute!(
-          { pageId: 'page-1', title: 'New Task' },
-          context
-        )
-      ).rejects.toThrow('Page must be a TASK_LIST page to add tasks');
-    });
-
-    describe('delete branch', () => {
-      it('hard-deletes task and trashes linked DOCUMENT page when delete: true', async () => {
+    describe('completion guard', () => {
+      it('returns structured failure when completing a task with incomplete sub-tasks', async () => {
         mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
           id: 'task-1',
           taskListId: 'list-1',
-          pageId: 'doc-page-1',
-          title: 'Old Task',
+          pageId: 'task-page-1',
+          completedAt: null,
         });
-        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'tasklist-page-1',
+          userId: 'user-123',
+        });
+        mockCanUserEditPage.mockResolvedValue(true);
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+          code: 'SUBTASKS_INCOMPLETE',
+          error: 'Complete all sub-tasks first (2 of 3 remaining)',
+          pending: 2,
+          total: 3,
+        });
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+        };
+
+        const result = await taskManagementTools.update_task.execute!(
+          { taskId: 'task-1', status: 'completed' },
+          context
+        );
+        expect(result).toMatchObject({ success: false, pending: 2, total: 3 });
+      });
+    });
+
+    describe('field update', () => {
+      it('updates a field and returns the refreshed task list', async () => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          pageId: 'doc-page-1',
+          status: 'pending',
+          priority: 'medium',
+          assigneeId: null,
+          assigneeAgentId: null,
+          dueDate: null,
+          completedAt: null,
+          metadata: null,
+          page: { title: 'My Task', parentId: 'task-list-page-1' },
+        });
         mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
           id: 'list-1',
           pageId: 'task-list-page-1',
@@ -312,182 +337,18 @@ describe('task-management-tools', () => {
           description: null,
           status: 'pending',
         });
-        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
-        mockCanUserEditPage.mockResolvedValue(true);
-
-        const tx = {
-          select: vi.fn().mockReturnThis(),
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([{ revision: 5 }]),
-          delete: vi.fn().mockReturnThis(),
-        };
-        // Make .where on delete chain return a thenable that resolves
-        const deleteCalls: unknown[] = [];
-        tx.delete = vi.fn(() => {
-          const chain = {
-            where: vi.fn().mockImplementation((arg: unknown) => {
-              deleteCalls.push(arg);
-              return Promise.resolve();
-            }),
-          };
-          return chain as unknown as typeof tx;
-        });
-        const transactionMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb(tx));
-        mockDb.transaction = transactionMock as unknown as typeof mockDb.transaction;
-
-        const context = {
-          toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-        };
-
-        const result = await taskManagementTools.update_task.execute!(
-          { taskId: 'task-1', delete: true },
-          context
-        );
-
-        const { applyPageMutation } = await import('@/services/api/page-mutation-service');
-        const { disableTaskTriggers } = await import('@/lib/workflows/task-trigger-helpers');
-
-        expect(applyPageMutation).toHaveBeenCalledWith(
-          expect.objectContaining({
-            pageId: 'doc-page-1',
-            operation: 'trash',
-            updates: expect.objectContaining({ isTrashed: true }),
-            expectedRevision: 5,
-          }),
-        );
-        expect(deleteCalls.length).toBeGreaterThanOrEqual(1);
-        expect(disableTaskTriggers).toHaveBeenCalledWith('task-1', expect.any(String));
-        // Deferred workflow trigger from applyPageMutation must run after the tx commits
-        // so downstream automation tied to page-trash activity fires.
-        expect(deferredTriggerMock).toHaveBeenCalled();
-        expect(result).toEqual(
-          expect.objectContaining({
-            success: true,
-            action: 'deleted',
-            task: expect.objectContaining({ id: 'task-1', pageId: 'doc-page-1' }),
-            // Refreshed list payload so client UIs (TasksDropdown via
-            // useAggregatedTasks) drop the deleted task immediately.
-            tasks: expect.any(Array),
-            taskList: expect.objectContaining({ id: 'list-1' }),
-          }),
-        );
-      });
-
-      it('ignores field updates when delete: true is also passed', async () => {
-        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
-          id: 'task-1',
-          taskListId: 'list-1',
-          pageId: 'doc-page-1',
-          title: 'Old Task',
-        });
         mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
-        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
-          id: 'list-1',
-          pageId: 'task-list-page-1',
-          userId: 'user-123',
-          title: 'My Tasks',
-          description: null,
-          status: 'pending',
-        });
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
         mockCanUserEditPage.mockResolvedValue(true);
 
-        const updateMock = vi.fn().mockReturnValue({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: 'task-1', title: 'NEW' }]),
-            }),
-          }),
-        });
-        const tx = {
-          select: vi.fn().mockReturnThis(),
-          from: vi.fn().mockReturnThis(),
-          where: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockResolvedValue([{ revision: 1 }]),
-          delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
-          update: updateMock,
-        };
-        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
-          cb(tx)
-        ) as unknown as typeof mockDb.transaction;
-
-        const context = {
-          toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-        };
-
-        const result = await taskManagementTools.update_task.execute!(
-          { taskId: 'task-1', delete: true, title: 'Should Be Ignored', status: 'completed' },
-          context
-        );
-
-        expect(updateMock).not.toHaveBeenCalled();
-        expect((result as { action: string }).action).toBe('deleted');
-      });
-
-      it('rejects delete when no taskId is provided', async () => {
-        const context = {
-          toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
-        };
-
-        await expect(
-          taskManagementTools.update_task.execute!(
-            { delete: true, pageId: 'page-1' },
-            context
-          )
-        ).rejects.toThrow('delete requires a taskId');
-      });
-    });
-
-    describe('reorder branch (position on existing task)', () => {
-      it('densifies peer positions when position is provided alongside taskId', async () => {
-        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
-          id: 'task-2',
-          taskListId: 'list-1',
-          pageId: 'doc-2',
-          title: 'Middle Task',
-        });
-        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
-          id: 'list-1',
-          pageId: 'task-list-page-1',
-          userId: 'user-123',
-        });
-        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
-        mockCanUserEditPage.mockResolvedValue(true);
-
-        // First db.select for the field-update transaction's siblings (status not provided, so won't be hit).
-        // Second db.select for reorder peer fetch.
-        const peerRows = [
-          { id: 'task-1', position: 0 },
-          { id: 'task-2', position: 1 },
-          { id: 'task-3', position: 2 },
-          { id: 'task-4', position: 3 },
-        ];
-        const selectCalls: unknown[] = [];
-        const dbSelectMock = vi.fn(() => {
-          const chain = {
-            from: vi.fn().mockReturnThis(),
-            where: vi.fn().mockReturnThis(),
-            orderBy: vi.fn(() => {
-              selectCalls.push('orderBy');
-              return Promise.resolve(peerRows);
-            }),
-          };
-          return chain;
-        });
-        mockDb.select = dbSelectMock as unknown as typeof mockDb.select;
-
-        // Field-update transaction returns the updated task
-        const fieldUpdateMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
           const tx = {
             update: vi.fn(() => ({
               set: vi.fn(() => ({
                 where: vi.fn(() => ({
                   returning: vi.fn().mockResolvedValue([
-                    { id: 'task-2', title: 'Middle Task', position: 1 },
+                    { id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'high', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, completedAt: null },
                   ]),
                 })),
               })),
@@ -496,55 +357,298 @@ describe('task-management-tools', () => {
             insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
           };
           return cb(tx);
-        });
-
-        // Reorder transaction collects position writes
-        const positionWrites: Array<{ id: string; position: number }> = [];
-        const reorderTxMock = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
-          const tx = {
-            update: vi.fn(() => {
-              let pendingPosition: number | undefined;
-              const chain = {
-                set: vi.fn((vals: { position: number }) => {
-                  pendingPosition = vals.position;
-                  return chain;
-                }),
-                where: vi.fn(() => {
-                  const idArg = (chain as unknown as { _id?: string })._id;
-                  positionWrites.push({ id: idArg ?? '', position: pendingPosition ?? -1 });
-                  return Promise.resolve();
-                }),
-              };
-              return chain;
-            }),
-          };
-          return cb(tx);
-        });
-
-        let txCallCount = 0;
-        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
-          txCallCount += 1;
-          if (txCallCount === 1) return fieldUpdateMock(cb);
-          return reorderTxMock(cb);
         }) as unknown as typeof mockDb.transaction;
-
-        // Mock db.query.taskItems.findMany used by the response builder at the end
-        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
 
         const context = {
           toolCallId: '1', messages: [],
-          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
         };
 
         const result = await taskManagementTools.update_task.execute!(
-          { taskId: 'task-2', position: 3 },
+          { taskId: 'task-1', priority: 'high' },
           context
         );
 
-        // Expect the reorder transaction to have been called
-        expect(reorderTxMock).toHaveBeenCalled();
-        // Result should reflect the clamped/densified position
-        expect((result as { task: { position: number } }).task.position).toBe(3);
+        expect(result).toEqual(
+          expect.objectContaining({
+            success: true,
+            action: 'updated',
+            task: expect.objectContaining({ id: 'task-1', priority: 'high' }),
+            taskList: expect.objectContaining({ id: 'list-1' }),
+            tasks: expect.any(Array),
+          }),
+        );
+      });
+
+      /**
+       * A due date the model writes as a wall-clock time ("2026-02-19T19:00:00")
+       * has to be read in the user's zone, which the execution context already
+       * carries. A bare `new Date()` read it in the server's zone instead, so
+       * the AI path stored a different instant than the same words typed into
+       * the calendar (#2404).
+       *
+       * The assertion is the GAP between two callers, not one absolute instant:
+       * a fixed expectation passes under the old parse on any machine whose
+       * zone matches the context's.
+       */
+      const updateDueDateIn = async (timezone: string, dueDate: string) => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          pageId: 'doc-page-1',
+          status: 'pending',
+          priority: 'medium',
+          assigneeId: null,
+          assigneeAgentId: null,
+          dueDate: null,
+          completedAt: null,
+          metadata: null,
+          page: { title: 'My Task', parentId: 'task-list-page-1' },
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'task-list-page-1',
+          userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
+        });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          const tx = {
+            update: vi.fn(() => ({
+              set: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  returning: vi.fn().mockResolvedValue([
+                    { id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium', position: 0, dueDate: null, assigneeId: null, assigneeAgentId: null, completedAt: null },
+                  ]),
+                })),
+              })),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          };
+          return cb(tx);
+        }) as unknown as typeof mockDb.transaction;
+
+        vi.mocked(syncTaskDueDateTrigger).mockClear();
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), timezone } as ToolExecutionContext,
+        };
+
+        await taskManagementTools.update_task.execute!({ taskId: 'task-1', dueDate }, context);
+
+        return vi.mocked(syncTaskDueDateTrigger).mock.calls.at(-1)?.[1] as Date | null;
+      };
+
+      it('reads a naive due date in the caller timezone from the execution context', async () => {
+        const chicago = await updateDueDateIn('America/Chicago', '2026-02-19T19:00:00');
+        const tokyo = await updateDueDateIn('Asia/Tokyo', '2026-02-19T19:00:00');
+
+        // UTC-6 vs UTC+9 in February. Read in the server's zone, both would be equal.
+        expect(Number(chicago) - Number(tokyo)).toBe(15 * 60 * 60 * 1000);
+      });
+
+      it('leaves an absolute due date alone whatever the caller timezone', async () => {
+        const stored = await updateDueDateIn('America/Chicago', '2026-02-19T19:00:00Z');
+
+        expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
+      });
+
+      describe('startDate', () => {
+        const runUpdate = async (existing: Record<string, unknown>, params: Record<string, unknown>) => {
+          const setCalls: Record<string, unknown>[] = [];
+          mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+            id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium',
+            assigneeId: null, assigneeAgentId: null, startDate: null, dueDate: null,
+            completedAt: null, metadata: null,
+            page: { title: 'My Task', parentId: 'task-list-page-1' },
+            ...existing,
+          });
+          mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+            id: 'list-1', pageId: 'task-list-page-1', userId: 'user-123', title: 'My Tasks', description: null, status: 'pending',
+          });
+          mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+          mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+          mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+          mockCanUserEditPage.mockResolvedValue(true);
+          mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({
+            update: vi.fn(() => ({
+              set: vi.fn((values: Record<string, unknown>) => {
+                setCalls.push(values);
+                return {
+                  where: vi.fn(() => ({
+                    returning: vi.fn().mockResolvedValue([
+                      { id: 'task-1', pageId: 'doc-page-1', status: 'pending', priority: 'medium', position: 0, startDate: values.startDate ?? null, dueDate: null, assigneeId: null, assigneeAgentId: null, completedAt: null },
+                    ]),
+                  })),
+                };
+              }),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          })) as unknown as typeof mockDb.transaction;
+
+          const context = {
+            toolCallId: '1', messages: [],
+            experimental_context: { userId: 'user-123', accessActor: credentialActor('user-123', null), timezone: 'UTC' } as ToolExecutionContext,
+          };
+          const run = () => taskManagementTools.update_task.execute!({ taskId: 'task-1', ...params }, context);
+          return { run, setCalls };
+        };
+
+        it('writes startDate when provided', async () => {
+          const { run, setCalls } = await runUpdate({}, { startDate: '2026-03-01T00:00:00Z' });
+          await run();
+          expect(setCalls[0]).toMatchObject({ startDate: new Date('2026-03-01T00:00:00Z') });
+        });
+
+        it('rejects a startDate after the stored due date', async () => {
+          const { run, setCalls } = await runUpdate(
+            { dueDate: new Date('2026-03-01T00:00:00Z') },
+            { startDate: '2026-03-05T00:00:00Z' },
+          );
+          await expect(run()).rejects.toThrow('Start date must be on or before the due date');
+          expect(setCalls).toHaveLength(0);
+        });
+
+        it('rejects a startDate that is not a date, before any write', async () => {
+          const { run, setCalls } = await runUpdate({}, { startDate: 'next tuesday' });
+          await expect(run()).rejects.toThrow('Invalid start date');
+          expect(setCalls).toHaveLength(0);
+        });
+      });
+
+      it('broadcasts page:updated when title changes', async () => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          pageId: 'doc-page-1',
+          status: 'pending',
+          priority: 'medium',
+          assigneeId: null,
+          assigneeAgentId: null,
+          dueDate: null,
+          completedAt: null,
+          metadata: null,
+          page: { title: 'Old Title', parentId: 'task-list-page-1' },
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'task-list-page-1',
+          userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
+        });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          const tx = {
+            select: vi.fn(() => ({
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([{ revision: 5 }]),
+                })),
+              })),
+            })),
+            update: vi.fn(() => ({
+              set: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  returning: vi.fn().mockResolvedValue([{
+                    id: 'task-1', pageId: 'doc-page-1', status: 'pending',
+                    priority: 'medium', position: 0, dueDate: null,
+                    assigneeId: null, assigneeAgentId: null, completedAt: null,
+                  }]),
+                })),
+              })),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          };
+          return cb(tx);
+        }) as unknown as typeof mockDb.transaction;
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+        };
+
+        await taskManagementTools.update_task.execute!(
+          { taskId: 'task-1', title: 'New Title' },
+          context
+        );
+
+        // driveId comes from applyPageMutation mock which returns driveId: 'd'
+        expect(vi.mocked(createPageEventPayload)).toHaveBeenCalledWith(
+          'd', 'doc-page-1', 'updated', { title: 'New Title' }
+        );
+        expect(vi.mocked(broadcastPageEvent)).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not broadcast page:updated when no title is provided', async () => {
+        mockDb.query.taskItems.findFirst = vi.fn().mockResolvedValue({
+          id: 'task-1',
+          pageId: 'doc-page-1',
+          status: 'pending',
+          priority: 'medium',
+          assigneeId: null,
+          assigneeAgentId: null,
+          dueDate: null,
+          completedAt: null,
+          metadata: null,
+          page: { title: 'My Task', parentId: 'task-list-page-1' },
+        });
+        mockDb.query.taskLists.findFirst = vi.fn().mockResolvedValue({
+          id: 'list-1',
+          pageId: 'task-list-page-1',
+          userId: 'user-123',
+          title: 'My Tasks',
+          description: null,
+          status: 'pending',
+        });
+        mockDb.query.taskItems.findMany = vi.fn().mockResolvedValue([]);
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue({ driveId: 'drive-1' });
+        mockDb.query.taskStatusConfigs.findMany = vi.fn().mockResolvedValue([]);
+        mockCanUserEditPage.mockResolvedValue(true);
+
+        mockDb.transaction = vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          const tx = {
+            update: vi.fn(() => ({
+              set: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  returning: vi.fn().mockResolvedValue([{
+                    id: 'task-1', pageId: 'doc-page-1', status: 'pending',
+                    priority: 'high', position: 0, dueDate: null,
+                    assigneeId: null, assigneeAgentId: null, completedAt: null,
+                  }]),
+                })),
+              })),
+            })),
+            delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+            insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
+          };
+          return cb(tx);
+        }) as unknown as typeof mockDb.transaction;
+
+        const context = {
+          toolCallId: '1', messages: [],
+          experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+        };
+
+        await taskManagementTools.update_task.execute!(
+          { taskId: 'task-1', priority: 'high' },
+          context
+        );
+
+        expect(vi.mocked(broadcastPageEvent)).not.toHaveBeenCalled();
       });
     });
 

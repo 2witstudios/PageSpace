@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import * as Sentry from '@sentry/node'
 import { healthRoute, tenantRoutes, stripeWebhookRoute, billingRoutes } from './routes'
 import { apiKeyAuth } from './middleware/api-key-auth'
 import type { TenantRouteDeps } from './routes/tenants'
@@ -36,6 +37,7 @@ export type AppDeps = {
 
 export function createApp({ logger = false, repo, provisioningEngine, lifecycle, stripe, priceMap }: AppDeps = {}) {
   const app = Fastify({ logger })
+  Sentry.setupFastifyErrorHandler(app)
 
   app.register(apiKeyAuth)
   app.register(healthRoute)

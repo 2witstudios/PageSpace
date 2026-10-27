@@ -68,6 +68,7 @@ import {
 } from '../attachment-upload';
 import { PermissionDeniedError, isPermissionDeniedError } from '../validated-service-token';
 import { loggers } from '../../logging/logger-config';
+import { credentialActor } from '../../permissions/access-actor';
 
 describe('createAttachmentUploadServiceToken', () => {
   beforeEach(() => {
@@ -90,7 +91,7 @@ describe('createAttachmentUploadServiceToken', () => {
 
       // Act
       const result = await createAttachmentUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         target,
       });
 
@@ -99,10 +100,13 @@ describe('createAttachmentUploadServiceToken', () => {
       // the current channel route behavior at apps/web/src/app/api/channels/[pageId]/upload/route.ts:127-144).
       expect(mockCreateUploadServiceToken).toHaveBeenCalledTimes(1);
       expect(mockCreateUploadServiceToken).toHaveBeenCalledWith({
-        userId: 'user-1',
+        actor: expect.objectContaining({ userId: 'user-1' }),
         driveId: 'drive-1',
         pageId: 'page-1',
         parentId: 'page-1',
+        // Attachments verify via /api/verify and never enqueue ingestion, so
+        // they must NOT inherit files:ingest from the page-upload default.
+        scopes: ['files:write'],
       });
       expect(result.token).toBe('ps_svc_page-token');
       // Conversation path must not run
@@ -115,7 +119,7 @@ describe('createAttachmentUploadServiceToken', () => {
 
       await expect(
         createAttachmentUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           target: { type: 'page', pageId: 'page-1', driveId: 'drive-1' },
         })
       ).rejects.toSatisfy((error: unknown) => isPermissionDeniedError(error));
@@ -133,7 +137,7 @@ describe('createAttachmentUploadServiceToken', () => {
 
       // Act
       const result = await createAttachmentUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         target: { type: 'conversation', conversationId: 'conv-1' },
       });
 
@@ -164,7 +168,7 @@ describe('createAttachmentUploadServiceToken', () => {
       });
 
       const result = await createAttachmentUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         target: { type: 'conversation', conversationId: 'conv-1' },
       });
 
@@ -187,7 +191,7 @@ describe('createAttachmentUploadServiceToken', () => {
 
       await expect(
         createAttachmentUploadServiceToken({
-          userId: 'user-outsider',
+          actor: credentialActor('user-outsider', null),
           target: { type: 'conversation', conversationId: 'conv-1' },
         })
       ).rejects.toBeInstanceOf(PermissionDeniedError);
@@ -204,7 +208,7 @@ describe('createAttachmentUploadServiceToken', () => {
 
       await expect(
         createAttachmentUploadServiceToken({
-          userId: 'user-1',
+          actor: credentialActor('user-1', null),
           target: { type: 'conversation', conversationId: 'missing-conv' },
         })
       ).rejects.toBeInstanceOf(PermissionDeniedError);
@@ -220,7 +224,7 @@ describe('createAttachmentUploadServiceToken', () => {
   describe('audit logging', () => {
     it('emits scope grant log including target type for page target', async () => {
       await createAttachmentUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         target: { type: 'page', pageId: 'page-1', driveId: 'drive-1' },
       });
 
@@ -241,7 +245,7 @@ describe('createAttachmentUploadServiceToken', () => {
       });
 
       await createAttachmentUploadServiceToken({
-        userId: 'user-1',
+        actor: credentialActor('user-1', null),
         target: { type: 'conversation', conversationId: 'conv-1' },
       });
 
@@ -261,7 +265,7 @@ describe('createAttachmentUploadServiceToken', () => {
       const badTarget = { type: 'whatever', conversationId: 'x' } as unknown as AttachmentTarget;
 
       await expect(
-        createAttachmentUploadServiceToken({ userId: 'user-1', target: badTarget })
+        createAttachmentUploadServiceToken({ actor: credentialActor('user-1', null), target: badTarget })
       ).rejects.toThrow(/unknown attachment target type/i);
     });
   });

@@ -1,0 +1,177 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
+import { NextResponse } from 'next/server';
+import { z } from 'zod/v4';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { drives } from '@pagespace/db/schema/core';
+import { driveBackupSchedules } from '@pagespace/db/schema/versioning';
+
+import { MEMORY_PAYING_TIERS } from '@pagespace/lib/billing/automation-preferences';
+import { orgEntitlementTier } from '@pagespace/lib/billing/spend-target';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { validateTimezone } from '@/lib/workflows/cron-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+
+const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+
+type BackupFrequency = 'daily' | 'weekly' | 'monthly';
+
+function computeNextRunAt(frequency: BackupFrequency, after: Date = new Date()): Date {
+  const next = new Date(after);
+  if (frequency === 'daily') {
+    next.setDate(next.getDate() + 1);
+  } else if (frequency === 'weekly') {
+    next.setDate(next.getDate() + 7);
+  } else {
+    // Clamp to last day of target month to avoid overflow (e.g. Jan 31 + 1 month → Feb 28)
+    const day = next.getDate();
+    next.setDate(1);
+    next.setMonth(next.getMonth() + 1);
+    const daysInMonth = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+    next.setDate(Math.min(day, daysInMonth));
+  }
+  return next;
+}
+
+const patchScheduleSchema = z.object({
+  enabled: z.boolean(),
+  frequency: z.enum(['daily', 'weekly', 'monthly']).optional(),
+  timezone: z.string().optional(),
+});
+
+export async function GET(request: Request, { params }: { params: Promise<{ driveId: string }> }) {
+  const { driveId } = await params;
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
+  if (isAuthError(auth)) return auth.error;
+
+  try {
+    const [canManage, ownerRow, schedule] = await Promise.all([
+      isPrincipalDriveOwnerOrAdmin(auth, driveId),
+      db.select({ tier: users.subscriptionTier, orgId: drives.orgId }).from(drives).innerJoin(users, eq(drives.ownerId, users.id)).where(eq(drives.id, driveId)).limit(1),
+      db.select().from(driveBackupSchedules).where(eq(driveBackupSchedules.driveId, driveId)).limit(1),
+    ]);
+
+    if (!canManage) {
+      return NextResponse.json({ error: 'Only drive owners and admins can access backup settings' }, { status: 403 });
+    }
+
+    const tier = ownerRow[0]?.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(ownerRow[0])) : resolvePersonalCapabilityTier(ownerRow[0]?.tier);
+    const available = MEMORY_PAYING_TIERS.includes(tier);
+    const row = schedule[0];
+
+    if (!row) {
+      return NextResponse.json({ available, enabled: false, frequency: 'daily', timezone: 'UTC', nextRunAt: null, lastRunAt: null });
+    }
+
+    return NextResponse.json({
+      available,
+      enabled: row.enabled,
+      frequency: row.frequency,
+      timezone: row.timezone,
+      nextRunAt: row.nextRunAt?.toISOString() ?? null,
+      lastRunAt: row.lastRunAt?.toISOString() ?? null,
+    });
+  } catch (error) {
+    loggers.api.error('Error fetching backup schedule', error as Error);
+    return NextResponse.json({ error: 'Failed to fetch backup schedule' }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request, { params }: { params: Promise<{ driveId: string }> }) {
+  const { driveId } = await params;
+  const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
+  if (isAuthError(auth)) return auth.error;
+
+  try {
+    const canManage = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
+    if (!canManage) {
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can change backup settings' }, { status: 403 }));
+    }
+
+    // Organization drives follow their org; personal drives follow their owner.
+    // The cron uses the same entitlement rule before executing a schedule.
+    const [ownerRow] = await db
+      .select({ tier: users.subscriptionTier, orgId: drives.orgId })
+      .from(drives)
+      .innerJoin(users, eq(drives.ownerId, users.id))
+      .where(eq(drives.id, driveId))
+      .limit(1);
+
+    const tier = ownerRow?.orgId ? orgEntitlementTier(await isOrgLapsedForDrive(ownerRow)) : resolvePersonalCapabilityTier(ownerRow?.tier);
+    if (!MEMORY_PAYING_TIERS.includes(tier)) {
+      return NextResponse.json({ error: 'pro_required', message: 'Automatic backups require a Pro plan or higher' }, { status: 402 });
+    }
+
+    const body = await request.json();
+    const parsed = patchScheduleSchema.parse(body);
+
+    if (parsed.timezone) {
+      const tzCheck = validateTimezone(parsed.timezone);
+      if (!tzCheck.valid) {
+        return NextResponse.json({ error: tzCheck.error }, { status: 400 });
+      }
+    }
+
+    const [existing] = await db
+      .select({ frequency: driveBackupSchedules.frequency, timezone: driveBackupSchedules.timezone })
+      .from(driveBackupSchedules)
+      .where(eq(driveBackupSchedules.driveId, driveId))
+      .limit(1);
+
+    const frequency = parsed.frequency ?? existing?.frequency ?? 'daily';
+    /**
+     * Deliberately NOT resolved against the caller's profile, unlike calendar
+     * events, task due dates and workflow schedules (#2404).
+     *
+     * A backup window belongs to the DRIVE, not to whoever last touched the
+     * setting. Any owner or admin can save this form, so a profile fallback
+     * would let a colleague in another timezone silently move the whole drive's
+     * backup window by toggling an unrelated field. The zone is an explicit
+     * choice with its own control in the UI; absent means "keep what the drive
+     * already had", and UTC only for a schedule that never had one.
+     */
+    const timezone = parsed.timezone ?? existing?.timezone ?? 'UTC';
+    const now = new Date();
+
+    const nextRunAt = parsed.enabled ? computeNextRunAt(frequency as BackupFrequency, now) : null;
+
+    await db
+      .insert(driveBackupSchedules)
+      .values({
+        driveId,
+        enabled: parsed.enabled,
+        frequency: frequency as BackupFrequency,
+        timezone,
+        nextRunAt,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: driveBackupSchedules.driveId,
+        set: {
+          enabled: parsed.enabled,
+          frequency: frequency as BackupFrequency,
+          timezone,
+          nextRunAt,
+          updatedAt: now,
+        },
+      });
+
+    return NextResponse.json({
+      enabled: parsed.enabled,
+      frequency,
+      timezone,
+      nextRunAt: nextRunAt?.toISOString() ?? null,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: error.issues }, { status: 400 });
+    }
+    loggers.api.error('Error updating backup schedule', error as Error);
+    return NextResponse.json({ error: 'Failed to update backup schedule' }, { status: 500 });
+  }
+}

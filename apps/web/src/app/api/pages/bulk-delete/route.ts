@@ -3,13 +3,18 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_DELETE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
 import { db } from '@pagespace/db/db'
-import { eq, inArray } from '@pagespace/db/operators'
+import { and, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserDeletePage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, isMCPAuthResult, canPrincipalDeletePage } from '@/lib/auth';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { syncTaskItemOnMove } from '@/services/api/task-sync-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -39,6 +44,7 @@ export async function DELETE(request: Request) {
     const { pageIds, trashChildren } = parseResult.data;
 
     // Fetch source pages
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const sourcePages = await db.query.pages.findMany({
       where: inArray(pages.id, pageIds),
     });
@@ -63,13 +69,21 @@ export async function DELETE(request: Request) {
 
     // Verify delete permissions for all pages
     for (const page of sourcePages) {
-      const canDelete = await canUserDeletePage(userId, page.id);
+      const canDelete = await canPrincipalDeletePage(auth, page.id);
       if (!canDelete) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), page.id, NextResponse.json(
           { error: `You do not have permission to delete page: ${page.title}` },
           { status: 403 }
-        );
+        ));
       }
+    }
+
+    // Refuse the whole batch if it contains a memory page, rather than deleting
+    // the rest around it: a partial success here is how someone loses their
+    // profile without noticing which item did it.
+    const protectedIds = await findProtectedMemoryPages(sourcePages.map((p) => p.id));
+    if (protectedIds.size > 0) {
+      return NextResponse.json({ error: MEMORY_PAGE_DELETE_ERROR }, { status: 403 });
     }
 
     // Track affected drives for broadcast events
@@ -95,13 +109,30 @@ export async function DELETE(request: Request) {
         if (trashChildren) {
           await trashChildrenRecursively(tx, page.id, now);
         } else {
-          // Move children to parent's parent
+          // Move children up to the deleted page's parent. Sync task_items per child so
+          // a TASK_LIST leaving a deleted TASK_LIST loses its row (or gains one if the
+          // new grandparent is also a TASK_LIST).
+          const children = await tx
+            .select({ id: pages.id, type: pages.type })
+            .from(pages)
+            .where(and(eq(pages.parentId, page.id), eq(pages.isTrashed, false)));
+
           await tx.update(pages)
             .set({
               parentId: page.parentId,
               updatedAt: now,
             })
             .where(eq(pages.parentId, page.id));
+
+          for (const child of children) {
+            await syncTaskItemOnMove(tx, {
+              movedPageId: child.id,
+              movedPageType: child.type,
+              oldParentId: page.id,
+              newParentId: page.parentId,
+              userId,
+            });
+          }
         }
       }
     });
@@ -158,6 +189,7 @@ async function trashChildrenRecursively(
   parentId: string,
   trashedAt: Date
 ): Promise<void> {
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const children = await tx.query.pages.findMany({
     where: eq(pages.parentId, parentId),
   });

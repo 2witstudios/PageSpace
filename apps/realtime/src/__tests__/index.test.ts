@@ -28,6 +28,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Mock dotenv so the config call is a no-op
 vi.mock('dotenv', () => ({ config: vi.fn() }));
 
+vi.mock('@pagespace/lib/services/sandbox/machine-session-manager', async () => {
+  const actual = await vi.importActual<typeof import('@pagespace/lib/services/sandbox/machine-session-manager')>(
+    '@pagespace/lib/services/sandbox/machine-session-manager',
+  );
+  return {
+    ...actual,
+    getSandboxSessionSecret: () => 'a'.repeat(32),
+  };
+});
+
 // Logger mock
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -40,6 +50,15 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   },
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  initializeLogging: vi.fn(),
+}));
+
+// instrument.ts (Sentry init) is a side-effecting module-load-time import —
+// stub it so index.ts's `import './instrument'` doesn't hit the real SDK.
+vi.mock('../instrument', () => ({}));
+vi.mock('@sentry/node', () => ({
+  captureException: vi.fn(),
+  flush: vi.fn(async () => true),
 }));
 
 // broadcast-auth mock
@@ -47,10 +66,43 @@ vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   verifyBroadcastSignature: vi.fn(),
 }));
 
+// field-crypto mock — defaults to passthrough (matches real decryptField's
+// behavior on non-ciphertext-shaped strings); tests override to simulate
+// actual ciphertext decryption.
+vi.mock('@pagespace/lib/encryption/field-crypto', () => ({
+  decryptField: vi.fn(async (value: string | null | undefined) => value),
+}));
+
 // permissions mock
+// SEC-2/3 seam: explainSignInRefusal names an org sign-in denial (the per-socket org-room watch is unit-tested on its own).
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getUserAccessLevel: vi.fn(),
   getUserDriveAccess: vi.fn(),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+}));
+const mockOrgRoomWatch = { track: vi.fn().mockResolvedValue(undefined), untrack: vi.fn(), recheck: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() };
+vi.mock('../org-room-watch', () => ({
+  ORG_REAUTHENTICATION_REQUIRED_EVENT: 'org:reauthentication_required',
+  createOrgRoomWatch: vi.fn(() => mockOrgRoomWatch),
+  createPolicyChangeFanout: vi.fn(() => vi.fn()),
+}));
+
+// conversation-access predicate mock (join_conversation authz — SSoT Phase 2)
+vi.mock('@pagespace/lib/permissions/spend-standing', () => ({
+  canViewDriveWallet: vi.fn().mockResolvedValue(false),
+}));
+vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
+  canAccessConversation: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: {
+    id: 'id',
+    userId: 'userId',
+    isShared: 'isShared',
+    type: 'type',
+    contextId: 'contextId',
+  },
 }));
 
 // auth/session mock
@@ -65,8 +117,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   },
 }));
 
-// DB mock – need query.socketTokens.findFirst and chained select().from().where().limit()
-const mockDbFindFirst = vi.fn();
+// DB mock – need chained select().from().where().limit() for the DM/profile lookups
 const mockDbSelect = vi.fn();
 const mockDbFrom = vi.fn();
 const mockDbWhere = vi.fn();
@@ -79,22 +130,15 @@ mockDbLimit.mockResolvedValue([]);
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    query: {
-      socketTokens: {
-        findFirst: mockDbFindFirst,
-      },
-    },
     select: mockDbSelect,
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ eq: [a, b] })),
-  gt: vi.fn((a, b) => ({ gt: [a, b] })),
   and: vi.fn((...args) => ({ and: args })),
   or: vi.fn((...args) => ({ or: args })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
-  socketTokens: { tokenHash: 'tokenHash', expiresAt: 'expiresAt' },
   users: { id: 'id', name: 'name', image: 'image' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -113,6 +157,9 @@ vi.mock('@pagespace/db/schema/social', () => ({
 
 // validation mock – pass through to real module but track calls
 vi.mock('../validation', () => ({
+  // isCUID2 is consumed by ../broadcast-audience (audience authorization, #972).
+  isCUID2: (input: unknown): input is string =>
+    typeof input === 'string' && input.length >= 2 && input.length <= 32 && /^[a-z][a-z0-9]{1,31}$/.test(input),
   validatePageId: vi.fn((input: unknown) => {
     if (typeof input === 'string' && /^[a-z][a-z0-9]{1,31}$/.test(input)) {
       return { ok: true, value: input };
@@ -195,6 +242,20 @@ vi.mock('../kick-handler', () => ({
   handleKickRequest: mockHandleKickRequest,
 }));
 
+// The voice attach endpoint receives a LIVE OpenAI ephemeral credential, so
+// what is asserted here is the wiring — that the signature gate runs before the
+// handler sees the body — not the handler's own behaviour (that has its own
+// suite). Mocked so no socket is ever opened by these tests.
+const mockHandleRealtimeAttachRequest = vi.fn().mockResolvedValue({
+  status: 200,
+  body: { success: true, callId: 'rtc_test' },
+});
+
+vi.mock('../voice/attach-handler', () => ({
+  handleRealtimeAttachRequest: mockHandleRealtimeAttachRequest,
+  defaultAttachHandlerDeps: { registry: {}, attach: vi.fn() },
+}));
+
 // ---------------------------------------------------------------------------
 // 2. Mock http.createServer and Socket.IO Server to capture callbacks
 // ---------------------------------------------------------------------------
@@ -204,9 +265,39 @@ let capturedRequestListener: ((req: unknown, res: unknown) => void) | null = nul
 let capturedIoUseCallback: ((socket: unknown, next: (err?: Error) => void) => Promise<void>) | null = null;
 let capturedIoConnectionCallback: ((socket: unknown) => void) | null = null;
 
+let capturedUpgradeListener: ((req: unknown, socket: unknown, head: unknown) => void) | null = null;
+// engine.io registers its own upgrade listener when `new Server(httpServer)` runs;
+// index.ts takes it off the server and re-dispatches. Model that: the mock server
+// reports one "engine" listener, and records whatever index.ts installs after.
+const mockEngineUpgradeListener = vi.fn();
 const mockHttpServer = {
   listen: vi.fn((port: unknown, cb: () => void) => { if (cb) cb(); }),
+  listeners: vi.fn(() => [mockEngineUpgradeListener]),
+  removeAllListeners: vi.fn(),
+  on: vi.fn((event: string, cb: (req: unknown, socket: unknown, head: unknown) => void) => {
+    if (event === 'upgrade') capturedUpgradeListener = cb;
+  }),
 };
+
+const mockPreviewUpgrade = vi.fn<(req: unknown, socket: unknown, head: unknown) => Promise<boolean>>().mockResolvedValue(false);
+const mockPreviewHolderForUpgrade = vi.fn<(req: unknown, apex: unknown) => unknown>().mockReturnValue(null);
+vi.mock('../dev-preview/preview-upgrade', () => ({
+  buildPreviewUpgradeHandler: () => mockPreviewUpgrade,
+  previewHolderForUpgrade: (req: unknown, apex: unknown) => mockPreviewHolderForUpgrade(req, apex),
+}));
+const mockRegistryEnsure = vi.fn<(input: unknown) => Promise<void>>().mockResolvedValue(undefined);
+const mockRegistryRead = vi.fn<(input: unknown) => Promise<unknown>>().mockResolvedValue({ detection: 'unavailable', listeners: null });
+vi.mock('../dev-preview/detection-registry', () => ({
+  createDetectionRegistry: () => ({ ensure: mockRegistryEnsure, read: mockRegistryRead, watching: () => [], stopAll: vi.fn() }),
+  nodeWebSocketFactory: vi.fn(),
+}));
+vi.mock('../dev-preview/preview-runtime', () => ({
+  buildRealtimePreviewAccessDeps: vi.fn(),
+  resolveHolderSandboxId: vi.fn(),
+  createConnectScopedSandboxHost: vi.fn(),
+  getRealtimePreviewCookieKey: vi.fn(() => Buffer.alloc(0)),
+  getRealtimePreviewStore: vi.fn(() => ({ findByHolder: vi.fn(), upsert: vi.fn() })),
+}));
 
 vi.mock('http', () => ({
   createServer: vi.fn((listener: (req: unknown, res: unknown) => void) => {
@@ -230,6 +321,50 @@ const mockIo = {
   }),
 };
 
+// The session map is consulted at exactly ONE place in index.ts — the
+// `shell:connect` success path — so a controllable `getBySocket` exercises both
+// its found/not-found branches without a live PTY.
+const mockGetBySocket = vi.fn<(key: string) => unknown>().mockReturnValue(undefined);
+vi.mock('../terminal/terminal-session-map', () => ({
+  createTerminalSessionMap: () => ({
+    getBySocket: (key: string) => mockGetBySocket(key),
+  }),
+}));
+
+// Shell handlers: the connect path is driven directly so both outcomes of
+// index.ts's `shell:connect` wrapper (success lookup, tagged error emit) are
+// exercised without a live Sprite.
+const mockShellOnConnect = vi.fn<(payload: unknown) => Promise<void>>().mockResolvedValue(undefined);
+vi.mock('../terminal/shell-handler', () => ({
+  buildShellHandlers: () => ({
+    onConnect: (payload: unknown) => mockShellOnConnect(payload),
+    onInput: vi.fn(),
+    onResize: vi.fn(),
+    onDisconnect: vi.fn(),
+  }),
+  // Real implementation (pure, no deps) — the `shell:connect` success-path
+  // tests below assert index.ts looks the just-registered session up under
+  // this SAME composed key.
+  composeSocketKey: (socketId: string, connectionId: string) => `${socketId}\u0000${connectionId}`,
+}));
+
+// Captures the deps object index.ts builds for the shell-IO bridge, so the
+// WIRING can be asserted. `reauthorizeViewer` is optional on `ShellIoDeps` and
+// the module fails closed without it — which is exactly how it shipped for a
+// while: declared, defaulted to `?? false`, and never supplied, so a revoked
+// user's identity was never refreshed and their running work never evicted.
+const capturedShellIoDeps: Record<string, unknown>[] = [];
+vi.mock('../terminal/shell-io', () => ({
+  handleShellReadRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true, shells: [] } });
+  },
+  handleShellSendRequest: (deps: Record<string, unknown>) => {
+    capturedShellIoDeps.push(deps);
+    return Promise.resolve({ status: 200, body: { success: true } });
+  },
+}));
+
 vi.mock('socket.io', () => ({
   Server: vi.fn().mockImplementation(() => mockIo),
 }));
@@ -239,23 +374,28 @@ vi.mock('socket.io', () => ({
 // ---------------------------------------------------------------------------
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { emitValidationError } from '../validation';
 
 // ---------------------------------------------------------------------------
 // 4. Dynamically import index.ts (runs module-level code with mocks in place)
 // ---------------------------------------------------------------------------
 // We do this at the top level outside describe so it runs once
-await import('../index');
+const { resolveActorEmail } = await import('../index');
 
 // ---------------------------------------------------------------------------
 // Helper factories
 // ---------------------------------------------------------------------------
 
+const TEST_EVIDENCE = { authenticatedAtMs: Date.parse('2026-10-12T00:00:00Z'), assurance: 'single_factor' as const };
+
 function createMockSocket(overrides: Partial<{
   id: string;
-  data: { user?: { id: string; name: string; avatarUrl: string | null } };
+  data: { user?: { id: string; name: string; avatarUrl: string | null }; actor?: { via: 'credential'; userId: string; authentication: { authenticatedAtMs: number; assurance: 'single_factor' | 'user_verified_passkey' } | null } };
   handshake: {
     auth: { token?: string };
     headers: { origin?: string; cookie?: string; 'user-agent'?: string };
@@ -276,7 +416,10 @@ function createMockSocket(overrides: Partial<{
 
   const socket = {
     id: 'test-socket-id',
-    data: { user: { id: 'user-1', name: 'Test User', avatarUrl: null } },
+    data: {
+      user: { id: 'user-1', name: 'Test User', avatarUrl: null },
+      actor: { via: 'credential' as const, userId: 'user-1', authentication: TEST_EVIDENCE },
+    } as { user?: { id: string; name: string; avatarUrl: string | null }; actor?: { via: 'credential'; userId: string; authentication: typeof TEST_EVIDENCE | null } },
     handshake: {
       auth: { token: 'ps_sess_test' },
       headers: { origin: undefined as string | undefined, cookie: undefined as string | undefined, 'user-agent': 'TestAgent/1.0' },
@@ -297,6 +440,10 @@ function createMockSocket(overrides: Partial<{
     _handlers: eventHandlers,
     ...overrides,
   };
+  // An authenticated socket carries its credential (the connect middleware sets both together).
+  if (socket.data.user && !socket.data.actor) {
+    socket.data = { ...socket.data, actor: { via: 'credential', userId: socket.data.user.id, authentication: TEST_EVIDENCE } };
+  }
 
   return socket;
 }
@@ -314,6 +461,7 @@ function createMockReq(overrides: Partial<{
     url: '/api/broadcast',
     headers: {},
     socket: { remoteAddress: '127.0.0.1' },
+    destroy: vi.fn(),
     on: vi.fn((event: string, cb: (chunk: unknown) => void) => {
       listeners[event] = listeners[event] || [];
       listeners[event].push(cb);
@@ -327,9 +475,25 @@ function createMockReq(overrides: Partial<{
 }
 
 function createMockRes() {
+  const listeners: Record<string, ((chunk?: unknown) => void)[]> = {};
   const res = {
     writeHead: vi.fn(),
-    end: vi.fn(),
+    // Real `http.ServerResponse#writableEnded` flips true the instant `end()`
+    // is called — `trackRequestAbandonment` (index.ts) reads it to tell a
+    // late `res` 'close' (ordinary connection teardown after a completed
+    // response) apart from an early one (the client walked away first).
+    writableEnded: false,
+    end: vi.fn(function (this: { writableEnded: boolean }) {
+      this.writableEnded = true;
+    }),
+    on: vi.fn((event: string, cb: (chunk?: unknown) => void) => {
+      listeners[event] = listeners[event] || [];
+      listeners[event].push(cb);
+    }),
+    _listeners: listeners,
+    _emit: (event: string, data?: unknown) => {
+      (listeners[event] || []).forEach(cb => cb(data));
+    },
   };
   return res;
 }
@@ -362,7 +526,8 @@ describe('requestListener - /api/broadcast', () => {
   it('given POST /api/broadcast with valid signature, should emit to channelId and return 200', async () => {
     vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
 
-    const body = JSON.stringify({ channelId: 'channel-1', event: 'test-event', payload: { key: 'val' } });
+    // channelId must be a legitimate room shape (#972) — use a real CUID2 page room.
+    const body = JSON.stringify({ channelId: 'athmieqpwr4ax1t2e0i4lmor', event: 'test-event', payload: { key: 'val' } });
     const req = createMockReq({
       method: 'POST',
       url: '/api/broadcast',
@@ -378,6 +543,74 @@ describe('requestListener - /api/broadcast', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ success: true }));
+  });
+
+  it('given a body over the internal byte cap, should destroy the connection and answer NOTHING — the HMAC check must never be reachable by memory exhaustion', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.alloc(1024 * 1024 + 1));
+    // Chunks after the cap are ignored, and 'end' (if the socket teardown still
+    // fires it) must not run the handler on a truncated body.
+    req._emit('data', Buffer.from('trailing'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(req.destroy).toHaveBeenCalled();
+    expect(res.writeHead).not.toHaveBeenCalled();
+    expect(res.end).not.toHaveBeenCalled();
+    expect(mockIo.emit).not.toHaveBeenCalled();
+  });
+
+  it('given POST /api/broadcast with valid signature but disallowed audience channelId, should return 403 and not emit (#972)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    // 'channel-1' is signature-valid but not a legitimate room shape (contains a hyphen → not a CUID2).
+    const body = JSON.stringify({ channelId: 'channel-1', event: 'test-event', payload: { key: 'val' } });
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/broadcast',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockIo.emit).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(403, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: 'Broadcast audience not authorized' }));
+  });
+
+  it('given POST /api/broadcast with valid signature but a missing required field, should return 400 and not emit (#972)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    // Signature-valid JSON but missing `event` → malformed payload (400), distinct
+    // from a well-formed-but-disallowed audience shape (403).
+    const body = JSON.stringify({ channelId: 'athmieqpwr4ax1t2e0i4lmor', payload: { key: 'val' } });
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/broadcast',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockIo.emit).not.toHaveBeenCalled();
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ error: 'Invalid broadcast payload' }));
   });
 
   it('given POST /api/broadcast with missing signature, should return 401', async () => {
@@ -532,6 +765,102 @@ describe('requestListener - /api/kick', () => {
   });
 });
 
+describe('requestListener - /api/realtime/attach', () => {
+  const attachBody = JSON.stringify({
+    callId: 'rtc_abc123',
+    secret: 'ek_secret_value',
+    userId: 'u1',
+    tools: [],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHandleRealtimeAttachRequest.mockResolvedValue({
+      status: 200,
+      body: { success: true, callId: 'rtc_abc123' },
+    });
+  });
+
+  it('given a valid signature, should delegate the RAW body to the attach handler', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // The raw body, byte for byte — it is what the HMAC was computed over.
+    expect(mockHandleRealtimeAttachRequest).toHaveBeenCalledWith(expect.anything(), attachBody);
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+  });
+
+  it('given NO signature, should 401 without the handler ever seeing the secret', async () => {
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: {},
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockHandleRealtimeAttachRequest).not.toHaveBeenCalled();
+  });
+
+  it('given an INVALID signature, should 401 without the handler ever seeing the secret', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'forged-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockHandleRealtimeAttachRequest).not.toHaveBeenCalled();
+  });
+
+  it('given the handler rejects, should 500 rather than leaving the request hanging', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockHandleRealtimeAttachRequest.mockRejectedValue(new Error('boom'));
+
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/realtime/attach',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(attachBody));
+    req._emit('end');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
+  });
+});
+
 describe('requestListener - 404', () => {
   it('given unknown route, should return 404', () => {
     const req = createMockReq({
@@ -605,8 +934,14 @@ describe('Socket.IO middleware - auth', () => {
     }));
   });
 
-  it('given valid ps_sock_* token, should authenticate and call next()', async () => {
-    mockDbFindFirst.mockResolvedValue({ userId: 'user-from-sock-token' });
+  it('given valid ps_sock_* token, should authenticate via sessionService and call next()', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-from-sock-token',
+      sessionId: 'sock-1',
+      expiresAt: new Date(),
+    } as Parameters<typeof sessionService.validateSession>[0] extends string
+      ? Awaited<ReturnType<typeof sessionService.validateSession>>
+      : never);
     mockDbLimit.mockResolvedValueOnce([{ name: 'Test User', image: null }])
                .mockResolvedValueOnce([]);
 
@@ -621,12 +956,32 @@ describe('Socket.IO middleware - auth', () => {
 
     await capturedIoUseCallback!(socket, next);
 
+    expect(sessionService.validateSession).toHaveBeenCalledWith('ps_sock_validtoken123', { expectedType: 'socket' });
     expect(next).toHaveBeenCalledWith(/* no error */);
     expect(next.mock.calls[0]).toHaveLength(0);
   });
 
-  it('given ps_sock_* token not found in DB, should reject with error', async () => {
-    mockDbFindFirst.mockResolvedValue(null);
+  it('SEC-2 (partial) the socket keeps its credential\'s ceremony evidence as its access actor at connect', async () => {
+    const authentication = { authenticatedAtMs: Date.parse('2026-10-12T00:00:00Z'), assurance: 'user_verified_passkey' as const };
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-from-sock-token',
+      sessionId: 'sock-1',
+      expiresAt: new Date(),
+      authentication,
+    } as unknown as Awaited<ReturnType<typeof sessionService.validateSession>>);
+    mockDbLimit.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    const socket = createMockSocket({
+      data: { user: undefined, actor: undefined },
+      handshake: { auth: { token: 'ps_sock_validtoken123' }, headers: { origin: undefined }, address: '127.0.0.1' },
+    });
+
+    await capturedIoUseCallback!(socket, vi.fn());
+
+    expect(socket.data.actor).toEqual({ via: 'credential', userId: 'user-from-sock-token', authentication });
+  });
+
+  it('given ps_sock_* token that fails validation, should reject with error', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue(null);
 
     const socket = createMockSocket({
       handshake: {
@@ -644,8 +999,8 @@ describe('Socket.IO middleware - auth', () => {
     }));
   });
 
-  it('given ps_sock_* token DB error, should reject with error', async () => {
-    mockDbFindFirst.mockRejectedValue(new Error('DB connection failed'));
+  it('given ps_sock_* token validation throws, should reject with server error', async () => {
+    vi.mocked(sessionService.validateSession).mockRejectedValue(new Error('Session service error'));
 
     const socket = createMockSocket({
       handshake: {
@@ -659,7 +1014,7 @@ describe('Socket.IO middleware - auth', () => {
     await capturedIoUseCallback!(socket, next);
 
     expect(next).toHaveBeenCalledWith(expect.objectContaining({
-      message: expect.stringContaining('Invalid or expired socket token'),
+      message: expect.stringContaining('Server failed'),
     }));
   });
 
@@ -960,6 +1315,8 @@ describe('Socket.IO connection handler', () => {
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:tasks');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:calendar');
     expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:drives');
+    // Directory plane (SSoT Phase 2): the user's own sessions room is auto-joined.
+    expect(socket.join).toHaveBeenCalledWith('user:user-conn-1:sessions');
     expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-conn-1', 'notifications:user-conn-1');
   });
 
@@ -989,6 +1346,33 @@ describe('Socket.IO connection handler', () => {
       await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
 
       expect(socket.join).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
+    });
+
+    it('SEC-2 (partial) a realtime join with a credential the org refuses is denied, and the socket is told to sign in again rather than disconnected', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue(null);
+      vi.mocked(explainSignInRefusal).mockResolvedValueOnce('org_strong_sign_in_required');
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(getUserAccessLevel).toHaveBeenCalledWith(
+        { via: 'credential', userId: 'user-1', authentication: TEST_EVIDENCE },
+        'athmieqpwr4ax1t2e0i4lmor',
+      );
+      expect(socket.join).not.toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor');
+      expect(socket.emit).toHaveBeenCalledWith('org:reauthentication_required', { code: 'org_strong_sign_in_required', resourceId: 'athmieqpwr4ax1t2e0i4lmor' });
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('SEC-3 (partial) a joined page room is handed to the socket\'s org-room watch for maximum-age eviction', async () => {
+      vi.mocked(getUserAccessLevel).mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_channel', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(mockOrgRoomWatch.track).toHaveBeenCalledWith('athmieqpwr4ax1t2e0i4lmor', 'athmieqpwr4ax1t2e0i4lmor');
     });
 
     it('given no access, should disconnect socket', async () => {
@@ -1034,6 +1418,23 @@ describe('Socket.IO connection handler', () => {
 
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
       expect(socket.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:calendar');
+    });
+
+    it('X-4 (partial) only a person with a wallet view of the drive joins its wallet room; a page-share collaborator with drive access does not', async () => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(true);
+      const viewer = createMockSocket({ id: 'socket-v', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(viewer);
+      await viewer._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(viewer.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
+      expect(canViewDriveWallet).toHaveBeenLastCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'athmieqpwr4ax1t2e0i4lmor');
+
+      vi.mocked(canViewDriveWallet).mockResolvedValueOnce(false);
+      const collaborator = createMockSocket({ id: 'socket-c', data: { user: { id: 'user-2', name: 'C', avatarUrl: null } } });
+      capturedIoConnectionCallback!(collaborator);
+      await collaborator._trigger('join_drive', 'athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor');
+      expect(collaborator.join).not.toHaveBeenCalledWith('drive:athmieqpwr4ax1t2e0i4lmor:wallet');
     });
 
     it('given no access, should not join drive rooms', async () => {
@@ -1114,6 +1515,134 @@ describe('Socket.IO connection handler', () => {
       await socket._trigger('join_dm_conversation', 'athmieqpwr4ax1t2e0i4lmor');
 
       expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith('Error joining DM conversation', expect.objectContaining({ message: 'DB error' }), { conversationId: 'athmieqpwr4ax1t2e0i4lmor' });
+    });
+  });
+
+  describe('join_conversation event (SSoT Phase 2 — canAccessConversation authz)', () => {
+    const CONV = 'athmieqpwr4ax1t2e0i4lmor';
+    const row = { userId: 'owner-1', isShared: false, type: 'page', contextId: 'pageabc123' };
+
+    it('given the predicate allows (owner, or shared + page access), joins the conv room', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'owner-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'owner-1' }), row);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+      expect(mockSocketRegistry.trackRoomJoin).toHaveBeenCalledWith('socket-1', `conv:${CONV}`);
+    });
+
+    it('given a non-owner on a PRIVATE conversation (predicate denies), does not join and does not disconnect', async () => {
+      mockDbLimit.mockResolvedValueOnce([row]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(false);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'intruder', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('given a collaborator on a SHARED conversation (predicate allows), joins the conv room', async () => {
+      const sharedRow = { ...row, isShared: true };
+      mockDbLimit.mockResolvedValueOnce([sharedRow]);
+      vi.mocked(canAccessConversation).mockResolvedValueOnce(true);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'collab-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(canAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'collab-1' }), sharedRow);
+      expect(socket.join).toHaveBeenCalledWith(`conv:${CONV}`);
+    });
+
+    it('given no conversations row, fails closed without consulting the predicate', async () => {
+      mockDbLimit.mockResolvedValueOnce([]);
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(canAccessConversation).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', { not: 'a string' });
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'join_conversation', 'Conversation ID must be a valid ID');
+    });
+
+    it('given no user on the socket, returns silently — no join, no validation error', async () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      await socket._trigger('join_conversation', CONV);
+
+      expect(socket.join).not.toHaveBeenCalled();
+      expect(emitValidationError).not.toHaveBeenCalled();
+    });
+
+    it('given the conversation lookup throws, logs the error without joining or disconnecting', async () => {
+      mockDbLimit.mockRejectedValueOnce(new Error('DB error'));
+
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      const joinCountBefore = socket.join.mock.calls.length;
+      await socket._trigger('join_conversation', CONV);
+
+      expect(vi.mocked(loggers.realtime.error)).toHaveBeenCalledWith(
+        'Error joining conversation',
+        expect.objectContaining({ message: 'DB error' }),
+        { conversationId: CONV },
+      );
+      expect(socket.join.mock.calls.length).toBe(joinCountBefore);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('leave_conversation event', () => {
+    it('leaves the conv room', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).toHaveBeenCalledWith('conv:athmieqpwr4ax1t2e0i4lmor');
+      expect(mockSocketRegistry.trackRoomLeave).toHaveBeenCalledWith('socket-1', 'conv:athmieqpwr4ax1t2e0i4lmor');
+    });
+
+    it('given no user on the socket, returns silently — no leave', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: undefined } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 'athmieqpwr4ax1t2e0i4lmor');
+
+      expect(socket.leave).not.toHaveBeenCalled();
+    });
+
+    it('given an invalid conversationId, emits a validation error and leaves nothing', () => {
+      const socket = createMockSocket({ id: 'socket-1', data: { user: { id: 'user-1', name: 'T', avatarUrl: null } } });
+      capturedIoConnectionCallback!(socket);
+
+      socket._trigger('leave_conversation', 12345);
+
+      expect(emitValidationError).toHaveBeenCalledWith(socket, 'leave_conversation', 'Conversation ID must be a valid ID');
+      expect(socket.leave).not.toHaveBeenCalled();
     });
   });
 
@@ -1643,6 +2172,62 @@ describe('populateUserMetadata', () => {
     expect((socket.data.user as { name: string }).name).toBe('User Name');
   });
 
+  it('given no profile and a ciphertext user name (GDPR #965 post-cutover), should decrypt before using as fallback', async () => {
+    mockDbLimit
+      .mockResolvedValueOnce([{ name: 'ciphertext-blob', image: null }]) // users query
+      .mockResolvedValueOnce([]); // no profile
+
+    vi.mocked(decryptField).mockImplementation(async (value) =>
+      value === 'ciphertext-blob' ? 'Decrypted Name' : value
+    );
+
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-meta-cipher',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'user-meta-cipher', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metacipher' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+    const next = vi.fn();
+
+    await capturedIoUseCallback!(socket, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(decryptField).toHaveBeenCalledWith('ciphertext-blob');
+    expect((socket.data.user as { name: string }).name).toBe('Decrypted Name');
+  });
+
+  it('given a profile displayName, should not decrypt users.name at all (a stale/corrupt ciphertext must not discard a valid displayName)', async () => {
+    mockDbLimit
+      .mockResolvedValueOnce([{ name: 'ciphertext-blob', image: null }]) // users query
+      .mockResolvedValueOnce([{ displayName: 'Profile Name', avatarUrl: null }]);
+
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: 'user-meta-skip-decrypt',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'user-meta-skip-decrypt', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metaskipdecrypt' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+    const next = vi.fn();
+
+    await capturedIoUseCallback!(socket, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(decryptField).not.toHaveBeenCalled();
+    expect((socket.data.user as { name: string }).name).toBe('Profile Name');
+  });
+
   it('given no user data at all, should use Unknown fallback', async () => {
     mockDbLimit
       .mockResolvedValueOnce([]) // no user
@@ -1691,5 +2276,485 @@ describe('populateUserMetadata', () => {
     expect(next).toHaveBeenCalledWith(/* no error */);
     expect(next.mock.calls[0]).toHaveLength(0);
     expect((socket.data.user as { name: string }).name).toBe('Unknown');
+  });
+
+  it('given a validated session with an empty-string userId, should refuse the connection (no credential without a user) and skip the DB lookup', async () => {
+    vi.mocked(sessionService.validateSession).mockResolvedValue({
+      userId: '',
+    } as Awaited<ReturnType<typeof sessionService.validateSession>>);
+
+    const socket = createMockSocket({
+      data: { user: { id: 'placeholder', name: 'Unknown', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_metaempty' },
+        headers: { origin: undefined },
+        address: '127.0.0.1',
+      },
+    });
+    const next = vi.fn();
+
+    await capturedIoUseCallback!(socket, next);
+
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
+    expect(mockDbSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveActorEmail', () => {
+  // Extracted from makeTerminalCheckAuth (terminal code-execution auth) so the
+  // decrypt-before-audit behavior is directly unit-testable without mocking
+  // the rest of that pipeline (sandbox provisioning, sprites SDK, audit sink).
+  // Guards against ciphertext users.email reaching writeCodeExecutionAudit's
+  // plaintext activity_logs.actorEmail snapshot (GDPR #965).
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given a ciphertext email, should return the decrypted value', async () => {
+    vi.mocked(decryptField).mockResolvedValue('user@example.com');
+
+    const result = await resolveActorEmail('ciphertext-blob');
+
+    expect(decryptField).toHaveBeenCalledWith('ciphertext-blob');
+    expect(result).toBe('user@example.com');
+  });
+
+  it('given legacy plaintext email, should pass it through (decryptField is a no-op)', async () => {
+    vi.mocked(decryptField).mockImplementation(async (value) => value);
+
+    const result = await resolveActorEmail('plaintext@example.com');
+
+    expect(result).toBe('plaintext@example.com');
+  });
+
+  it('given no email, should return an empty string without calling decryptField', async () => {
+    const result = await resolveActorEmail(undefined);
+
+    expect(decryptField).not.toHaveBeenCalled();
+    expect(result).toBe('');
+  });
+});
+
+/**
+ * A `shell:error` emitted WITHOUT the failing pane's `connectionId` is claimed by
+ * every shell multiplexed on the socket, because the client's `isMine`
+ * deliberately accepts untagged events. One pane's billing/database failure
+ * would then mark all of them dead and suppress their reconnects, so the tag is
+ * what scopes the kill to the pane that actually failed.
+ */
+describe('shell:connect error scoping', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given onConnect rejects for a pane, should emit shell:error tagged with that pane connectionId', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-1',
+      data: { user: { id: 'user-shell-1', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-A', cols: 80, rows: 24 });
+    // Let the rejection settle through .then().catch().
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).toMatchObject({ connectionId: 'conn-A' });
+    }
+  });
+
+  // The one case where an error is still socket-wide. Acceptable because
+  // XtermTerminal ALWAYS sends a connectionId, so this is unreachable from the
+  // real client — and inventing an id would be worse: it would tag the error for
+  // a pane that does not exist, silently dropping the failure entirely.
+  it('given a payload with no connectionId, should emit an untagged error rather than inventing one', async () => {
+    const socket = createMockSocket({
+      id: 'socket-shell-2',
+      data: { user: { id: 'user-shell-2', name: 'Shell User', avatarUrl: null } },
+    });
+
+    mockShellOnConnect.mockRejectedValueOnce(new Error('billing ledger unreachable'));
+    capturedIoConnectionCallback!(socket);
+
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const errorEmits = socket.emit.mock.calls.filter(([event]) => event === 'shell:error');
+    expect(errorEmits.length).toBeGreaterThan(0);
+    for (const [, payload] of errorEmits) {
+      expect(payload).not.toHaveProperty('connectionId');
+    }
+  });
+});
+
+describe('shell:connect success path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a resolved connect whose session is found, should log it under the pane connectionId key', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-3', data: { user: { id: 'user-shell-3', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce({ sessionKey: 'pgs-ses-abc', sandboxId: 'sbx-1' });
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-B', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Keyed by the PANE's connectionId, not the shared socket id — several
+    // panes multiplex this socket and a bare socket.id would only ever find
+    // whichever pane sent none.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-3\u0000conn-B');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+
+  it('given a resolved connect with no tracked session, should stay silent rather than emit', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-4', data: { user: { id: 'user-shell-4', name: 'U', avatarUrl: null } } });
+    mockGetBySocket.mockReturnValueOnce(undefined);
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // No connectionId on the payload → falls back to the socket id for lookup.
+    expect(mockGetBySocket).toHaveBeenCalledWith('socket-shell-4\u0000socket-shell-4');
+    expect(socket.emit).not.toHaveBeenCalledWith('shell:error', expect.anything());
+  });
+});
+
+describe('shell:connect error coercion and connection metadata', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockShellOnConnect.mockResolvedValue(undefined);
+  });
+
+  it('given a NON-Error rejection, should coerce it to a generic message rather than leak the raw value', async () => {
+    const socket = createMockSocket({ id: 'socket-shell-5', data: { user: { id: 'user-shell-5', name: 'U', avatarUrl: null } } });
+    // A driver can reject with a plain string/object; the emit must stay a
+    // well-formed { message } payload either way.
+    mockShellOnConnect.mockRejectedValueOnce('raw string blip');
+
+    capturedIoConnectionCallback!(socket);
+    await socket._trigger('shell:connect', { shellId: 'shell_1', connectionId: 'conn-C', cols: 80, rows: 24 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const [, payload] = socket.emit.mock.calls.find(([event]) => event === 'shell:error')!;
+    expect(payload).toEqual({ message: 'Internal error', connectionId: 'conn-C' });
+  });
+
+  it('given a socket with no user-agent or cookie headers, should still complete the connection handshake', async () => {
+    // Exercises the optional-chain / present-missing metadata branches that a
+    // fully-populated handshake never reaches.
+    const socket = createMockSocket({
+      id: 'socket-shell-6',
+      data: { user: { id: 'user-shell-6', name: 'U', avatarUrl: null } },
+      handshake: {
+        auth: { token: 'ps_sess_test' },
+        headers: { origin: undefined, cookie: undefined, 'user-agent': undefined },
+        address: '127.0.0.1',
+      },
+    });
+
+    expect(() => capturedIoConnectionCallback!(socket)).not.toThrow();
+    expect(socket.on).toHaveBeenCalledWith('shell:connect', expect.any(Function));
+  });
+});
+
+/**
+ * The HTTP dispatch chain: `/api/broadcast`, then the three signed shell
+ * endpoints, then a fallthrough. An unmatched POST must reach the fallthrough
+ * rather than being swallowed by a shell route, and a GET to a shell path must
+ * not be served just because the URL matches.
+ */
+describe('requestListener - dispatch fallthrough', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given POST to an unknown path, should fall through every shell route to a 404', async () => {
+    const req = createMockReq({ method: 'POST', url: '/api/definitely-not-a-route', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to a shell endpoint path, should not serve it (POST-only routes)', async () => {
+    const req = createMockReq({ method: 'GET', url: '/api/shell-read', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(404);
+  });
+
+  it('given GET to the health path, should respond without falling through', async () => {
+    const req = createMockReq({ method: 'GET', url: '/health', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('end');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - shell bridge wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedShellIoDeps.length = 0;
+  });
+
+  it('should supply reauthorizeViewer to the shell-IO bridge', async () => {
+    // Not a behaviour test — `shell-io`'s own suite covers what the dep does.
+    // This pins that index.ts CONNECTS it, which is the only part that was ever
+    // missing. The dep is optional and fails closed, so an unwired build denies
+    // nothing loudly: it simply stops re-authorizing, and a revoked user keeps
+    // typing into a live shell until someone notices.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(capturedShellIoDeps).toHaveLength(1);
+    expect(typeof capturedShellIoDeps[0].reauthorizeViewer).toBe('function');
+  });
+
+  it('should supply every OPTIONAL seam the bridge degrades silently without', async () => {
+    // Each of these is optional on `ShellIoDeps` with a benign default, so an
+    // unwired one produces no error anywhere — just a quietly missing feature:
+    //
+    //   startSession    absent → an agent can never start a shell that has
+    //                   never run; `read_shell`/`send_shell` answer "not live"
+    //                   forever (the whole of issue #2206, undone)
+    //   rearmIdleReap   absent → a viewer-less session's idle reap keeps the
+    //                   clock it started with, so a long agent-driven build is
+    //                   killed mid-run by the very timer its own activity
+    //                   should have pushed back
+    //
+    // Asserting presence, not behaviour: both are covered in `shell-io`'s own
+    // suite, and the connection is the only part that has ever gone missing in
+    // this PR — three times.
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({
+      method: 'POST',
+      url: '/api/shell-read',
+      headers: { 'x-broadcast-signature': 'valid-sig' },
+    });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ shellIds: ['sh-1'], limit: 10 })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const deps = capturedShellIoDeps[0];
+    expect(typeof deps.startSession).toBe('function');
+    expect(typeof deps.rearmIdleReap).toBe('function');
+  });
+});
+
+describe('requestListener - /api/dev-preview/watch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given a valid signature and a well-formed body, should accept and hand the holder + sprite to the detection registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const body = JSON.stringify({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'ignored-caller-claim' });
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockRegistryEnsure).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' } });
+    expect(res.writeHead).toHaveBeenCalledWith(202, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ accepted: true }));
+  });
+
+  it('given a bad signature, should 401 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from('{}'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockRegistryEnsure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'not json',
+    JSON.stringify({ holder: { kind: 'drive', id: 'x' }, sandboxId: 's' }),
+    JSON.stringify({ holder: { kind: 'env', id: '' }, sandboxId: 's' }),
+    JSON.stringify({ holder: { kind: 'env' } }),
+    JSON.stringify({ sandboxId: 's' }),
+  ])('given a signed but malformed body (%s), should 400 without touching the registry', async (body) => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(mockRegistryEnsure).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - /api/dev-preview/listeners', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given a valid signature and a holder, should answer the registry snapshot for that holder (sprite re-derived, never the caller\'s claim)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryRead.mockResolvedValueOnce({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }] });
+    const body = JSON.stringify({ holder: { kind: 'workspace', id: 'ws1' }, sandboxId: 'ignored-caller-claim' });
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockRegistryRead).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' } });
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }] }));
+  });
+
+  it('given no snapshot in hand, should answer listeners: null with the detection state (honest unknown, not an empty list)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryRead.mockResolvedValueOnce({ detection: 'unavailable', listeners: null });
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ detection: 'unavailable', listeners: null }));
+  });
+
+  it('given a bad signature, should 401 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockRegistryRead).not.toHaveBeenCalled();
+  });
+
+  it('given a signed but malformed body, should 400 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'drive', id: 'x' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(mockRegistryRead).not.toHaveBeenCalled();
+  });
+
+  it('given a registry failure, should 500 and log', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryRead.mockRejectedValueOnce(new Error('boom'));
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
+    expect(loggers.realtime.error).toHaveBeenCalledWith('dev-preview: listeners read failed', expect.any(Error));
+  });
+});
+
+describe('http upgrade dispatcher - one owner per socket', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPreviewHolderForUpgrade.mockReturnValue(null);
+  });
+
+  it('should install the dispatcher as the upgrade owner', () => {
+    expect(capturedUpgradeListener).not.toBeNull();
+  });
+
+  it('given a preview-host upgrade — even at /socket.io/ — should hand the socket to the tunnel ONLY, never to engine.io', async () => {
+    mockPreviewHolderForUpgrade.mockReturnValue({ kind: 'env', id: 'e' });
+    const socket = { destroy: vi.fn() };
+    const req = { url: '/socket.io/?EIO=4&transport=websocket', headers: { host: 'env-e.preview.x' } };
+    capturedUpgradeListener!(req, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockPreviewUpgrade).toHaveBeenCalledWith(req, socket, expect.anything());
+    expect(mockEngineUpgradeListener).not.toHaveBeenCalled();
+    expect(socket.destroy).not.toHaveBeenCalled();
+  });
+
+  it('given PageSpace\'s own /socket.io/ upgrade, should hand the socket to engine.io only', async () => {
+    const socket = { destroy: vi.fn() };
+    const req = { url: '/socket.io/?EIO=4&transport=websocket', headers: {} };
+    capturedUpgradeListener!(req, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockEngineUpgradeListener).toHaveBeenCalledWith(req, socket, expect.anything());
+    expect(mockPreviewUpgrade).not.toHaveBeenCalled();
+    expect(socket.destroy).not.toHaveBeenCalled();
+  });
+
+  it('given a preview upgrade whose handler rejects, should log and destroy the socket rather than leak it or the rejection', async () => {
+    mockPreviewHolderForUpgrade.mockReturnValue({ kind: 'env', id: 'e' });
+    mockPreviewUpgrade.mockRejectedValueOnce(new Error('boom'));
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url: '/ws', headers: { host: 'env-e.preview.x' } }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(loggers.realtime.error).toHaveBeenCalledWith('dev-preview: upgrade failed', expect.any(Error));
+  });
+
+  it.each(['/anything-else', undefined])('given a stray upgrade (%s), should destroy the socket — destroyUpgrade is off, so the dispatcher owns the hygiene', async (url) => {
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url, headers: {} }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(mockEngineUpgradeListener).not.toHaveBeenCalled();
   });
 });

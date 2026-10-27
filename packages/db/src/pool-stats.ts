@@ -1,16 +1,25 @@
 import type { Pool } from 'pg';
 
-let _pool: Pool | null = null;
+export const MAIN_POOL_NAME = 'main';
 
-export function registerPool(pool: Pool): void {
-  _pool = pool;
+const pools = new Map<string, Pool>();
+
+export interface PoolStats {
+  total: number;
+  idle: number;
+  waiting: number;
 }
 
-export function getPoolStats(): { total: number; idle: number; waiting: number } {
-  if (!_pool) return { total: 0, idle: 0, waiting: 0 };
+export function registerPool(pool: Pool, name: string = MAIN_POOL_NAME): void {
+  pools.set(name, pool);
+}
+
+export function getPoolStats(name: string = MAIN_POOL_NAME): PoolStats {
+  const pool = pools.get(name);
+  if (!pool) return { total: 0, idle: 0, waiting: 0 };
   return {
-    total: _pool.totalCount,
-    idle: _pool.idleCount,
-    waiting: _pool.waitingCount,
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
   };
 }

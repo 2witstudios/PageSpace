@@ -7,7 +7,7 @@ export interface OpaqueToken {
   tokenPrefix: string;
 }
 
-export type TokenType = 'sess' | 'svc' | 'mcp' | 'dev';
+export type TokenType = 'sess' | 'svc' | 'mcp' | 'dev' | 'at' | 'rt' | 'sock';
 
 /**
  * Generate cryptographically secure opaque token
@@ -29,10 +29,10 @@ export function isValidTokenFormat(token: string): boolean {
   if (typeof token !== 'string') return false;
   if (token.length < 40 || token.length > 100) return false;
   if (!token.startsWith('ps_')) return false;
-  return /^ps_(sess|svc|mcp|dev)_[A-Za-z0-9_-]+$/.test(token);
+  return /^ps_(sess|svc|mcp|dev|at|rt|sock)_[A-Za-z0-9_-]+$/.test(token);
 }
 
 export function getTokenType(token: string): TokenType | null {
-  const match = token.match(/^ps_(sess|svc|mcp|dev)_/);
+  const match = token.match(/^ps_(sess|svc|mcp|dev|at|rt|sock)_/);
   return match ? (match[1] as TokenType) : null;
 }

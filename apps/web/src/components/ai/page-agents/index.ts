@@ -7,3 +7,4 @@
 export { default as PageAgentHistoryTab } from './PageAgentHistoryTab';
 export { default as PageAgentSettingsTab, type PageAgentSettingsTabRef } from './PageAgentSettingsTab';
 export { PageAgentConversationRenderer } from './PageAgentConversationRenderer';
+export { ConversationShareToggle } from './ConversationShareToggle';

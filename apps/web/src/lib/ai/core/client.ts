@@ -6,12 +6,11 @@
  */
 
 export {
-  abortActiveStream,
+  abortActiveStreamByConversation,
   abortActiveStreamByMessageId,
-  createStreamTrackingFetch,
-  setActiveStreamId,
-  getActiveStreamId,
-  clearActiveStreamId,
+  reportAbortOutcome,
+  reportAbortOutcomes,
+  type AbortResult,
 } from './stream-abort-client';
 
 export { getBrowserSessionId } from './browser-session-id';

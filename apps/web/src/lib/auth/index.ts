@@ -1,20 +1,34 @@
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
-import { mcpTokens } from '@pagespace/db/schema/auth';
+import { mcpTokens, users } from '@pagespace/db/schema/auth';
+import { oauthAccessTokens } from '@pagespace/db/schema/oauth';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
-import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { sessionService, type SessionClaims, type SessionFailureReason } from '@pagespace/lib/auth/session-service';
+import { findOAuthAccessTokenByValue } from '@pagespace/lib/auth/token-lookup';
+import { parseScopeList, scopeSetToDriveScopes, type ScopeSet, type DriveScopeRow } from '@pagespace/lib/auth/oauth/scopes';
 import { EnforcedAuthContext } from '@pagespace/lib/permissions/enforced-context';
 import { logSecurityEvent } from '@pagespace/lib/logging/logger-config';
 import { getSessionFromCookies } from './cookie-config';
 
 const BEARER_PREFIX = 'Bearer ';
-const MCP_TOKEN_PREFIX = 'mcp_';
-const SESSION_TOKEN_PREFIX = 'ps_sess_';
+// Single source of truth is ./token-prefixes, an edge-safe leaf: middleware.ts
+// (Edge runtime) imports the prefixes from there directly — never from this
+// barrel, whose import graph is Node-only — while this module re-exports them
+// so its bearer-prefix checks and every Node-side consumer stay byte-for-byte
+// in sync. Do not redefine these values anywhere else.
+import {
+  MCP_TOKEN_PREFIX,
+  SESSION_TOKEN_PREFIX,
+  OAUTH_ACCESS_TOKEN_PREFIX,
+} from './token-prefixes';
+export { MCP_TOKEN_PREFIX, SESSION_TOKEN_PREFIX, OAUTH_ACCESS_TOKEN_PREFIX };
 
-export type TokenType = 'mcp' | 'session';
+export type TokenType = 'mcp' | 'session' | 'oauth' | 'service';
 
 interface BaseAuthDetails {
+  authentication?: SessionClaims['authentication'];
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
@@ -36,15 +50,71 @@ export interface SessionAuthResult extends BaseAuthDetails {
   sessionId: string;
 }
 
-export type AuthResult = MCPAuthResult | SessionAuthResult;
+interface OAuthAuthDetails extends BaseAuthDetails {
+  tokenId: string;
+  scopes: ScopeSet;
+  // Bridge to the mcp_token_drives-shaped capability model (ADR 0002 Decision 2).
+  driveScopes: DriveScopeRow[];
+  // Drive IDs this token is scoped to. Empty array means access to ALL drives
+  // (the `account` scope) — same convention as MCPAuthDetails.allowedDriveIds.
+  allowedDriveIds: string[];
+}
+
+export interface OAuthAuthResult extends OAuthAuthDetails {
+  tokenType: 'oauth';
+}
+
+/**
+ * A SERVICE proved itself over an HMAC and NAMED the user it is acting for.
+ *
+ * The signature authenticates the service, never the person — exactly the model
+ * `/api/internal/voice/bridge` already runs on. So nothing here is a claim ABOUT
+ * the user: `role`, `tokenVersion` and `adminRoleVersion` are read from the live
+ * user row by {@link loadServicePrincipal} at the moment of use, never carried
+ * in the signed payload, and a suspended user is refused there.
+ *
+ * `allowedDriveIds` is a CEILING INHERITED from whatever credential started the
+ * chain, not an entitlement this result confers: a worker dispatched by a
+ * drive-scoped MCP token must stay inside that token's drives across the hop.
+ * `[]` means "no ceiling", matching the convention on the MCP and OAuth results.
+ * See the service branch in {@link getAllowedDriveIds} — without it this type
+ * would inherit session auth's full access and silently widen every scoped
+ * caller.
+ */
+export interface ServiceAuthResult extends BaseAuthDetails {
+  tokenType: 'service';
+  /** Audit vocabulary — which service signed. Never consulted for authorization. */
+  service: 'agent-dispatch';
+  /** Inherited drive ceiling; `[]` = no ceiling. */
+  allowedDriveIds: string[];
+  /** Set when the chain STARTED at a scoped MCP token, so its RBAC ceiling survives the hop. */
+  originatingMcpTokenId?: string;
+}
+
+export type AuthResult = MCPAuthResult | SessionAuthResult | OAuthAuthResult | ServiceAuthResult;
 
 export interface AuthError {
   error: NextResponse;
+  /**
+   * When the failure was a session-token validation failure, the machine-readable reason
+   * (D5): expired vs revoked vs not_found vs ... Additive — undefined for non-session failures
+   * (missing token, MCP/OAuth failures). Callers spread it into their `auth_failed` audit
+   * details so an incident is provable.
+   */
+  authFailureReason?: SessionFailureReason;
 }
 
 export type AuthenticationResult = AuthResult | AuthError;
 
-export type AllowedTokenType = TokenType;
+/**
+ * What a ROUTE may admit. Deliberately NOT `TokenType`: `'service'` is absent,
+ * so there is no `allow` list any route can write — and no code path inside
+ * {@link authenticateRequestWithOptions} — that could produce or accept a
+ * {@link ServiceAuthResult}. Service auth is constructed at exactly one place
+ * (`POST /api/internal/agent-dispatch`, after verifying an HMAC over the raw
+ * body) and never by parsing a request's own credentials.
+ */
+export type AllowedTokenType = Exclude<TokenType, 'service'>;
 
 export interface AuthenticateOptions {
   allow: ReadonlyArray<AllowedTokenType>;
@@ -64,6 +134,68 @@ export function getBearerToken(request: Request): string | null {
   return authHeader.slice(BEARER_PREFIX.length);
 }
 
+/**
+ * Resolve the acting user for a SERVICE-signed request into a full
+ * {@link ServiceAuthResult}.
+ *
+ * The signed payload names a user id and NOTHING about that user's privileges.
+ * Every privilege-bearing field is read here, from the live row, at the moment
+ * of use — the same columns {@link validateMCPToken} reads — so a role change or
+ * a suspension takes effect on the next dispatch rather than whenever the signer
+ * happened to mint its claim.
+ *
+ * Fails closed: an unknown user and a suspended user both return `null`, and the
+ * caller answers with a fixed refusal that distinguishes neither.
+ */
+export async function loadServicePrincipal(input: {
+  userId: string;
+  service: 'agent-dispatch';
+  allowedDriveIds: string[];
+  originatingMcpTokenId?: string;
+  /**
+   * The DISPATCHING credential's ceremony evidence, carried in the signed payload like every derived credential's
+   * (SEC-2/3): the worker opens org drives exactly as far as the person who dispatched it. Null when that credential
+   * carried none, which every org sign-in policy refuses.
+   */
+  authentication: VerifiedAuthentication | null;
+}): Promise<ServiceAuthResult | null> {
+  if (!input.userId) return null;
+
+  const user = await db.query.users.findFirst({
+    where: eq(users.id, input.userId),
+    columns: {
+      id: true,
+      role: true,
+      tokenVersion: true,
+      adminRoleVersion: true,
+      suspendedAt: true,
+    },
+  });
+
+  if (!user) return null;
+
+  if (user.suspendedAt) {
+    logSecurityEvent('unauthorized', {
+      reason: 'service_dispatch_user_suspended',
+      userId: input.userId,
+      authType: 'service',
+    });
+    return null;
+  }
+
+  return {
+    tokenType: 'service',
+    service: input.service,
+    authentication: input.authentication,
+    userId: user.id,
+    role: user.role as 'user' | 'admin',
+    tokenVersion: user.tokenVersion,
+    adminRoleVersion: user.adminRoleVersion,
+    allowedDriveIds: input.allowedDriveIds,
+    ...(input.originatingMcpTokenId ? { originatingMcpTokenId: input.originatingMcpTokenId } : {}),
+  };
+}
+
 export async function validateMCPToken(token: string): Promise<MCPAuthDetails | null> {
   try {
     if (!token || !token.startsWith(MCP_TOKEN_PREFIX)) {
@@ -78,6 +210,8 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
         id: true,
         userId: true,
         isScoped: true,
+        authenticatedAt: true,
+        authenticationAssurance: true,
       },
       with: {
         user: {
@@ -145,10 +279,107 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: tokenRecord.authenticatedAt?.getTime(), assurance: tokenRecord.authenticationAssurance }, Date.now()),
       allowedDriveIds,
     };
   } catch (error) {
     console.error('validateMCPToken error', error);
+    return null;
+  }
+}
+
+export async function validateOAuthAccessToken(token: string): Promise<OAuthAuthDetails | null> {
+  try {
+    if (!token || !token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+      return null;
+    }
+
+    const record = await findOAuthAccessTokenByValue(token);
+    if (!record) {
+      return null;
+    }
+
+    const user = record.user;
+
+    // Revoke on sight, mirroring the mcp_token_user_suspended handling above.
+    if (user.suspendedAt) {
+      logSecurityEvent('unauthorized', {
+        reason: 'oauth_token_user_suspended',
+        userId: record.userId,
+        tokenId: record.id,
+        authType: 'oauth',
+        action: 'revoke_and_deny',
+      });
+
+      await db
+        .update(oauthAccessTokens)
+        .set({ revokedAt: new Date(), revokedReason: 'user_suspended' })
+        .where(eq(oauthAccessTokens.id, record.id));
+
+      return null;
+    }
+
+    if (record.expiresAt.getTime() <= Date.now()) {
+      return null;
+    }
+
+    // Stale token: the user's tokenVersion moved on (password change/global
+    // logout) since this access token was minted — mirrors device-auth-utils.
+    if (record.tokenVersion !== user.tokenVersion) {
+      return null;
+    }
+
+    const parsed = parseScopeList(record.scopes.join(' '));
+    if (!parsed.ok) {
+      // Fail closed: corrupt/unparseable stored scope data must never resolve.
+      return null;
+    }
+
+    // Fail closed at the mechanism level: `update_key:<id>`/`activate_key:<id>`
+    // grants are one-shot consent ceremonies, never bearer scopes — the
+    // authorization-code exchange intercepts them before any token family is
+    // minted (`oauth-repository.ts`'s ok_mcp_update/ok_mcp_activate
+    // branches), so no access token should ever carry either. If one somehow
+    // does (a future issuance path persisting scopes verbatim, a reordered
+    // exchange branch), honoring it would turn a consent ceremony into live
+    // access. Reject the token outright rather than trusting every mint door
+    // to remember the interception.
+    if (parsed.scopes.updateKeyId !== null || parsed.scopes.activateKeyId !== null) {
+      return null;
+    }
+
+    // Same fail-closed reasoning, same shape of guard: `all_drives` only ever
+    // resolves correctly as an unscoped (`isScoped: false`) `mcp_tokens` row
+    // (`oauth-repository.ts`'s `isAllDrivesGrant` branch) — as a bearer OAuth
+    // access token it would carry `allowedDriveIds: []` on a non-`account`
+    // token, a shape this codebase's two authorization-helper families
+    // disagree on (deny-everything via `isScopedOAuthAuth`/`getScopedAccessLevel`,
+    // or grant-everything via `getAllowedDriveIds`/`checkMCPDriveScope`,
+    // depending on which a given route calls). Today exactly two upstream
+    // gates keep `all_drives` from ever reaching a persisted access token
+    // (the authorization_code exchange's early intercept, and the
+    // device-authorization endpoint's outright rejection) — reject here too
+    // rather than trust both to remember it forever.
+    if (parsed.scopes.allDrives) {
+      return null;
+    }
+
+    const driveScopes = scopeSetToDriveScopes(parsed.scopes);
+    const allowedDriveIds = parsed.scopes.account ? [] : driveScopes.map((scope) => scope.driveId);
+
+    return {
+      userId: record.userId,
+      role: user.role as 'user' | 'admin',
+      tokenVersion: user.tokenVersion,
+      adminRoleVersion: user.adminRoleVersion,
+      tokenId: record.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: record.authenticatedAt?.getTime(), assurance: record.authenticationAssurance }, Date.now()),
+      scopes: parsed.scopes,
+      driveScopes,
+      allowedDriveIds,
+    };
+  } catch (error) {
+    console.error('validateOAuthAccessToken error', error);
     return null;
   }
 }
@@ -158,10 +389,35 @@ export async function validateSessionToken(token: string): Promise<SessionClaims
     if (!token) {
       return null;
     }
-    return await sessionService.validateSession(token);
+    // Only browser/user sessions may authenticate generic web requests. Other
+    // session types (service, mcp, device, socket) have their own dedicated
+    // validation surfaces and must not be replayable as a session cookie or
+    // bearer session token.
+    return await sessionService.validateSession(token, { expectedType: 'user' });
   } catch (error) {
     console.error('validateSessionToken error', error);
     return null;
+  }
+}
+
+/**
+ * Session-token validation that also surfaces WHY it failed (D5), for the audit trail.
+ * Mirrors `validateSessionToken`'s error-swallowing contract: on success returns the claims;
+ * on any failure returns `{ failureReason }` and never throws (an unexpected error maps to
+ * `not_found`, preserving the historical 401 outcome).
+ */
+async function validateSessionTokenWithReason(
+  token: string,
+): Promise<{ claims: SessionClaims } | { claims?: undefined; failureReason: SessionFailureReason }> {
+  try {
+    if (!token) {
+      return { failureReason: 'bad_format' };
+    }
+    const result = await sessionService.validateSessionWithReason(token, { expectedType: 'user' });
+    return result.claims ? { claims: result.claims } : { failureReason: result.failureReason };
+  } catch (error) {
+    console.error('validateSessionTokenWithReason error', error);
+    return { failureReason: 'not_found' };
   }
 }
 
@@ -187,6 +443,28 @@ export async function authenticateMCPRequest(request: Request): Promise<Authenti
   } satisfies MCPAuthResult;
 }
 
+export async function authenticateOAuthRequest(request: Request): Promise<AuthenticationResult> {
+  const token = getBearerToken(request);
+
+  if (!token || !token.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+    return {
+      error: unauthorized('OAuth access token required'),
+    };
+  }
+
+  const oauthDetails = await validateOAuthAccessToken(token);
+  if (!oauthDetails) {
+    return {
+      error: unauthorized('Invalid OAuth access token'),
+    };
+  }
+
+  return {
+    ...oauthDetails,
+    tokenType: 'oauth',
+  } satisfies OAuthAuthResult;
+}
+
 export async function authenticateSessionRequest(request: Request): Promise<AuthenticationResult> {
   // Check for bearer token first (desktop/mobile clients)
   const bearerToken = getBearerToken(request);
@@ -201,18 +479,19 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
 
     // Session token sent as Bearer (mobile/desktop)
     if (bearerToken.startsWith(SESSION_TOKEN_PREFIX)) {
-      const sessionResult = await validateSessionToken(bearerToken);
-      if (sessionResult) {
+      const sessionResult = await validateSessionTokenWithReason(bearerToken);
+      if (sessionResult.claims) {
         return {
-          userId: sessionResult.userId,
-          role: sessionResult.userRole,
-          tokenVersion: sessionResult.tokenVersion,
-          adminRoleVersion: sessionResult.adminRoleVersion,
-          sessionId: sessionResult.sessionId,
+          userId: sessionResult.claims.userId,
+          role: sessionResult.claims.userRole,
+          tokenVersion: sessionResult.claims.tokenVersion,
+          adminRoleVersion: sessionResult.claims.adminRoleVersion,
+          sessionId: sessionResult.claims.sessionId,
+          authentication: sessionResult.claims.authentication,
           tokenType: 'session',
         } satisfies SessionAuthResult;
       }
-      return { error: unauthorized('Invalid or expired session') };
+      return { error: unauthorized('Invalid or expired session'), authFailureReason: sessionResult.failureReason };
     }
 
     // Unknown Bearer token format
@@ -229,19 +508,21 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
     };
   }
 
-  const sessionClaims = await validateSessionToken(sessionToken);
-  if (!sessionClaims) {
+  const sessionResult = await validateSessionTokenWithReason(sessionToken);
+  if (!sessionResult.claims) {
     return {
       error: unauthorized('Invalid or expired session'),
+      authFailureReason: sessionResult.failureReason,
     };
   }
 
   return {
-    userId: sessionClaims.userId,
-    role: sessionClaims.userRole,
-    tokenVersion: sessionClaims.tokenVersion,
-    adminRoleVersion: sessionClaims.adminRoleVersion,
-    sessionId: sessionClaims.sessionId,
+    userId: sessionResult.claims.userId,
+    role: sessionResult.claims.userRole,
+    tokenVersion: sessionResult.claims.tokenVersion,
+    adminRoleVersion: sessionResult.claims.adminRoleVersion,
+    sessionId: sessionResult.claims.sessionId,
+    authentication: sessionResult.claims.authentication,
     tokenType: 'session',
   } satisfies SessionAuthResult;
 }
@@ -258,8 +539,24 @@ export function isMCPAuthResult(result: AuthenticationResult): result is MCPAuth
   return !('error' in result) && result.tokenType === 'mcp';
 }
 
+/**
+ * The session id of a session-authenticated result, else undefined. The tool context carries it so the
+ * agent-account authority can tell a person's live run from an unattended one (G2, ADR 0004 §4.4).
+ */
+export function authSessionIdOf(result: AuthResult): string | undefined {
+  return result.tokenType === 'session' ? result.sessionId : undefined;
+}
+
 export function isSessionAuthResult(result: AuthenticationResult): result is SessionAuthResult {
   return !('error' in result) && result.tokenType === 'session';
+}
+
+export function isServiceAuthResult(result: AuthenticationResult): result is ServiceAuthResult {
+  return !isAuthError(result) && result.tokenType === 'service';
+}
+
+export function isOAuthAuthResult(result: AuthenticationResult): result is OAuthAuthResult {
+  return !('error' in result) && result.tokenType === 'oauth';
 }
 
 export async function authenticateRequestWithOptions(
@@ -278,6 +575,7 @@ export async function authenticateRequestWithOptions(
   const allowedTypes = new Set(allow);
   const allowMCP = allowedTypes.has('mcp');
   const allowSession = allowedTypes.has('session');
+  const allowOAuth = allowedTypes.has('oauth');
 
   const bearerToken = getBearerToken(request);
 
@@ -290,12 +588,23 @@ export async function authenticateRequestWithOptions(
     return authenticateMCPRequest(request);
   }
 
+  if (bearerToken?.startsWith(OAUTH_ACCESS_TOKEN_PREFIX)) {
+    if (!allowOAuth) {
+      return {
+        error: unauthorized('OAuth tokens are not permitted for this endpoint'),
+      };
+    }
+    return authenticateOAuthRequest(request);
+  }
+
   let authResult: AuthenticationResult;
 
   if (allowSession) {
     authResult = await authenticateSessionRequest(request);
   } else if (allowMCP) {
     authResult = await authenticateMCPRequest(request);
+  } else if (allowOAuth) {
+    authResult = await authenticateOAuthRequest(request);
   } else {
     return {
       error: unauthorized('No authentication methods permitted for this endpoint', 500),
@@ -433,14 +742,56 @@ export async function authenticateWithEnforcedContext(
 // These helpers enforce drive-level access restrictions for scoped MCP tokens.
 // Policy: If allowedDriveIds is empty, the token has full access to all user's drives.
 //         If allowedDriveIds is non-empty, only those specific drives are accessible.
+// Exception: a manage-keys-only OAuth credential (auth.scopes.manageKeys) has no
+//            content access at all, so it must never benefit from the "empty means
+//            full access" convention below — every helper here fails it closed.
 // ============================================================================
+
+/**
+ * True iff this credential can only manage keys and must never resolve to
+ * content access. `parseScopeList` (see ScopeSet.manageKeys) mints this today
+ * via the `manage_keys` token, through both the authorize and
+ * device-authorization flows — every helper below exists because this is a
+ * real, reachable credential shape, not a hypothetical one.
+ */
+export function isManageKeysOnly(auth: AuthResult): boolean {
+  return isOAuthAuthResult(auth) && auth.scopes.manageKeys === true;
+}
+
+function manageKeysOnlyDeniedResponse(): NextResponse {
+  return NextResponse.json(
+    { error: 'This credential is management-only and has no drive content access' },
+    { status: 403 }
+  );
+}
+
+// Never equals a real drive id (cuid2 ids are lowercase alphanumeric only).
+// Lets a manage-keys-only credential resolve through the same allowedDriveIds
+// contract as every other scoped credential, so any caller that reads
+// `allowedDriveIds.length` directly — not just the helpers below — also sees
+// "no drives" rather than the empty-array-means-full-access default.
+const manageKeysNoDriveAccess: readonly string[] = ['MANAGE_KEYS_ONLY_NO_DRIVE_ACCESS'];
 
 /**
  * Get allowed drive IDs from an authentication result.
  * Returns empty array for session auth (full access) or unscoped MCP tokens.
  */
 export function getAllowedDriveIds(auth: AuthResult): string[] {
+  if (isManageKeysOnly(auth)) {
+    return [...manageKeysNoDriveAccess];
+  }
   if (isMCPAuthResult(auth)) {
+    return auth.allowedDriveIds;
+  }
+  if (isOAuthAuthResult(auth)) {
+    return auth.allowedDriveIds; // Empty for the `account` scope = full access
+  }
+  // A dispatched worker inherits the CEILING of whatever credential started the
+  // chain. This branch is load bearing: without it, service auth falls through
+  // to the session `return []` below — full access — and a worker spawned by a
+  // drive-scoped MCP token would run UNSCOPED across the internal hop, which is
+  // a privilege escalation, not a convenience.
+  if (isServiceAuthResult(auth)) {
     return auth.allowedDriveIds;
   }
   return []; // Session auth = full access
@@ -458,6 +809,10 @@ export function checkMCPDriveScope(
   auth: AuthResult,
   driveId: string
 ): NextResponse | null {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access (unscoped token or session auth)
@@ -489,6 +844,10 @@ export async function checkMCPPageScope(
   auth: AuthResult,
   pageId: string
 ): Promise<NextResponse | null> {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access
@@ -530,6 +889,10 @@ export function filterDrivesByMCPScope(
   auth: AuthResult,
   driveIds: string[]
 ): string[] {
+  if (isManageKeysOnly(auth)) {
+    return [];
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Empty allowedDriveIds means full access
@@ -555,6 +918,10 @@ export function checkMCPCreateScope(
   auth: AuthResult,
   targetDriveId: string | null
 ): NextResponse | null {
+  if (isManageKeysOnly(auth)) {
+    return manageKeysOnlyDeniedResponse();
+  }
+
   const allowedDriveIds = getAllowedDriveIds(auth);
 
   // Unscoped tokens can create anywhere
@@ -582,6 +949,25 @@ export function checkMCPCreateScope(
 }
 
 // Re-export from other auth modules
+export {
+  isScopedMCPAuth,
+  isDriveScopedPrincipal,
+  isScopedOAuthAuth,
+  getPrincipalAccessLevel,
+  canPrincipalViewPage,
+  canPrincipalEditPage,
+  canPrincipalDeletePage,
+  canPrincipalSharePage,
+  canManagePageWebhooks,
+  isPrincipalDriveMember,
+  getPrincipalDriveAccess,
+  isPrincipalDriveOwnerOrAdmin,
+  getPrincipalDriveIds,
+  getPrincipalAccessiblePagesInDrive,
+  getPrincipalBatchPagePermissions,
+  getPrincipalDriveAccessLevel,
+  getPrincipalDriveMembership,
+} from './principal-permissions';
 export { verifyAuth, verifyAdminAuth, isAdminAuthError, withAdminAuth, type VerifiedUser, type AdminRouteContext } from './auth';
 export { validateCSRF } from './csrf-validation';
 export {

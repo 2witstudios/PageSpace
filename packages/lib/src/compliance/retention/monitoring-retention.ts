@@ -1,12 +1,14 @@
 import { lt } from 'drizzle-orm';
 import { db } from '@pagespace/db/db';
 import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
+import { isClickHouseEnabled } from '../../observability/clickhouse-client';
 import type { CleanupResult } from './retention-engine';
 
 const DEFAULT_API_METRICS_DAYS = 90;
 const DEFAULT_SYSTEM_LOGS_DAYS = 30;
 const DEFAULT_ERROR_LOGS_DAYS = 90;
 const DEFAULT_USER_ACTIVITIES_DAYS = 180;
+const DEFAULT_AI_USAGE_LOGS_DAYS = 90;
 
 export interface RetentionConfig {
   apiMetricsDays: number;
@@ -29,6 +31,16 @@ export function getRetentionConfig(): RetentionConfig {
     errorLogsDays: parsePositiveInt(process.env.RETENTION_ERROR_LOGS_DAYS, DEFAULT_ERROR_LOGS_DAYS),
     userActivitiesDays: parsePositiveInt(process.env.RETENTION_USER_ACTIVITIES_DAYS, DEFAULT_USER_ACTIVITIES_DAYS),
   };
+}
+
+/**
+ * Retention window (in days) for AI usage logs, used by the purge-ai-usage-logs
+ * cron. Configurable via RETENTION_AI_USAGE_LOGS_DAYS so tenant deployments can
+ * tune storage limits without a code change (mirrors the RETENTION_* pattern
+ * above). Falls back to 90 days for unset/invalid values.
+ */
+export function getAiUsageLogsRetentionDays(): number {
+  return parsePositiveInt(process.env.RETENTION_AI_USAGE_LOGS_DAYS, DEFAULT_AI_USAGE_LOGS_DAYS);
 }
 
 export function getRetentionCutoff(days: number): Date {
@@ -76,6 +88,16 @@ export async function cleanupUserActivities(opts: { retentionDays: number }): Pr
 // (GDPR Art 17(3)(b) legal-obligation justification).
 
 export async function runMonitoringRetentionCleanup(): Promise<CleanupResult[]> {
+  // With CLICKHOUSE_ENABLED, retention for these 4 tables is enforced by CH
+  // table TTLs (clickhouse-ddl.ts: api_metrics 90d, system_logs 30d,
+  // user_activities 180d; error_logs deliberately none — GDPR erasure
+  // mutations are its only eraser). The PG copies then hold only frozen
+  // pre-cutover history, removed wholesale by the deferred Phase 6 drop
+  // (scripts/deferred-migrations/) — purging them here would double-handle
+  // retention across stores. aiUsageLogs retention is unaffected (separate
+  // cron via getAiUsageLogsRetentionDays; the table stays in main PG).
+  if (isClickHouseEnabled()) return [];
+
   const config = getRetentionConfig();
   const results = await Promise.all([
     cleanupApiMetrics({ retentionDays: config.apiMetricsDays }),

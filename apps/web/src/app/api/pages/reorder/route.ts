@@ -3,8 +3,12 @@ import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import { pageReorderService } from '@/services/api';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -28,6 +32,25 @@ export async function PATCH(request: Request) {
     const scopeError = await checkMCPPageScope(auth, pageId);
     if (scopeError) return scopeError;
 
+    // A scoped MCP token is its own drive member: it must hold OWNER/ADMIN on the
+    // page's drive itself (mirrors the owner/admin rule pageReorderService enforces
+    // for users), so a MEMBER-role token cannot reorder via its owner's powers.
+    if (isScopedMCPAuth(auth)) {
+      const page = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { driveId: true },
+      });
+      if (!page) {
+        return NextResponse.json({ error: 'Page not found.' }, { status: 404 });
+      }
+      if (!(await isPrincipalDriveOwnerOrAdmin(auth, page.driveId))) {
+        return deniedResponse(actorFromAuth(auth), page.driveId, NextResponse.json(
+          { error: 'Only drive owners and admins can reorder pages.' },
+          { status: 403 }
+        ));
+      }
+    }
+
     // Validate parent change to prevent circular references
     const validation = await pageReorderService.validateMove(pageId, newParentId);
     if (!validation.valid) {
@@ -43,7 +66,7 @@ export async function PATCH(request: Request) {
       pageId,
       newParentId,
       newPosition,
-      userId: auth.userId,
+      actor: actorFromAuth(auth),
       metadata: isMCP ? { source: 'mcp' } : undefined,
     });
 

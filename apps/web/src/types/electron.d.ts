@@ -14,6 +14,13 @@ export interface ElectronAPI {
   removeAllListeners: (channel: string) => void;
   platform: NodeJS.Platform;
   version: string;
+  /**
+   * Which desktop app this is — `pagespace` or `coder`. One shell builds both,
+   * and each registers its own protocol scheme, so anything constructing a deep
+   * link back into the app must resolve the scheme from this rather than
+   * assuming `pagespace://`. Absent in older shells; treat that as `pagespace`.
+   */
+  appVariant?: string;
   auth: {
     /**
      * Gets the opaque session token from Electron's secure storage.
@@ -29,6 +36,14 @@ export interface ElectronAPI {
       csrfToken?: string | null;
       deviceToken?: string | null;
     } | null>;
+    /**
+     * Begins a desktop-initiated auth flow, recording a single-use state so the
+     * returning `pagespace://auth-exchange` deep link is bound to a login this
+     * instance actually started (CSRF / session-fixation protection). Call this
+     * immediately before triggering any desktop sign-in handoff.
+     * @returns The opaque state value, or null if not on desktop / untrusted.
+     */
+    beginExchange?: () => Promise<string | null>;
     /**
      * Persists the current authentication session in the native secure storage.
      */

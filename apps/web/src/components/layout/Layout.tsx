@@ -3,6 +3,13 @@
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
+import { useOrgRealtime } from "@/hooks/useOrgs";
+import { useSurfaceOrgId } from "@/hooks/useSurfaceOrgId";
+import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
+import { useNotificationToasts } from "@/hooks/useNotificationToasts";
+import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
+import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
+import { useAppleTransactionObserver } from "@/hooks/useAppleTransactionObserver";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -10,10 +17,11 @@ import RightPanel from "@/components/layout/right-sidebar";
 import { NavigationProvider } from "@/components/layout/NavigationProvider";
 import { TabBar } from "@/components/layout/tabs";
 import { GlobalChatProvider } from "@/contexts/GlobalChatContext";
+import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
-import { useResponsivePanels } from "@/hooks/useResponsivePanels";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
+import { OrgReauthenticationPrompt } from "@/components/auth/OrgReauthenticationPrompt";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
@@ -24,7 +32,7 @@ import { useTabSync } from "@/hooks/useTabSync";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { useEditingStore } from "@/stores/useEditingStore";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Sheet,
   SheetContent,
@@ -32,7 +40,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { VoiceModeBorder } from "@/components/ai/voice";
+import { VoiceSessionBridge } from "@/components/ai/voice/realtime";
+import { decideReveal } from "@/lib/ai/realtime/voice-reveal";
+import type { VoiceSurface } from "@/lib/ai/realtime/voice-binding";
 import {
   LEFT_SIDEBAR_MAX_SIZE,
   MAIN_MIN_SIZE,
@@ -43,6 +53,7 @@ import {
   getRightSidebarSizeFromLayout,
   type ResizablePanelLayout,
 } from "@/components/layout/panel-layout";
+import { shouldShowAuthLoadingScreen } from "@/components/layout/shouldShowAuthLoadingScreen";
 
 const panelContainerClassName =
   "h-full w-full min-h-0 min-w-0 overflow-hidden @container";
@@ -51,8 +62,41 @@ interface LayoutProps {
   children?: React.ReactNode;
 }
 
+/**
+ * Radix focuses the first tabbable descendant when a sheet opens. On phones that is
+ * the sidebar search input (or the assistant textarea), which pops the keyboard over
+ * the panel the user just opened. Cancel that and focus the sheet container instead
+ * so focus still enters the modal for keyboard and screen-reader users.
+ */
+function focusSheetContainer(event: Event) {
+  event.preventDefault();
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.focus();
+  }
+}
+
 function Layout({ children }: LayoutProps) {
   const { isLoading, isAuthenticated } = useAuth();
+  // Has THIS mount observed a successful auth check yet? Starts false on every fresh
+  // mount regardless of what isAuthenticated was optimistically restored to from
+  // localStorage — see shouldShowAuthLoadingScreen's doc comment. Mutated inline
+  // during render (not an effect): the very render where isLoading first resolves to
+  // false while authenticated is exactly the render that no longer needs the ref, so
+  // there is no one-tick lag to matter for.
+  const hasConfirmedAuthRef = useRef(false);
+  if (isAuthenticated && !isLoading) {
+    hasConfirmedAuthRef.current = true;
+  }
+  // Did THIS mount actually render the boot screen below? That — not the mere
+  // fact of mounting — is what "cold boot" means for the entrance animation.
+  // `Layout` is mounted by three sibling layout clients (DashboardLayoutClient,
+  // SettingsLayoutClient, NotificationsLayoutClient), so navigating between
+  // /dashboard, /settings and /notifications unmounts one Layout and mounts
+  // another. Applying the animation unconditionally therefore faded the whole
+  // shell out and back in on ordinary navigation. Set inline during render,
+  // matching hasConfirmedAuthRef above: the spinner return happens in the same
+  // render pass, so the flag is already correct when the gate finally opens.
+  const showedBootScreenRef = useRef(false);
   const router = useRouter();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
 
@@ -62,7 +106,6 @@ function Layout({ children }: LayoutProps) {
   const rightSidebarOpen = useLayoutStore(state => state.rightSidebarOpen);
   const toggleLeftSidebar = useLayoutStore(state => state.toggleLeftSidebar);
   const toggleRightSidebar = useLayoutStore(state => state.toggleRightSidebar);
-  const setLeftSidebarOpen = useLayoutStore(state => state.setLeftSidebarOpen);
   const setRightSidebarOpen = useLayoutStore(state => state.setRightSidebarOpen);
 
   // Mobile sheet state from store (allows other components to control sheets)
@@ -70,6 +113,11 @@ function Layout({ children }: LayoutProps) {
   const rightSheetOpen = useLayoutStore(state => state.rightSheetOpen);
   const setLeftSheetOpen = useLayoutStore(state => state.setLeftSheetOpen);
   const setRightSheetOpen = useLayoutStore(state => state.setRightSheetOpen);
+
+  // Desktop overlay state (1024-1279px) — transient, starts closed each load
+  const leftOverlayOpen = useLayoutStore(state => state.leftOverlayOpen);
+  const setLeftOverlayOpen = useLayoutStore(state => state.setLeftOverlayOpen);
+  const setRightSidebarPageTab = useLayoutStore(state => state.setRightSidebarPageTab);
 
   const hasHydrated = useHasHydrated();
   const shouldOverlaySidebarsDefault = useBreakpoint("(max-width: 1279px)");
@@ -121,13 +169,27 @@ function Layout({ children }: LayoutProps) {
     [leftPanelVisible, rightPanelVisible, setLeftSidebarSize, setRightSidebarSize]
   );
 
-  useResponsivePanels();
-
   // Initialize socket connection for real-time features
   useSocket();
 
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
+
+  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete),
+  // and so does the org this screen belongs to: its banner turns on or off live when it lapses or is paid.
+  useOrgRealtime(useSurfaceOrgId());
+
+  // Show live toast popups for new notifications, anywhere in the app
+  useNotificationToasts();
+
+  // Show native OS notifications for new notifications when the desktop app is unfocused
+  useDesktopNotifications();
+
+  // Keep the native app-icon badge in sync with the unread count (reactive SSOT projection)
+  useNativeBadgeSync();
+
+  // iOS In-App Purchase: deliver renewals, Ask to Buy and interrupted purchases to the server
+  useAppleTransactionObserver(isAuthenticated);
 
   // Monitor performance
   usePerformanceMonitor();
@@ -160,6 +222,15 @@ function Layout({ children }: LayoutProps) {
     }
   }, [isSheetBreakpoint, setLeftSheetOpen, setRightSheetOpen]);
 
+  // Reset the transient desktop overlay when the layout is no longer in left-overlay
+  // mode (persistent >=1280px, or sheet mode), so re-entering overlay width always
+  // starts closed — matching first-load behavior and the sheet reset above.
+  useEffect(() => {
+    if ((!shouldOverlayLeftSidebar || isSheetBreakpoint) && leftOverlayOpen) {
+      setLeftOverlayOpen(false);
+    }
+  }, [shouldOverlayLeftSidebar, isSheetBreakpoint, leftOverlayOpen, setLeftOverlayOpen]);
+
 
   // Handle authentication redirect with Next.js router for faster navigation
   useEffect(() => {
@@ -181,13 +252,13 @@ function Layout({ children }: LayoutProps) {
 
     // Left sidebar is in overlay mode (desktop 1024-1279px): exclusive toggle
     if (shouldOverlayLeftSidebar) {
-      if (leftSidebarOpen) {
-        setLeftSidebarOpen(false);
+      if (leftOverlayOpen) {
+        setLeftOverlayOpen(false);
       } else {
         if (shouldOverlayRightSidebar && rightSidebarOpen) {
           setRightSidebarOpen(false);
         }
-        setLeftSidebarOpen(true);
+        setLeftOverlayOpen(true);
       }
       return;
     }
@@ -200,11 +271,11 @@ function Layout({ children }: LayoutProps) {
     rightSheetOpen,
     shouldOverlayLeftSidebar,
     shouldOverlayRightSidebar,
-    leftSidebarOpen,
+    leftOverlayOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
     setRightSheetOpen,
-    setLeftSidebarOpen,
+    setLeftOverlayOpen,
     setRightSidebarOpen,
     toggleLeftSidebar,
   ]);
@@ -226,8 +297,8 @@ function Layout({ children }: LayoutProps) {
         setRightSidebarOpen(false);
       } else {
         // Only close left sidebar if left is also in overlay mode
-        if (shouldOverlayLeftSidebar && leftSidebarOpen) {
-          setLeftSidebarOpen(false);
+        if (shouldOverlayLeftSidebar && leftOverlayOpen) {
+          setLeftOverlayOpen(false);
         }
         setRightSidebarOpen(true);
       }
@@ -242,14 +313,60 @@ function Layout({ children }: LayoutProps) {
     rightSheetOpen,
     shouldOverlayLeftSidebar,
     shouldOverlayRightSidebar,
-    leftSidebarOpen,
+    leftOverlayOpen,
     rightSidebarOpen,
     setLeftSheetOpen,
     setRightSheetOpen,
-    setLeftSidebarOpen,
+    setLeftOverlayOpen,
     setRightSidebarOpen,
     toggleRightSidebar,
   ]);
+
+  /**
+   * Bring the assistant into view for a voice call — OPEN-ONLY.
+   *
+   * NOT `handleRightPanelToggle`. That one closes an open sidebar, and the nav
+   * trigger's second job is being the way BACK to a minimized call: a toggle
+   * there means pressing the live indicator hides the call you pressed it to
+   * see. The breakpoint reasoning is the same and lives in `decideReveal`,
+   * where it can be tested at every breakpoint without a viewport.
+   */
+  const handleRevealAssistant = useCallback(
+    (surface: VoiceSurface) => {
+      const writes = decideReveal({
+        surface,
+        isSheetBreakpoint,
+        shouldOverlayRightSidebar,
+        shouldOverlayLeftSidebar,
+        rightSheetOpen,
+        leftSheetOpen,
+        rightSidebarOpen,
+        leftOverlayOpen,
+      });
+
+      if (writes.leftSheetOpen !== undefined) setLeftSheetOpen(writes.leftSheetOpen);
+      if (writes.rightSheetOpen !== undefined) setRightSheetOpen(writes.rightSheetOpen);
+      if (writes.leftOverlayOpen !== undefined) setLeftOverlayOpen(writes.leftOverlayOpen);
+      if (writes.rightSidebarOpen !== undefined) setRightSidebarOpen(writes.rightSidebarOpen);
+      // Voice is a mode on the CHAT surface, so revealing a call means the chat
+      // tab, not whichever tab the sidebar was left on.
+      if (writes.showChatTab) setRightSidebarPageTab('chat');
+    },
+    [
+      isSheetBreakpoint,
+      shouldOverlayRightSidebar,
+      shouldOverlayLeftSidebar,
+      rightSheetOpen,
+      leftSheetOpen,
+      rightSidebarOpen,
+      leftOverlayOpen,
+      setLeftSheetOpen,
+      setRightSheetOpen,
+      setLeftOverlayOpen,
+      setRightSidebarOpen,
+      setRightSidebarPageTab,
+    ],
+  );
 
   // Dismiss keyboard when tapping outside editable content (iOS Capacitor fix)
   // iOS contenteditable elements don't automatically blur on outside taps like regular inputs
@@ -268,8 +385,19 @@ function Layout({ children }: LayoutProps) {
     }
   }, []);
 
-  // Optimize loading checks - show UI earlier for better perceived performance
-  if (isLoading || !hasHydrated) {
+  // Optimize loading checks - show UI earlier for better perceived performance.
+  // Gated on shouldShowAuthLoadingScreen (not a raw isLoading check) so a routine
+  // background loadSession() recheck of an ALREADY-authenticated session doesn't
+  // unmount this entire subtree — GlobalChatProvider included — down to a spinner.
+  if (
+    shouldShowAuthLoadingScreen({
+      isLoading,
+      hasHydrated,
+      isAuthenticated,
+      hasConfirmedAuthThisMount: hasConfirmedAuthRef.current,
+    })
+  ) {
+    showedBootScreenRef.current = true;
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="flex items-center gap-2">
@@ -294,15 +422,39 @@ function Layout({ children }: LayoutProps) {
 
   return (
     <NavigationProvider>
+      {/*
+        THE app-wide voice session. Mounted HERE — above the panel group, not
+        inside RightPanel — because `rightPanelVisible && …` below unmounts the
+        right sidebar outright when it closes, and a session owned by the panel
+        would hang up the user's call every time they collapsed it. Voice is a
+        transport onto a conversation, not a property of a panel; the sidebar is
+        its home, not its owner.
+
+        Outside GlobalChatProvider rather than inside it: this provider consumes
+        nothing from it, and a session that cannot be interrupted by anything
+        below it is the whole point.
+      */}
+      <VoiceSessionProvider>
       <GlobalChatProvider>
+        {/*
+          Renders nothing. It keeps a live call's sense of place current as the
+          user navigates (WITHOUT rebinding), and applies the agent switcher's
+          rebind once the new agent's conversation resolves. Mounted here, above
+          every panel, for the same reason the session itself is: both jobs
+          outlive the sidebar, which is unmounted whenever it is collapsed.
+          Inside GlobalChatProvider because the binding it computes reads the
+          global conversation from it.
+        */}
+        <VoiceSessionBridge />
         <div
-          className="flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10"
+          className={`${showedBootScreenRef.current ? "app-shell-enter " : ""}flex flex-col overflow-hidden bg-gradient-to-br from-background via-background to-muted/10`}
           style={{ height: 'var(--app-height, 100dvh)' }}
           onClick={handleLayoutClick}
         >
           <TopBar
             onToggleLeftPanel={handleLeftPanelToggle}
             onToggleRightPanel={handleRightPanelToggle}
+            onRevealAssistant={handleRevealAssistant}
           />
 
           {/* TabBar: auto-hides when <=1 tab, accordion from TopBar */}
@@ -338,7 +490,7 @@ function Layout({ children }: LayoutProps) {
               <div className={panelContainerClassName}>
                 <main className="relative flex min-h-0 min-w-0 h-full flex-col overflow-hidden">
                   <AnimatePresence>
-                    {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftSidebarOpen && (
+                    {shouldOverlayLeftSidebar && !isSheetBreakpoint && leftOverlayOpen && (
                       <motion.div
                         key="left-sidebar"
                         initial={{ x: -320, opacity: 0, scale: 0.98 }}
@@ -358,6 +510,8 @@ function Layout({ children }: LayoutProps) {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  {/* SEAT-9: the lapse banner on every org surface (org pages, open org drives) */}
+                  <OrgSurfaceBanner />
                   {children ? (
                     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
                       {children}
@@ -365,7 +519,6 @@ function Layout({ children }: LayoutProps) {
                   ) : (
                     <CenterPanel />
                   )}
-                  <VoiceModeBorder />
                   <AnimatePresence>
                     {shouldOverlayRightSidebar && !isSheetBreakpoint && rightSidebarOpen && (
                       <motion.div
@@ -389,7 +542,7 @@ function Layout({ children }: LayoutProps) {
                   </AnimatePresence>
                   <AnimatePresence>
                     {!isSheetBreakpoint && (
-                      (shouldOverlayLeftSidebar && leftSidebarOpen) ||
+                      (shouldOverlayLeftSidebar && leftOverlayOpen) ||
                       (shouldOverlayRightSidebar && rightSidebarOpen)
                     ) && (
                       <motion.button
@@ -402,8 +555,8 @@ function Layout({ children }: LayoutProps) {
                         className="absolute inset-0 z-30 bg-black/50 backdrop-blur-sm"
                         aria-label="Close side panels"
                         onClick={() => {
-                          if (shouldOverlayLeftSidebar && leftSidebarOpen) {
-                            setLeftSidebarOpen(false);
+                          if (shouldOverlayLeftSidebar && leftOverlayOpen) {
+                            setLeftOverlayOpen(false);
                           }
                           if (shouldOverlayRightSidebar && rightSidebarOpen) {
                             setRightSidebarOpen(false);
@@ -434,6 +587,8 @@ function Layout({ children }: LayoutProps) {
           </ResizablePanelGroup>
 
           <DebugPanel />
+          {/* D-OW-45: one prompt for every org sign-in denial the fetch layer reports. */}
+          <OrgReauthenticationPrompt />
         </div>
 
         {isSheetBreakpoint && (
@@ -447,7 +602,12 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="left" className="w-full max-w-[22rem] border-r p-0 sm:max-w-sm">
+            <SheetContent
+              side="left"
+              className="w-full max-w-[22rem] border-r p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
+            >
               <SheetHeader className="sr-only">
                 <SheetTitle>Navigation menu</SheetTitle>
                 <SheetDescription>Browse spaces and files</SheetDescription>
@@ -465,9 +625,14 @@ function Layout({ children }: LayoutProps) {
               }
             }}
           >
-            <SheetContent side="right" className="w-full max-w-[22rem] border-l p-0 sm:max-w-sm">
+            <SheetContent
+              side="right"
+              className="w-full max-w-[22rem] border-l p-0 outline-none sm:max-w-sm"
+              tabIndex={-1}
+              onOpenAutoFocus={focusSheetContainer}
+            >
               <SheetHeader className="sr-only">
-                <SheetTitle>Assistant panel</SheetTitle>
+                <SheetTitle>Global Assistant panel</SheetTitle>
                 <SheetDescription>Chat with the global assistant</SheetDescription>
               </SheetHeader>
               <RightPanel variant="overlay" className="h-full w-full" />
@@ -476,6 +641,7 @@ function Layout({ children }: LayoutProps) {
         </>
         )}
       </GlobalChatProvider>
+      </VoiceSessionProvider>
     </NavigationProvider>
   );
 }

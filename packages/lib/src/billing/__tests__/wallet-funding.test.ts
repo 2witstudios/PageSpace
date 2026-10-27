@@ -1,0 +1,648 @@
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  orgPoolRefillGrant,
+  orgSubscriptionFundingBasis,
+  orgInvoiceFundingInput,
+  GIFT_SUBSCRIPTION_METADATA_TYPE,
+  orgPoolListPriceGrantCents,
+  orgInvoicePaidCents,
+  selectOrgPoolRefillLines,
+  currentGoverningPeriodMs,
+  refillPool,
+  invoiceServicePeriodMs,
+  planAllocationReset,
+  planPersonalRootRoll,
+  orderFundingLegs,
+  drawFundingLegs,
+  planLegRefund,
+  planDonation,
+  type StoredFundingLeg,
+  type OrgInvoice,
+  type OrgInvoiceLine,
+  type DonationInput,
+} from '../wallet-funding';
+
+// Fixture amounts are whole cents of credit value, never credit counts.
+const c = (cents: number): number => cents;
+const BASE_CENTS = 5000; // Business list price, $50
+const SEAT_CENTS = 1000; // one extra seat, $10
+const base = { amount: BASE_CENTS };
+const seats = (n: number) => ({ amount: SEAT_CENTS * n });
+// An admin gift is a 100%-coupon subscription: Stripe keeps the list price on the line
+// and puts the coupon in its discount_amounts.
+const giftedBase = { amount: BASE_CENTS, discount_amounts: [{ amount: BASE_CENTS }] };
+
+describe('wallet-funding: org pool refill', () => {
+  it('MON-3 base + 3 extra seats paid × the Business ratio: 8000 paid → 8000', () => {
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true });
+    expect(grant).toEqual({ paidCents: 8000, allowanceCents: 8000, basis: 'paid', reason: 'paid' });
+  });
+
+  it('MON-3 more seats means a bigger pool with no second constant: 10 seats vs 3 seats', () => {
+    const three = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: true });
+    const ten = orgPoolRefillGrant({ lines: [base, seats(10)], amountPaidCents: 15000, hasSubscriptionParent: true });
+    expect(ten.allowanceCents - three.allowanceCents).toBe(Math.floor((SEAT_CENTS * 7 * 10000) / 10_000));
+  });
+
+  it('a proration credit nets against the charge before the ratio', () => {
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3), { amount: -2000 }], amountPaidCents: 6000, hasSubscriptionParent: true });
+    expect(grant).toMatchObject({ paidCents: 6000, allowanceCents: 6000 });
+  });
+
+  it('an invoice with no subscription parent never refills the pool, whatever it paid', () => {
+    const grant = orgPoolRefillGrant({ lines: [base, seats(3)], amountPaidCents: 8000, hasSubscriptionParent: false, gifted: true });
+    expect(grant).toEqual({ paidCents: 8000, allowanceCents: 0, basis: 'none', reason: 'not_a_subscription_invoice' });
+  });
+
+  it('MON-3 D-OW-30 a $0 trial-shaped org invoice (subscription_create, paid 0, subtotal 0) grants NOTHING: the pool is funded only from what was actually paid', () => {
+    const grant = orgPoolRefillGrant(
+      { lines: [{ amount: 0 }], amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 0 },
+    );
+    expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+  });
+
+  it('MON-3 D-OW-30 the FIRST real payment funds the pool from what it actually paid: base + 2 seats, 7000 paid → 7000', () => {
+    const first = { lines: [base, seats(2)], amountPaidCents: 7000, hasSubscriptionParent: true, billingReason: 'subscription_create', subtotalCents: 7000 };
+    expect(orgPoolRefillGrant(first)).toEqual({ paidCents: 7000, allowanceCents: 7000, basis: 'paid', reason: 'paid' });
+  });
+
+  it('D-OW-23 a gifted org subscription (the admin path) is still funded at list price × ratio through the one named function', () => {
+    const grant = orgPoolRefillGrant(
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0 },
+    );
+    expect(grant).toMatchObject({ allowanceCents: orgPoolListPriceGrantCents(0), basis: 'list', reason: 'gifted' });
+    expect(orgPoolListPriceGrantCents(0)).toBe(5000);
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a gift funds list × ratio for exactly the seats the admin pinned, never the seats the invoice billed', () => {
+    // The Owner kept 10 throwaway invites live across the boundary: the gift invoice bills 10
+    // extra seats at $0. The admin pinned 2, so the pool is funded for 2.
+    const giftedSeats = { amount: SEAT_CENTS * 10, discount_amounts: [{ amount: SEAT_CENTS * 10 }] };
+    const grant = orgPoolRefillGrant({
+      lines: [giftedBase, giftedSeats], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true,
+      billingReason: 'subscription_cycle', subtotalCents: 15000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 2,
+    });
+    expect(grant).toEqual({ paidCents: 0, allowanceCents: orgPoolListPriceGrantCents(2), basis: 'list', reason: 'gifted' });
+    expect(grant.allowanceCents).toBe(7000);
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a PAID invoice on a gift-typed subscription funds as a paid invoice (what it paid × ratio), never at the gift list price', () => {
+    const paidGift = orgPoolRefillGrant({
+      lines: [base, seats(3)], hasVerifiedGiftPrice: true, amountPaidCents: 8000, hasSubscriptionParent: true,
+      billingReason: 'subscription_cycle', subtotalCents: 8000, gifted: true, onOrgSubscription: true, giftedExtraSeats: 10_000,
+    });
+    expect(paidGift).toEqual({ paidCents: 8000, allowanceCents: 8000, basis: 'paid', reason: 'paid' });
+    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: 5000, hasSubscriptionParent: true, hasVerifiedGiftPrice: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 10_000 })).toBe('paid');
+  });
+
+  it('SEAT-8 (partial) D-OW-54 a gift invoice with no admin-pinned seat quantity (a gift made outside the admin route) funds nothing and is no funding evidence', () => {
+    const gift = { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true, onOrgSubscription: true };
+    for (const giftedExtraSeats of [null, undefined, -1, 1.5]) {
+      expect(orgPoolRefillGrant({ ...gift, giftedExtraSeats })).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_quantity_unknown' });
+      expect(orgSubscriptionFundingBasis({ ...gift, giftedExtraSeats })).toBeNull();
+    }
+  });
+
+  it('D-OW-23 review #2761 P2-4: a gift NOT on the org\'s own subscription (a separately created gift subscription the org never mirrors) grants nothing — fail closed, no money into a pool the org cannot spend', () => {
+    const gift = { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000, gifted: true };
+    for (const onOrgSubscription of [false, undefined]) {
+      expect(orgPoolRefillGrant({ ...gift, onOrgSubscription })).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'gift_not_org_subscription' });
+    }
+    expect(orgPoolRefillGrant({ ...gift, onOrgSubscription: true, giftedExtraSeats: 0 })).toMatchObject({ basis: 'list', reason: 'gifted' });
+  });
+
+  it('a 100% coupon on a non-gifted org subscription grants nothing: the line keeps list price, its discount takes it to 0', () => {
+    const grant = orgPoolRefillGrant(
+      { lines: [giftedBase], hasVerifiedGiftPrice: true, amountPaidCents: 0, hasSubscriptionParent: true, billingReason: 'subscription_cycle', subtotalCents: 5000 },
+    );
+    expect(grant).toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+  });
+
+  it('MON-3 a 50% coupon halves the pool: base + 3 seats list 8000, paid 4000 → 4000', () => {
+    const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
+    const grant = orgPoolRefillGrant(
+      { lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4000, hasSubscriptionParent: true, subtotalCents: 8000 },
+    );
+    expect(grant).toEqual({ paidCents: 4000, allowanceCents: 4000, basis: 'paid', reason: 'paid' });
+  });
+
+  it('MON-3 tax in amount_paid never grows the pool, and a short payment shrinks it', () => {
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 8800 })).toBe(8000);
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: 3000 })).toBe(3000);
+    expect(orgInvoicePaidCents({ lines: [base, seats(3)], amountPaidCents: null })).toBe(0);
+    // A 50% coupon with tax on top: 4000 of lines after the discount, 4400 collected.
+    // The discount is netted per line, so the tax cannot fill the gap back up.
+    const half = (amount: number) => ({ amount, discount_amounts: [{ amount: amount / 2 }] });
+    expect(orgInvoicePaidCents({ lines: [half(BASE_CENTS), half(SEAT_CENTS * 3)], amountPaidCents: 4400 })).toBe(4000);
+  });
+
+  describe('Organization invoice line selection: only the Business base and extra-seat lines refill the pool', () => {
+    const BASE_PRICE_ID = 'price_org_base';
+    const SEAT_PRICE_ID = 'price_org_seat';
+    const priced = (priceId: string, amount: number) => ({ amount, parent: { subscription_item_details: { subscription_item: 'si_org' } }, pricing: { price_details: { price: priceId } } });
+    const PRICES = { basePriceId: BASE_PRICE_ID, seatPriceId: SEAT_PRICE_ID };
+
+    it('MON-3 an ad-hoc invoice line (a manually added item, no org price, no subscription item) does NOT refill the pool', () => {
+      const adHoc = { amount: 2500 };
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), priced(SEAT_PRICE_ID, SEAT_CENTS * 3), adHoc], PRICES);
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS), priced(SEAT_PRICE_ID, SEAT_CENTS * 3)]);
+      expect(selection.unrecognized).toEqual([{ priceId: null, subscriptionItemId: null, amountCents: 2500 }]);
+      // The grant is sized from the recognized lines alone: 8000 paid × 100%, never 10500 × 100%.
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 10500, hasSubscriptionParent: true });
+      expect(grant).toEqual({ paidCents: 8000, allowanceCents: 8000, basis: 'paid', reason: 'paid' });
+    });
+
+    it('given a storage add-on line, should keep it out of the refill without reporting it as a stranger', () => {
+      const storage = { ...priced('price_storage', 1500) };
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), storage], { ...PRICES, storagePriceId: 'price_storage' });
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS)]);
+      expect(selection.unrecognized).toEqual([]);
+      expect(selection.storageLines).toEqual([storage]);
+      // The verified-price signal (first-payment funding proof) is unaffected by storage.
+      expect(selection.hasVerifiedGiftPrice).toBe(true);
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: BASE_CENTS + 1500, hasSubscriptionParent: true });
+      expect(grant.paidCents).toBe(BASE_CENTS);
+    });
+
+    it('MON-3 a stranger price id is excluded and reported with its price id and amount', () => {
+      const stranger = { amount: 900, pricing: { price_details: { price: 'price_stranger' } } };
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), stranger], PRICES);
+      expect(selection.refillLines).toEqual([priced(BASE_PRICE_ID, BASE_CENTS)]);
+      expect(selection.unrecognized).toEqual([{ priceId: 'price_stranger', subscriptionItemId: null, amountCents: 900 }]);
+    });
+
+    it('MON-3 (partial) a stored subscription item cannot authorize an unreadable or unknown price', () => {
+      const parent = { subscription_item_details: { subscription_item: 'si_base' } };
+      const unreadable = { amount: BASE_CENTS, parent };
+      const unknown = { ...priced('price_unknown', BASE_CENTS), parent };
+      const selection = selectOrgPoolRefillLines([unreadable, unknown], PRICES);
+      expect(selection.refillLines).toEqual([]);
+      expect(selection.unrecognized).toHaveLength(2);
+    });
+
+    it('MON-3 (partial) ambiguous configured org prices authorize no invoice lines', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS)], { basePriceId: BASE_PRICE_ID, seatPriceId: BASE_PRICE_ID });
+      expect(selection.refillLines).toEqual([]);
+    });
+
+    it('MON-3 (partial) a gift with no recognized invoice lines grants nothing', () => {
+      const gift = orgPoolRefillGrant({ lines: [], amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true });
+      expect(gift).toMatchObject({ allowanceCents: 0, basis: 'none', reason: 'no_ratio' });
+    });
+
+    it.each([false, true])('MON-3 (partial) unknown replacement subscription prices cannot authorize gifts (known charge: %s)', (knownCharge) => {
+      const parent = { subscription_item_details: { subscription_item: 'si_org_base' } };
+      const selection = selectOrgPoolRefillLines([
+        { ...priced(BASE_PRICE_ID, knownCharge ? 5000 : -5000), parent },
+        { ...priced('price_unknown_replacement', 6000), parent },
+      ], PRICES);
+      expect(orgPoolRefillGrant({
+        lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0,
+      }).allowanceCents).toBe(0);
+    });
+
+    it('MON-3 (partial) an ad-hoc item using the org price cannot authorize a gift', () => {
+      const selection = selectOrgPoolRefillLines([{
+        amount: BASE_CENTS, pricing: { price_details: { price: BASE_PRICE_ID } },
+      }], PRICES);
+      expect(orgPoolRefillGrant({
+        lines: selection.refillLines, hasVerifiedGiftPrice: selection.hasVerifiedGiftPrice,
+        amountPaidCents: 0, hasSubscriptionParent: true, gifted: true, onOrgSubscription: true, giftedExtraSeats: 0,
+      }).allowanceCents).toBe(0);
+    });
+
+    it('MON-3 an expanded price object and a recognized proration credit are read like plain lines', () => {
+      const expanded = { amount: BASE_CENTS, parent: { subscription_item_details: { subscription_item: 'si_org' } }, pricing: { price_details: { price: { id: BASE_PRICE_ID } } } };
+      const seatProration = priced(SEAT_PRICE_ID, -500);
+      const selection = selectOrgPoolRefillLines([expanded, seatProration], PRICES);
+      expect(selection.refillLines).toEqual([expanded, seatProration]);
+      const grant = orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 4500, hasSubscriptionParent: true });
+      expect(grant.paidCents).toBe(4500);
+    });
+
+    it('MON-3 with no configured price ids nothing is recognized — the pool is never sized from unverified lines', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS), { amount: SEAT_CENTS * 3 }]);
+      expect(selection.refillLines).toEqual([]);
+      expect(selection.unrecognized.map((l) => l.amountCents)).toEqual([BASE_CENTS, SEAT_CENTS * 3]);
+      expect(orgPoolRefillGrant({ lines: selection.refillLines, amountPaidCents: 8000, hasSubscriptionParent: true }))
+        .toEqual({ paidCents: 0, allowanceCents: 0, basis: 'none', reason: 'zero_amount' });
+    });
+
+    it('MON-3 empty configured price ids (live mode before the D1 prices are set) recognize nothing', () => {
+      const selection = selectOrgPoolRefillLines([priced(BASE_PRICE_ID, BASE_CENTS)], { basePriceId: '', seatPriceId: '' });
+      expect(selection.refillLines).toEqual([]);
+    });
+  });
+
+  it('refillPool rolls the pool over and nets its debt, like a personal renewal', () => {
+    expect(refillPool({ monthlyRemainingCents: 1000, debtCents: 300 }, 4800)).toEqual({
+      monthlyRemainingCents: 5500,
+      monthlyAllowanceCents: 4800,
+      debtCents: 0,
+    });
+    expect(refillPool(null, 4800).monthlyRemainingCents).toBe(4800);
+  });
+
+  it('the service period comes from the line with the latest end, not the invoice-level period', () => {
+    const period = invoiceServicePeriodMs({
+      lines: [{ period: { start: 100, end: 200 } }, { period: { start: 300, end: 400 } }],
+      periodStart: 1,
+      periodEnd: 2,
+    });
+    expect(period).toEqual({ startMs: 300_000, endMs: 400_000 });
+    expect(invoiceServicePeriodMs({ lines: [], periodStart: 1, periodEnd: 2 })).toEqual({ startMs: 1000, endMs: 2000 });
+  });
+});
+
+describe('wallet-funding: allocation reset (D-OW-12)', () => {
+  const POOL_START = Date.UTC(2026, 8, 17); // the pool refilled on 17 Sep
+  const POOL_END = Date.UTC(2026, 9, 17);
+  const PERSONAL_START = Date.UTC(2026, 8, 3); // the person renews on the 3rd
+  const PERSONAL_END = Date.UTC(2026, 9, 3);
+  const NOW = Date.UTC(2026, 8, 20, 12);
+  const wallet = (periodStartMs: number | null, spentCents = 700, debtCents = 0) => ({
+    periodStartMs,
+    periodEndMs: null,
+    allocationCents: 1000,
+    spentCents,
+    debtCents,
+    paused: false,
+  });
+
+  it('WAL-3 (partial) an org drive allocation resets on the POOL refill date, not the calendar month', () => {
+    const plan = planAllocationReset({
+      wallet: wallet(Date.UTC(2026, 7, 17)),
+      governing: { ownerType: 'org', periodStartMs: POOL_START, periodEndMs: POOL_END },
+      nowMs: NOW,
+    });
+    expect(plan).toEqual({ due: true, periodStartMs: POOL_START, periodEndMs: POOL_END, spentCents: 0, debtCents: 0, status: 'active' });
+  });
+
+  it('WAL-3 (partial) a personal drive allocation resets on the PERSONAL renewal date — a second clock', () => {
+    const plan = planAllocationReset({
+      wallet: wallet(Date.UTC(2026, 7, 3)),
+      governing: { ownerType: 'user', periodStartMs: PERSONAL_START, periodEndMs: PERSONAL_END },
+      nowMs: NOW,
+    });
+    expect(plan).toMatchObject({ due: true, periodStartMs: PERSONAL_START, periodEndMs: PERSONAL_END });
+  });
+
+  it('a root never refilled falls back to the UTC calendar month (D20)', () => {
+    const plan = planAllocationReset({
+      wallet: wallet(Date.UTC(2026, 7, 1)),
+      governing: { ownerType: 'org', periodStartMs: null, periodEndMs: null },
+      nowMs: NOW,
+    });
+    expect(plan).toMatchObject({ due: true, periodStartMs: Date.UTC(2026, 8, 1), periodEndMs: Date.UTC(2026, 9, 1) });
+  });
+
+  it('WAL-3 (partial) a reset run twice in the same period grants once: the second run is not due', () => {
+    const governing = { ownerType: 'org' as const, periodStartMs: POOL_START, periodEndMs: POOL_END };
+    const first = planAllocationReset({ wallet: wallet(Date.UTC(2026, 7, 17)), governing, nowMs: NOW });
+    expect(first.due).toBe(true);
+    if (!first.due) return;
+    const second = planAllocationReset({ wallet: wallet(first.periodStartMs, 400), governing, nowMs: NOW + 60_000 });
+    expect(second).toEqual({ due: false });
+  });
+
+  it('WAL-6 (partial) a reset nets wallet debt against the new allocation, clears it, and lifts "over"', () => {
+    const plan = planAllocationReset({
+      wallet: wallet(Date.UTC(2026, 7, 17), 1000, 250),
+      governing: { ownerType: 'org', periodStartMs: POOL_START, periodEndMs: POOL_END },
+      nowMs: NOW,
+    });
+    expect(plan).toMatchObject({ due: true, spentCents: 250, debtCents: 0, status: 'active' });
+  });
+
+  it('a paused wallet stays paused through a reset', () => {
+    const plan = planAllocationReset({
+      wallet: { ...wallet(Date.UTC(2026, 7, 17)), paused: true },
+      governing: { ownerType: 'org', periodStartMs: POOL_START, periodEndMs: POOL_END },
+      nowMs: NOW,
+    });
+    expect(plan).toMatchObject({ due: true, status: 'paused' });
+  });
+
+  it('WAL-3 (partial) a lapsed root rolls forward by whole periods, so its allocations keep resetting', () => {
+    const start = Date.UTC(2026, 5, 3);
+    const end = Date.UTC(2026, 6, 3);
+    const length = end - start;
+    const governing = { ownerType: 'user' as const, periodStartMs: start, periodEndMs: end };
+    const current = currentGoverningPeriodMs(governing, NOW);
+    expect((current.startMs - end) % length).toBe(0);
+    expect(current.startMs).toBeLessThanOrEqual(NOW);
+    expect(current.endMs).toBe(current.startMs + length);
+    expect(NOW).toBeLessThan(current.endMs);
+    const plan = planAllocationReset({ wallet: wallet(start), governing, nowMs: NOW });
+    expect(plan).toMatchObject({ due: true, periodStartMs: current.startMs, spentCents: 0 });
+  });
+
+  it('WAL-3 (partial) a late renewal resets once: the rolled period starts where the renewal will', () => {
+    const lateNow = POOL_END + 12 * 3_600_000;
+    const governing = { ownerType: 'org' as const, periodStartMs: POOL_START, periodEndMs: POOL_END };
+    const beforeRenewal = planAllocationReset({ wallet: wallet(POOL_START), governing, nowMs: lateNow });
+    expect(beforeRenewal).toMatchObject({ due: true, periodStartMs: POOL_END });
+    // The renewal then lands, stamping the pool with the period that starts at the old end.
+    const renewed = { ownerType: 'org' as const, periodStartMs: POOL_END, periodEndMs: Date.UTC(2026, 10, 17) };
+    expect(planAllocationReset({ wallet: wallet(POOL_END, 300), governing: renewed, nowMs: lateNow + 60_000 })).toEqual({ due: false });
+  });
+
+  it('WAL-3 (partial) a personal root the gate re-stamps late never resets a child twice in overlapping periods', () => {
+    const day = 86_400_000;
+    const sep3 = Date.UTC(2026, 8, 3);
+    const oct3 = Date.UTC(2026, 9, 3);
+    const lapsed = { ownerType: 'user' as const, periodStartMs: sep3, periodEndMs: oct3 };
+    const child = (periodStartMs: number, periodEndMs: number, spentCents: number) => ({
+      periodStartMs, periodEndMs, allocationCents: 1000, spentCents, debtCents: 0, paused: false,
+    });
+
+    // Oct 5: the root lapsed on Oct 3; the child resets once onto the rolled period.
+    const first = planAllocationReset({ wallet: child(sep3, oct3, 900), governing: lapsed, nowMs: oct3 + 2 * day });
+    expect(first).toMatchObject({ due: true, periodStartMs: oct3, spentCents: 0 });
+    if (!first.due) return;
+
+    // Oct 10: the owner spends and the gate stamps the root Oct 10 → Nov 10. The child is
+    // still inside its Oct 3 period, so this is not a second allocation.
+    const oct10 = oct3 + 7 * day;
+    const restamped = { ownerType: 'user' as const, periodStartMs: oct10, periodEndMs: Date.UTC(2026, 10, 10) };
+    const child1 = child(first.periodStartMs, first.periodEndMs, 400);
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: oct10 + day })).toEqual({ due: false });
+    // Nor once the child's period ends mid-way through the root's: the Oct 10 period
+    // overlaps the one the child already had.
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: first.periodEndMs + day })).toEqual({ due: false });
+    // The next root boundary that starts after the child's period ends resets it, once.
+    const nov10 = Date.UTC(2026, 10, 10);
+    expect(planAllocationReset({ wallet: child1, governing: restamped, nowMs: nov10 + day })).toMatchObject({ due: true, periodStartMs: nov10 });
+  });
+
+  it('a wallet never reset is due at once', () => {
+    const plan = planAllocationReset({
+      wallet: wallet(null),
+      governing: { ownerType: 'org', periodStartMs: POOL_START, periodEndMs: POOL_END },
+      nowMs: NOW,
+    });
+    expect(plan.due).toBe(true);
+  });
+});
+
+describe('wallet-funding: funding legs (D-OW-13)', () => {
+  const T = Date.UTC(2026, 8, 1);
+  const leg = (id: string, kind: StoredFundingLeg['funderKind'], remainingCents: number, createdAtMs: number, funderUserId: string | null = null): StoredFundingLeg => ({
+    id,
+    funderKind: kind,
+    funderUserId,
+    remainingCents,
+    includedCents: 0,
+    nonRefundable: kind === 'donation',
+    createdAtMs,
+  });
+
+  it('WAL-3 (partial) legs draw FIFO by arrival then id, whoever funded them', () => {
+    const ordered = orderFundingLegs([
+      leg('b', 'donation', 1, T + 2),
+      leg('z', 'owner', 1, T),
+      leg('a', 'donation', 1, T + 2),
+    ]);
+    expect(ordered.map((l) => l.id)).toEqual(['z', 'a', 'b']);
+  });
+
+  it('WAL-4 (partial) two donors fund one drive wallet; spend drains the older leg first and each remaining is exact to the cent', () => {
+    const legs = [
+      leg('leg-marcus', 'donation', c(300), T + 1000, 'marcus'),
+      leg('leg-ana', 'donation', c(500), T, 'ana'),
+    ];
+    const first = drawFundingLegs(legs, 537);
+    expect(first.draws).toEqual([
+      { legId: 'leg-ana', cents: 500 },
+      { legId: 'leg-marcus', cents: 37 },
+    ]);
+    expect(first.legs).toEqual([
+      { legId: 'leg-ana', funder: 'donation', donorUserId: 'ana', remainingCents: 0 },
+      { legId: 'leg-marcus', funder: 'donation', donorUserId: 'marcus', remainingCents: 263 },
+    ]);
+    expect(first.shortfallCents).toBe(0);
+
+    const second = drawFundingLegs(legs.map((l) => ({ ...l, remainingCents: l.id === 'leg-ana' ? 0 : 263 })), 300);
+    expect(second.draws).toEqual([{ legId: 'leg-marcus', cents: 263 }]);
+    expect(second.appliedCents).toBe(263);
+    expect(second.shortfallCents).toBe(37);
+  });
+
+  it('D-OW-13 a refund attempt against a donation leg refuses, even with funds remaining', () => {
+    expect(planLegRefund(leg('d', 'donation', 500, T, 'ana'), 100)).toEqual({ kind: 'refuse', legId: 'd', reason: 'donation_non_refundable' });
+  });
+
+  it('an owner leg refunds only what it still holds', () => {
+    const owner = leg('o', 'owner', 500, T);
+    expect(planLegRefund(owner, 200)).toEqual({ kind: 'refund', legId: 'o', cents: 200, remainingCents: 300 });
+    expect(planLegRefund(owner, 501)).toMatchObject({ kind: 'refuse', reason: 'exceeds_remaining' });
+    expect(planLegRefund({ ...owner, nonRefundable: true }, 1)).toMatchObject({ kind: 'refuse', reason: 'non_refundable' });
+    expect(planLegRefund(owner, 1.5)).toMatchObject({ kind: 'refuse', reason: 'invalid_amount' });
+  });
+});
+
+describe('wallet-funding: donations', () => {
+  const input = (over: Partial<DonationInput> = {}): DonationInput => ({
+    amountCents: 700,
+    donorCanSeeDrive: true,
+    donor: { walletId: 'w-ana', isPersonalRoot: true, balance: { monthlyCents: 500, topupCents: 1000, debtCents: 0 }, heldCents: 0 },
+    target: { walletId: 'w-product', subjectType: 'drive', donationsEnabled: true, legsRemainingCents: 200 },
+    ...over,
+  });
+
+  it('WAL-4 (partial) a donation draws the donor monthly-then-top-up and lands as a new non-refundable leg', () => {
+    expect(planDonation(input())).toEqual({
+      kind: 'donate',
+      amountCents: 700,
+      donor: { monthlyRemainingCents: 0, topupRemainingCents: 800, spentMonthly: 500, spentTopup: 200 },
+      leg: { originalCents: 700, remainingCents: 700, nonRefundable: true },
+      target: { topupRemainingCents: 900 },
+    });
+  });
+
+  it('WAL-4 (partial) D-OW-13: a donation never pays the wallet\'s debt — the whole gift is the donor\'s leg; the plan writes no debt at all', () => {
+    // A funder who chose wallet debt (WAL-6c) nets it from their next allocation (WAL-6d); a donor's
+    // money funds spend made after it, attributable to them, never an overage that preceded it.
+    const plan = planDonation(input());
+    expect(plan).toMatchObject({ leg: { originalCents: 700, remainingCents: 700 } });
+    expect(plan.kind === 'donate' ? Object.keys(plan.target) : []).toEqual(['topupRemainingCents']);
+  });
+
+  it.each([
+    ['invalid_amount', { amountCents: 0 }],
+    ['invalid_amount', { amountCents: 12.5 }],
+    ['cannot_see_drive', { donorCanSeeDrive: false }],
+    ['insufficient_funds', { amountCents: 1501 }],
+  ] as const)('WAL-4 (partial) refuses %s', (reason, over) => {
+    expect(planDonation(input(over))).toEqual({ kind: 'refuse', reason });
+  });
+
+  it('WAL-4 (partial) refuses when the drive lead turned donations off', () => {
+    expect(planDonation(input({ target: { ...input().target, donationsEnabled: false } }))).toEqual({ kind: 'refuse', reason: 'donations_disabled' });
+  });
+
+  it('refuses a target that is not a drive wallet (a personal wallet)', () => {
+    expect(planDonation(input({ target: { ...input().target, subjectType: null } }))).toEqual({ kind: 'refuse', reason: 'not_a_drive_wallet' });
+  });
+
+  it('refuses a source that is not the donor personal wallet, and a wallet donating to itself', () => {
+    expect(planDonation(input({ donor: { ...input().donor, isPersonalRoot: false } }))).toEqual({ kind: 'refuse', reason: 'not_personal_wallet' });
+    expect(planDonation(input({ donor: { ...input().donor, walletId: 'w-product' } }))).toEqual({ kind: 'refuse', reason: 'same_wallet' });
+  });
+
+  it('counts the donor debt and in-flight holds against what they can give', () => {
+    const donor = { ...input().donor, balance: { monthlyCents: 500, topupCents: 1000, debtCents: 400 }, heldCents: 401 };
+    expect(planDonation(input({ donor }))).toEqual({ kind: 'refuse', reason: 'insufficient_funds' });
+    expect(planDonation(input({ donor: { ...donor, heldCents: 400 } })).kind).toBe('donate');
+  });
+});
+
+describe('wallet-funding purity', () => {
+  it('imports no db, no Stripe, no env, and reads no clock', () => {
+    const src = readFileSync(fileURLToPath(new URL('../wallet-funding.ts', import.meta.url)), 'utf8');
+    expect(src).not.toMatch(/@pagespace\/db|stripe['"]|process\.env|Date\.now\(|new Date\(\)/);
+  });
+});
+
+describe('wallet-funding: the comped personal root roll', () => {
+  // A comped Pro account renews on the 3rd at 08:30 UTC; nothing from Stripe will ever refill it.
+  const END = Date.UTC(2026, 8, 3, 8, 30);
+  const comped = (periodEndMs: number | null, nowMs: number, over: Partial<{ tier: string; hasRenewalCapableSubscription: boolean; periodStartMs: number | null }> = {}) =>
+    planPersonalRootRoll({ tier: 'pro', hasRenewalCapableSubscription: false, periodStartMs: null, periodEndMs, nowMs, ...over });
+
+  it('is not due while the period runs, for a tier that never refills, or where invoice.paid owns the renewal', () => {
+    expect(comped(END, END - 1)).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { tier: 'free' })).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { tier: 'normal' })).toEqual({ due: false });
+    expect(comped(END - 86_400_000, END, { hasRenewalCapableSubscription: true })).toEqual({ due: false });
+  });
+
+  it('rolls exactly at the stored UTC period end, onto the next calendar month at the same UTC instant', () => {
+    expect(comped(END, END)).toEqual({ due: true, periodStartMs: END, periodEndMs: Date.UTC(2026, 9, 3, 8, 30) });
+    // An hour (or a day) of cron latency never moves the clock: the period still starts at the end.
+    expect(comped(END, END + 3_600_000)).toEqual({ due: true, periodStartMs: END, periodEndMs: Date.UTC(2026, 9, 3, 8, 30) });
+  });
+
+  it('after months unattended it rolls ONCE onto the period containing now — one allowance, never one per missed month', () => {
+    const now = Date.UTC(2026, 11, 20);
+    expect(comped(END, now)).toEqual({ due: true, periodStartMs: Date.UTC(2026, 11, 3, 8, 30), periodEndMs: Date.UTC(2027, 0, 3, 8, 30) });
+  });
+
+  it('a month-end renewal clamps to the shorter month in UTC (Jan 31 → Feb 28), never spilling into March', () => {
+    const jan31 = Date.UTC(2026, 0, 31, 23, 30);
+    expect(comped(jan31, jan31 + 60_000)).toEqual({ due: true, periodStartMs: jan31, periodEndMs: Date.UTC(2026, 1, 28, 23, 30) });
+  });
+
+  it('review P3-2: a month-end anchor survives the clamp — Jan 31 → Feb 28 → Mar 31 → Apr 30 → May 31, never drifting to the 28th', () => {
+    // Each roll is fed the period the previous one stamped, exactly as the sweep stores it.
+    let start = Date.UTC(2026, 0, 1, 9);
+    let end = Date.UTC(2026, 0, 31, 9);
+    const ends: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const plan = comped(end, end + 60_000, { periodStartMs: start });
+      if (!plan.due) throw new Error('expected a roll');
+      expect(plan.periodStartMs).toBe(end);
+      start = plan.periodStartMs;
+      end = plan.periodEndMs;
+      ends.push(new Date(end).toISOString().slice(0, 10));
+    }
+    expect(ends).toEqual(['2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31']);
+  });
+
+  it('review P3-2: in a leap year the anchor clamps to Feb 29 and comes back to the 31st', () => {
+    const jan31 = Date.UTC(2028, 0, 31, 9);
+    const first = comped(jan31, jan31 + 60_000, { periodStartMs: Date.UTC(2027, 11, 31, 9) });
+    expect(first).toEqual({ due: true, periodStartMs: jan31, periodEndMs: Date.UTC(2028, 1, 29, 9) });
+    if (!first.due) return;
+    const second = comped(first.periodEndMs, first.periodEndMs + 60_000, { periodStartMs: first.periodStartMs });
+    expect(second).toEqual({ due: true, periodStartMs: Date.UTC(2028, 1, 29, 9), periodEndMs: Date.UTC(2028, 2, 31, 9) });
+  });
+
+  it('review P3-2: a genuine 28th or 29th anchor stays where it is', () => {
+    const feb28 = Date.UTC(2026, 1, 28, 9);
+    expect(comped(feb28, feb28 + 60_000, { periodStartMs: Date.UTC(2026, 0, 28, 9) })).toMatchObject({ periodEndMs: Date.UTC(2026, 2, 28, 9) });
+    const jan29 = Date.UTC(2026, 0, 29, 9);
+    expect(comped(jan29, jan29 + 60_000, { periodStartMs: Date.UTC(2025, 11, 29, 9) })).toMatchObject({ periodEndMs: Date.UTC(2026, 1, 28, 9) });
+  });
+
+  it('review P3-2: months unattended still roll once, onto the anchored period containing now', () => {
+    const jan31 = Date.UTC(2026, 0, 31, 9);
+    expect(comped(jan31, Date.UTC(2026, 4, 15), { periodStartMs: Date.UTC(2025, 11, 31, 9) }))
+      .toEqual({ due: true, periodStartMs: Date.UTC(2026, 3, 30, 9), periodEndMs: Date.UTC(2026, 4, 31, 9) });
+  });
+
+  it('a row never stamped (created bare by a top-up) starts its first period now', () => {
+    const now = Date.UTC(2026, 8, 20, 12);
+    expect(comped(null, now)).toEqual({ due: true, periodStartMs: now, periodEndMs: Date.UTC(2026, 9, 20, 12) });
+  });
+
+  it('a period resets exactly once: the plan applied is never due again inside the period it stamped', () => {
+    const now = Date.UTC(2026, 8, 3, 9);
+    const first = comped(END, now);
+    expect(first.due).toBe(true);
+    if (!first.due) return;
+    for (const later of [now, now + 3_600_000, first.periodEndMs - 1]) {
+      expect(comped(first.periodEndMs, later)).toEqual({ due: false });
+    }
+  });
+});
+
+describe('organization first-funding evidence', () => {
+  it.each([
+    { paid: 1, verified: true, gifted: false, own: true, expected: 'paid' },
+    { paid: 0, verified: true, gifted: false, own: true, expected: null },
+    { paid: 5000, verified: false, gifted: false, own: true, expected: null },
+    { paid: 0, verified: true, gifted: true, own: true, expected: 'gift' },
+    { paid: 0, verified: true, gifted: true, own: false, expected: null },
+  ])('recognizes only verified paid or own-subscription gift evidence: %j', ({ paid, verified, gifted, own, expected }) => {
+    expect(orgSubscriptionFundingBasis({ lines: [base], amountPaidCents: paid, hasSubscriptionParent: true, hasVerifiedGiftPrice: verified, gifted, onOrgSubscription: own, giftedExtraSeats: gifted ? 0 : null })).toBe(expected);
+  });
+});
+
+describe('orgInvoiceFundingInput — the ONE reading of an org invoice that funding proof and reactivation share', () => {
+  const PRICES = { basePriceId: 'price_base', seatPriceId: 'price_seat' };
+  const line = (price: string, amount: number, discount = 0): OrgInvoiceLine => ({
+    amount,
+    discount_amounts: discount ? [{ amount: discount }] : [],
+    pricing: { price_details: { price } },
+    parent: { subscription_item_details: { subscription_item: `si_${price}` } },
+  });
+  const invoice = (over: { lines?: OrgInvoiceLine[]; paid?: number; gift?: boolean; hasMore?: boolean; sub?: string | null } = {}): OrgInvoice => ({
+    amount_paid: over.paid ?? 5000,
+    subtotal: 5000,
+    billing_reason: 'subscription_create',
+    parent: over.sub === null ? null : { subscription_details: { subscription: over.sub ?? 'sub_1', metadata: over.gift ? { type: GIFT_SUBSCRIPTION_METADATA_TYPE } : {} } },
+    lines: { has_more: over.hasMore ?? false, data: over.lines ?? [line('price_base', 5000), line('price_seat', 0)] },
+  });
+  const basis = (inv: OrgInvoice, storedSubscriptionId: string | null = 'sub_1', giftedExtraSeats: number | null = null) =>
+    orgSubscriptionFundingBasis(orgInvoiceFundingInput(inv, { prices: PRICES, storedSubscriptionId, giftedExtraSeats }).input);
+
+  it('SEAT-8 (partial) a paid Business invoice is paid evidence', () => {
+    expect(basis(invoice())).toBe('paid');
+  });
+
+  it('SEAT-8 (partial) D-OW-30 money paid only for an ad-hoc line, with the Business base fully discounted, is no evidence', () => {
+    expect(basis(invoice({ lines: [line('price_base', 5000, 5000), line('price_seat', 0), { ...line('price_adhoc', 1000), parent: null }], paid: 1000 }))).toBeNull();
+  });
+
+  it('SEAT-8 (partial) a gift is evidence only on the stored subscription, and only with its admin-pinned seats (D-OW-54)', () => {
+    const gift = invoice({ lines: [line('price_base', 5000, 5000), line('price_seat', 0)], paid: 0, gift: true });
+    expect(basis(gift, 'sub_1', 0)).toBe('gift');
+    expect(basis(gift, 'sub_other', 0)).toBeNull();
+    expect(basis(gift, null, 0)).toBeNull();
+    expect(basis(gift, 'sub_1', null)).toBeNull();
+  });
+
+  it('an invoice with no subscription parent is no evidence', () => {
+    expect(basis(invoice({ sub: null }))).toBeNull();
+  });
+
+  it('reports the lines it excluded, for the refill log', () => {
+    const adhoc = { ...line('price_adhoc', 1000), parent: null };
+    expect(orgInvoiceFundingInput(invoice({ lines: [line('price_base', 5000), line('price_seat', 0), adhoc] }), { prices: PRICES, storedSubscriptionId: 'sub_1' }).unrecognized)
+      .toEqual([{ priceId: 'price_adhoc', subscriptionItemId: null, amountCents: 1000 }]);
+  });
+});

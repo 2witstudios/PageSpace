@@ -22,6 +22,7 @@ export const StreamingIndicator: React.FC<StreamingIndicatorProps> = ({
 }) => {
   return (
     <div
+      data-testid="streaming-indicator"
       className={`mb-4 mr-8 ${className || ''}`}
       style={{ contain: 'layout style paint' }}
     >

@@ -10,8 +10,9 @@ export interface Invite {
   driveId: string;
   driveName: string;
   role: Role;
+  customRoleId: string | null;
   invitedBy: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 
@@ -25,6 +26,7 @@ export interface AcceptedInviteData {
   driveId: string;
   driveName: string;
   role: Role;
+  customRoleId: string | null;
   invitedUserId: string;
   inviterUserId: string;
 }
@@ -43,7 +45,15 @@ export type InviteAcceptanceErrorCode =
   | 'TOKEN_CONSUMED'
   | 'EMAIL_MISMATCH'
   | 'ALREADY_MEMBER'
-  | 'ACCOUNT_SUSPENDED';
+  | 'ACCOUNT_SUSPENDED'
+  // POL-2: the org's guests policy is OFF, so an outsider cannot accept. The invitation is not consumed.
+  | 'GUEST_POLICY'
+  // POL-2: the org's guests policy is APPROVE and this invitation was not approved: the acceptance is queued for an
+  // Owner or Admin, nothing is granted, and the invitation is spent.
+  | 'GUEST_APPROVAL_PENDING'
+  // [D-OW-33] the drive's org is lapsed: accepting would loosen access. The invitation is not consumed and works
+  // again once the org pays.
+  | 'ORG_LAPSED';
 
 export type AcceptInviteResult = Result<AcceptedInviteData, InviteAcceptanceErrorCode>;
 
@@ -68,7 +78,7 @@ export interface RequestMagicLinkInput {
   email: string;
   now: Date;
   expiryMinutes?: number;
-  platform?: 'web' | 'desktop' | 'ios';
+  platform?: 'web' | 'desktop' | 'ios' | 'android';
   deviceId?: string;
   deviceName?: string;
   // Same-origin redirect target embedded in the verify URL. The caller must
@@ -103,7 +113,7 @@ export interface PendingInviteSummary {
   driveId: string;
   invitedByName: string;
   createdAt: Date;
-  expiresAt: Date;
+  expiresAt: Date | null;
 }
 
 export interface UserAccount {
@@ -128,7 +138,7 @@ export interface PageInvite {
   driveName: string;
   permissions: PendingPagePermission[];
   invitedBy: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 

@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { buildTree } from '@pagespace/lib/content/tree-utils'
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -39,33 +41,27 @@ export async function GET(request: Request, context: { params: Promise<DrivePara
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    // Check if user is owner
-    const isOwner = drive.ownerId === auth.userId;
-
-    // Check if user is admin
-    let isAdmin = false;
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, auth.userId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
+    // Only owners and admins can view trash. Scoped tokens with an explicit
+    // role need OWNER/ADMIN; inherited keys use the owner's own authority.
+    if (isScopedMCPAuth(auth)) {
+      if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
+          { error: 'Only drive owners and admins can view trash' },
+          { status: 403 },
+        ));
+      }
+    } else {
+      // The drive's lead or an effective ADMIN (the org-aware membership: accepted rows only,
+      // org Owner/Admin power, stale org rows counting for nothing).
+      if (!canAdministerDrive(await loadDriveRelationship(actorFromAuth(auth), drive))) {
+        return deniedResponse(actorFromAuth(auth), drive.id, NextResponse.json(
+          { error: 'Only drive owners and admins can view trash' },
+          { status: 403 },
+        ));
+      }
     }
 
-    // Only owners and admins can view trash
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json(
-        { error: 'Only drive owners and admins can view trash' },
-        { status: 403 },
-      );
-    }
-
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const trashedPages = await db.query.pages.findMany({
       where: and(eq(pages.driveId, drive.id), eq(pages.isTrashed, true)),
       with: {

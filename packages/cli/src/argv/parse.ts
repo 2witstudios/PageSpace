@@ -1,0 +1,179 @@
+/**
+ * parseArgv — the CLI's pure grammar (Phase 4 task 1). Turns raw argv tokens
+ * into a typed `CommandIntent` or a typed `UsageError`; never touches
+ * `process.*`, never throws. Command-tree validity (does "keys create"
+ * resolve to a handler?) is the router's job, not this function's — parseArgv
+ * only understands the fixed global-flag grammar every command shares.
+ *
+ * Zero trust: a rejected flag's value is never echoed back in the error
+ * message, only the flag name — the value may be a secret (`--token`).
+ *
+ * Command-specific flags (e.g. `keys create --drive`) are not part of this
+ * global grammar. Once at least one positional/command token has been seen,
+ * an unrecognized `--flag` is passed through into `args` verbatim for the
+ * command's own pure arg-mapper to interpret — only a `--flag` with NO
+ * preceding positional token is a hard usage error (there is no command yet
+ * to hand it to).
+ *
+ * Value-bearing flags (`--host`, `--token`, `--key`) also accept the equals-joined
+ * form (`--host=value`), not just space-separated (`--host value`) —
+ * resolved before any other grammar rule so `--host=-looks-like-a-flag` is
+ * unambiguously a value, not a following flag. Boolean flags (`--json`,
+ * `--yes`, ...) deliberately do NOT accept an equals-joined value: presence
+ * always means true, and there is no well-defined meaning for an
+ * unrecognized value on a confirmation flag like `--yes=oops` — better to
+ * reject it as an unknown flag than silently coerce a typo to `false`.
+ *
+ * `--timeout <seconds>` is the caller's wall-clock deadline for the ONE
+ * request a command makes, in seconds (a human-facing unit; the SDK's own
+ * option is milliseconds). It exists because per-operation deadlines used to
+ * be unraisable: `agents.ask` declares a 120s default and the client applied
+ * it in preference to any caller setting, so a consult whose duration is
+ * inherently unbounded could not be waited on, and the completed answer was
+ * abandoned. Rejected rather than defaulted when the CONVERTED millisecond
+ * value is unusable: silently substituting 30s for `--timeout abc` would make
+ * a caller who asked to wait longer wait LESS, which is the opposite of what
+ * they asked for — and so, more quietly, would accepting `--timeout 0.0001`
+ * (rounds to 0ms) or `--timeout 1e308` (overflows to Infinity, which Node's
+ * setTimeout silently treats as 1ms).
+ *
+ * `--profile` (the pre-1.5.0 name for `--key`) is special-cased to a
+ * dedicated rename error wherever it appears in argv — it was a GLOBAL
+ * value flag before the rename, so letting it fall through as a generic
+ * unknown flag (or worse, pass through to a command arg-mapper after a
+ * positional) would bury the one-line fix.
+ */
+import { isUsableTimeoutMs, MAX_TIMEOUT_MS } from '../config/resolve.js';
+
+export interface ParsedFlags {
+  readonly json: boolean;
+  readonly host: string | undefined;
+  readonly token: string | undefined;
+  readonly key: string | undefined;
+  readonly yes: boolean;
+  readonly all: boolean;
+  readonly force: boolean;
+  readonly help: boolean;
+  readonly version: boolean;
+  readonly device: boolean;
+  /** `--timeout <seconds>` as milliseconds, ready to hand to `PageSpaceClientOptions.timeoutMs`. */
+  readonly timeoutMs: number | undefined;
+}
+
+export interface CommandIntent {
+  readonly kind: 'command';
+  /** Positional tokens in order: the command path followed by any command-specific args. */
+  readonly args: readonly string[];
+  readonly flags: ParsedFlags;
+}
+
+export interface UsageError {
+  readonly kind: 'usage-error';
+  readonly message: string;
+}
+
+export type ParseResult = CommandIntent | UsageError;
+
+const VALUE_FLAGS = new Set(['--host', '--token', '--key', '--timeout']);
+const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
+
+export const PROFILE_FLAG_RENAMED_MESSAGE = '--profile was renamed to --key in 1.5.0.';
+
+export function parseArgv(argv: readonly string[]): ParseResult {
+  let json = false;
+  let host: string | undefined;
+  let token: string | undefined;
+  let key: string | undefined;
+  let yes = false;
+  let all = false;
+  let force = false;
+  let help = false;
+  let version = false;
+  let device = false;
+  let timeoutMs: number | undefined;
+  const args: string[] = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const current = argv[i];
+
+    // `--` after a command ends option parsing: it and everything after it are
+    // handed to the command verbatim, so `workspaces exec <id> -- ls --json`
+    // runs `ls --json` instead of the CLI eating `--json` as its own flag.
+    if (current === '--' && args.length > 0) {
+      args.push(...argv.slice(i));
+      break;
+    }
+    const eqIndex = current.startsWith('--') ? current.indexOf('=') : -1;
+    const flagName = eqIndex === -1 ? current : current.slice(0, eqIndex);
+    const inlineValue = eqIndex === -1 ? undefined : current.slice(eqIndex + 1);
+
+    if (flagName === '--profile') {
+      return { kind: 'usage-error', message: PROFILE_FLAG_RENAMED_MESSAGE };
+    }
+
+    if (VALUE_FLAGS.has(flagName)) {
+      const value = inlineValue ?? argv[i + 1];
+      const missing = value === undefined || value.length === 0 || (inlineValue === undefined && value.startsWith('-'));
+      if (missing) {
+        return { kind: 'usage-error', message: `Flag ${flagName} requires a value.` };
+      }
+      if (flagName === '--host') host = value;
+      else if (flagName === '--token') token = value;
+      else if (flagName === '--key') key = value;
+      else {
+        // Seconds in, milliseconds out. Finite and > 0 only: 0 and negatives
+        // would mean "already expired", and NaN would silently become the
+        // default the caller was trying to override.
+        // Validated AFTER the conversion, because the conversion is where the
+        // unusable values come from: 0.0001 is a positive finite number of
+        // seconds that rounds to 0ms, and 1e308 is finite until multiplied by
+        // 1000. Both yield a client that aborts every request immediately —
+        // and since an explicit timeout outranks each operation's own default,
+        // the caller asking to wait longer is the one who breaks.
+        const requestedMs = Math.round(Number(value) * 1000);
+        if (!isUsableTimeoutMs(requestedMs)) {
+          // Stated in MILLISECONDS because milliseconds are what is actually
+          // checked. Quoting a seconds range would misdescribe the boundaries
+          // it is supposed to explain: rounding means `0.0005` (1ms) and
+          // `2147483.5` (2147483500ms) are both accepted, so "between 0.001
+          // and 2147483 seconds" would name a range that is neither what is
+          // enforced nor what a caller at the edge observes.
+          return {
+            kind: 'usage-error',
+            message: `Flag --timeout requires a number of seconds that converts to between 1 and ${MAX_TIMEOUT_MS} milliseconds.`,
+          };
+        }
+        timeoutMs = requestedMs;
+      }
+      if (inlineValue === undefined) i += 1;
+      continue;
+    }
+
+    if (BOOLEAN_FLAGS.has(current)) {
+      if (current === '--json') json = true;
+      else if (current === '--yes') yes = true;
+      else if (current === '--all') all = true;
+      else if (current === '--force') force = true;
+      else if (current === '--help') help = true;
+      else if (current === '--version') version = true;
+      else device = true;
+      continue;
+    }
+
+    if (current.startsWith('-')) {
+      if (args.length === 0) {
+        return { kind: 'usage-error', message: `Unknown flag: ${current}` };
+      }
+      args.push(current);
+      continue;
+    }
+
+    args.push(current);
+  }
+
+  return {
+    kind: 'command',
+    args,
+    flags: { json, host, token, key, yes, all, force, help, version, device, timeoutMs },
+  };
+}

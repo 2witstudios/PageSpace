@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { createHash } from 'crypto';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 /**
  * WebSocket Security Utilities
@@ -25,10 +26,7 @@ import { createHash } from 'crypto';
  */
 export function getConnectionFingerprint(request: NextRequest): string {
   // Extract IP address (handle proxies)
-  const ip =
-    request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
-    request.headers.get('x-real-ip') ||
-    'unknown';
+  const ip = getClientIP(request);
 
   // Extract User-Agent
   const userAgent = request.headers.get('user-agent') || 'unknown';
@@ -39,22 +37,6 @@ export function getConnectionFingerprint(request: NextRequest): string {
     .digest('hex');
 
   return fingerprint;
-}
-
-/**
- * Verify connection fingerprint matches stored fingerprint
- *
- * Used to detect if user's IP or browser changed mid-session
- *
- * @param currentFingerprint - Current connection fingerprint
- * @param storedFingerprint - Previously stored fingerprint
- * @returns true if fingerprints match
- */
-export function verifyFingerprint(
-  currentFingerprint: string,
-  storedFingerprint: string
-): boolean {
-  return currentFingerprint === storedFingerprint;
 }
 
 // ============================================================================

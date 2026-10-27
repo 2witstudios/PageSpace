@@ -9,6 +9,7 @@ interface MatrixEntry {
   service: string;
   dockerfile: string;
   context: string;
+  build_args?: string;
 }
 
 interface Workflow {
@@ -37,12 +38,23 @@ function loadWorkflow(): Workflow {
   return parse(raw) as Workflow;
 }
 
+/**
+ * The published-image inventory. `admin` and `marketing` were added to the
+ * workflow matrix while this file still asserted a hard-coded five — nothing ran
+ * it, because `infrastructure/` is not a workspace and no job invoked its vitest.
+ * The count assertion below is now derived from this map in BOTH directions, so
+ * the next service added to (or dropped from) the matrix without updating this
+ * inventory fails here instead of drifting silently.
+ */
 const EXPECTED_SERVICES: Record<string, { dockerfile: string; context: string }> = {
   web: { dockerfile: 'apps/web/Dockerfile', context: '.' },
   migrate: { dockerfile: 'apps/web/Dockerfile.migrate', context: '.' },
   realtime: { dockerfile: 'apps/realtime/Dockerfile', context: '.' },
   processor: { dockerfile: 'apps/processor/Dockerfile', context: '.' },
   cron: { dockerfile: 'docker/cron/Dockerfile', context: 'docker/cron' },
+  admin: { dockerfile: 'apps/admin/Dockerfile', context: '.' },
+  marketing: { dockerfile: 'apps/marketing/Dockerfile', context: '.' },
+  imago: { dockerfile: 'apps/imago/Dockerfile', context: '.' },
 };
 
 describe('Docker Images CI workflow', () => {
@@ -51,11 +63,8 @@ describe('Docker Images CI workflow', () => {
   const serviceNames = matrix.map((e) => e.service);
 
   describe('service matrix', () => {
-    it('should include all 5 required services', () => {
-      expect(serviceNames).toHaveLength(5);
-      for (const name of Object.keys(EXPECTED_SERVICES)) {
-        expect(serviceNames).toContain(name);
-      }
+    it('should build exactly the services in the expected inventory — no more, no fewer', () => {
+      expect([...serviceNames].sort()).toEqual(Object.keys(EXPECTED_SERVICES).sort());
     });
 
     it.each(Object.entries(EXPECTED_SERVICES))(
@@ -75,6 +84,38 @@ describe('Docker Images CI workflow', () => {
         expect(entry!.context).toBe(expected.context);
       },
     );
+  });
+
+  describe('shared cookie domain', () => {
+    const buildArgs = (service: string): string[] =>
+      (matrix.find((e) => e.service === service)?.build_args ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const cookieDomainArg = (service: string): string | undefined =>
+      buildArgs(service).find((arg) => arg.startsWith('NEXT_PUBLIC_COOKIE_DOMAIN='));
+
+    it('given web bakes NEXT_PUBLIC_COOKIE_DOMAIN, should bake the same value into imago (IMG-1.7a)', () => {
+      // Both apps write the `theme` cookie; a different (or missing) domain in
+      // imago would leave a host-only cookie beside classic's shared one.
+      expect(cookieDomainArg('web')).toBe('NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai');
+      expect(cookieDomainArg('imago')).toBe(cookieDomainArg('web'));
+    });
+  });
+
+  describe('imago rollout flag', () => {
+    const buildArgs = (service: string): string[] =>
+      (matrix.find((e) => e.service === service)?.build_args ?? '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    it('given NEXT_PUBLIC_IMAGO_ENABLED is inlined at build time, should pass it to web explicitly, on since the IMG-11.2 flip', () => {
+      // A Fly runtime env cannot reach a NEXT_PUBLIC_* value: the "Try Imago"
+      // link only appears from a web image built with this arg set to true.
+      const args = buildArgs('web').filter((arg) => arg.startsWith('NEXT_PUBLIC_IMAGO_ENABLED='));
+      expect(args).toEqual(['NEXT_PUBLIC_IMAGO_ENABLED=true']);
+    });
   });
 
   describe('trigger configuration', () => {

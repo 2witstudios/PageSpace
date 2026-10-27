@@ -1,22 +1,45 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, desc, sql } from '@pagespace/db/operators'
-import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { decryptField } from '@pagespace/lib/encryption/field-crypto'
+import { eq, and, or, gte, lte, inArray, isNull, isNotNull, desc, sql } from '@pagespace/db/operators'
+import { calendarEvents, calendarEventDrives, eventAttendees } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { type ToolExecutionContext } from '../core';
+import { isUserMemberOfAnyEventDrive, listEventDrives, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
+import type { ToolExecutionContext } from '../core/types';
+import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped, toolActor } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
+import { expandRecurringEvents } from '../../workflows/recurrence-utils';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 /**
  * Check if user can access an event based on visibility rules
  */
 async function canAccessEvent(
   userId: string,
-  event: typeof calendarEvents.$inferSelect
+  event: typeof calendarEvents.$inferSelect,
+  context: ToolExecutionContext
 ): Promise<boolean> {
+  const actor = toolActor(context);
+  // SEC-2/3: an org drive's event is that org's content, whoever created or attends it.
+  if (event.driveId && !(await checkActorDriveAuthentication(actor, event.driveId)).allowed) return false;
+  // A scoped MCP token must have access to at least one of the event's drives
+  // (home drive + any shared drives). Check all drives so tokens scoped to a
+  // shared drive can still reach the event.
+  if (context && event.driveId) {
+    const allDriveIds = await getAllDriveIdsForEvent(event.id);
+    const accessible = await filterDriveIdsByAppTokenScope(context, allDriveIds);
+    if (accessible.length === 0) return false;
+  }
+  // A drive-scoped token has no identity power over the owner's PERSONAL
+  // (drive-less) events — it belongs to a workspace, not to all of you.
+  if (context && !event.driveId && isMcpScoped(context)) {
+    return false;
+  }
+
   // Creator always has access
   if (event.createdById === userId) {
     return true;
@@ -33,9 +56,9 @@ async function canAccessEvent(
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility
-  if (event.driveId && event.visibility === 'DRIVE') {
-    return isUserDriveMember(userId, event.driveId);
+  // Check membership in home drive OR any shared drive for DRIVE-visible events
+  if (event.visibility === 'DRIVE') {
+    return isUserMemberOfAnyEventDrive(actor, event);
   }
 
   return false;
@@ -44,7 +67,7 @@ async function canAccessEvent(
 /**
  * Format event for AI response
  */
-function formatEventForResponse(event: {
+async function formatEventForResponse(event: {
   id: string;
   title: string;
   description: string | null;
@@ -71,6 +94,18 @@ function formatEventForResponse(event: {
   drive?: { id: string; name: string; slug: string } | null;
 }, timezone?: string, triggerInfo?: { status: string; triggerId: string } | null) {
   const displayTz = timezone ?? event.timezone;
+  // Decrypt PII at the edge (GDPR #965) so creator/attendee names are plaintext
+  // (legacy plaintext passes through unchanged).
+  const createdByName = event.createdBy ? await decryptField(event.createdBy.name) : null;
+  const decryptedAttendees = event.attendees
+    ? await Promise.all(event.attendees.map(async (a) => ({
+        userId: a.user?.id,
+        name: await decryptField(a.user?.name),
+        status: a.status,
+        isOrganizer: a.isOrganizer,
+        isOptional: a.isOptional,
+      })))
+    : undefined;
   return {
     id: event.id,
     title: event.title,
@@ -90,17 +125,11 @@ function formatEventForResponse(event: {
     ...(event.createdBy && {
       createdBy: {
         id: event.createdBy.id,
-        name: event.createdBy.name,
+        name: createdByName,
       },
     }),
-    ...(event.attendees && {
-      attendees: event.attendees.map((a) => ({
-        userId: a.user?.id,
-        name: a.user?.name,
-        status: a.status,
-        isOrganizer: a.isOrganizer,
-        isOptional: a.isOptional,
-      })),
+    ...(decryptedAttendees && {
+      attendees: decryptedAttendees,
     }),
     ...(event.page && {
       linkedPage: {
@@ -238,7 +267,11 @@ export const calendarReadTools = {
             };
           }
 
-          const canView = await isUserDriveMember(userId, driveId);
+          if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'view')) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
+
+          const canView = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canView) {
             return {
               success: false,
@@ -246,7 +279,14 @@ export const calendarReadTools = {
             };
           }
 
-          // Get event IDs where user is an attendee (for ATTENDEES_ONLY events)
+          // Event IDs shared into this drive via the junction table (DRIVE visibility only)
+          const sharedRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(eq(calendarEventDrives.driveId, driveId));
+          const sharedEventIds = sharedRows.map((r) => r.eventId);
+
+          // Event IDs where user is an attendee (for ATTENDEES_ONLY events in this drive)
           const attendeeEventsInDrive = await db
             .select({ eventId: eventAttendees.eventId })
             .from(eventAttendees)
@@ -254,17 +294,36 @@ export const calendarReadTools = {
             .where(
               and(
                 eq(eventAttendees.userId, userId),
-                eq(calendarEvents.driveId, driveId)
+                or(
+                  eq(calendarEvents.driveId, driveId),
+                  sharedEventIds.length > 0
+                    ? inArray(calendarEvents.id, sharedEventIds)
+                    : eq(calendarEvents.id, '__never_match__')
+                )
               )
             );
           const attendeeEventIdsInDrive = attendeeEventsInDrive.map((e) => e.eventId);
 
+          // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
           const events = await db.query.calendarEvents.findMany({
             where: and(
-              eq(calendarEvents.driveId, driveId),
+              or(
+                eq(calendarEvents.driveId, driveId),
+                sharedEventIds.length > 0
+                  ? inArray(calendarEvents.id, sharedEventIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.isTrashed, false),
-              lte(calendarEvents.startAt, parsedEndDate),
-              gte(calendarEvents.endAt, parsedStartDate),
+              or(
+                and(
+                  lte(calendarEvents.startAt, parsedEndDate),
+                  gte(calendarEvents.endAt, parsedStartDate),
+                ),
+                and(
+                  isNotNull(calendarEvents.recurrenceRule),
+                  lte(calendarEvents.startAt, parsedEndDate),
+                ),
+              ),
               or(
                 eq(calendarEvents.visibility, 'DRIVE'),
                 and(
@@ -301,15 +360,16 @@ export const calendarReadTools = {
           });
 
           const userTz = (ctx as ToolExecutionContext)?.timezone;
-          const triggerMap = await fetchTriggerInfoForEvents(events);
-          const formattedEvents = events.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id)));
+          const expandedEvents = expandRecurringEvents(events, parsedStartDate, parsedEndDate);
+          const triggerMap = await fetchTriggerInfoForEvents(expandedEvents);
+          const formattedEvents = await Promise.all(expandedEvents.map((e) => formatEventForResponse(e, userTz, triggerMap.get(e.id))));
 
           return {
             success: true,
             data: { events: formattedEvents },
-            summary: `Found ${events.length} event${events.length === 1 ? '' : 's'} in drive calendar from ${startDate} to ${endDate}`,
+            summary: `Found ${formattedEvents.length} event${formattedEvents.length === 1 ? '' : 's'} in drive calendar from ${startDate} to ${endDate}`,
             stats: {
-              eventCount: events.length,
+              eventCount: formattedEvents.length,
               dateRange: { start: startDate, end: endDate },
               context: 'drive',
               driveId,
@@ -324,8 +384,12 @@ export const calendarReadTools = {
           };
         }
 
-        // User context: aggregate events from all sources
-        const driveIds = await getDriveIdsForUser(userId);
+        // User context: aggregate events from all sources. Ceiling a scoped MCP
+        // token to its allowed drives (no-op for unscoped callers).
+        const driveIds = await filterDriveIdsByAppTokenScope(
+          ctx as ToolExecutionContext,
+          await getDriveIdsForUser(toolActor(ctx as ToolExecutionContext)),
+        );
         const conditions = [];
 
         // Personal events
@@ -335,11 +399,23 @@ export const calendarReadTools = {
           );
         }
 
-        // Drive events with DRIVE visibility
+        // Drive events with DRIVE visibility (home drive or shared into user's drives)
         if (driveIds.length > 0) {
+          // Events shared into any of the user's drives via junction table
+          const sharedEventRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(inArray(calendarEventDrives.driveId, driveIds));
+          const sharedEventIds = sharedEventRows.map((r) => r.eventId);
+
           conditions.push(
             and(
-              inArray(calendarEvents.driveId, driveIds),
+              or(
+                inArray(calendarEvents.driveId, driveIds),
+                sharedEventIds.length > 0
+                  ? inArray(calendarEvents.id, sharedEventIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.visibility, 'DRIVE')
             )
           );
@@ -370,12 +446,21 @@ export const calendarReadTools = {
           };
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const events = await db.query.calendarEvents.findMany({
           where: and(
             or(...conditions),
             eq(calendarEvents.isTrashed, false),
-            lte(calendarEvents.startAt, parsedEndDate),
-            gte(calendarEvents.endAt, parsedStartDate)
+            or(
+              and(
+                lte(calendarEvents.startAt, parsedEndDate),
+                gte(calendarEvents.endAt, parsedStartDate),
+              ),
+              and(
+                isNotNull(calendarEvents.recurrenceRule),
+                lte(calendarEvents.startAt, parsedEndDate),
+              ),
+            ),
           ),
           with: {
             createdBy: {
@@ -398,23 +483,34 @@ export const calendarReadTools = {
           orderBy: [desc(calendarEvents.startAt)],
         });
 
+        // Final ceiling: drop any drive-tied event outside a scoped MCP token's
+        // drives or its own role's view access (e.g. reached via the attendee
+        // branch). No-op for unscoped callers; personal events (no driveId) are
+        // unaffected.
+        const eventDriveIds = Array.from(new Set(events.map((e) => e.driveId).filter((id): id is string => !!id)));
+        const allowedEventDriveIds = new Set(
+          await filterDriveIdsByAppTokenScope(ctx as ToolExecutionContext, eventDriveIds),
+        );
+        const scopedEvents = events.filter((e) => !e.driveId || allowedEventDriveIds.has(e.driveId));
+        const expandedScopedEvents = expandRecurringEvents(scopedEvents, parsedStartDate, parsedEndDate);
+
         const userTzForList = (ctx as ToolExecutionContext)?.timezone;
-        const triggerMapAll = await fetchTriggerInfoForEvents(events);
-        const formattedEvents = events.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id)));
+        const triggerMapAll = await fetchTriggerInfoForEvents(expandedScopedEvents);
+        const formattedEvents = await Promise.all(expandedScopedEvents.map((e) => formatEventForResponse(e, userTzForList, triggerMapAll.get(e.id))));
 
         return {
           success: true,
           data: { events: formattedEvents },
-          summary: `Found ${events.length} event${events.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
+          summary: `Found ${formattedEvents.length} event${formattedEvents.length === 1 ? '' : 's'} from ${startDate} to ${endDate}`,
           stats: {
-            eventCount: events.length,
+            eventCount: formattedEvents.length,
             dateRange: { start: startDate, end: endDate },
             context: 'user',
             includedDrives: driveIds.length,
             includePersonal,
           },
           nextSteps:
-            events.length > 0
+            formattedEvents.length > 0
               ? [
                   'Use get_calendar_event to see full details of a specific event',
                   'Use create_calendar_event to schedule new meetings',
@@ -488,7 +584,7 @@ export const calendarReadTools = {
         }
 
         // Check access
-        const hasAccess = await canAccessEvent(userId, event);
+        const hasAccess = await canAccessEvent(userId, event, ctx as ToolExecutionContext);
         if (!hasAccess) {
           return {
             success: false,
@@ -497,7 +593,7 @@ export const calendarReadTools = {
         }
 
         const triggerMapSingle = await fetchTriggerInfoForEvents([event]);
-        const formatted = formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone, triggerMapSingle.get(event.id));
+        const formatted = await formatEventForResponse(event as Parameters<typeof formatEventForResponse>[0], (ctx as ToolExecutionContext)?.timezone, triggerMapSingle.get(event.id));
 
         // Calculate RSVP summary if attendees included
         let rsvpSummary: Record<string, number> | undefined;
@@ -608,7 +704,10 @@ export const calendarReadTools = {
 
         // Validate drive access if specified
         if (driveId) {
-          const canView = await isUserDriveMember(userId, driveId);
+          if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'view')) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
+          const canView = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canView) {
             return {
               success: false,
@@ -617,8 +716,12 @@ export const calendarReadTools = {
           }
         }
 
-        // Get user's events in the date range
-        const driveIds = driveId ? [driveId] : await getDriveIdsForUser(userId);
+        // Get user's events in the date range. Ceiling a scoped MCP token to its
+        // allowed drives (no-op for unscoped callers).
+        const driveIds = await filterDriveIdsByAppTokenScope(
+          ctx as ToolExecutionContext,
+          driveId ? [driveId] : await getDriveIdsForUser(toolActor(ctx as ToolExecutionContext)),
+        );
         const conditions = [];
 
         // Personal events (user is creator, no drive)
@@ -629,11 +732,22 @@ export const calendarReadTools = {
         // Events where user is the creator (any visibility, any drive)
         conditions.push(eq(calendarEvents.createdById, userId));
 
-        // Drive events with DRIVE visibility (visible to all drive members)
+        // Drive events with DRIVE visibility (home drive or shared into user's drives)
         if (driveIds.length > 0) {
+          const sharedBusyRows = await db
+            .select({ eventId: calendarEventDrives.eventId })
+            .from(calendarEventDrives)
+            .where(inArray(calendarEventDrives.driveId, driveIds));
+          const sharedBusyIds = sharedBusyRows.map((r) => r.eventId);
+
           conditions.push(
             and(
-              inArray(calendarEvents.driveId, driveIds),
+              or(
+                inArray(calendarEvents.driveId, driveIds),
+                sharedBusyIds.length > 0
+                  ? inArray(calendarEvents.id, sharedBusyIds)
+                  : eq(calendarEvents.id, '__never_match__')
+              ),
               eq(calendarEvents.visibility, 'DRIVE')
             )
           );
@@ -649,6 +763,7 @@ export const calendarReadTools = {
           conditions.push(inArray(calendarEvents.id, attendeeEventIds));
         }
 
+        // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
         const events = await db.query.calendarEvents.findMany({
           where: and(
             or(...conditions),
@@ -662,9 +777,20 @@ export const calendarReadTools = {
             startAt: true,
             endAt: true,
             allDay: true,
+            driveId: true,
           },
           orderBy: [calendarEvents.startAt],
         });
+
+        // Final ceiling: a scoped MCP token must not learn the timing of
+        // out-of-scope drive events — or events in drives its role cannot view —
+        // via the creator/attendee branches above (no-op for unscoped callers;
+        // personal events have no driveId).
+        const busyEventDriveIds = Array.from(new Set(events.map((e) => e.driveId).filter((id): id is string => !!id)));
+        const allowedBusyDriveIds = new Set(
+          await filterDriveIdsByAppTokenScope(ctx as ToolExecutionContext, busyEventDriveIds),
+        );
+        const scopedEvents = events.filter((e) => !e.driveId || allowedBusyDriveIds.has(e.driveId));
 
         // Find free slots using user's timezone for working hour boundaries
         const userTz = normalizeTimezone((ctx as ToolExecutionContext)?.timezone);
@@ -672,7 +798,7 @@ export const calendarReadTools = {
         const freeSlots: Array<{ start: string; end: string; durationMinutes: number }> = [];
 
         // Create busy intervals from events
-        const busyIntervals = events.map((e) => ({
+        const busyIntervals = scopedEvents.map((e) => ({
           start: e.startAt.getTime(),
           end: e.endAt.getTime(),
         }));
@@ -790,6 +916,46 @@ export const calendarReadTools = {
           `Failed to check availability: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  list_event_drives: tool({
+    description:
+      'List all drives an event is shared with. ' +
+      'The home drive (where the event was created) is always listed first with isHome=true. ' +
+      'Returns an empty array for personal events (not tied to any drive).',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event'),
+    }),
+    execute: async ({ eventId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      // Verify event exists and caller has access before exposing drive topology
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+      const hasAccess = await canAccessEvent(userId, event, ctx as ToolExecutionContext);
+      if (!hasAccess) return { success: false, error: 'You do not have access to this event.' };
+
+      const drives = await listEventDrives(eventId);
+
+      return {
+        success: true,
+        data: { eventId, drives },
+        summary:
+          drives.length === 0
+            ? 'This is a personal event not shared with any drive.'
+            : `Event is visible in ${drives.length} drive(s): ${drives.map((d) => d.driveName).join(', ')}`,
+        nextSteps:
+          drives.length > 0
+            ? [
+                'Use share_event_with_drive to share with additional drives',
+                'Use unshare_event_from_drive to remove from a shared drive',
+              ]
+            : [],
+      };
     },
   }),
 };

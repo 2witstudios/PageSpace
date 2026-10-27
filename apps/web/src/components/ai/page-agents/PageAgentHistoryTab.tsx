@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { VirtualizedConversationList } from '@/components/ai/shared/chat';
+import { ConversationShareToggle } from './ConversationShareToggle';
 
 // Threshold for enabling virtualization
 const VIRTUALIZATION_THRESHOLD = 20;
@@ -23,6 +24,8 @@ interface Conversation {
   createdAt: Date | string;
   updatedAt: Date | string;
   messageCount: number;
+  isShared?: boolean;
+  isOwner?: boolean;
   lastMessage: {
     role: string;
     timestamp: Date | string;
@@ -34,7 +37,16 @@ interface PageAgentHistoryTabProps {
   currentConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
   onCreateNew: () => void;
+  /**
+   * Refuses "New Conversation" for a reason the LIST does not know about —
+   * a response still streaming on the Chat tab, or a mint already in flight.
+   * Without it this button stays enabled while its handler silently returns,
+   * which reads as a broken button. Both surfaces that host this tab guard the
+   * same action; this is how the guard becomes visible instead of mute.
+   */
+  createDisabled?: boolean;
   onDeleteConversation: (conversationId: string) => void;
+  onToggleShare?: (conversationId: string, isShared: boolean) => void;
   isLoading: boolean;
 }
 
@@ -43,11 +55,13 @@ const ConversationCard = memo(function ConversationCard({
   isActive,
   onClick,
   onDelete,
+  onToggleShare,
 }: {
   conversation: Conversation;
   isActive: boolean;
   onClick: () => void;
   onDelete: () => void;
+  onToggleShare?: () => void;
 }) {
   const updatedAt =
     typeof conversation.updatedAt === 'string'
@@ -56,9 +70,11 @@ const ConversationCard = memo(function ConversationCard({
 
   return (
     <Card
+      data-testid="history-conversation-item"
+      data-conversation-id={conversation.id}
       className={cn(
         'p-4 cursor-pointer hover:bg-accent transition-colors',
-        isActive && 'bg-accent border-primary'
+        isActive && 'bg-primary-soft border-primary'
       )}
       onClick={onClick}
     >
@@ -82,18 +98,26 @@ const ConversationCard = memo(function ConversationCard({
             </span>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="shrink-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title="Delete conversation"
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-1 shrink-0">
+          {onToggleShare && (
+            <ConversationShareToggle
+              isShared={conversation.isShared ?? false}
+              isOwner={conversation.isOwner ?? false}
+              onToggle={onToggleShare}
+            />
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            title="Delete conversation"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
     </Card>
   );
@@ -132,7 +156,9 @@ export default function PageAgentHistoryTab({
   currentConversationId,
   onSelectConversation,
   onCreateNew,
+  createDisabled = false,
   onDeleteConversation,
+  onToggleShare,
   isLoading,
 }: PageAgentHistoryTabProps) {
   // Determine if we should virtualize
@@ -146,9 +172,10 @@ export default function PageAgentHistoryTab({
         isActive={conv.id === currentConversationId}
         onClick={() => onSelectConversation(conv.id)}
         onDelete={() => onDeleteConversation(conv.id)}
+        onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
       />
     </div>
-  ), [currentConversationId, onSelectConversation, onDeleteConversation]);
+  ), [currentConversationId, onSelectConversation, onDeleteConversation, onToggleShare]);
 
   // Get key for virtualization
   const getConversationKey = useCallback((conv: Conversation) => conv.id, []);
@@ -156,7 +183,7 @@ export default function PageAgentHistoryTab({
   return (
     <div className="flex flex-col h-full p-4">
       <div className="mb-4">
-        <Button onClick={onCreateNew} className="w-full" disabled={isLoading}>
+        <Button onClick={onCreateNew} className="w-full" disabled={isLoading || createDisabled}>
           <Plus className="h-4 w-4 mr-2" />
           New Conversation
         </Button>
@@ -188,6 +215,7 @@ export default function PageAgentHistoryTab({
                   isActive={conv.id === currentConversationId}
                   onClick={() => onSelectConversation(conv.id)}
                   onDelete={() => onDeleteConversation(conv.id)}
+                  onToggleShare={onToggleShare ? () => onToggleShare(conv.id, !conv.isShared) : undefined}
                 />
               ))}
             </div>

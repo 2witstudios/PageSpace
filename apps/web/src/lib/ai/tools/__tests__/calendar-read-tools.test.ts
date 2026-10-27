@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: vi.fn().mockReturnThis(),
@@ -23,6 +31,7 @@ vi.mock('@pagespace/db/operators', () => ({
   lte: vi.fn(),
   inArray: vi.fn(),
   isNull: vi.fn(),
+  isNotNull: vi.fn(),
   desc: vi.fn(),
   not: vi.fn(),
 }));
@@ -35,6 +44,12 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
     isTrashed: 'isTrashed',
     startAt: 'startAt',
     endAt: 'endAt',
+    recurrenceRule: 'recurrenceRule',
+    recurrenceExceptions: 'recurrenceExceptions',
+  },
+  calendarEventDrives: {
+    eventId: 'eventId',
+    driveId: 'driveId',
   },
   eventAttendees: {
     id: 'id',
@@ -45,8 +60,15 @@ vi.mock('@pagespace/db/schema/calendar', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   getDriveIdsForUser: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn(),
+  listEventDrives: vi.fn().mockResolvedValue([]),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue(['drive-1']),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -70,11 +92,14 @@ vi.mock('@/lib/logging/mask', () => ({
 import { calendarReadTools } from '../calendar-read-tools';
 import { db } from '@pagespace/db/db';
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import { isUserMemberOfAnyEventDrive } from '@pagespace/lib/services/calendar-event-drive-service';
+import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
 const mockIsUserDriveMember = vi.mocked(isUserDriveMember);
 const mockGetDriveIdsForUser = vi.mocked(getDriveIdsForUser);
+const mockIsUserMemberOfAnyEventDrive = vi.mocked(isUserMemberOfAnyEventDrive);
 
 const createMockEvent = (overrides = {}) => ({
   id: 'event-1',
@@ -101,7 +126,7 @@ const createMockEvent = (overrides = {}) => ({
 const createAuthContext = (userId = 'user-123', timezone?: string) => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId, ...(timezone && { timezone }) } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null), ...(timezone && { timezone }) } as ToolExecutionContext,
 });
 
 describe('calendar-read-tools', () => {
@@ -250,8 +275,14 @@ describe('calendar-read-tools', () => {
 
       it('returns events for drive context with access', async () => {
         mockIsUserDriveMember.mockResolvedValue(true);
-        // Mock attendee events query
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        // First select: calendarEventDrives (shared events)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        // Second select: attendee events (innerJoin)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
           from: vi.fn().mockReturnValue({
             innerJoin: vi.fn().mockReturnValue({
               where: vi.fn().mockResolvedValue([]),
@@ -329,8 +360,14 @@ describe('calendar-read-tools', () => {
 
       it('returns events from accessible drives', async () => {
         mockGetDriveIdsForUser.mockResolvedValue(['drive-1', 'drive-2']);
-        // Mock attendee events query
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        // First select: calendarEventDrives (events shared into user's drives)
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        // Second select: attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
           from: vi.fn().mockReturnValue({
             where: vi.fn().mockResolvedValue([]),
           }),
@@ -363,6 +400,110 @@ describe('calendar-read-tools', () => {
           should: 'return events',
           actual: (result as { data: { events: unknown[] } }).data.events.length,
           expected: 2,
+        });
+      });
+    });
+
+    describe('recurring event expansion', () => {
+      const createRecurringEvent = (overrides = {}) => ({
+        ...createMockEvent(),
+        startAt: new Date('2026-05-19T10:00:00Z'),
+        endAt: new Date('2026-05-19T11:00:00Z'),
+        recurrenceRule: { frequency: 'WEEKLY' as const, interval: 2 },
+        recurrenceExceptions: [],
+        metadata: null,
+        ...overrides,
+      });
+
+      it('drive context: expands biweekly recurring event into window instances when base is before window', async () => {
+        mockIsUserDriveMember.mockResolvedValue(true);
+        // shared events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        // attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({
+            innerJoin: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+          }),
+        });
+        mockDb.query.calendarEvents.findMany = vi.fn().mockResolvedValue([createRecurringEvent()]);
+
+        const result = await calendarReadTools.list_calendar_events.execute!(
+          { startDate: '2026-06-01', endDate: '2026-07-01', context: 'drive', driveId: 'drive-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'drive context: biweekly event (base May 19) queried Jun 1 – Jul 1',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        const events = (result as { data: { events: Array<{ startAt: string }> } }).data.events;
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'return 3 June instances (Jun 2, Jun 16, Jun 30)',
+          actual: events.length,
+          expected: 3,
+        });
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'all returned instances fall within the queried window',
+          actual: events.every(
+            (e) =>
+              new Date(e.startAt) >= new Date('2026-06-01') &&
+              new Date(e.startAt) < new Date('2026-07-01')
+          ),
+          expected: true,
+        });
+      });
+
+      it('user context: expands biweekly recurring event into window instances when base is before window', async () => {
+        mockGetDriveIdsForUser.mockResolvedValue(['drive-1']);
+        // shared events into user drives
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        // attendee events
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+        mockDb.query.calendarEvents.findMany = vi.fn().mockResolvedValue([createRecurringEvent()]);
+
+        const result = await calendarReadTools.list_calendar_events.execute!(
+          { startDate: '2026-06-01', endDate: '2026-07-01', context: 'user' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'user context: biweekly event (base May 19) queried Jun 1 – Jul 1',
+          should: 'return success',
+          actual: (result as { success: boolean }).success,
+          expected: true,
+        });
+
+        const events = (result as { data: { events: Array<{ startAt: string }> } }).data.events;
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'return 3 June instances (Jun 2, Jun 16, Jun 30)',
+          actual: events.length,
+          expected: 3,
+        });
+
+        assert({
+          given: 'biweekly recurring event with May 19 base, querying Jun 1 – Jul 1',
+          should: 'all returned instances fall within the queried window',
+          actual: events.every(
+            (e) =>
+              new Date(e.startAt) >= new Date('2026-06-01') &&
+              new Date(e.startAt) < new Date('2026-07-01')
+          ),
+          expected: true,
         });
       });
     });
@@ -569,7 +710,7 @@ describe('calendar-read-tools', () => {
       });
       mockDb.query.calendarEvents.findFirst = vi.fn().mockResolvedValue(event);
       mockDb.query.eventAttendees.findFirst = vi.fn().mockResolvedValue(null);
-      mockIsUserDriveMember.mockResolvedValue(true);
+      mockIsUserMemberOfAnyEventDrive.mockResolvedValue(true);
       const input = { eventId: 'event-1' };
 
       const result = await calendarReadTools.get_calendar_event.execute!(

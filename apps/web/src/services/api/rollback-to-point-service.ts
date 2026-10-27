@@ -16,6 +16,8 @@ import {
   type RollbackContext,
 } from './rollback-service';
 import type { ActivityActionPreview } from '@/types/activity-actions';
+import { lockOrgsOfDrivesForShare } from '@pagespace/lib/organizations/policy-reader';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Context for rollback-to-point operations
@@ -82,9 +84,10 @@ function fallbackPreview(reason: string): ActivityActionPreview {
  */
 export async function previewRollbackToPoint(
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackToPointContext
 ): Promise<RollbackToPointPreview | null> {
+  const userId = actor.userId;
   loggers.api.debug('[RollbackToPoint:Preview] Starting preview', {
     activityId,
     userId,
@@ -171,7 +174,7 @@ export async function previewRollbackToPoint(
 
       let preview: ActivityActionPreview;
       try {
-        preview = await previewRollback(activity.id, userId, rollbackContext, { undoGroupActivityIds });
+        preview = await previewRollback(activity.id, actor, rollbackContext, { undoGroupActivityIds });
         if (!preview) {
           preview = fallbackPreview('Preview failed');
           warnings.push(`Could not preview rollback for activity ${activity.id}`);
@@ -256,11 +259,12 @@ export async function previewRollbackToPoint(
  */
 export async function executeRollbackToPoint(
   activityId: string,
-  userId: string,
+  actor: AccessActor,
   context: RollbackToPointContext,
   existingPreview?: RollbackToPointPreview,
   options?: { force?: boolean }
 ): Promise<RollbackToPointResult> {
+  const userId = actor.userId;
   loggers.api.debug('[RollbackToPoint:Execute] Starting execution', {
     activityId,
     userId,
@@ -274,7 +278,7 @@ export async function executeRollbackToPoint(
 
   try {
     // Use existing preview if provided, otherwise compute it
-    const preview = existingPreview ?? (await previewRollbackToPoint(activityId, userId, context));
+    const preview = existingPreview ?? (await previewRollbackToPoint(activityId, actor, context));
     if (!preview) {
       loggers.api.debug('[RollbackToPoint:Execute] Aborting - preview not available');
       return {
@@ -297,6 +301,12 @@ export async function executeRollbackToPoint(
     const deferredTriggers: Array<() => void> = [];
 
     await db.transaction(async (tx) => {
+      // POL-2 (re-verify N6): the org rows of every drive these activities touch are share-locked BEFORE any of
+      // them writes, so a re-entering grant's policy check cannot deadlock with a concurrent policy change.
+      await lockOrgsOfDrivesForShare(tx, {
+        driveIds: preview.activitiesAffected.map((a) => a.driveId),
+        pageIds: preview.activitiesAffected.map((a) => a.pageId),
+      });
       // Rollback activities in reverse chronological order (newest first)
       for (const activity of preview.activitiesAffected) {
         const activityPreview = activity.preview;
@@ -327,7 +337,7 @@ export async function executeRollbackToPoint(
           rollbackContext,
         });
 
-        const result = await executeRollback(activity.id, userId, rollbackContext, { tx, force, undoGroupActivityIds });
+        const result = await executeRollback(activity.id, actor, rollbackContext, { tx, force, undoGroupActivityIds });
         if (!result.success) {
           loggers.api.debug('[RollbackToPoint:Execute] Activity rollback failed - aborting', {
             activityId: activity.id,

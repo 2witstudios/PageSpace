@@ -9,7 +9,7 @@
  * repository instead (rubric §3, §4).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mockSelectChain = vi.hoisted(() => ({ from: vi.fn() }));
 const mockInsertChain = vi.hoisted(() => ({ values: vi.fn() }));
@@ -17,6 +17,31 @@ const mockUpdateChain = vi.hoisted(() => ({ set: vi.fn() }));
 const mockDeleteChain = vi.hoisted(() => ({ where: vi.fn() }));
 const mockUsersFindFirst = vi.hoisted(() => vi.fn());
 const mockTransaction = vi.hoisted(() => vi.fn());
+
+// POL-2: acceptance asks the org's guests policy inside the transaction; these unit tests are about a drive with no org.
+const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-admission', () => ({ decideOrgDriveAdmission }));
+// P2-6: under approve, acceptance consumes an `approved` marker or queues the request.
+const consumeApprovedInvitation = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/permissions/guest-holds', () => ({ consumeApprovedInvitation, requestGuestApproval }));
+// [D-OW-33] the lapse guard: a drive with no org (null) unless a test lapses it. guardDriveAccess runs the write with
+// the transaction the test hands it (guardTx) and throws when the test says the write loosened a lapsed org.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn());
+const guardTx = vi.hoisted(() => ({ current: null as unknown }));
+const guardRefuses = vi.hoisted(() => ({ current: false }));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>();
+  return {
+    ...real,
+    checkDriveMayLoosen,
+    guardDriveAccess: vi.fn(async (_executor: unknown, _driveId: string, _scope: unknown, write: (tx: unknown) => Promise<unknown>) => {
+      const result = await write(guardTx.current);
+      if (guardRefuses.current) throw new real.OrgLapsedError();
+      return result;
+    }),
+  };
+});
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -32,10 +57,12 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ kind: 'eq', field, value })),
   and: vi.fn((...conditions) => ({ kind: 'and', conditions })),
+  or: vi.fn((...conditions) => ({ kind: 'or', conditions })),
   gt: vi.fn((field, value) => ({ kind: 'gt', field, value })),
   lte: vi.fn((field, value) => ({ kind: 'lte', field, value })),
   isNotNull: vi.fn((field) => ({ kind: 'isNotNull', field })),
   isNull: vi.fn((field) => ({ kind: 'isNull', field })),
+  sql: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({ kind: 'sql', text: strings.join('?'), values })),
 }));
 
 vi.mock('@pagespace/db/schema/auth', () => ({
@@ -61,6 +88,11 @@ vi.mock('@pagespace/db/schema/members', () => ({
     pageId: 'pagePermissions.pageId',
     userId: 'pagePermissions.userId',
   },
+  driveRoles: {
+    id: 'driveRoles.id',
+    name: 'driveRoles.name',
+    color: 'driveRoles.color',
+  },
 }));
 
 vi.mock('@pagespace/db/schema/pending-invites', () => ({
@@ -79,6 +111,9 @@ vi.mock('@pagespace/db/schema/pending-invites', () => ({
 
 import { driveInviteRepository } from '../drive-invite-repository';
 import { isNotNull, isNull } from '@pagespace/db/operators';
+// Real encryption helpers (NOT mocked) — prove a ciphertext inviter name seeded
+// at rest is decrypted at the read edge before flowing to invite/signup screens.
+import { encryptField, looksEncrypted } from '@pagespace/lib/encryption/field-crypto';
 
 const setupSelectLimit = (rows: unknown[]) => {
   const limit = vi.fn().mockResolvedValue(rows);
@@ -93,23 +128,11 @@ const setupSelectAll = (rows: unknown[]) => {
   return { where };
 };
 
-const setupInsert = (rows: unknown[]) => {
-  const returning = vi.fn().mockResolvedValue(rows);
-  const values = vi.fn().mockReturnValue({ returning });
-  mockInsertChain.values = values;
-  return { values, returning };
-};
-
-const setupUpdate = (returnRows?: unknown[]) => {
-  const where = returnRows
-    ? vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue(returnRows) })
-    : vi.fn().mockResolvedValue(undefined);
-  const set = vi.fn().mockReturnValue({ where });
-  mockUpdateChain.set = set;
-  return { set, where };
-};
-
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  checkDriveMayLoosen.mockResolvedValue(null);
+  guardRefuses.current = false;
+});
 
 describe('driveInviteRepository.findDriveById', () => {
   it('returns the drive row when one exists', async () => {
@@ -123,29 +146,6 @@ describe('driveInviteRepository.findDriveById', () => {
   it('returns null when the drive does not exist', async () => {
     setupSelectLimit([]);
     expect(await driveInviteRepository.findDriveById('missing')).toBeNull();
-  });
-});
-
-describe('driveInviteRepository.findAdminMembership', () => {
-  it('applies the acceptedAt-IS-NOT-NULL gate so pending ADMINs are excluded', async () => {
-    const member = { id: 'mem_1', role: 'ADMIN', acceptedAt: new Date('2025-01-01') };
-    const { where } = setupSelectLimit([member]);
-
-    const result = await driveInviteRepository.findAdminMembership('drive_1', 'user_1');
-
-    expect(result).toEqual(member);
-    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
-    const args = where.mock.calls[0]?.[0] as { conditions?: unknown[] };
-    expect(args?.conditions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: 'isNotNull', field: 'driveMembers.acceptedAt' }),
-      ])
-    );
-  });
-
-  it('returns null when no accepted ADMIN row matches (pending or non-ADMIN)', async () => {
-    setupSelectLimit([]);
-    expect(await driveInviteRepository.findAdminMembership('drive_1', 'user_1')).toBeNull();
   });
 });
 
@@ -169,47 +169,6 @@ describe('driveInviteRepository.findExistingMember', () => {
   });
 });
 
-describe('driveInviteRepository.createDriveMember', () => {
-  const baseInput = {
-    driveId: 'drive_1',
-    userId: 'user_1',
-    role: 'MEMBER' as const,
-    customRoleId: null,
-    invitedBy: 'inviter',
-  };
-
-  it('persists acceptedAt as a Date when provided (auto-accept path)', async () => {
-    const acceptedAt = new Date('2025-02-01');
-    const inserted = { id: 'mem_new', ...baseInput, acceptedAt };
-    const { values } = setupInsert([inserted]);
-
-    const result = await driveInviteRepository.createDriveMember({ ...baseInput, acceptedAt });
-
-    expect(values).toHaveBeenCalledWith(expect.objectContaining({ acceptedAt }));
-    expect(result.acceptedAt).toEqual(acceptedAt);
-  });
-
-  it('persists acceptedAt as null for pending invitations', async () => {
-    const inserted = { id: 'mem_pending', ...baseInput, acceptedAt: null };
-    const { values } = setupInsert([inserted]);
-
-    const result = await driveInviteRepository.createDriveMember({ ...baseInput, acceptedAt: null });
-
-    expect(values).toHaveBeenCalledWith(expect.objectContaining({ acceptedAt: null }));
-    expect(result.acceptedAt).toBeNull();
-  });
-});
-
-describe('driveInviteRepository.updateDriveMemberRole', () => {
-  it('updates role and customRoleId for the given memberId', async () => {
-    const { set } = setupUpdate();
-
-    await driveInviteRepository.updateDriveMemberRole('mem_1', 'ADMIN', 'role_x');
-
-    expect(set).toHaveBeenCalledWith({ role: 'ADMIN', customRoleId: 'role_x' });
-  });
-});
-
 describe('driveInviteRepository.getValidPageIds', () => {
   it('returns the page ids belonging to the drive', async () => {
     setupSelectAll([{ id: 'page_1' }, { id: 'page_2' }]);
@@ -219,49 +178,6 @@ describe('driveInviteRepository.getValidPageIds', () => {
   it('returns an empty array when the drive has no pages', async () => {
     setupSelectAll([]);
     expect(await driveInviteRepository.getValidPageIds('drive_empty')).toEqual([]);
-  });
-});
-
-describe('driveInviteRepository.findPagePermission', () => {
-  it('returns the permission row when one exists, null otherwise', async () => {
-    const perm = { id: 'perm_1', canView: true };
-    setupSelectLimit([perm]);
-    expect(await driveInviteRepository.findPagePermission('page_1', 'user_1')).toEqual(perm);
-
-    setupSelectLimit([]);
-    expect(await driveInviteRepository.findPagePermission('page_1', 'user_1')).toBeNull();
-  });
-});
-
-describe('driveInviteRepository.createPagePermission', () => {
-  it('inserts the permission and returns the inserted row', async () => {
-    const data = {
-      pageId: 'page_1',
-      userId: 'user_1',
-      canView: true,
-      canEdit: false,
-      canShare: false,
-      canDelete: false,
-      grantedBy: 'inviter',
-    };
-    const { values } = setupInsert([{ id: 'perm_new', ...data }]);
-
-    const result = await driveInviteRepository.createPagePermission(data);
-
-    expect(values).toHaveBeenCalledWith(expect.objectContaining(data));
-    expect(result).toMatchObject(data);
-  });
-});
-
-describe('driveInviteRepository.updatePagePermission', () => {
-  it('updates the permission row and returns the updated row', async () => {
-    const grantedAt = new Date('2025-02-01');
-    const data = { canView: true, canEdit: true, canShare: false, grantedBy: 'inviter', grantedAt };
-    const updated = { id: 'perm_1', ...data };
-    const { set } = setupUpdate([updated]);
-
-    expect(await driveInviteRepository.updatePagePermission('perm_1', data)).toEqual(updated);
-    expect(set).toHaveBeenCalledWith(expect.objectContaining(data));
   });
 });
 
@@ -334,7 +250,14 @@ describe('driveInviteRepository.findActivePendingInviteByDriveAndEmail', () => {
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.driveId', value: 'drive_1' }),
         expect.objectContaining({ kind: 'eq', field: 'pendingInvites.email', value: 'a@b.com' }),
         expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.consumedAt' }),
-        expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: now }),
+        // null expiresAt = no expiry; otherwise require expiresAt > now
+        expect.objectContaining({
+          kind: 'or',
+          conditions: expect.arrayContaining([
+            expect.objectContaining({ kind: 'isNull', field: 'pendingInvites.expiresAt' }),
+            expect.objectContaining({ kind: 'gt', field: 'pendingInvites.expiresAt', value: now }),
+          ]),
+        }),
       ])
     );
   });
@@ -450,12 +373,13 @@ describe('driveInviteRepository.createPendingInvite', () => {
       email: 'a@b.com',
       driveId: 'drive_1',
       role: 'MEMBER',
+      customRoleId: null,
       invitedBy: 'inviter_1',
       expiresAt,
       now,
     });
 
-    expect(result).toEqual(inserted);
+    expect(result).toEqual({ ...inserted, approvalStaged: [] });
     expect(txInsertValues).toHaveBeenCalledWith(
       expect.objectContaining({
         tokenHash: 'h1',
@@ -482,6 +406,10 @@ describe('driveInviteRepository.createPendingInvite', () => {
 });
 
 describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
+  beforeEach(() => {
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
+  });
+
   const setupTx = ({
     consumeReturning,
     insertReturning,
@@ -499,15 +427,17 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     const txInsertReturning = insertThrows
       ? vi.fn().mockRejectedValue(insertThrows)
       : vi.fn().mockResolvedValue(insertReturning ?? []);
-    const txInsertValues = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsertOnConflict = vi.fn().mockReturnValue({ returning: txInsertReturning });
+    const txInsertValues = vi.fn().mockReturnValue({ onConflictDoUpdate: txInsertOnConflict });
     const txInsert = vi.fn().mockReturnValue({ values: txInsertValues });
 
+    const txSelect = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue([{ email: 'invitee@example.com' }]) }) }) });
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
-      const tx = { update: txUpdate, insert: txInsert };
+      const tx = { update: txUpdate, insert: txInsert, select: txSelect };
       return cb(tx);
     });
 
-    return { txUpdateSet, txUpdateWhere, txInsertValues };
+    return { txUpdateSet, txUpdateWhere, txInsertValues, txInsertOnConflict };
   };
 
   const baseInput = {
@@ -515,6 +445,7 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     driveId: 'drive_1',
     userId: 'user_new',
     role: 'MEMBER' as const,
+    customRoleId: null,
     invitedBy: 'inviter_1',
     acceptedAt: new Date('2026-05-06T12:00:00.000Z'),
   };
@@ -541,6 +472,40 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     );
   });
 
+  it('POL-2 (partial) guests OFF: acceptance is refused with GUEST_POLICY BEFORE the invitation is consumed and nothing is inserted', async () => {
+    const { txUpdateSet, txInsertValues } = setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'GUEST_POLICY' });
+    expect(txUpdateSet).not.toHaveBeenCalled();
+    expect(txInsertValues).not.toHaveBeenCalled();
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_new' }, expect.anything());
+  });
+
+  it('POL-2 (partial) guests APPROVE: an invitation an Owner or Admin approved (its marker consumed) is accepted', async () => {
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(true);
+    expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: true, memberId: 'mem_new' });
+    expect(consumeApprovedInvitation).toHaveBeenCalledWith(expect.anything(), { driveId: 'drive_1', invite: { kind: 'drive', id: 'inv_1' } });
+    expect(requestGuestApproval).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) guests APPROVE: an invitation nobody approved (sent while guests were on) is queued, spent, and grants nothing', async () => {
+    const { txUpdateSet, txInsertValues } = setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [{ id: 'mem_new' }] });
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    consumeApprovedInvitation.mockResolvedValue(false);
+
+    expect(await driveInviteRepository.consumeInviteAndCreateMembership(baseInput)).toEqual({ ok: false, reason: 'GUEST_APPROVAL_PENDING' });
+    expect(txUpdateSet).toHaveBeenCalledWith({ consumedAt: baseInput.acceptedAt });
+    expect(txInsertValues).not.toHaveBeenCalled();
+    expect(requestGuestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: 'org_1', driveId: 'drive_1', userId: 'user_new', origin: 'invite', request: { role: 'MEMBER', customRoleId: null, invitedBy: 'inviter_1' },
+    }), expect.anything());
+  });
+
   it('given the conditional consume matches zero rows (already consumed), returns ok=false reason=TOKEN_CONSUMED and skips the insert', async () => {
     const { txInsertValues } = setupTx({ consumeReturning: [] });
 
@@ -559,6 +524,37 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
     expect(result).toEqual({ ok: false, reason: 'ALREADY_MEMBER' });
   });
 
+  it('given an existing GUEST row (redeemed page share link), upgrades it in place to the invited role', async () => {
+    const { txInsertOnConflict } = setupTx({
+      consumeReturning: [{ id: 'inv_1' }],
+      insertReturning: [{ id: 'mem_guest' }],
+    });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: true, memberId: 'mem_guest' });
+    const conflict = txInsertOnConflict.mock.calls[0]?.[0] as {
+      set: Record<string, unknown>;
+      setWhere: { text: string };
+    };
+    expect(conflict.set).toEqual({
+      role: 'MEMBER',
+      customRoleId: null,
+      invitedBy: 'inviter_1',
+      acceptedAt: baseInput.acceptedAt,
+    });
+    // Only a GUEST row may be overwritten; the role column is interpolated.
+    expect(conflict.setWhere.text).toBe("? = 'GUEST'");
+  });
+
+  it('given an existing non-GUEST row, the guarded upsert touches nothing and returns ALREADY_MEMBER', async () => {
+    setupTx({ consumeReturning: [{ id: 'inv_1' }], insertReturning: [] });
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership(baseInput);
+
+    expect(result).toEqual({ ok: false, reason: 'ALREADY_MEMBER' });
+  });
+
   it('given a non-unique-violation error, propagates so the caller can 500 (transaction rollback handles consume)', async () => {
     const otherError = new Error('connection lost');
     setupTx({ consumeReturning: [{ id: 'inv_1' }], insertThrows: otherError });
@@ -569,3 +565,210 @@ describe('driveInviteRepository.consumeInviteAndCreateMembership', () => {
   });
 });
 
+describe('driveInviteRepository — inviter name PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    process.env.ENCRYPTION_KEY = 'drive-invite-pii-test-master-key-32chars!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('findPendingInviteByTokenHash decrypts the joined inviter name', async () => {
+    const cipher = await encryptField('Jane Doe');
+    expect(looksEncrypted(cipher)).toBe(true);
+
+    const limit = vi.fn().mockResolvedValue([
+      {
+        id: 'inv_1',
+        email: 'invitee@example.com',
+        driveId: 'drive_1',
+        role: 'MEMBER',
+        customRoleId: null,
+        invitedBy: 'inviter_1',
+        expiresAt: new Date('2030-01-01'),
+        consumedAt: null,
+        driveName: 'Alpha',
+        inviterName: cipher,
+      },
+    ]);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+
+    const result = await driveInviteRepository.findPendingInviteByTokenHash('hash_xyz');
+
+    expect(result?.inviterName).toBe('Jane Doe');
+  });
+
+  it('findUnconsumedInvitesByDrive decrypts each inviter name', async () => {
+    const cipherA = await encryptField('Alice');
+    const cipherB = await encryptField('Bob');
+
+    const where = vi.fn().mockResolvedValue([
+      { id: 'i1', email: 'a@x.com', role: 'MEMBER', customRoleId: null, customRoleName: null, customRoleColor: null, driveId: 'd1', invitedByName: cipherA, createdAt: new Date(), expiresAt: null },
+      { id: 'i2', email: 'b@x.com', role: 'ADMIN', customRoleId: null, customRoleName: null, customRoleColor: null, driveId: 'd1', invitedByName: cipherB, createdAt: new Date(), expiresAt: null },
+    ]);
+    const leftJoin = vi.fn().mockReturnValue({ where });
+    const innerJoin = vi.fn().mockReturnValue({ leftJoin });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin });
+
+    const rows = await driveInviteRepository.findUnconsumedInvitesByDrive('d1');
+
+    expect(rows.map((r) => r.invitedByName)).toEqual(['Alice', 'Bob']);
+  });
+
+  it('passes a legacy plaintext inviter name through unchanged (mixed-state safety)', async () => {
+    const limit = vi.fn().mockResolvedValue([
+      {
+        id: 'inv_2',
+        email: 'invitee@example.com',
+        driveId: 'drive_1',
+        role: 'MEMBER',
+        customRoleId: null,
+        invitedBy: 'inviter_2',
+        expiresAt: null,
+        consumedAt: null,
+        driveName: 'Alpha',
+        inviterName: 'Legacy Plain',
+      },
+    ]);
+    const where = vi.fn().mockReturnValue({ limit });
+    const innerJoin2 = vi.fn().mockReturnValue({ where });
+    const innerJoin1 = vi.fn().mockReturnValue({ innerJoin: innerJoin2 });
+    mockSelectChain.from = vi.fn().mockReturnValue({ innerJoin: innerJoin1 });
+
+    const result = await driveInviteRepository.findPendingInviteByTokenHash('hash_legacy');
+
+    expect(result?.inviterName).toBe('Legacy Plain');
+  });
+});
+
+
+describe('driveInviteRepository.createAcceptedMemberWithPermissions and the guests policy', () => {
+  const input = {
+    driveId: 'drive_1',
+    userId: 'user_outside',
+    role: 'MEMBER' as const,
+    customRoleId: null,
+    invitedBy: 'inviter_1',
+    permissions: [{ pageId: 'page_1', canView: true, canEdit: false, canShare: false }],
+    grantedBy: 'inviter_1',
+    validPageIds: new Set(['page_1']),
+  };
+  const setupTx = () => {
+    const memberValues = vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([{ id: 'mem_1' }]) });
+    const grantValues = vi.fn().mockResolvedValue(undefined);
+    const insert = vi.fn().mockReturnValueOnce({ values: memberValues }).mockReturnValueOnce({ values: grantValues });
+    const tx = { insert };
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+    return { tx, insert };
+  };
+
+  it('POL-2 (partial) guests turned OFF after the route asked: the write asks again inside its transaction and creates nothing', async () => {
+    const { tx, insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ refused: 'GUEST_POLICY' });
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: 'drive_1', userId: 'user_outside' }, tx);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) allowed (or approved and replayed): the member row and its grants are written', async () => {
+    const { insert } = setupTx();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+
+    expect(await driveInviteRepository.createAcceptedMemberWithPermissions(input)).toEqual({ memberId: 'mem_1', permissionsGranted: 1, staged: [] });
+    expect(insert).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('driveInviteRepository [D-OW-33] a lapsed org only restricts', () => {
+  const LAPSED = { ok: false, code: 'org_lapsed', status: 402, message: 'lapsed' };
+
+  it('SEAT-9 (partial) [D-OW-33] createAcceptedMemberWithPermissions: a lapsed org adds nobody, an org member included; the guard reads in the write transaction', async () => {
+    const insert = vi.fn();
+    const tx = { insert };
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb(tx));
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: 'org_1' });
+    checkDriveMayLoosen.mockResolvedValue(LAPSED);
+
+    const result = await driveInviteRepository.createAcceptedMemberWithPermissions({
+      driveId: 'drive_1', userId: 'org_member', role: 'MEMBER', customRoleId: null, invitedBy: 'inviter_1',
+      permissions: [], grantedBy: 'inviter_1', validPageIds: new Set(),
+    });
+
+    expect(result).toEqual({ refused: 'ORG_LAPSED' });
+    expect(checkDriveMayLoosen).toHaveBeenCalledWith(tx, 'drive_1', true);
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] createPendingInvite: no invitation token is issued while lapsed (OrgLapsedError, nothing inserted)', async () => {
+    const insert = vi.fn();
+    const del = vi.fn();
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb({ insert, delete: del }));
+    checkDriveMayLoosen.mockResolvedValue(LAPSED);
+
+    await expect(driveInviteRepository.createPendingInvite({
+      tokenHash: 'h', email: 'a@b.com', driveId: 'drive_1', role: 'MEMBER', customRoleId: null, invitedBy: 'i', expiresAt: null, now: new Date(),
+    })).rejects.toMatchObject({ name: 'OrgLapsedError', code: 'org_lapsed', status: 402 });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] consumeInviteAndCreateMembership: refused with ORG_LAPSED BEFORE the token is consumed, so it works again once paid', async () => {
+    const update = vi.fn();
+    const insert = vi.fn();
+    mockTransaction.mockImplementation(async (cb: (t: unknown) => Promise<unknown>) => cb({ update, insert }));
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: 'org_1' });
+    checkDriveMayLoosen.mockResolvedValue(LAPSED);
+
+    const result = await driveInviteRepository.consumeInviteAndCreateMembership({
+      inviteId: 'inv_1', driveId: 'drive_1', userId: 'u', role: 'MEMBER', customRoleId: null, invitedBy: 'i', acceptedAt: new Date(),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'ORG_LAPSED' });
+    expect(update).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  describe('upgradeMemberWithPermissions', () => {
+    const input = {
+      memberId: 'mem_1', driveId: 'drive_1', userId: 'u1', role: 'MEMBER' as const, customRoleId: null,
+      permissions: [
+        { pageId: 'page_1', canView: true, canEdit: false, canShare: false },
+        { pageId: 'page_gone', canView: true, canEdit: false, canShare: false },
+      ],
+      grantedBy: 'admin', validPageIds: new Set(['page_1']),
+    };
+    const setupGuardTx = (existingGrant: { id: string } | null) => {
+      const updateWhere = vi.fn().mockResolvedValue(undefined);
+      const updateSet = vi.fn().mockReturnValue({ where: updateWhere });
+      const update = vi.fn().mockReturnValue({ set: updateSet });
+      const insertValues = vi.fn().mockResolvedValue(undefined);
+      const insert = vi.fn().mockReturnValue({ values: insertValues });
+      const limit = vi.fn().mockResolvedValue(existingGrant ? [existingGrant] : []);
+      const select = vi.fn().mockReturnValue({ from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit }) }) });
+      guardTx.current = { update, insert, select };
+      return { update, updateSet, insert, insertValues };
+    };
+
+    it('SEAT-9 (partial) [D-OW-33] sets the role and writes each valid grant inside guardDriveAccess, scoped to the person', async () => {
+      const { updateSet, insertValues } = setupGuardTx(null);
+
+      expect(await driveInviteRepository.upgradeMemberWithPermissions(input)).toEqual({ permissionsGranted: 1, skippedPageIds: ['page_gone'], staged: [] });
+      expect(updateSet).toHaveBeenCalledWith({ role: 'MEMBER', customRoleId: null });
+      expect(insertValues).toHaveBeenCalledWith(expect.objectContaining({ pageId: 'page_1', userId: 'u1', canView: true, canDelete: false }));
+      const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+      expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), 'drive_1', { users: ['u1'], agents: false }, expect.any(Function));
+    });
+
+    it('SEAT-9 (partial) [D-OW-33] the guard refusing (it gave a lapsed org\'s member more) surfaces as OrgLapsedError', async () => {
+      setupGuardTx({ id: 'perm_1' });
+      guardRefuses.current = true;
+
+      await expect(driveInviteRepository.upgradeMemberWithPermissions(input)).rejects.toMatchObject({ code: 'org_lapsed' });
+    });
+  });
+});

@@ -1,22 +1,26 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, sql } from '@pagespace/db/operators'
+import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
-import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
-import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { isUserDriveMember, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, isScopedMCPAuth, type AuthResult } from '@/lib/auth';
+import { isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventUpdateToGoogle, pushEventDeleteToGoogle } from '@/lib/integrations/google-calendar/push-service';
-import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import {
   removeCalendarTrigger,
+  resyncCalendarTriggerTimings,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -58,15 +62,31 @@ const updateEventSchema = z.object({
 });
 
 /**
- * Check if user can access an event
+ * Check if the principal can access an event
  */
-async function canAccessEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  // Creator always has access
+async function canAccessEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
+  const userId = auth.userId;
+
+  // SEC-2/3 (D-OW-45): an event in a drive is that drive's content, so the drive's org sign-in policy is asked of the
+  // credential BEFORE any identity shortcut — its creator and attendees included.
+  if (event.driveId && !(await checkActorDriveAuthentication(actorFromAuth(auth), event.driveId)).allowed) {
+    return false;
+  }
+
+  // Creator always has access (identity check) — including a scoped token
+  // reading back a driveless event IT created: the token still acts on
+  // behalf of its owner for a resource that belongs to that exact identity.
   if (event.createdById === userId) {
     return true;
   }
 
-  // Check if user is an attendee
+  // A drive-scoped token acts as an app member of its drives only: it gets no
+  // identity power over a DIFFERENT user's PERSONAL (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) {
+    return false;
+  }
+
+  // Check if user is an attendee (identity check)
   const attendee = await db.query.eventAttendees.findFirst({
     where: and(
       eq(eventAttendees.eventId, event.id),
@@ -77,20 +97,25 @@ async function canAccessEvent(userId: string, event: typeof calendarEvents.$infe
     return true;
   }
 
-  // Check drive membership for drive events with DRIVE visibility
-  if (event.driveId && event.visibility === 'DRIVE') {
-    return isUserDriveMember(userId, event.driveId);
+  // Check membership in home drive OR any shared drive for DRIVE-visible events
+  if (event.visibility === 'DRIVE') {
+    return isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
   }
 
   return false;
 }
 
 /**
- * Check if user can edit an event (only creator or drive admin)
+ * Check if the principal can edit an event (only creator or drive admin)
  */
-async function canEditEvent(userId: string, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
-  if (event.createdById === userId) return true;
-  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+async function canEditEvent(auth: AuthResult, event: typeof calendarEvents.$inferSelect): Promise<boolean> {
+  // Creator always has edit access, including a scoped token editing a
+  // driveless event it created itself.
+  if (event.createdById === auth.userId) return true;
+  // Scoped tokens have no identity power over a different user's personal
+  // (drive-less) events.
+  if (!event.driveId && isScopedMCPAuth(auth)) return false;
+  if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }
 
@@ -108,8 +133,6 @@ export async function GET(
   if (isAuthError(auth)) {
     return auth.error;
   }
-
-  const userId = auth.userId;
 
   try {
     const event = await db.query.calendarEvents.findFirst({
@@ -148,9 +171,9 @@ export async function GET(
     }
 
     // Check access
-    const hasAccess = await canAccessEvent(userId, event);
+    const hasAccess = await canAccessEvent(auth, event);
     if (!hasAccess) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     return NextResponse.json(event);
@@ -200,12 +223,12 @@ export async function PATCH(
     }
 
     // Check edit permission
-    const canEdit = await canEditEvent(userId, event);
+    const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json(
         { error: 'You do not have permission to edit this event' },
         { status: 403 }
-      );
+      ));
     }
 
     const body = await request.json();
@@ -220,14 +243,23 @@ export async function PATCH(
 
     const data = parseResult.data;
 
-    // Apply timezone-aware parsing for naive ISO datetimes.
-    // Use the provided timezone, or fall back to the existing event's timezone.
-    const effectiveTimezone = data.timezone ?? event.timezone ?? 'UTC';
-    const adjustedStartAt = (data.startAt && typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
-      ? parseNaiveDatetimeInTimezone(body.startAt, effectiveTimezone)
+    // Apply timezone-aware parsing for naive ISO datetimes: the provided
+    // timezone, else the event's own stored timezone, else the caller's profile
+    // (resolveTimezone), else UTC.
+    //
+    // The stored column is NOT NULL, so the profile tier is a guard rather than
+    // a routine path — it costs no query when the event has a zone, and it keeps
+    // the fallback chain identical to create's (#2404) instead of stopping one
+    // tier short.
+    const effectiveTimezone = await resolveTimezone(
+      data.timezone?.trim() || event.timezone,
+      userId,
+    );
+    const adjustedStartAt = (data.startAt && typeof body.startAt === 'string')
+      ? parseDatetimeInTimezone(body.startAt, effectiveTimezone)
       : data.startAt;
-    const adjustedEndAt = (data.endAt && typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
-      ? parseNaiveDatetimeInTimezone(body.endAt, effectiveTimezone)
+    const adjustedEndAt = (data.endAt && typeof body.endAt === 'string')
+      ? parseDatetimeInTimezone(body.endAt, effectiveTimezone)
       : data.endAt;
 
     // Validate dates if both are provided
@@ -246,18 +278,6 @@ export async function PATCH(
     if (data.agentTrigger && !event.driveId) {
       return NextResponse.json(
         { error: 'Agent triggers require a drive event' },
-        { status: 400 }
-      );
-    }
-
-    // Reject agent-trigger upserts on recurring events. The cron poller
-    // fires one-shot occurrences, so attaching one trigger to a recurring
-    // event would silently misfire on every occurrence past the first.
-    // Mirrors the POST /events and PUT /triggers guards.
-    const willBeRecurring = data.recurrenceRule !== undefined ? data.recurrenceRule !== null : event.recurrenceRule !== null;
-    if (data.agentTrigger && willBeRecurring) {
-      return NextResponse.json(
-        { error: 'Agent triggers are not supported for recurring events' },
         { status: 400 }
       );
     }
@@ -284,6 +304,11 @@ export async function PATCH(
     // write where the title moved but the trigger didn't would be confusing
     // for the user and hard to retry safely.
     const [updatedEvent] = await db.transaction(async (tx) => {
+      // [D-OW-33] ruling: an org-drive event made more visible (e.g. Private → Drive) loosens who reads it; refused
+      // while the drive's org is lapsed, judged on the event row locked in this transaction. Narrowing still applies.
+      if (data.visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, data.visibility))) {
+        throw new OrgLapsedError();
+      }
       const result = await tx
         .update(calendarEvents)
         .set({
@@ -293,7 +318,12 @@ export async function PATCH(
           startAt: adjustedStartAt,
           endAt: adjustedEndAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          // Persist the CANONICAL zone the request resolved to, not the raw
+          // field. `" America/Chicago "` resolves and validates trimmed, and
+          // `" "` resolves to the event's existing zone — writing the raw string
+          // back would store a value nothing can schedule against. Absent stays
+          // undefined, which Drizzle reads as "no change".
+          timezone: data.timezone === undefined ? undefined : effectiveTimezone,
           recurrenceRule: data.recurrenceRule,
           visibility: data.visibility,
           color: data.color,
@@ -303,24 +333,10 @@ export async function PATCH(
         .where(eq(calendarEvents.id, eventId))
         .returning();
 
-      if (adjustedStartAt && data.agentTrigger === undefined) {
-        // Caller didn't touch the trigger payload — keep the existing
-        // re-aim semantics: only triggers that haven't been processed yet
-        // get their triggerAt bumped. If the caller IS upserting the
-        // trigger this tick, the upsert below will set triggerAt itself
-        // and there's no point doing the re-aim sweep.
-        await tx
-          .update(calendarTriggers)
-          .set({ triggerAt: adjustedStartAt })
-          .where(and(
-            eq(calendarTriggers.calendarEventId, eventId),
-            sql`NOT EXISTS (
-              SELECT 1 FROM ${workflowRuns}
-              WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
-                AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
-            )`,
-          ));
-      }
+      // Effective recurrence rule after the update (undefined = unchanged).
+      const effectiveRecurrenceRule = data.recurrenceRule !== undefined
+        ? data.recurrenceRule
+        : event.recurrenceRule;
 
       // Apply agentTrigger changes inside the same tx so partial writes
       // can't leave the event mutated but the trigger out of sync.
@@ -332,9 +348,22 @@ export async function PATCH(
           scheduledById: userId,
           calendarEventId: eventId,
           triggerAt: newStartAt,
-          timezone: data.timezone ?? event.timezone ?? 'UTC',
+          timezone: effectiveTimezone,
           agentTrigger: data.agentTrigger,
+          recurrenceRule: effectiveRecurrenceRule,
+          recurrenceExceptions: event.recurrenceExceptions ?? [],
         });
+      } else if (data.agentTrigger === undefined && (adjustedStartAt || data.recurrenceRule !== undefined)) {
+        // Caller didn't touch agentTrigger but timing/recurrence changed.
+        // For recurring events: re-expand the full occurrence series.
+        // For one-shot events: re-aim the single pending trigger row.
+        await resyncCalendarTriggerTimings(
+          tx,
+          eventId,
+          newStartAt,
+          effectiveRecurrenceRule,
+          event.recurrenceExceptions ?? [],
+        );
       }
 
       return result;
@@ -360,19 +389,22 @@ export async function PATCH(
       },
     });
 
-    // Get all attendee IDs for broadcasting
-    const attendees = await db
-      .select({ userId: eventAttendees.userId })
-      .from(eventAttendees)
-      .where(eq(eventAttendees.eventId, eventId));
+    // Get all attendee IDs and shared drive IDs for broadcasting
+    const [attendees, allDriveIds] = await Promise.all([
+      db.select({ userId: eventAttendees.userId })
+        .from(eventAttendees)
+        .where(eq(eventAttendees.eventId, eventId)),
+      getAllDriveIdsForEvent(eventId),
+    ]);
 
-    // Broadcast event update
+    // Broadcast event update to home drive + all shared drives
     await broadcastCalendarEvent({
       eventId,
       driveId: updatedEvent.driveId,
       operation: 'updated',
       userId,
       attendeeIds: attendees.map(a => a.userId),
+      extraDriveIds: allDriveIds.slice(1), // skip home drive (index 0)
     });
 
     // Push update to Google Calendar (fire-and-forget)
@@ -384,6 +416,7 @@ export async function PATCH(
 
     return NextResponse.json(completeEvent);
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating calendar event:', error as Error);
     return NextResponse.json(
       { error: 'Failed to update calendar event' },
@@ -429,19 +462,21 @@ export async function DELETE(
     }
 
     // Check edit permission
-    const canEdit = await canEditEvent(userId, event);
+    const canEdit = await canEditEvent(auth, event);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json(
         { error: 'You do not have permission to delete this event' },
         { status: 403 }
-      );
+      ));
     }
 
-    // Get all attendee IDs before deletion for broadcasting
-    const attendees = await db
-      .select({ userId: eventAttendees.userId })
-      .from(eventAttendees)
-      .where(eq(eventAttendees.eventId, eventId));
+    // Get all attendee IDs and shared drive IDs before deletion for broadcasting
+    const [attendees, allDriveIds] = await Promise.all([
+      db.select({ userId: eventAttendees.userId })
+        .from(eventAttendees)
+        .where(eq(eventAttendees.eventId, eventId)),
+      getAllDriveIdsForEvent(eventId),
+    ]);
 
     // Delete from Google Calendar before soft-deleting locally (fire-and-forget)
     after(() => {
@@ -460,13 +495,14 @@ export async function DELETE(
       })
       .where(eq(calendarEvents.id, eventId));
 
-    // Broadcast event deletion
+    // Broadcast event deletion to home drive + all shared drives
     await broadcastCalendarEvent({
       eventId,
       driveId: event.driveId,
       operation: 'deleted',
       userId,
       attendeeIds: attendees.map(a => a.userId),
+      extraDriveIds: allDriveIds.slice(1), // skip home drive (index 0)
     });
 
     auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'event', resourceId: eventId });

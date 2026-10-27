@@ -1,99 +1,132 @@
 /**
  * Memory Compaction Service
  *
- * When a personalization field exceeds the size threshold, this service
- * uses LLM to reorganize and summarize the content while preserving
- * key insights.
+ * When a personalization field exceeds its budget, this service uses LLM to
+ * reorganize and reduce the content while preserving key information.
+ *
+ * Compaction is now deletion-biased: "delete anything that does not change
+ * AI behaviour; preserve only what does."
  */
 
 import { generateText } from 'ai';
-import { createAIProvider, isProviderError } from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import {
-  updatePersonalization,
-  getCurrentPersonalization,
-} from './integration-service';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
+import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
-// Size thresholds
-const DEFAULT_MAX_LENGTH = 20000;
-const COMPACTION_TRIGGER_RATIO = 0.9;
-const COMPACTION_TARGET_RATIO = 0.7;
+import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
 
-type PersonalizationField = 'bio' | 'writingStyle' | 'rules';
+export type { MemoryField };
 
-const COMPACTION_PROMPTS: Record<PersonalizationField, string> = {
-  bio: `You are reorganizing a user's bio/background information that has grown too long.
+const COMPACTION_PROMPTS: Record<MemoryField, string> = {
+  bio: `You are compacting a user's bio and background information that has grown too long.
 
-Your job is to:
-1. Preserve all key facts about their background, expertise, and role
-2. Consolidate redundant or overlapping information
-3. Remove outdated or superseded information (keep most recent)
-4. Maintain the essential character and voice
-5. Organize into clear sections if appropriate
+Your job is to DELETE anything that does not change how an AI behaves. Keep ONLY what affects AI responses.
 
-Output the reorganized bio as clean prose or bullet points. Do NOT add commentary or explanations - just output the compacted content.`,
+REMOVE:
+- Personal history, family details, living situation
+- Religious or political beliefs
+- Hobbies, games, sports, entertainment preferences
+- Named third parties (other than the user)
+- Self-reported metrics or rankings
+- Current tasks or project status
 
-  writingStyle: `You are reorganizing a user's writing style preferences that have grown too long.
+PRESERVE:
+- Professional expertise and domain knowledge
+- Technical background and specialization
+- Thinking patterns and decision-making frameworks
+- Work style preferences that affect AI collaboration
 
-Your job is to:
-1. Preserve all distinct communication preferences
-2. Merge similar or overlapping preferences
-3. Remove redundant instructions
-4. Keep the most specific/actionable guidance
-5. Organize logically (tone, format, length, etc.)
+Organize the remaining content clearly. Output only the compacted bio, no commentary.`,
 
-Output the reorganized writing style as clean prose or bullet points. Do NOT add commentary - just output the compacted content.`,
+  writingStyle: `You are compacting a user's writing style preferences that have grown too long.
 
-  rules: `You are reorganizing a user's AI rules/instructions that have grown too long.
+Your job is to DELETE anything that does not change how an AI writes or responds. Keep ONLY actionable instructions.
 
-Your job is to:
-1. Preserve all explicit do's and don'ts
-2. Consolidate rules that say the same thing differently
-3. Remove rules that contradict newer rules (keep most recent)
-4. Organize by category if appropriate
-5. Keep the most specific/actionable rules
+REMOVE:
+- Descriptive statements about how the user talks (e.g. "user uses typos")
+- Redundant or conflicting instructions
+- Project-specific preferences
 
-Output the reorganized rules as clean prose or bullet points. Do NOT add commentary - just output the compacted content.`,
+PRESERVE:
+- Imperative instructions for how AI should respond TO the user
+- Imperative instructions for how AI should draft text AS the user
+- Voice, banned constructions, sentence shape, characteristic phrasing
+- Formatting and interaction preferences
+
+Organize by direction (TO vs AS) if both exist. Output only the compacted content, no commentary.`,
+
+  rules: `You are compacting a user's AI behavior rules that have grown too long.
+
+Your job is to DELETE anything that does not change how an AI behaves. Keep ONLY universal rules.
+
+REMOVE:
+- Project-specific technology choices
+- Scope or priority decisions for a specific release
+- One-off decisions tied to a specific context
+- Redundant or conflicting rules
+
+PRESERVE:
+- Universal preferences that apply in ANY workspace
+- Persistent do's and don'ts about AI output
+- Always/never instructions that the user wants followed
+
+Organize clearly. Output only the compacted rules, no commentary.`,
 };
 
 /**
- * Check if a field needs compaction
+ * Check if a field needs compaction.
  */
 export function needsCompaction(
   content: string,
-  maxLength: number = DEFAULT_MAX_LENGTH
+  field: MemoryField
 ): boolean {
-  const triggerLength = maxLength * COMPACTION_TRIGGER_RATIO;
-  return content.length > triggerLength;
+  return content.length > MAX_FIELD_LENGTH[field];
 }
 
+/** A field's compaction: its (possibly unchanged) content, or the credit refusal that stopped it. */
+type CompactionOutcome = { content: string } | { creditRefusal: MemoryGateRefusal };
+
 /**
- * Compact a single personalization field
+ * Compact a single personalization field under its own credit reservation.
  */
 export async function compactField(
   userId: string,
-  fieldName: PersonalizationField,
-  content: string,
-  maxLength: number = DEFAULT_MAX_LENGTH
-): Promise<string> {
-  const targetLength = Math.floor(maxLength * COMPACTION_TARGET_RATIO);
+  field: MemoryField,
+  content: string
+): Promise<CompactionOutcome> {
+  const compactTo = compactionTarget(field);
 
   const providerResult = await createAIProvider(userId, {
-    selectedProvider: 'pagespace',
-    selectedModel: 'pro',
-  });
+    selectedProvider: BACKGROUND_HEAVY_PROVIDER,
+    selectedModel: BACKGROUND_HEAVY_MODEL,
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory compaction: provider error', {
       userId,
-      fieldName,
+      field,
       error: providerResult.error,
     });
-    return content;
+    return { content };
+  }
+
+  // Reserve before the model (SPEND-1). Refused: the page keeps its content, as when the
+  // provider is unavailable, and nothing is charged.
+  const reservation = await reserveMemoryCall(userId, {
+    provider: providerResult.provider,
+    model: providerResult.modelName,
+    inputChars: content.length,
+  });
+  if (!reservation.allowed) {
+    loggers.api.info('Memory compaction: skipped, credit gate refused', { userId, field, reason: reservation.reason });
+    return { creditRefusal: reservation.reason };
   }
 
   try {
-    const systemPrompt = COMPACTION_PROMPTS[fieldName];
+    const systemPrompt = COMPACTION_PROMPTS[field];
 
     const result = await generateText({
       model: providerResult.model,
@@ -101,81 +134,92 @@ export async function compactField(
       messages: [
         {
           role: 'user',
-          content: `Here is the ${fieldName} content that needs to be reorganized and compacted:
+          content: `Here is the ${field} content that needs to be compacted to under ${compactTo} characters:
 
 ---
 ${content}
 ---
 
-Reorganize this into a more concise version (target: under ${targetLength} characters) while preserving all key information. Output only the compacted content.`,
+Compact this by deleting anything that does not change AI behaviour. Output only the compacted content.`,
         },
       ],
       temperature: 0.3,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
+
+    // Settles the reservation once (trackUsage takes the hold).
+    discardUsageOutcome(AIMonitoring.trackUsage({
+      userId,
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
+      inputTokens: result.usage?.inputTokens,
+      outputTokens: result.usage?.outputTokens,
+      totalTokens: result.usage
+        ? (result.usage.inputTokens ?? 0) + (result.usage.outputTokens ?? 0)
+        : undefined,
+      success: true,
+      metadata: { feature: 'memory_compaction', field },
+    }));
 
     const compactedContent = result.text.trim();
 
     if (compactedContent.length === 0) {
       loggers.api.warn('Memory compaction: empty result, keeping original', {
         userId,
-        fieldName,
+        field,
       });
-      return content;
+      return { content };
     }
 
     if (compactedContent.length >= content.length) {
       loggers.api.debug('Memory compaction: no size reduction, keeping original', {
         userId,
-        fieldName,
+        field,
         originalLength: content.length,
         compactedLength: compactedContent.length,
       });
-      return content;
+      return { content };
     }
 
     loggers.api.info('Memory compaction: field compacted', {
       userId,
-      fieldName,
+      field,
       originalLength: content.length,
       compactedLength: compactedContent.length,
       reduction: `${Math.round((1 - compactedContent.length / content.length) * 100)}%`,
     });
 
-    return compactedContent;
+    return { content: compactedContent };
   } catch (error) {
     loggers.api.error('Memory compaction: generation error', {
       userId,
-      fieldName,
+      field,
       error,
     });
-    return content;
+    return { content };
   }
 }
 
 /**
- * Check and compact all personalization fields for a user if needed
+ * Check and compact all personalization fields for a user if needed.
  */
 export async function checkAndCompactIfNeeded(
-  userId: string,
-  maxLength: number = DEFAULT_MAX_LENGTH
-): Promise<{ compacted: boolean; fields: string[] }> {
-  const current = await getCurrentPersonalization(userId);
+  userId: string
+): Promise<{ compacted: boolean; fields: MemoryField[]; creditRefusal?: MemoryGateRefusal }> {
+  const current = await getCurrentPersonalizationPages(userId);
 
-  if (!current) {
-    return { compacted: false, fields: [] };
-  }
+  const fieldsToCompact: MemoryField[] = [];
 
-  const fieldsToCompact: PersonalizationField[] = [];
-
-  if (current.bio && needsCompaction(current.bio, maxLength)) {
-    fieldsToCompact.push('bio');
-  }
-  if (current.writingStyle && needsCompaction(current.writingStyle, maxLength)) {
-    fieldsToCompact.push('writingStyle');
-  }
-  if (current.rules && needsCompaction(current.rules, maxLength)) {
-    fieldsToCompact.push('rules');
+  for (const [field, content] of Object.entries(current) as [MemoryField, string][]) {
+    if (content && needsCompaction(content, field)) {
+      fieldsToCompact.push(field);
+    }
   }
 
   if (fieldsToCompact.length === 0) {
@@ -187,27 +231,38 @@ export async function checkAndCompactIfNeeded(
     fields: fieldsToCompact,
   });
 
-  const compactionResults = await Promise.all(
-    fieldsToCompact.map(async (field) => {
-      const originalContent = current[field];
-      if (!originalContent) return { field, content: '' };
-      const compactedContent = await compactField(userId, field, originalContent, maxLength);
-      return { field, content: compactedContent };
-    })
-  );
+  const compactedFields: MemoryField[] = [];
 
-  const updates: Partial<Pick<typeof current, 'bio' | 'writingStyle' | 'rules'>> = {};
-  const compactedFields: string[] = [];
-
-  for (const result of compactionResults) {
-    if (result.content && result.content !== current[result.field]) {
-      updates[result.field] = result.content;
-      compactedFields.push(result.field);
+  for (const field of fieldsToCompact) {
+    const originalContent = current[field] ?? '';
+    // Each field's model call reserves its own credits first (reserveMemoryCall). A
+    // refusal compacts and writes nothing for that field, and stops the remaining
+    // fields: their pages stay exactly as the user and the evaluator left them, and
+    // the next run tries again. Fields already compacted were paid for and keep.
+    const outcome = await compactField(userId, field, originalContent);
+    if ('creditRefusal' in outcome) {
+      return { compacted: compactedFields.length > 0, fields: compactedFields, creditRefusal: outcome.creditRefusal };
     }
-  }
+    const compactedContent = outcome.content;
 
-  if (compactedFields.length > 0) {
-    await updatePersonalization(userId, updates);
+    if (compactedContent === originalContent) continue;
+
+    // Report only what actually landed. `updatePersonalizationPage` refuses a
+    // write when the page was edited during this run (the user's edit wins) or
+    // when the pointer is stale — claiming those as compacted would report a
+    // page as shrunk while it is still over budget, and the next run would
+    // silently do the same thing again.
+    const result = await updatePersonalizationPage(userId, field, compactedContent);
+
+    if (result.written) {
+      compactedFields.push(field);
+    } else {
+      loggers.api.warn('Memory compaction: compacted content was not written', {
+        userId,
+        field,
+        reason: result.reason,
+      });
+    }
   }
 
   return {

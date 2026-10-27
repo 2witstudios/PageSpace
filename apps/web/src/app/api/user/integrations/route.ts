@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listUserConnections, createConnection, findUserConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository';
+import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials';
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler';
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
-import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
+import { validateIntegrationTargetUrl } from '@pagespace/lib/integrations/validation/validate-base-url';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -28,6 +30,7 @@ const createConnectionSchema = z.object({
  * List all integration connections for the authenticated user.
  */
 export async function GET(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
@@ -70,6 +73,7 @@ export async function GET(request: Request) {
  * For API key/bearer: validates and creates connection immediately.
  */
 export async function POST(request: Request) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
@@ -86,6 +90,18 @@ export async function POST(request: Request) {
 
     const { providerId, name, visibility, credentials, baseUrlOverride, returnUrl } = validation.data;
 
+    // A stored override becomes the fetch base for credentialed tool calls:
+    // refuse private / loopback / link-local / metadata targets before any write.
+    if (baseUrlOverride) {
+      const target = await validateIntegrationTargetUrl(baseUrlOverride);
+      if (!target.ok) {
+        return NextResponse.json(
+          { error: 'Validation failed', details: { baseUrlOverride: [target.reason] } },
+          { status: 400 }
+        );
+      }
+    }
+
     // Load provider
     const provider = await getProviderById(db, providerId);
     if (!provider || !provider.enabled) {
@@ -98,7 +114,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Connection already exists for this provider' }, { status: 409 });
     }
 
-    const config = provider.config as IntegrationProviderConfig;
+    // Builtin providers may have changed shape (new scopes, renamed auth
+    // params) since this row was persisted — resolve to the canonical
+    // in-memory definition rather than trusting the possibly-stale DB copy.
+    const config = resolveProviderConfig(provider);
+    if (!config) {
+      return NextResponse.json({ error: 'Provider configuration is missing' }, { status: 500 });
+    }
 
     // OAuth providers: redirect to auth URL
     if (config.authMethod.type === 'oauth2') {

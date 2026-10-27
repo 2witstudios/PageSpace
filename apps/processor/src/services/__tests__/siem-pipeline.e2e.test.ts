@@ -197,6 +197,11 @@ vi.mock('../../db', () => {
     getPoolForWorker: () => ({
       connect: async () => client,
     }),
+    // Unreached: this e2e pins the LEGACY single-store pipeline, which
+    // post-cutover is the break-glass routing (env stubbed in beforeEach).
+    getAdminPoolForWorker: () => {
+      throw new Error('getAdminPoolForWorker must not be called in the break-glass e2e');
+    },
   };
 });
 
@@ -314,6 +319,10 @@ describe('SIEM pipeline e2e', () => {
     setEnv('AUDIT_WEBHOOK_SECRET', WEBHOOK_SECRET);
     setEnv('AUDIT_WEBHOOK_BATCH_SIZE', '100');
     setEnv('AUDIT_WEBHOOK_RETRY_ATTEMPTS', '0');
+    // This e2e pins the LEGACY single-store pipeline — post-cutover that is
+    // exactly the break-glass routing (#890 Phase 2 leaf 7).
+    setEnv('ADMIN_DATABASE_URL', '');
+    setEnv('ADMIN_DB_BREAK_GLASS', 'true');
   });
 
   afterEach(async () => {

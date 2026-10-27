@@ -105,30 +105,39 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
   return { ChatTextarea: MockChatTextarea };
 });
 
-// Mock the footer so test queries don't fight popovers/tooltips
+// Mock the footer so test queries don't fight popovers/tooltips.
+// capturedFooterMentionSelect lets tests trigger the onMentionSelect callback.
+const { capturedFooterMentionSelect } = vi.hoisted(() => ({
+  capturedFooterMentionSelect: vi.fn(),
+}));
 vi.mock('../ChannelInputFooter', () => ({
   ChannelInputFooter: ({
     onAttachmentClick,
     attachmentsEnabled,
     disabled,
+    onMentionSelect,
   }: {
     onAttachmentClick?: () => void;
     attachmentsEnabled?: boolean;
     disabled?: boolean;
-  }) => (
-    <div data-testid="channel-input-footer">
-      {attachmentsEnabled && (
-        <button
-          type="button"
-          data-testid="attach-button"
-          onClick={onAttachmentClick}
-          disabled={disabled}
-        >
-          Attach
-        </button>
-      )}
-    </div>
-  ),
+    onMentionSelect?: (s: unknown) => void;
+  }) => {
+    capturedFooterMentionSelect.mockImplementation(onMentionSelect ?? (() => {}));
+    return (
+      <div data-testid="channel-input-footer">
+        {attachmentsEnabled && (
+          <button
+            type="button"
+            data-testid="attach-button"
+            onClick={onAttachmentClick}
+            disabled={disabled}
+          >
+            Attach
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 // Capture useAttachmentUpload args + expose a controllable mock state
@@ -139,8 +148,15 @@ const uploadHookCalls: Array<{
 let mockAttachment: FileAttachment | null = null;
 let mockIsUploading = false;
 const mockUploadFile = vi.fn(async (_file: File) => {});
+const mockUploadFiles = vi.fn(async (_files: File[]) => {});
 const mockClearAttachment = vi.fn(() => {
   mockAttachment = null;
+});
+const mockRemoveAttachment = vi.fn((_id: string) => {
+  mockAttachment = null;
+});
+const mockRestoreAttachments = vi.fn((restored: FileAttachment[]) => {
+  mockAttachment = restored[0] ?? null;
 });
 vi.mock('@/hooks/useAttachmentUpload', async () => {
   const actual =
@@ -155,10 +171,14 @@ vi.mock('@/hooks/useAttachmentUpload', async () => {
     }) => {
       uploadHookCalls.push(opts);
       return {
+        attachments: mockAttachment ? [mockAttachment] : [],
         attachment: mockAttachment,
         isUploading: mockIsUploading,
         uploadFile: mockUploadFile,
+        uploadFiles: mockUploadFiles,
         clearAttachment: mockClearAttachment,
+        removeAttachment: mockRemoveAttachment,
+        restoreAttachments: mockRestoreAttachments,
       };
     },
   };
@@ -167,6 +187,7 @@ vi.mock('@/hooks/useAttachmentUpload', async () => {
 import { ChannelInput } from '../ChannelInput';
 
 const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-abc',
   id: 'file-abc',
   originalName: 'photo.png',
   size: 12345,
@@ -232,18 +253,18 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(onSend).toHaveBeenCalledWith(undefined);
   });
 
-  it('textAndAttachment_send_callsOnSendWithAttachmentObject', async () => {
+  it('textAndAttachment_send_callsOnSendWithAttachmentArray', async () => {
     mockAttachment = sampleAttachment;
     const user = userEvent.setup();
     const { onSend } = renderInput({ value: 'with file' });
 
     await user.type(screen.getByTestId('chat-textarea'), '{enter}');
 
-    expect(onSend).toHaveBeenCalledWith(sampleAttachment);
+    expect(onSend).toHaveBeenCalledWith([sampleAttachment]);
     expect(mockClearAttachment).toHaveBeenCalledTimes(1);
   });
 
-  it('attachmentOnly_emptyText_send_callsOnSendWithAttachment_andDoesNotBlockSend', async () => {
+  it('attachmentOnly_emptyText_send_callsOnSendWithAttachmentArray_andDoesNotBlockSend', async () => {
     mockAttachment = sampleAttachment;
     const user = userEvent.setup();
     const { onSend } = renderInput({ value: '' });
@@ -251,7 +272,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     // Empty textarea + Enter should still send because there is an attachment.
     await user.type(screen.getByTestId('chat-textarea'), '{enter}');
 
-    expect(onSend).toHaveBeenCalledWith(sampleAttachment);
+    expect(onSend).toHaveBeenCalledWith([sampleAttachment]);
   });
 
   it('isUploading_disablesSendButton_andEnterToSend', async () => {
@@ -275,7 +296,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(screen.getByText('photo.png')).toBeInTheDocument();
     const remove = screen.getByRole('button', { name: /remove attachment/i });
     await user.click(remove);
-    expect(mockClearAttachment).toHaveBeenCalledTimes(1);
+    expect(mockRemoveAttachment).toHaveBeenCalledWith('instance-abc');
 
     // Simulate the hook clearing by re-rendering with attachment null + empty value
     mockAttachment = null;
@@ -292,7 +313,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(sendBtn).toBeDisabled();
   });
 
-  it('pasteImageFile_invokesUploadFile_withTheFile', () => {
+  it('pasteImageFile_invokesUploadFiles_withTheFile', () => {
     renderInput();
 
     const file = new File(['x'], 'pasted.png', { type: 'image/png' });
@@ -310,11 +331,11 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
-  it('pastePlainText_doesNotInvokeUploadFile', () => {
+  it('pastePlainText_doesNotInvokeUploadFiles', () => {
     renderInput();
     const textarea = screen.getByTestId('chat-textarea');
 
@@ -330,10 +351,10 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).not.toHaveBeenCalled();
+    expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
-  it('dragDropImageFile_invokesUploadFile_withTheFile', () => {
+  it('dragDropImageFile_invokesUploadFiles_withTheFile', () => {
     const { container } = renderInput();
 
     const file = new File(['x'], 'dropped.png', { type: 'image/png' });
@@ -350,11 +371,11 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
-  it('filePickerButton_choosingFile_invokesUploadFile', () => {
+  it('filePickerButton_choosingFile_invokesUploadFiles', () => {
     const { container } = renderInput();
 
     const attach = screen.getByTestId('attach-button');
@@ -366,8 +387,8 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     const file = new File(['x'], 'picked.pdf', { type: 'application/pdf' });
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    expect(mockUploadFile).toHaveBeenCalledTimes(1);
-    expect(mockUploadFile).toHaveBeenCalledWith(file);
+    expect(mockUploadFiles).toHaveBeenCalledTimes(1);
+    expect(mockUploadFiles).toHaveBeenCalledWith([file]);
   });
 
   it('filePicker_hasNoAcceptRestriction_allowsAnyFileType', () => {
@@ -391,7 +412,7 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
       },
     });
 
-    expect(mockUploadFile).not.toHaveBeenCalled();
+    expect(mockUploadFiles).not.toHaveBeenCalled();
   });
 
   it('mentionsAndIme_propsForwardedToChatTextarea_unchangedByAttachmentFeature', () => {
@@ -404,5 +425,56 @@ describe('ChannelInput — DM upload mode (conversationId)', () => {
     expect(last?.driveId).toBe('drive-1');
     expect(last?.crossDrive).toBe(true);
     expect(last?.popupPlacement).toBe('top');
+  });
+});
+
+describe('ChannelInput mention selection', () => {
+  beforeEach(() => {
+    mockAttachment = null;
+    mockIsUploading = false;
+    vi.clearAllMocks();
+  });
+
+  it('should insert a formatted mention into the value when a suggestion is selected', () => {
+    const onChange = vi.fn();
+    render(
+      <ChannelInput
+        value="Hello "
+        onChange={onChange}
+        onSend={vi.fn()}
+        driveId="drive-1"
+      />,
+    );
+
+    capturedFooterMentionSelect({
+      id: 'user-1',
+      label: 'Alice',
+      type: 'user',
+      data: {},
+    });
+
+    expect(onChange).toHaveBeenCalledWith(expect.stringContaining('Alice'));
+  });
+
+  it('should append a space after the inserted mention', () => {
+    const onChange = vi.fn();
+    render(
+      <ChannelInput
+        value=""
+        onChange={onChange}
+        onSend={vi.fn()}
+        driveId="drive-1"
+      />,
+    );
+
+    capturedFooterMentionSelect({
+      id: 'page-1',
+      label: 'Project Alpha Budget',
+      type: 'page',
+      data: { pageType: 'DOCUMENT', driveId: 'drive-1' },
+    });
+
+    const inserted: string = onChange.mock.calls[0][0];
+    expect(inserted.endsWith(' ')).toBe(true);
   });
 });

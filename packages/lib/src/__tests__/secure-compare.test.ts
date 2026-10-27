@@ -150,25 +150,28 @@ describe('secureCompare', () => {
     /**
      * NOTE: Actual timing-safe verification requires statistical timing analysis
      * which is out of scope for unit tests. This documents expected behavior
-     * and verifies the function uses SHA-256 hashing + crypto.timingSafeEqual.
+     * and verifies the function uses SHA3-256 hashing + crypto.timingSafeEqual.
+     *
+     * SHA3-256 is the repo convention for auth/secret comparisons (it matches how
+     * tokens are hashed at rest — see token-utils.ts `hashToken`).
      *
      * The implementation must:
-     * 1. SHA-256 hash both inputs to produce fixed 32-byte digests
+     * 1. SHA3-256 hash both inputs to produce fixed 32-byte digests
      * 2. Use crypto.timingSafeEqual on the equal-length hashes
      * 3. Never branch on input length or content before comparison
      */
     it('performs length-constant comparison even when lengths differ (both hash to 32 bytes)', () => {
-      // Both inputs are SHA-256 hashed to 32-byte digests before comparison
+      // Both inputs are SHA3-256 hashed to 32-byte digests before comparison
       expect(secureCompare('short', 'much-longer-string')).toBe(false);
       expect(secureCompare('much-longer-string', 'short')).toBe(false);
     });
 
-    it('hashes both inputs with SHA-256 before comparing', () => {
+    it('hashes both inputs with SHA3-256 before comparing', () => {
       const createHashSpy = vi.spyOn(crypto, 'createHash');
       try {
         secureCompare('input-a', 'input-b');
-        const sha256Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha256');
-        expect(sha256Calls).toHaveLength(2);
+        const sha3Calls = createHashSpy.mock.calls.filter(([alg]) => alg === 'sha3-256');
+        expect(sha3Calls).toHaveLength(2);
       } finally {
         createHashSpy.mockRestore();
       }

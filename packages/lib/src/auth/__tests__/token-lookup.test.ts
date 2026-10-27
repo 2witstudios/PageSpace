@@ -8,6 +8,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
       mcpTokens: { findFirst: vi.fn() },
+      oauthAccessTokens: { findFirst: vi.fn() },
     },
   },
 }));
@@ -17,13 +18,19 @@ vi.mock('@pagespace/db/schema/auth', () => ({
     revokedAt: 'revokedAt',
   },
 }));
+vi.mock('@pagespace/db/schema/oauth', () => ({
+  oauthAccessTokens: {
+    tokenHash: 'oauthAccessTokens.tokenHash',
+    revokedAt: 'oauthAccessTokens.revokedAt',
+  },
+}));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   isNull: vi.fn(),
 }));
 
-import { findMCPTokenByValue } from '../token-lookup';
+import { findMCPTokenByValue, findOAuthAccessTokenByValue } from '../token-lookup';
 import { db } from '@pagespace/db/db';
 
 describe('token-lookup', () => {
@@ -80,6 +87,60 @@ describe('token-lookup', () => {
       vi.mocked(db.query.mcpTokens.findFirst).mockResolvedValue(undefined as never);
 
       const result = await findMCPTokenByValue('mcp_nonexistent-token');
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('findOAuthAccessTokenByValue', () => {
+    it('should return null for empty input', async () => {
+      const result = await findOAuthAccessTokenByValue('');
+      expect(result).toBeNull();
+      expect(db.query.oauthAccessTokens.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('should return null for non-string input', async () => {
+      const result = await findOAuthAccessTokenByValue(null as unknown as string);
+      expect(result).toBeNull();
+    });
+
+    it('should return null for token without ps_at_ prefix', async () => {
+      const result = await findOAuthAccessTokenByValue('mcp_some-token');
+      expect(result).toBeNull();
+      expect(db.query.oauthAccessTokens.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('should look up token by hash when prefix is correct', async () => {
+      const mockRecord = {
+        id: 'oauth-token-1',
+        userId: 'user-1',
+        tokenHash: 'hash123',
+        tokenPrefix: 'ps_at_abc',
+        familyId: 'family-1',
+        scopes: ['account'],
+        tokenVersion: 1,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+        revokedAt: null,
+        user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: null },
+      };
+      vi.mocked(db.query.oauthAccessTokens.findFirst).mockResolvedValue(mockRecord as never);
+
+      const result = await findOAuthAccessTokenByValue('ps_at_some-valid-token');
+      expect(result).toEqual(mockRecord);
+      expect(db.query.oauthAccessTokens.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          with: expect.objectContaining({
+            user: expect.objectContaining({
+              columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true, suspendedAt: true },
+            }),
+          }),
+        })
+      );
+    });
+
+    it('should return null when no matching token found', async () => {
+      vi.mocked(db.query.oauthAccessTokens.findFirst).mockResolvedValue(undefined as never);
+
+      const result = await findOAuthAccessTokenByValue('ps_at_nonexistent-token');
       expect(result).toBeNull();
     });
   });

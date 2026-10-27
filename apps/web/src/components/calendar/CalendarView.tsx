@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { format, addMonths, subMonths, addWeeks, subWeeks, addDays, subDays } from 'date-fns';
 import { Bot, ChevronLeft, ChevronRight, Plus, Calendar as CalendarIcon, List, LayoutGrid, Clock, PanelLeft, User } from 'lucide-react';
 import useSWR from 'swr';
 import { Button } from '@/components/ui/button';
+import { FocusTrigger } from '@/components/shared/FocusTrigger';
 import { Toggle } from '@/components/ui/toggle';
 import {
   Select,
@@ -27,12 +29,15 @@ import { MobileCalendarView } from './MobileCalendarView';
 import { EventModal } from './EventModal';
 import { CalendarSidebar } from './CalendarSidebar';
 import {
+  AttendeeStatus,
   CalendarViewMode,
   CalendarEvent,
   CalendarHandlers,
   EventColorConfig,
+  RecurrenceRule,
   getDriveCalendarColor,
 } from './calendar-types';
+import { useAuthStore } from '@/stores/useAuthStore';
 
 interface CalendarViewProps {
   context: 'user' | 'drive';
@@ -59,16 +64,36 @@ const googleCalendarStatusFetcher = async (url: string): Promise<GoogleCalendarS
 export function CalendarView({ context, driveId, driveName: _driveName, className }: CalendarViewProps) {
   const { tier } = useDeviceTier();
   const shouldUseMobileCalendar = tier === 'mobile';
-  const [currentDate, setCurrentDate] = useState(new Date());
+
+  // Deep-link support: a tool-call card (or any link) can open a specific event
+  // via ?eventId=<id>&date=<ISO>. The date seeds the initial view window so the
+  // target event is actually loaded before we open its modal.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const deepLinkEventId = searchParams.get('eventId');
+  const deepLinkDate = searchParams.get('date');
+
+  const [currentDate, setCurrentDate] = useState(() => {
+    if (deepLinkDate) {
+      const d = new Date(deepLinkDate);
+      if (!isNaN(d.getTime())) return d;
+    }
+    return new Date();
+  });
   const [viewMode, setViewMode] = useState<CalendarViewMode>('month');
   const [showTasks, setShowTasks] = useState(true);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+  // Track which deep-linked event id we've already opened, so a second event
+  // link clicked on the same page (no remount) still opens.
+  const [handledDeepLinkId, setHandledDeepLinkId] = useState<string | null>(null);
   const [newEventDefaults, setNewEventDefaults] = useState<{
     startAt: Date;
     endAt: Date;
     allDay: boolean;
   } | null>(null);
+
+  const currentUserId = useAuthStore((s) => s.user?.id);
 
   const {
     events,
@@ -78,6 +103,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     createEvent,
     updateEvent,
     deleteEvent,
+    updateRsvp,
+    addAttendees,
+    removeAttendee,
     refresh: _refresh,
   } = useCalendarData({
     context,
@@ -87,12 +115,34 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     includeTasks: showTasks,
   });
 
+  // Open the deep-linked event once it appears in the loaded set. Keyed on the
+  // event id (not a one-shot flag) so clicking a different event link while
+  // already on the calendar opens the new event too. If the target isn't in the
+  // current window yet, jump the view to its date so the fetch includes it.
+  useEffect(() => {
+    if (!deepLinkEventId || deepLinkEventId === handledDeepLinkId) return;
+    const match = events.find((e) => e.id === deepLinkEventId);
+    if (match) {
+      setSelectedEvent(match);
+      setIsEventModalOpen(true);
+      setHandledDeepLinkId(deepLinkEventId);
+      return;
+    }
+    if (deepLinkDate) {
+      const target = new Date(deepLinkDate);
+      if (!isNaN(target.getTime()) && target.getTime() !== currentDate.getTime()) {
+        setCurrentDate(target);
+      }
+    }
+  }, [deepLinkEventId, deepLinkDate, handledDeepLinkId, events, currentDate]);
+
   // Drive filtering (root calendar only)
   const drives = useDriveStore((s) => s.drives);
   const fetchDrives = useDriveStore((s) => s.fetchDrives);
   const { hiddenCalendars, toggleCalendar, showAll, hideAll, hiddenEventTypes, toggleEventType, isEventTypeVisible } =
     useCalendarFilterStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [selectedCalendarKey, setSelectedCalendarKey] = useState('personal');
 
   // Force-refresh drives on mount so the sidebar reflects current memberships
   const isUserContext = context === 'user';
@@ -157,6 +207,19 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     () => calendarEntries.map((c) => c.key),
     [calendarEntries]
   );
+
+  // When user context: derive the effective driveId/context for the event modal.
+  // Editing an existing event: use the event's own driveId. A null driveId means
+  // the event is personal — convert null→undefined so it isn't confused with "no
+  // event selected". Never inherit the selected calendar key when editing.
+  // Creating a new event: use the selected calendar key.
+  const creationDriveId = isUserContext && selectedCalendarKey !== 'personal'
+    ? selectedCalendarKey
+    : (isUserContext ? undefined : driveId);
+  const effectiveModalDriveId = selectedEvent
+    ? (selectedEvent.driveId ?? undefined)
+    : creationDriveId;
+  const effectiveModalContext: 'user' | 'drive' = effectiveModalDriveId ? 'drive' : 'user';
 
   const { data: googleCalendarStatus } = useSWR<GoogleCalendarStatusResponse>(
     '/api/integrations/google-calendar/status',
@@ -228,8 +291,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
       setIsEventModalOpen(false);
     },
     onTaskClick: (task) => {
-      // Navigate to task list page
-      window.location.href = `/dashboard/${task.driveId}/${task.taskListPageId}`;
+      // Navigate to task list page. router.push, not window.location: a hard
+      // navigation is handed to the iOS shell's navigation policy, which cancels
+      // it (see lib/navigation/app-navigator.ts).
+      router.push(`/dashboard/${task.driveId}/${task.taskListPageId}`);
     },
     onDateChange: setCurrentDate,
     onViewChange: setViewMode,
@@ -246,6 +311,7 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     color?: string;
     attendeeIds?: string[];
     pageId?: string | null;
+    recurrenceRule?: RecurrenceRule | null;
     agentTrigger?: {
       agentPageId: string;
       prompt?: string;
@@ -258,13 +324,100 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
     } else {
       // POST schema doesn't accept null (only undefined no-op or object upsert)
       const { agentTrigger, ...rest } = eventData;
+      const driveOverride = isUserContext && selectedCalendarKey !== 'personal'
+        ? selectedCalendarKey
+        : undefined;
       await createEvent({
         ...rest,
         agentTrigger: agentTrigger ?? undefined,
-      });
+      }, driveOverride);
     }
     setIsEventModalOpen(false);
   };
+
+  const handleRsvp = useCallback(async (status: AttendeeStatus) => {
+    if (!selectedEvent) return;
+    const previousEvent = selectedEvent;
+    setSelectedEvent((prev) =>
+      prev
+        ? {
+            ...prev,
+            attendees: prev.attendees.map((a) =>
+              a.userId === currentUserId
+                ? { ...a, status, respondedAt: new Date().toISOString() }
+                : a,
+            ),
+          }
+        : null,
+    );
+    try {
+      await updateRsvp(selectedEvent.id, status);
+    } catch {
+      setSelectedEvent(previousEvent);
+      throw new Error('Failed to update RSVP');
+    }
+  }, [selectedEvent, updateRsvp, currentUserId]);
+
+  const handleAddAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev
+          ? {
+              ...prev,
+              attendees: [
+                ...prev.attendees,
+                {
+                  id: userId,
+                  eventId: prev.id,
+                  userId,
+                  status: 'PENDING' as const,
+                  responseNote: null,
+                  isOrganizer: false,
+                  isOptional: false,
+                  invitedAt: new Date().toISOString(),
+                  respondedAt: null,
+                  user: { id: userId, name: null, image: null },
+                },
+              ],
+            }
+          : null
+      );
+      const targetEventId = selectedEvent.id;
+      try {
+        const updatedAttendees = await addAttendees(targetEventId, [userId]);
+        if (updatedAttendees.length > 0) {
+          setSelectedEvent((prev) =>
+            prev && prev.id === targetEventId ? { ...prev, attendees: updatedAttendees } : prev
+          );
+        }
+      } catch {
+        setSelectedEvent((prev) =>
+          prev && prev.id === targetEventId ? prevEvent : prev
+        );
+        throw new Error('Failed to add attendee');
+      }
+    },
+    [selectedEvent, addAttendees]
+  );
+
+  const handleRemoveAttendee = useCallback(
+    async (userId: string) => {
+      if (!selectedEvent) return;
+      const prevEvent = selectedEvent;
+      setSelectedEvent((prev) =>
+        prev ? { ...prev, attendees: prev.attendees.filter((a) => a.userId !== userId) } : null
+      );
+      try {
+        await removeAttendee(selectedEvent.id, userId);
+      } catch {
+        setSelectedEvent(prevEvent);
+        throw new Error('Failed to remove attendee');
+      }
+    },
+    [selectedEvent, removeAttendee]
+  );
 
   // Get header title based on view mode
   const getHeaderTitle = () => {
@@ -303,6 +456,10 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           currentDate={currentDate}
           driveColorMap={driveColorMap}
           context={context}
+          focusTrigger={
+            // 32px, like the tasks toggle and the filter it sits between.
+            <FocusTrigger section="calendar" variant="compact" size="sm" />
+          }
           calendarEntries={isUserContext ? calendarEntries : undefined}
           onToggleCalendar={toggleCalendar}
           onShowAllCalendars={showAll}
@@ -316,8 +473,11 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
           defaultValues={newEventDefaults}
           onSave={handleEventSave}
           onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-          driveId={driveId}
-          context={context}
+          onRsvp={handleRsvp}
+          onAddAttendee={handleAddAttendee}
+          onRemoveAttendee={handleRemoveAttendee}
+          driveId={effectiveModalDriveId}
+          context={effectiveModalContext}
         />
       </div>
     );
@@ -355,6 +515,9 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
 
           {/* Title */}
           <h2 className="text-lg font-semibold">{getHeaderTitle()}</h2>
+
+          {/* The focus, as a subtitle-sized chip after the month. Context IS the focus here. */}
+          <FocusTrigger section="calendar" />
         </div>
 
         <div className="flex items-center gap-2">
@@ -510,6 +673,8 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
               userEventsVisible={isEventTypeVisible('user')}
               onToggleAgentEvents={() => toggleEventType('agent')}
               onToggleUserEvents={() => toggleEventType('user')}
+              selectedKey={selectedCalendarKey}
+              onSelectCalendar={setSelectedCalendarKey}
             />
           </aside>
         )}
@@ -576,8 +741,11 @@ export function CalendarView({ context, driveId, driveName: _driveName, classNam
         defaultValues={newEventDefaults}
         onSave={handleEventSave}
         onDelete={selectedEvent ? async () => { await handlers.onEventDelete(selectedEvent.id); } : undefined}
-        driveId={driveId}
-        context={context}
+        onRsvp={handleRsvp}
+        onAddAttendee={handleAddAttendee}
+        onRemoveAttendee={handleRemoveAttendee}
+        driveId={effectiveModalDriveId}
+        context={effectiveModalContext}
       />
     </div>
   );

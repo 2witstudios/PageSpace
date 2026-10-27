@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import path from 'path';
 
 // Mock tesseract.js
 const mockWorkerRecognize = vi.fn().mockResolvedValue({ data: { text: 'OCR extracted text' } });
@@ -16,43 +15,16 @@ vi.mock('tesseract.js', () => ({
   createWorker: (...args: unknown[]) => mockCreateWorker(...args),
 }));
 
-// Mock fs module (used with require inside ocr-processor)
-const mockReadFile = vi.fn();
-const mockMkdir = vi.fn().mockResolvedValue(undefined);
-const mockWriteFile = vi.fn().mockResolvedValue(undefined);
-
-vi.mock('fs', () => ({
-  default: {
-    promises: {
-      readFile: (...args: unknown[]) => mockReadFile(...args),
-      mkdir: (...args: unknown[]) => mockMkdir(...args),
-      writeFile: (...args: unknown[]) => mockWriteFile(...args),
-    },
-  },
-  promises: {
-    readFile: (...args: unknown[]) => mockReadFile(...args),
-    mkdir: (...args: unknown[]) => mockMkdir(...args),
-    writeFile: (...args: unknown[]) => mockWriteFile(...args),
-  },
-}));
-
-// Mock path module (used with require inside ocr-processor)
-vi.mock('path', async (importOriginal) => {
-  const actual = await importOriginal<typeof path>();
-  return {
-    ...actual,
-    default: actual,
-  };
-});
-
 // Mock content store
 const mockGetOriginal = vi.fn();
-const mockGetCachePath = vi.fn().mockResolvedValue('/cache/abc123/ocr.jpg');
+const mockGetCache = vi.fn();
+const mockSaveCache = vi.fn().mockResolvedValue({});
 
 vi.mock('../../server', () => ({
   contentStore: {
     getOriginal: (...args: unknown[]) => mockGetOriginal(...args),
-    getCachePath: (...args: unknown[]) => mockGetCachePath(...args),
+    getCache: (...args: unknown[]) => mockGetCache(...args),
+    saveCache: (...args: unknown[]) => mockSaveCache(...args),
   },
 }));
 
@@ -64,8 +36,7 @@ describe('processOCR', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetOriginal.mockResolvedValue(Buffer.from('image-data'));
-    mockGetCachePath.mockResolvedValue(`/cache/${VALID_HASH}/ocr.jpg`);
-    mockReadFile.mockRejectedValue({ code: 'ENOENT' }); // No cache by default
+    mockGetCache.mockResolvedValue(null); // No cache by default
     mockWorkerRecognize.mockResolvedValue({ data: { text: 'OCR text result' } });
     mockWorkerTerminate.mockResolvedValue(undefined);
     mockCreateWorker.mockResolvedValue({
@@ -88,7 +59,7 @@ describe('processOCR', () => {
 
   it('returns cached OCR result if available', async () => {
     const cachedText = 'Previously extracted OCR text';
-    mockReadFile.mockResolvedValueOnce(cachedText);
+    mockGetCache.mockResolvedValueOnce(Buffer.from(cachedText));
 
     const result = await processOCR({
       contentHash: VALID_HASH,
@@ -146,16 +117,14 @@ describe('processOCR', () => {
     expect(mockWorkerTerminate).toHaveBeenCalledTimes(1);
   });
 
-  it('writes OCR result to cache', async () => {
+  it('writes OCR result to cache via saveCache', async () => {
     await processOCR({ contentHash: VALID_HASH, fileId: 'page-1' });
 
-    expect(mockMkdir).toHaveBeenCalledWith(
-      expect.stringContaining(VALID_HASH),
-      { recursive: true }
-    );
-    expect(mockWriteFile).toHaveBeenCalledWith(
-      expect.stringContaining('ocr-text.txt'),
-      'OCR text result'
+    expect(mockSaveCache).toHaveBeenCalledWith(
+      VALID_HASH,
+      'ocr-text.txt',
+      Buffer.from('OCR text result'),
+      'text/plain'
     );
   });
 

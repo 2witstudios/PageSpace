@@ -1,0 +1,1 @@
+ALTER TABLE "credit_balances" ADD COLUMN "debtCents" integer DEFAULT 0 NOT NULL;

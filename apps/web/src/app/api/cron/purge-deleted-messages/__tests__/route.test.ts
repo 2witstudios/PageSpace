@@ -4,9 +4,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockChatRepo, mockGlobalRepo, mockDmRepo, mockAudit } = vi.hoisted(() => ({
-  mockChatRepo: { purgeInactiveMessages: vi.fn() },
-  mockGlobalRepo: { purgeInactiveMessages: vi.fn(), purgeInactiveConversations: vi.fn() },
+// Since the message-table merge (epic "Agent-Session Single Source of Truth",
+// Phase 4 / D6) `purgeInactiveMessages` sweeps the ONE `messages` table, page
+// rows included. The separate legacy sweep went with `chat_messages` at PR 15.
+// `globalConversationRepository` keeps only the CONVERSATION purge.
+const { mockMessageRepo, mockGlobalRepo, mockDmRepo, mockAudit } = vi.hoisted(() => ({
+  mockMessageRepo: { purgeInactiveMessages: vi.fn() },
+  mockGlobalRepo: { purgeInactiveConversations: vi.fn() },
   mockDmRepo: { purgeInactiveMessages: vi.fn() },
   mockAudit: vi.fn(),
 }));
@@ -15,8 +19,8 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: mockChatRepo,
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: mockMessageRepo,
 }));
 
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
@@ -52,8 +56,7 @@ describe('/api/cron/purge-deleted-messages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockChatRepo.purgeInactiveMessages.mockResolvedValue(5);
-    mockGlobalRepo.purgeInactiveMessages.mockResolvedValue(3);
+    mockMessageRepo.purgeInactiveMessages.mockResolvedValue(3);
     mockGlobalRepo.purgeInactiveConversations.mockResolvedValue(2);
     mockDmRepo.purgeInactiveMessages.mockResolvedValue(4);
   });
@@ -67,7 +70,6 @@ describe('/api/cron/purge-deleted-messages', () => {
         resourceType: 'cron_job',
         resourceId: 'purge_deleted_messages',
         details: {
-          chatMessagesPurged: 5,
           globalMessagesPurged: 3,
           directMessagesPurged: 4,
           conversationsPurged: 2,
@@ -99,7 +101,7 @@ describe('/api/cron/purge-deleted-messages', () => {
   });
 
   it('does not log audit event when purge throws', async () => {
-    mockChatRepo.purgeInactiveMessages.mockRejectedValue(new Error('DB error'));
+    mockMessageRepo.purgeInactiveMessages.mockRejectedValue(new Error('DB error'));
 
     await GET(makeRequest());
 

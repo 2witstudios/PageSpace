@@ -1,11 +1,12 @@
-import path from 'path';
-import fs from 'fs/promises';
-import * as pdfjsLib from 'pdfjs-dist';
+// pdfjs-dist is loaded lazily in extractPdfText — v5+ uses DOMMatrix at module
+// init time which crashes Node.js on import. Dynamic import avoids the issue.
 import mammoth from 'mammoth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { TextExtractJobData, TextExtractResult } from '../types';
-import type { PDFLoadingTask, PDFTextItem, PDFInfo } from '../types/pdfjs';
+import type { PDFLoadingTask, PDFInfo } from '../types/pdfjs';
+import { composePageText, composeDocumentText } from '../services/pdf-text-layout';
+import { cleanExtractedText, shouldPersistExtractedText } from './extracted-text-policy';
 
 export async function extractText(data: TextExtractJobData): Promise<TextExtractResult> {
   const { contentHash, mimeType } = data;
@@ -54,14 +55,21 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
     }
 
     // Clean extracted text - remove null bytes and other invalid UTF-8 characters
-    extractedText = extractedText.replace(/\0/g, '').trim();
+    extractedText = cleanExtractedText(extractedText);
 
-    const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'text'));
-    await fs.mkdir(cacheDir, { recursive: true });
-    await fs.writeFile(
-      path.join(cacheDir, 'extracted-text.txt'),
-      extractedText
-    );
+    // GDPR #973: the extracted text is PII. It is always returned to the caller
+    // (persisted to the DB for search). The redundant object-store cache copy is
+    // written ONLY when it can be encrypted at rest — never as plaintext.
+    const hasEncryptionKey = !!process.env.ENCRYPTION_KEY;
+    const persisted = shouldPersistExtractedText({ hasEncryptionKey });
+    if (persisted) {
+      await contentStore.saveCache(contentHash, 'extracted-text.txt', Buffer.from(extractedText), 'text/plain');
+    } else {
+      loggers.processor.warn(
+        'Skipping extracted-text cache write: no ENCRYPTION_KEY configured (would store PII unencrypted)',
+        { contentHash, mimeType },
+      );
+    }
 
     loggers.processor.info('Text extraction succeeded', {
       contentHash,
@@ -74,7 +82,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
       text: extractedText,
       textLength: extractedText.length,
       metadata,
-      cached: true
+      cached: persisted
     };
 
   } catch (error) {
@@ -92,6 +100,7 @@ export async function extractText(data: TextExtractJobData): Promise<TextExtract
 }
 
 async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata: Record<string, unknown> }> {
+  const pdfjsLib = await import('pdfjs-dist');
   const uint8Array = new Uint8Array(buffer);
   const getDocument = pdfjsLib.getDocument as unknown as
     (params: { data: Uint8Array; disableWorker: boolean }) => PDFLoadingTask;
@@ -106,17 +115,13 @@ async function extractPdfText(buffer: Buffer): Promise<{ text: string; metadata:
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
 
-    const pageText = textContent.items
-      .map((item: PDFTextItem) => item.str)
-      .join(' ');
-
-    textParts.push(pageText);
+    textParts.push(composePageText(textContent.items));
   }
 
   const info: PDFInfo | null = metadata.info;
 
   return {
-    text: textParts.join('\n\n'),
+    text: composeDocumentText(textParts),
     metadata: {
       title: info?.Title || '',
       author: info?.Author || '',

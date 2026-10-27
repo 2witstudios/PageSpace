@@ -3,19 +3,14 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { toast } from 'sonner';
 import { formatBytes } from '@pagespace/lib/services/storage-limits';
-import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { post } from '@/lib/auth/auth-fetch';
+import { isBillingEnabled } from '@/lib/deployment-mode';
+import { uploadFileToS3, type UploadedPage } from '@/lib/upload/orchestrator';
 
 interface FileDropState {
   isDraggingFiles: boolean;
   isUploading: boolean;
   uploadProgress: number;
-}
-
-interface UploadedPage {
-  id: string;
-  title: string;
-  type: string;
-  [key: string]: unknown;
 }
 
 interface UseFileDropOptions {
@@ -54,12 +49,12 @@ export function useFileDrop({
     if (isFileDrag(e)) {
       e.preventDefault();
       e.stopPropagation();
-      
+
       // Only set to false if we're leaving the entire drop zone
       const rect = e.currentTarget.getBoundingClientRect();
       const x = e.clientX;
       const y = e.clientY;
-      
+
       if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
         setState(prev => ({ ...prev, isDraggingFiles: false }));
       }
@@ -75,26 +70,27 @@ export function useFileDrop({
   }, [isFileDrag]);
 
   const handleFileDrop = useCallback(async (
-    e: DragEvent, 
+    e: DragEvent,
     customParentId?: string | null,
     position?: 'before' | 'after' | null,
     afterNodeId?: string | null
   ) => {
     if (!isFileDrag(e)) return;
-    
+
     e.preventDefault();
     e.stopPropagation();
-    
+
     setState(prev => ({ ...prev, isDraggingFiles: false }));
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
 
-    // Pre-validate file sizes client-side
-    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '20') * 1024 * 1024;
-    const MAX_CONCURRENT_UPLOADS = 2;
+    // Pre-validate file sizes client-side against a generous, tier-blind global
+    // ceiling (1GB = the largest tier's per-file limit). The precise per-tier
+    // limit is enforced server-side at presign; this only catches absurd files
+    // early. Deployments can tighten it via NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB.
+    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '1024') * 1024 * 1024;
 
-    // Check for oversized files
     const oversizedFiles = files.filter(f => f.size > maxFileSize);
     if (oversizedFiles.length > 0) {
       const fileNames = oversizedFiles.map(f => `${f.name} (${formatBytes(f.size)})`).join(', ');
@@ -102,10 +98,12 @@ export function useFileDrop({
       return;
     }
 
-    // Check storage quota before uploading
+    // Check storage quota before uploading. Per-file quota is also enforced
+    // server-side at presign time; this is an early, friendlier guard. It names
+    // the drive so an org drive is checked against the org's quota (WAL-9).
     const totalSize = files.reduce((sum, f) => sum + f.size, 0);
     try {
-      await post('/api/storage/check', { fileSize: totalSize });
+      await post('/api/storage/check', { fileSize: totalSize, driveId });
     } catch (error) {
       console.error('Storage check failed:', error);
       const errorMessage = (error as Error).message;
@@ -114,93 +112,56 @@ export function useFileDrop({
       } else if (errorMessage.includes('503')) {
         toast.error('Server is busy. Please try again later.');
       } else {
-        toast.error('Upload not allowed');
+        const denial = quotaDenial(error);
+        if (denial) {
+          toast.error(denial.reason, denial.manageHref && isBillingEnabled()
+            ? { action: { label: 'Get more storage', onClick: () => window.location.assign(denial.manageHref as string) } }
+            : undefined);
+        } else {
+          toast.error('Upload not allowed');
+        }
       }
       return;
     }
 
     setState(prev => ({ ...prev, isUploading: true, uploadProgress: 0 }));
 
+    // customParentId can be explicitly null (drop at root), so distinguish
+    // "not passed" (undefined) from "passed as null".
+    const targetParentId = customParentId !== undefined ? customParentId : parentId;
+
     try {
-      const uploadedPages = [];
+      const uploadedPages: UploadedPage[] = [];
       const totalFiles = files.length;
-      let activeUploads = 0;
-      
+
+      // For a before/after drop, chain each subsequent file after the previous
+      // one so a multi-file drop preserves the dragged order instead of
+      // inverting it (every file would otherwise resolve against the same node).
+      let nextPosition = position;
+      let nextAfterNodeId = afterNodeId;
+
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-
-        // Limit concurrent uploads
-        while (activeUploads >= MAX_CONCURRENT_UPLOADS) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        activeUploads++;
-        
-        // Update progress
-        setState(prev => ({ 
-          ...prev, 
-          uploadProgress: ((i + 1) / totalFiles) * 100 
-        }));
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('driveId', driveId);
-        
-        const targetParentId = customParentId !== undefined ? customParentId : parentId;
-        if (targetParentId) {
-          formData.append('parentId', targetParentId);
-        }
-        
-        // Add position data if provided
-        if (position) {
-          formData.append('position', position);
-        }
-        if (afterNodeId) {
-          formData.append('afterNodeId', afterNodeId);
-        }
-
         try {
-          const response = await fetchWithAuth('/api/upload', {
-            method: 'POST',
-            body: formData,
-          });
-
-          if (!response.ok) {
-            const errorData = await response.json();
-            if (response.status === 413) {
-              toast.error(`${file.name}: ${errorData.error}`);
-              if (errorData.storageInfo) {
-                const { formattedUsed, formattedQuota } = errorData.storageInfo;
-                toast.error(`Storage: ${formattedUsed} / ${formattedQuota} used`);
-              }
-            } else if (response.status === 429) {
-              toast.error('Too many concurrent uploads. Waiting...');
-              // Wait before retrying
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              i--; // Retry this file
-              continue;
-            } else if (response.status === 503) {
-              toast.error('Server busy. Waiting...');
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              i--; // Retry this file
-              continue;
-            } else {
-              throw new Error(errorData.error || `Failed to upload ${file.name}`);
-            }
-          } else {
-            const result = await response.json();
-            uploadedPages.push(result.page);
-
-            // Show storage info if available
-            if (result.storageInfo) {
-              const percent = (result.storageInfo.used / result.storageInfo.quota) * 100;
-              if (percent > 80) {
-                toast.warning(`Storage ${percent.toFixed(0)}% full`);
-              }
-            }
+          const page = await uploadFileToS3(
+            file,
+            { driveId, parentId: targetParentId, position: nextPosition, afterNodeId: nextAfterNodeId },
+            (pct) => setState(prev => ({
+              ...prev,
+              uploadProgress: ((i + pct / 100) / totalFiles) * 100,
+            })),
+          );
+          uploadedPages.push(page);
+          if (nextPosition === 'before' || nextPosition === 'after') {
+            nextPosition = 'after';
+            nextAfterNodeId = page.id;
           }
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : `Failed to upload ${file.name}`);
         } finally {
-          activeUploads--;
+          // Advance the bar per file, whether it succeeded or failed, so it
+          // never stalls mid-file on a failure.
+          setState(prev => ({ ...prev, uploadProgress: ((i + 1) / totalFiles) * 100 }));
         }
       }
 
@@ -210,16 +171,16 @@ export function useFileDrop({
         toast.error('No files were uploaded successfully');
       }
       onUploadComplete?.(uploadedPages);
-      
+
     } catch (error) {
       console.error('File upload error:', error);
       toast.error((error as Error).message);
       onUploadError?.(error as Error);
     } finally {
-      setState(prev => ({ 
-        ...prev, 
-        isUploading: false, 
-        uploadProgress: 0 
+      setState(prev => ({
+        ...prev,
+        isUploading: false,
+        uploadProgress: 0
       }));
     }
   }, [driveId, parentId, isFileDrag, onUploadComplete, onUploadError]);
@@ -237,4 +198,32 @@ export function useFileDrop({
     resetDragState,
     isFileDrag
   };
+}
+
+/**
+ * The storage check's 413 refusal: its reason, and, when more storage would resolve it,
+ * where the payer can get it (their own usage page, or the org's billing page for an org drive).
+ */
+export function quotaDenial(error: unknown): { reason: string; manageHref: string | null } | null {
+  const { status, body } = (error ?? {}) as { status?: unknown; body?: unknown };
+  if (status !== 413 || !body || typeof body !== 'object') return null;
+  const { reason, quota, requiredBytes } = body as {
+    reason?: unknown;
+    requiredBytes?: unknown;
+    quota?: { orgId?: unknown; userId?: unknown; availableBytes?: unknown; tier?: unknown };
+  };
+  if (typeof reason !== 'string' || reason.length === 0) return null;
+  // More storage (or, on Free, a paid plan) only helps when space ran out, or when Free's
+  // file-count cap was hit. A file over the per-file limit is refused whatever the quota.
+  const outOfSpace = !reason.startsWith('File exceeds ')
+    && typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
+    && requiredBytes > quota.availableBytes;
+  const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
+  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null };
+  const manageHref = typeof quota?.orgId === 'string'
+    ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing`
+    : typeof quota?.userId === 'string'
+      ? '/settings/usage'
+      : null;
+  return { reason, manageHref };
 }

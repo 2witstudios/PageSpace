@@ -7,52 +7,22 @@ import { files } from '@pagespace/db/schema/storage';
 import { PageType } from '@pagespace/lib/utils/enums'
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { isFilePage } from '@pagespace/lib/content/page-types.config'
-import { createPageServiceToken, createDriveServiceToken, createFileServiceToken } from '@pagespace/lib/services/validated-service-token';
 import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+
+/** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
+function toContentHash(storagePath: string): string {
+  const m = storagePath.match(/^files\/([a-f0-9]{64})\/original$/i);
+  return m ? m[1].toLowerCase() : storagePath;
+}
 
 interface RouteParams {
   params: Promise<{
     id: string;
   }>;
-}
-
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-/**
- * Fetch a file from the processor and return it as a download
- */
-async function fetchAndDownloadFile(
-  contentHash: string,
-  serviceToken: string,
-  filename: string,
-  mimeType: string,
-  fileSize?: number
-): Promise<NextResponse> {
-  const fileResponse = await fetch(`${PROCESSOR_URL}/cache/${contentHash}/original`, {
-    headers: {
-      'Authorization': `Bearer ${serviceToken}`
-    },
-    signal: AbortSignal.timeout(30000),
-  });
-
-  if (!fileResponse.ok) {
-    throw new Error(`Processor returned ${fileResponse.status}: ${fileResponse.statusText}`);
-  }
-
-  const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
-  const sanitizedFilename = sanitizeFilenameForHeader(filename);
-
-  const headers = new Headers();
-  headers.set('Content-Type', mimeType || 'application/octet-stream');
-  headers.set('Content-Length', fileSize?.toString() || fileBuffer.length.toString());
-  headers.set('Content-Disposition', `attachment; filename="${sanitizedFilename}"`);
-  headers.set('X-Content-Type-Options', 'nosniff');
-  headers.set('X-Frame-Options', 'DENY');
-  headers.set('Content-Security-Policy', "default-src 'none';");
-
-  return new NextResponse(fileBuffer, { status: 200, headers });
 }
 
 export async function GET(
@@ -63,6 +33,10 @@ export async function GET(
     const { id } = await context.params;
     const { searchParams } = new URL(request.url);
     const filenameParam = searchParams.get('filename');
+    // JSON mode lets the client fetch the presigned URL without credentials.
+    // A credentialed fetch following the 307 into Tigris fails CORS (the
+    // bucket never sends Access-Control-Allow-Credentials).
+    const wantsJson = request.headers.get('Accept')?.includes('application/json') ?? false;
 
     const user = await verifyAuth(request);
     if (!user) {
@@ -71,58 +45,36 @@ export async function GET(
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: id, details: { action: 'download' } });
 
-    // First, try to find as a FILE-type page (existing behavior)
+    // Try file-type page first
     const page = await db.query.pages.findFirst({
       where: eq(pages.id, id),
     });
 
     if (page && isFilePage(page.type as PageType)) {
-      // Handle FILE-type page
-      const canView = await canUserViewPage(user.id, page.id);
+      const canView = await canUserViewPage(actorFromVerifiedUser(user), page.id);
       if (!canView) {
-        return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+        return deniedResponse(actorFromVerifiedUser(user), page.id, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
       }
 
       if (!page.filePath) {
         return NextResponse.json({ error: 'File path not found' }, { status: 500 });
       }
 
-      const contentHash = page.filePath;
+      const contentHash = toContentHash(page.filePath);
+      const mimeType = page.mimeType || 'application/octet-stream';
+      const filename = sanitizeFilenameForHeader(page.originalFileName || page.title);
+      const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+      const disposition = `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+      const ttl = getPresignedUrlTtl(mimeType);
+      const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition);
 
-      try {
-        const { token: serviceToken } = await createPageServiceToken(
-          user.id,
-          page.id,
-          ['files:read'],
-          '5m'
-        );
+      auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'download', mimeType } });
 
-        const response = await fetchAndDownloadFile(
-          contentHash,
-          serviceToken,
-          page.originalFileName || page.title,
-          page.mimeType || 'application/octet-stream',
-          page.fileSize ?? undefined
-        );
-
-        auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'download', mimeType: page.mimeType } });
-
-        return response;
-      } catch (fileError) {
-        const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
-        console.error('Error downloading file page:', {
-          pageId: page.id,
-          contentHash,
-          isTimeout,
-          error: fileError instanceof Error ? fileError.message : 'Unknown error',
-        });
-        return NextResponse.json({
-          error: isTimeout ? 'Request timed out' : 'File not accessible'
-        }, { status: isTimeout ? 504 : 500 });
-      }
+      if (wantsJson) return NextResponse.json({ url: presignedUrl });
+      return NextResponse.redirect(presignedUrl, 307);
     }
 
-    // If not a FILE-type page, try to find in the files table (for channel attachments)
+    // Fall back to files table (channel/DM attachments)
     const file = await db.query.files.findFirst({
       where: eq(files.id, id),
     });
@@ -131,43 +83,24 @@ export async function GET(
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
-    // Check file access: page-level for linked files, drive membership for unlinked
-    const hasAccess = await canUserAccessFile(user.id, file.id, file.driveId);
+    const hasAccess = await canUserAccessFile(actorFromVerifiedUser(user), file.id, file.driveId);
     if (!hasAccess) {
-      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      const refused = NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      return file.driveId ? deniedResponse(actorFromVerifiedUser(user), file.driveId, refused) : refused;
     }
 
-    const contentHash = file.storagePath || file.id;
+    const contentHash = toContentHash(file.storagePath || file.id);
+    const mimeType = file.mimeType || 'application/octet-stream';
+    const filename = sanitizeFilenameForHeader(filenameParam || contentHash);
+    const asciiFilename = filename.replace(/[^\x20-\x7E]/g, '_');
+    const disposition = `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+    const ttl = getPresignedUrlTtl(mimeType);
+    const presignedUrl = await generatePresignedUrl(contentHash, 'original', ttl, disposition);
 
-    try {
-      const { token: serviceToken } =
-        file.driveId === null
-          ? await createFileServiceToken(user.id, file.id, ['files:read'], '5m')
-          : await createDriveServiceToken(user.id, file.driveId, ['files:read'], '5m');
+    auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'download', mimeType } });
 
-      const response = await fetchAndDownloadFile(
-        contentHash,
-        serviceToken,
-        filenameParam || contentHash,
-        file.mimeType || 'application/octet-stream',
-        file.sizeBytes
-      );
-
-      auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: file.id, details: { source: 'download', mimeType: file.mimeType } });
-
-      return response;
-    } catch (fileError) {
-      const isTimeout = fileError instanceof Error && fileError.name === 'TimeoutError';
-      console.error('Error downloading file:', {
-        fileId: file.id,
-        contentHash,
-        isTimeout,
-        error: fileError instanceof Error ? fileError.message : 'Unknown error',
-      });
-      return NextResponse.json({
-        error: isTimeout ? 'Request timed out' : 'File not accessible'
-      }, { status: isTimeout ? 504 : 500 });
-    }
+    if (wantsJson) return NextResponse.json({ url: presignedUrl });
+    return NextResponse.redirect(presignedUrl, 307);
 
   } catch (error) {
     console.error('Download error:', error);

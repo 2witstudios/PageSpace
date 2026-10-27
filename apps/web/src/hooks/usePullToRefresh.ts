@@ -49,27 +49,58 @@ export function usePullToRefresh({
 }: UsePullToRefreshOptions): UsePullToRefreshReturn {
   const containerRef = useRef<HTMLElement | null>(null);
   const startYRef = useRef<number>(0);
-  const startScrollRef = useRef<number>(0);
   const isPullingRef = useRef(false);
   const hasTriggeredHapticRef = useRef(false);
+  /** The element this gesture is scrolling; see `findScroller`. */
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  /** Was that element already at the edge when the finger went down? */
+  const startedAtEdgeRef = useRef(false);
 
   const [pullDistance, setPullDistance] = useState(0);
   const [isPulling, setIsPulling] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hasReachedThreshold, setHasReachedThreshold] = useState(false);
 
-  const isAtEdge = useCallback(() => {
+  /**
+   * The element whose scroll position decides whether a pull may start.
+   *
+   * Usually the container, but not always: a page that owns its scroll end to
+   * end nests the real scroller inside a container that never moves. The task
+   * list is the live case — `h-full flex flex-col` with `flex-1 overflow-auto`
+   * on the list itself — so the container sits at `scrollTop` 0 forever and
+   * every downward swipe reads as "already at the top". Walk up from whatever
+   * was actually touched and take the first ancestor that scrolls; fall back
+   * to the container when nothing between them does.
+   */
+  const findScroller = useCallback((target: EventTarget | null): HTMLElement | null => {
     const container = containerRef.current;
-    if (!container) return false;
+    if (!container) return null;
 
-    if (direction === 'top') {
-      return container.scrollTop <= 0;
-    } else {
-      // For bottom, check if scrolled to the end
-      const scrollBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      return scrollBottom <= 1; // Allow 1px tolerance for rounding
+    let node: Node | null = target instanceof Node ? target : null;
+    while (node && node !== container.parentNode) {
+      if (node instanceof HTMLElement && node.scrollHeight > node.clientHeight) {
+        const { overflowY } = getComputedStyle(node);
+        if (overflowY === 'auto' || overflowY === 'scroll') return node;
+      }
+      node = node.parentNode;
     }
-  }, [direction]);
+    return container;
+  }, []);
+
+  const isAtEdge = useCallback(
+    (el: HTMLElement | null) => {
+      if (!el) return false;
+
+      if (direction === 'top') {
+        return el.scrollTop <= 0;
+      } else {
+        // For bottom, check if scrolled to the end
+        const scrollBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        return scrollBottom <= 1; // Allow 1px tolerance for rounding
+      }
+    },
+    [direction]
+  );
 
   const onTouchStart = useCallback(
     (e: React.TouchEvent) => {
@@ -77,10 +108,15 @@ export function usePullToRefresh({
 
       const touch = e.touches[0];
       startYRef.current = touch.clientY;
-      startScrollRef.current = containerRef.current?.scrollTop ?? 0;
       hasTriggeredHapticRef.current = false;
+      // Latch the edge state for the whole gesture. A pull may only begin from
+      // a scroller that was ALREADY at the edge when the finger went down —
+      // otherwise flicking back up turns into a refresh the moment the list
+      // happens to reach the top, mid-swipe, and the two fight each other.
+      scrollerRef.current = findScroller(e.target);
+      startedAtEdgeRef.current = isAtEdge(scrollerRef.current);
     },
-    [disabled, isRefreshing]
+    [disabled, isRefreshing, findScroller, isAtEdge]
   );
 
   const onTouchMove = useCallback(
@@ -91,8 +127,13 @@ export function usePullToRefresh({
       const deltaY = touch.clientY - startYRef.current;
 
       // Determine if we should start pulling based on direction and position
+      // Both halves matter. The latch stops a scroll-up from becoming a pull
+      // when the list reaches the top mid-gesture; the live check stops a
+      // finger that started at the top, scrolled away, and came back from
+      // pulling in the middle of the list.
+      const atEdge = startedAtEdgeRef.current && isAtEdge(scrollerRef.current);
       const shouldStartPulling =
-        direction === 'top' ? deltaY > 0 && isAtEdge() : deltaY < 0 && isAtEdge();
+        direction === 'top' ? deltaY > 0 && atEdge : deltaY < 0 && atEdge;
 
       if (!isPullingRef.current && shouldStartPulling) {
         isPullingRef.current = true;

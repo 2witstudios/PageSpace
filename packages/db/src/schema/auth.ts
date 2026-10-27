@@ -1,7 +1,6 @@
-import { pgTable, text, timestamp, integer, index, uniqueIndex, pgEnum, real, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, bigint, index, uniqueIndex, pgEnum, real, boolean, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { chatMessages } from './core';
 
 export const userRole = pgEnum('UserRole', ['user', 'admin']);
 export const authProvider = pgEnum('AuthProvider', ['email', 'google', 'apple']);
@@ -9,8 +8,15 @@ export const platformType = pgEnum('PlatformType', ['web', 'desktop', 'ios', 'an
 
 export const users = pgTable('users', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
+  // `name` and `email` hold AES-256-GCM ciphertext at rest (GDPR #965). Email
+  // equality lookups + uniqueness run against `emailBidx` (deterministic HMAC
+  // blind index) instead of the raw email value. See
+  // docs/security/pii-encryption-design.md.
   name: text('name').notNull(),
   email: text('email').unique().notNull(),
+  // Deterministic blind index of the normalized email — unique, queryable.
+  // Nullable during backfill; becomes the canonical lookup key once populated.
+  emailBidx: text('emailBidx'),
   emailVerified: timestamp('emailVerified', { mode: 'date' }),
   image: text('image'),
 
@@ -20,15 +26,49 @@ export const users = pgTable('users', {
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
-  currentAiProvider: text('currentAiProvider').default('pagespace').notNull(),
-  currentAiModel: text('currentAiModel').default('glm-4.7').notNull(),
-  // Storage tracking fields (quota/tier now computed from subscriptionTier)
-  storageUsedBytes: real('storageUsedBytes').default(0).notNull(),
+  currentAiProvider: text('currentAiProvider').default('zai').notNull(),
+  currentAiModel: text('currentAiModel').default('z-ai/glm-5.3-flash').notNull(),
+  // Chosen OpenRouter image-generation model (null = none configured → tool uses the
+  // system default). Deliberately separate from currentAiModel: image generation is a
+  // tool, not the chat model, and is never shown in the model selector.
+  imageGenerationModel: text('imageGenerationModel'),
+  // Storage tracking fields (quota/tier now computed from subscriptionTier).
+  // storageUsedBytes is a CACHE, not a source of truth: the authoritative value
+  // is SUM(files.sizeBytes) over files.createdBy = this user (the charge basis).
+  // It exists so quota checks don't pay an aggregate per upload, and it is kept
+  // honest by the scheduled reconcile (api/cron/reconcile-storage →
+  // reconcileAllStorageUsage), which rewrites it from the files rows when it
+  // drifts. Never treat a read of this column as exact (#2155).
+  //
+  // bigint/mode:'number', NOT real (#2225 review): `real` is IEEE-754 single
+  // precision, exact only up to 2^24 (~16 MiB) — past that, storing an exact
+  // byte count can round to an adjacent representable float, permanently
+  // differing from the BIGINT-exact `files.sizeBytes` sum by more than the
+  // reconcile's 1-byte tolerance. That made every correction round straight
+  // back to the same (still-wrong) value, so any user over ~16 MiB would
+  // re-flag as drifted and get "corrected" every single cron tick forever,
+  // never converging. Mirrors `files.sizeBytes`'s bigint/number pattern below.
+  storageUsedBytes: bigint('storageUsedBytes', { mode: 'number' }).default(0).notNull(),
+  // @deprecated (#2154) — superseded by the TTL'd `pending_uploads` table
+  // (packages/db/src/schema/storage.ts); no application code reads or writes
+  // this column anymore. Kept in the schema (not dropped) because deploys run
+  // migrations BEFORE the new app image takes traffic
+  // (.github/workflows/docker-images.yml: "Run migrations" precedes "Deploy
+  // web"), so dropping it in the SAME migration as this cutover would 500
+  // every upload presign/complete/cancel request served by the still-running
+  // OLD image during the rollout window. Drop in a follow-up migration once
+  // this deploy has fully rolled out and no old image can still write it.
   activeUploads: integer('activeUploads').default(0).notNull(),
   lastStorageCalculated: timestamp('lastStorageCalculated', { mode: 'date' }),
   // Subscription fields
   stripeCustomerId: text('stripeCustomerId').unique(),
-  subscriptionTier: text('subscriptionTier').default('free').notNull(), // 'free' | 'pro' | 'founder' | 'business'
+  // Untyped text; the canonical vocabulary is SubscriptionTier in
+  // @pagespace/lib/billing/subscription-tiers (TIERS). This is a denormalized
+  // CACHE of the subscriptions table — see subscription-tier-sync.ts for the
+  // single write-through derivation and subscription-tier-reconcile.ts for the
+  // periodic drift repair. Personal rows support only Free/Pro; org entitlements
+  // come from org_subscriptions, never this column.
+  subscriptionTier: text('subscriptionTier').default('free').notNull(),
   tosAcceptedAt: timestamp('tosAcceptedAt', { mode: 'date' }),
   // Account lockout fields
   failedLoginAttempts: integer('failedLoginAttempts').default(0).notNull(),
@@ -38,11 +78,41 @@ export const users = pgTable('users', {
   suspendedReason: text('suspendedReason'),
   // User timezone for correct time-of-day calculations (IANA timezone, e.g., "America/New_York")
   timezone: text('timezone'),
+  /**
+   * Stamped once the starter skills (see packages/lib/src/commands/starter-skills.ts)
+   * have been installed into this user's Home drive. NULL = never installed.
+   *
+   * This is a high-water mark, not a mirror of the commands table: the installer
+   * must never resurrect a starter the user deliberately deleted, and the
+   * backfill script must be safely re-runnable after a partial failure. Checking
+   * "does a command with this trigger exist?" alone would fail both.
+   */
+  starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
+  /**
+   * When the user finished (or dismissed) first-run onboarding. NULL means the
+   * flow has never run to completion for them.
+   *
+   * Migration 0280 stamps every row that exists at migration time, so from that
+   * point on NULL means genuinely new. That backfill lives in the migration
+   * rather than a standalone script precisely because a script would never run
+   * on self-hosted upgrades (docker-compose runs `db:migrate` and nothing else)
+   * and could race accounts created while it walked the table.
+   *
+   * Read it through `hasCompletedOnboarding`, never as a bare null check.
+   */
+  onboardingCompletedAt: timestamp('onboardingCompletedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
-});
+}, (table) => ({
+  personalTier: check('users_personal_subscription_tier', sql`${table.subscriptionTier} IN ('free', 'pro')`),
+  // Unique blind-index lookup for email (preserves the email uniqueness
+  // guarantee once the raw-email unique constraint is retired post-backfill).
+  emailBidxIdx: uniqueIndex('users_email_bidx_idx').on(table.emailBidx),
+}));
 
 export const deviceTokens = pgTable('device_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -88,6 +158,8 @@ export const deviceTokens = pgTable('device_tokens', {
 });
 
 export const mcpTokens = pgTable('mcp_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
 
@@ -109,23 +181,6 @@ export const mcpTokens = pgTable('mcp_tokens', {
   };
 });
 
-// Junction table for MCP token drive scopes
-// If a token has no entries here, it has access to ALL user's drives (backward compatible)
-// If a token has entries here, it ONLY has access to those specific drives
-import { drives } from './core';
-
-export const mcpTokenDrives = pgTable('mcp_token_drives', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  tokenId: text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
-  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-}, (table) => {
-  return {
-    tokenIdx: index('mcp_token_drives_token_id_idx').on(table.tokenId),
-    driveIdx: index('mcp_token_drives_drive_id_idx').on(table.driveId),
-    tokenDriveUnique: uniqueIndex('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
-  };
-});
 
 export const verificationTokens = pgTable('verification_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -149,8 +204,12 @@ export const verificationTokens = pgTable('verification_tokens', {
   };
 });
 
-// Socket tokens for cross-origin Socket.IO authentication
-// Short-lived tokens (5 min) that bypass sameSite: 'strict' cookie restrictions
+// DEPRECATED (#1054): superseded by the unified `sessions` table with
+// `type: 'socket'`, minted/validated through opaque-tokens.ts + session-service.ts
+// like every other token type. No longer written to. Left in place (rather than
+// dropped) so the retention-cleanup job keeps purging any legacy rows and so we
+// avoid a table drop in the same PR that changes the write path. Safe to drop in
+// a follow-up once confirmed empty in production.
 export const socketTokens = pgTable('socket_tokens', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -171,7 +230,6 @@ import { sessions } from './sessions';
 
 export const usersRelations = relations(users, ({ many }) => ({
   deviceTokens: many(deviceTokens),
-  chatMessages: many(chatMessages),
   mcpTokens: many(mcpTokens),
   verificationTokens: many(verificationTokens),
   socketTokens: many(socketTokens),
@@ -188,24 +246,6 @@ export const deviceTokensRelations = relations(deviceTokens, ({ one }) => ({
   }),
 }));
 
-export const mcpTokensRelations = relations(mcpTokens, ({ one, many }) => ({
-  user: one(users, {
-    fields: [mcpTokens.userId],
-    references: [users.id],
-  }),
-  driveScopes: many(mcpTokenDrives),
-}));
-
-export const mcpTokenDrivesRelations = relations(mcpTokenDrives, ({ one }) => ({
-  token: one(mcpTokens, {
-    fields: [mcpTokenDrives.tokenId],
-    references: [mcpTokens.id],
-  }),
-  drive: one(drives, {
-    fields: [mcpTokenDrives.driveId],
-    references: [drives.id],
-  }),
-}));
 
 export const verificationTokensRelations = relations(verificationTokens, ({ one }) => ({
   user: one(users, {
@@ -242,6 +282,30 @@ export const passkeys = pgTable('passkeys', {
 export const passkeysRelations = relations(passkeys, ({ one }) => ({
   user: one(users, {
     fields: [passkeys.userId],
+    references: [users.id],
+  }),
+}));
+
+// Sign in with Apple refresh tokens (App Store Guideline 5.1.1(v), Apple TN3194).
+// Kept only so account deletion can revoke the user's Apple authorization via
+// /auth/revoke. One row per (user, client): the native app (bundle id) and the
+// web flow (Services ID) are distinct Apple clients, and a token can only be
+// revoked by the client it was issued to. `refreshToken` is AES-256-GCM
+// ciphertext (field-crypto); the plaintext never touches the database.
+export const appleSignInTokens = pgTable('apple_sign_in_tokens', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  clientId: text('client_id').notNull(),
+  refreshToken: text('refresh_token').notNull(),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  userClientIdx: uniqueIndex('apple_sign_in_tokens_user_client_idx').on(table.userId, table.clientId),
+}));
+
+export const appleSignInTokensRelations = relations(appleSignInTokens, ({ one }) => ({
+  user: one(users, {
+    fields: [appleSignInTokens.userId],
     references: [users.id],
   }),
 }));

@@ -46,6 +46,22 @@ describe('processMentionsInMessage', () => {
       expect(result.mentions).toEqual([]);
     });
   });
+
+  describe('given a message with a leading command chip (the mention processor ignores it — command execution is handled separately by command-processor.ts)', () => {
+    it('should ignore the /[Label](commandId:command) token and process mentions normally', () => {
+      const result = processMentionsInMessage(
+        '/[release-checklist](cmd1:command) compare @[Doc A](id1:page)'
+      );
+      expect(result.pageIds).toEqual(['id1']);
+      expect(result.mentions).toEqual([{ id: 'id1', label: 'Doc A', type: 'page' }]);
+    });
+
+    it('should treat a command-only message as having no mentions', () => {
+      const result = processMentionsInMessage('/[release-checklist](cmd1:command) ship it');
+      expect(result.pageIds).toEqual([]);
+      expect(result.mentions).toEqual([]);
+    });
+  });
 });
 
 describe('hasMentions', () => {

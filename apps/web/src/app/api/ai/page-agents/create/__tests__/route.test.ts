@@ -16,7 +16,6 @@ vi.mock('@/lib/repositories/page-agent-repository', () => ({
     getDriveById: vi.fn(),
     getParentPage: vi.fn(),
     getNextPosition: vi.fn(),
-    createAgent: vi.fn(),
   },
 }));
 
@@ -25,11 +24,24 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
+  }),
+}));
+
+// Mock app-permissions (boundary): drive-scope role lookup for scoped MCP tokens
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
+    getUserDriveAccess: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -57,20 +69,66 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 // Mock AI tools for validation
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: {},
     list_pages: {},
     create_page: {},
     update_page: {},
     delete_page: {},
+    // A sandbox-family name: valid to store, and granted only when the switch
+    // says so (issue #2460).
+    spawn_session: {},
   },
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
+  ONPREM_ALLOWED_PROVIDERS: new Set(['ollama', 'lmstudio', 'azure_openai']),
+  // Cloud models are vendor-prefixed; treat any 'vendor/model' id as valid here.
+  isValidModel: (_provider: string, model: string) =>
+    typeof model === 'string' && model.includes('/'),
+}));
+
+// Mock DB — wraps both the pages insert and membership insert in a transaction.
+// tx.insert(pages).values(data).returning() → [createdAgent]
+// tx.insert(driveAgentMembers).values(data)  → awaitable (no .returning())
+const { mockInsertReturning, mockInsertValues, mockInsert, mockTransaction } = vi.hoisted(() => {
+  const mockInsertReturning = vi.fn().mockResolvedValue([{ id: 'agent_123', title: 'Test Agent', type: 'AI_CHAT' }]);
+  const mockInsertValues = vi.fn().mockReturnValue({ returning: mockInsertReturning });
+  const mockInsert = vi.fn().mockReturnValue({ values: mockInsertValues });
+  const mockTransaction = vi.fn().mockImplementation(
+    async (cb: (tx: { insert: typeof mockInsert }) => Promise<unknown>) =>
+      cb({ insert: mockInsert }),
+  );
+  return { mockInsertReturning, mockInsertValues, mockInsert, mockTransaction };
+});
+
+vi.mock('@pagespace/db/db', () => ({
+  db: { transaction: mockTransaction },
+}));
+
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  agentModelSaveRefusal: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveAgentMembers: 'driveAgentMembers_table',
+}));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: 'pages_table',
 }));
 
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { canUserEditPage, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { driveAgentMembers } from '@pagespace/db/schema/members';
+import { pages } from '@pagespace/db/schema/core';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -100,12 +158,22 @@ describe('POST /api/ai/page-agents/create', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // Re-wire the DB insert chain after clearAllMocks wipes implementations
+    mockInsertReturning.mockResolvedValue([{ id: 'agent_123', title: 'Test Agent', type: 'AI_CHAT' }]);
+    mockInsertValues.mockReturnValue({ returning: mockInsertReturning });
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockTransaction.mockImplementation(
+      async (cb: (tx: { insert: typeof mockInsert }) => Promise<unknown>) =>
+        cb({ insert: mockInsert }),
+    );
+
     // Default: authenticated user
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
 
     // Default: permission granted
     vi.mocked(canUserEditPage).mockResolvedValue(true);
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
 
     // Default: MCP scope check passes (returns null = allowed)
     vi.mocked(checkMCPDriveScope).mockReturnValue(null);
@@ -119,15 +187,43 @@ describe('POST /api/ai/page-agents/create', () => {
     // Default: position calculation returns 1
     vi.mocked(pageAgentRepository.getNextPosition).mockResolvedValue(1);
 
-    // Default: agent creation succeeds
-    vi.mocked(pageAgentRepository.createAgent).mockResolvedValue({
-      id: 'agent_123',
-      title: 'Test Agent',
-      type: 'AI_CHAT',
+    // Default: the drive's org allows the model (or there is no org)
+    vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: true });
+  });
+
+  describe('the org model allowlists', () => {
+    it('POL-8 (partial) a chosen model the drive\'s org does not allow is refused 403 naming the policy, and no agent is created', async () => {
+      vi.mocked(agentModelSaveRefusal).mockResolvedValue({ ok: false, code: 'org_policy', reason: 'org_policy', policy: 'modelAllowlist', status: 403, message: "This organization doesn't allow that AI model." });
+      const response = await POST(createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        aiProvider: 'openrouter',
+        aiModel: 'openai/gpt-5.4-nano',
+      }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
+      expect(agentModelSaveRefusal).toHaveBeenCalledWith(mockDriveId, { provider: 'openrouter', modelId: 'openai/gpt-5.4-nano' });
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
+    it('POL-8 (partial) with no model chosen, the product default is stored and judged when it runs, not at save', async () => {
+      const response = await POST(createRequest({ driveId: mockDriveId, title: 'Test Agent', systemPrompt: 'You are helpful.' }));
+
+      expect(response.status).toBe(200);
+      expect(agentModelSaveRefusal).not.toHaveBeenCalled();
     });
   });
 
   describe('authentication', () => {
+    it.each([undefined, [], ['read_page']])('refuses root creation when the lead credential fails drive access, regardless of tools %s', async (enabledTools) => {
+      vi.mocked(getUserDriveAccess).mockResolvedValue(false);
+      const response = await POST(createRequest({ driveId: mockDriveId, title: 'Agent', systemPrompt: 'Helpful', enabledTools }));
+      expect(response.status).toBe(403);
+      expect(mockTransaction).not.toHaveBeenCalled();
+    });
+
     it('should return 401 when not authenticated', async () => {
       vi.mocked(isAuthError).mockReturnValue(true);
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuthError(401));
@@ -204,6 +300,67 @@ describe('POST /api/ai/page-agents/create', () => {
     });
   });
 
+  /**
+   * Issue #2460: an agent could be BORN in the contradiction — sandbox tools in
+   * `enabledTools`, no way to say the switch was on, and a response listing
+   * tools it would never be granted.
+   */
+  describe('the per-agent sandbox switch', () => {
+    it('stores the switch and reports what the agent can actually call', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        enabledTools: ['read_page', 'spawn_session'],
+        sandboxEnabled: true,
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.agentConfig.sandboxEnabled).toBe(true);
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page', 'spawn_session']);
+      expect(body.agentConfig.blockedTools).toEqual([]);
+    });
+
+    it('given sandbox tools and no switch, reports them BLOCKED rather than available', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        enabledTools: ['read_page', 'spawn_session'],
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      // Stored in full…
+      expect(body.agentConfig.enabledTools).toEqual(['read_page', 'spawn_session']);
+      // …granted in part, and the nextSteps line says the true number.
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page']);
+      expect(body.agentConfig.blockedTools).toEqual([
+        { tool: 'spawn_session', gate: 'sandbox_disabled' },
+      ]);
+      expect(String(body.warnings.join(' '))).toContain('sandboxEnabled');
+      expect(body.nextSteps.join(' ')).toContain('can call 1 tool(s)');
+    });
+
+    it('rejects a non-boolean switch rather than coercing it', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        sandboxEnabled: 'false',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+    });
+  });
+
   describe('resource not found', () => {
     it('should return 404 when drive does not exist', async () => {
       vi.mocked(pageAgentRepository.getDriveById).mockResolvedValue(null);
@@ -265,6 +422,63 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(body.error).toContain('Only drive owners');
     });
 
+    // Scoped MCP token at root level: an explicit role means the key acts as
+    // exactly that role (user parity) — only OWNER may create at drive root.
+    it('should return 403 when scoped token with explicit ADMIN role creates at root level', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: mockUserId,
+        tokenType: 'mcp',
+        tokenId: 'token_123',
+        allowedDriveIds: [mockDriveId],
+      } as unknown as SessionAuthResult);
+      vi.mocked(getAppDriveMembership).mockResolvedValue({
+        role: 'ADMIN',
+        customRoleId: null,
+        ownerUserId: mockUserId,
+      });
+
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toContain('Only drive owners');
+      expect(getAppDriveMembership).toHaveBeenCalledWith(expect.objectContaining({ userId: expect.any(String) }), 'token_123', mockDriveId);
+    });
+
+    // role === null means INHERIT: the key acts as its owner, so root creation
+    // falls through to the drive.ownerId === userId check and succeeds.
+    it('should allow scoped token with inherited (null) role to create at root when owner owns the drive', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+        userId: mockUserId,
+        tokenType: 'mcp',
+        tokenId: 'token_123',
+        allowedDriveIds: [mockDriveId],
+      } as unknown as SessionAuthResult);
+      vi.mocked(getAppDriveMembership).mockResolvedValue({
+        role: null,
+        customRoleId: null,
+        ownerUserId: mockUserId,
+      });
+
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+    });
+
     it('should return 403 when user lacks edit permission for parent folder', async () => {
       vi.mocked(pageAgentRepository.getParentPage).mockResolvedValue({ id: 'parent_123' });
       vi.mocked(canUserEditPage).mockResolvedValue(false);
@@ -282,7 +496,7 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(403);
       expect(body.error).toContain('Insufficient permissions');
       // Verify permission check was called with correct userId and pageId
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, 'parent_123');
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'parent_123');
     });
   });
 
@@ -306,27 +520,30 @@ describe('POST /api/ai/page-agents/create', () => {
       });
     });
 
-    it('should pass correct data to repository when creating agent', async () => {
+    it('should pass correct data in transaction when creating agent', async () => {
       const request = createRequest({
         driveId: mockDriveId,
         title: 'Test Agent',
         systemPrompt: 'You are helpful.',
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
         welcomeMessage: 'Hello!',
       });
 
       await POST(request);
 
-      expect(pageAgentRepository.createAgent).toHaveBeenCalledWith(
+      // First insert in the transaction is the pages row
+      expect(mockInsert).toHaveBeenNthCalledWith(1, pages);
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           title: 'Test Agent',
           type: 'AI_CHAT',
           systemPrompt: 'You are helpful.',
           enabledTools: ['read_page', 'list_pages'],
-          aiProvider: 'openrouter',
-          aiModel: 'anthropic/claude-3-opus',
+          aiProvider: 'anthropic',
+          aiModel: 'anthropic/claude-haiku-4.5',
           content: 'Hello!',
           driveId: mockDriveId,
           parentId: null,
@@ -350,7 +567,8 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
-      expect(pageAgentRepository.createAgent).toHaveBeenCalledWith(
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        1,
         expect.objectContaining({
           parentId: 'parent_123',
         })
@@ -363,8 +581,8 @@ describe('POST /api/ai/page-agents/create', () => {
         title: 'Test Agent',
         systemPrompt: 'You are helpful.',
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
       });
 
       const response = await POST(request);
@@ -372,8 +590,8 @@ describe('POST /api/ai/page-agents/create', () => {
 
       expect(body.agentConfig).toMatchObject({
         enabledTools: ['read_page', 'list_pages'],
-        aiProvider: 'openrouter',
-        aiModel: 'anthropic/claude-3-opus',
+        aiProvider: 'anthropic',
+        aiModel: 'anthropic/claude-haiku-4.5',
       });
     });
   });
@@ -402,13 +620,38 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(broadcastPageEvent).toHaveBeenCalledWith(expectedPayload);
     });
 
+    it('should insert pages and MEMBER membership atomically in one transaction', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+      });
+
+      await POST(request);
+
+      // Both inserts happen inside the single transaction
+      expect(mockTransaction).toHaveBeenCalledOnce();
+
+      // First insert: pages table
+      expect(mockInsert).toHaveBeenNthCalledWith(1, pages);
+
+      // Second insert: drive membership with MEMBER role
+      expect(mockInsert).toHaveBeenNthCalledWith(2, driveAgentMembers);
+      expect(mockInsertValues).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          driveId: mockDriveId,
+          agentPageId: 'agent_123',
+          role: 'MEMBER',
+          addedBy: mockUserId,
+        })
+      );
+    });
   });
 
   describe('error handling', () => {
-    it('should return 500 when repository throws', async () => {
-      vi.mocked(pageAgentRepository.createAgent).mockRejectedValue(
-        new Error('Database connection failed')
-      );
+    it('should return 500 when transaction throws', async () => {
+      mockTransaction.mockRejectedValue(new Error('Database connection failed'));
 
       const request = createRequest({
         driveId: mockDriveId,
@@ -424,7 +667,7 @@ describe('POST /api/ai/page-agents/create', () => {
     });
 
     it('should not leak internal error details to client', async () => {
-      vi.mocked(pageAgentRepository.createAgent).mockRejectedValue(
+      mockTransaction.mockRejectedValue(
         new Error('SENSITIVE: connection string with password=secret123')
       );
 

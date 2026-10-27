@@ -1,3 +1,14 @@
+.find-highlight {
+  background: oklch(85% 0.15 85 / 0.45);
+  border-radius: 2px;
+}
+
+.find-highlight-current {
+  background: oklch(72% 0.18 55 / 0.65);
+  outline: 1px solid oklch(55% 0.2 55);
+  border-radius: 2px;
+}
+
 .tiptap {
   overflow-wrap: break-word;
   word-wrap: break-word;

@@ -1,11 +1,18 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
+import {
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import {
@@ -13,7 +20,7 @@ import {
   resetDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
@@ -124,6 +131,39 @@ export async function POST(req: Request) {
       );
     }
 
+    // Per-account lockout (complements the per-IP rate limit above; the two use
+    // independent counters so there is no double-counting). Resolve the account
+    // from the credential and, if it is locked, reject BEFORE running the crypto
+    // verification. The magic-link path is the always-open recovery channel, so
+    // a locked passkey never means a fully locked-out account.
+    const credentialId =
+      response && typeof (response as { id?: unknown }).id === 'string'
+        ? (response as { id: string }).id
+        : undefined;
+    const lockoutUserId = credentialId ? await findUserIdByCredentialId(credentialId) : null;
+
+    if (lockoutUserId) {
+      const lockout = await getAccountLockoutStatus(lockoutUserId);
+      if (lockout.isLocked) {
+        const retryAfter = lockout.lockedUntil
+          ? Math.max(0, Math.ceil((lockout.lockedUntil.getTime() - Date.now()) / 1000))
+          : undefined;
+        auditRequest(req, {
+          eventType: 'security.rate.limited',
+          riskScore: 0.5,
+          details: { reason: 'passkey_account_locked' },
+        });
+        loggers.auth.warn('Passkey authentication blocked by account lockout', {
+          userId: lockoutUserId,
+          ip: clientIP,
+        });
+        return NextResponse.json(
+          { error: 'Account temporarily locked due to repeated failed attempts. Try again later or sign in with a magic link.', retryAfter },
+          { status: 423 }
+        );
+      }
+    }
+
     // Verify authentication
     const result = await verifyAuthentication({
       response,
@@ -131,6 +171,17 @@ export async function POST(req: Request) {
     });
 
     if (!result.ok) {
+      // Count only the genuine attack signals toward lockout — a real credential
+      // presented for a real account that fails crypto verification or trips
+      // replay detection. Benign challenge/credential errors are not counted so
+      // ordinary UX hiccups never lock anyone out.
+      if (
+        lockoutUserId &&
+        (result.error.code === 'VERIFICATION_FAILED' ||
+          result.error.code === 'COUNTER_REPLAY_DETECTED')
+      ) {
+        await recordFailedLoginAttempt(lockoutUserId);
+      }
       const errorMap: Record<string, { status: number; message: string }> = {
         'CREDENTIAL_NOT_FOUND': { status: 400, message: 'Passkey not found' },
         'CHALLENGE_NOT_FOUND': { status: 400, message: 'Challenge not found or invalid' },
@@ -160,17 +211,24 @@ export async function POST(req: Request) {
     }
 
     const { userId } = result.data;
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
 
-    // Passkey is the strongest auth flow — hard-reset all sessions across devices
-    const revokedCount = await sessionService.revokeAllUserSessions(userId, 'passkey_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked all sessions on passkey login', { userId, count: revokedCount });
-    }
+    // Successful passkey auth proves legitimacy — clear any accumulated failed
+    // attempts / lock for this account.
+    await resetFailedLoginAttempts(userId);
+
+    // Revoke prior sessions scoped to THIS device when the client supplies a
+    // deviceId (multi-device safe — a passkey login on one device no longer logs
+    // the user out everywhere). Old clients that send no deviceId keep the legacy
+    // all-web-session revoke via the helper's fallback. Admin-console sessions are
+    // scoped separately and always left intact.
+    await revokeSessionsForLogin(userId, deviceId, 'passkey_login', 'passkey');
 
     // Create new session
     const sessionToken = await sessionService.createSession({
       userId,
       type: 'user',
+      authentication,
       scopes: ['*'],
       expiresInMs: SESSION_DURATION_MS,
       deviceId,
@@ -233,9 +291,22 @@ export async function POST(req: Request) {
       });
     }
 
+    // Passkey is the on-prem sign-in (no password auth, no email delivery), so
+    // like every other sign-in path it provisions the Home drive and the Imago
+    // agents, recreating any the user deleted. The session is already
+    // committed: a failure here is logged and never blocks the login.
+    try {
+      await provisionHomeDriveIfNeeded(userId);
+    } catch (error) {
+      loggers.auth.error('Failed to provision Home drive during passkey sign-in', error as Error, { userId });
+    }
+
     const invitedDriveId = inviteResult?.invitedDriveId ?? null;
     const successRedirect =
-      inviteResult?.kind === 'connection'
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      inviteResult?.orgLandingPath
+        ? inviteResult.orgLandingPath
+        : inviteResult?.kind === 'connection'
         ? '/dashboard/connections?connection_requested=1'
         : inviteResult?.kind === 'page' && invitedDriveId && inviteResult.invitedPageId
           ? `/dashboard/${invitedDriveId}/pages/${inviteResult.invitedPageId}?invited=1`
@@ -268,7 +339,7 @@ export async function POST(req: Request) {
         const user = await authRepository.findUserById(userId);
         if (user) {
           deviceTokenValue = await createDeviceToken({
-            userId, deviceId, tokenVersion: user.tokenVersion,
+            userId, deviceId, tokenVersion: user.tokenVersion, authentication,
             platform: platform || 'web',
             deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
             userAgent: req.headers.get('user-agent') || undefined,

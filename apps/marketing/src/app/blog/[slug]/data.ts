@@ -21,43 +21,338 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
-  "managed-provider-keys": {
-    slug: "managed-provider-keys",
-    title: "PageSpace now manages AI provider keys for you",
+  "agents-get-a-computer": {
+    slug: "agents-get-a-computer",
+    title: "Your Agents Just Got a Computer",
     description:
-      "Per-user API keys (\"BYOK\") are gone. Provider credentials and quotas are now handled at the platform level — your AI chats keep working without any setup. Here's what changes for existing users.",
+      "PageSpace agents now run on a real machine in the cloud — with a real terminal, a real filesystem, and real code execution. Split the Agents screen into panes to run several at once. And scheduled automations can now write and run code themselves, unattended. Here's what shipped, and what it means for what you can build.",
     content: `
-## What changed
+## We said this was coming
 
-If you ever pasted an API key into **Settings > AI** to use Claude, GPT, Gemini, or any non-default provider, that flow is retired. The settings page no longer asks for a key, and every key you'd stored has been deleted from our database.
+Back in June, we told you agents would run real code in sandboxed containers, right inside your workspace. Not a snippet you copy into your own terminal. The agent, actually running it. We said "more on that as it lands."
 
-In practice nothing breaks. Open an AI Chat, pick a model, send a message. The model picker shows whichever providers PageSpace has enabled for your deployment — you don't manage credentials for any of them.
+It landed. Today it's open to every Pro plan and above.
 
-## What this means in practice
+## Your agent gets a machine
 
-- **Your AI conversations keep working.** No setup, no key to paste, no encryption details to think about.
-- **Your previously-stored keys are gone from our side.** We've deleted them. Your accounts at OpenAI, Anthropic, Google AI, and the other providers are untouched — those keys still exist with the upstream provider. Revoke them there if you want, but you don't have to.
-- **Provider availability is now a deployment-level concern.** On pagespace.ai cloud, that's whatever PageSpace has enabled. On a self-hosted install, it's whatever your operator has configured via environment variables.
+Start an agent session in PageSpace and your agent isn't just talking to you anymore. It's provisioning a real cloud machine behind the conversation: its own filesystem, its own shell, its own life for as long as the session runs. When it reads a file, it's reading an actual file. When it runs a build, a real build runs. When it calls git, that's a real repository, with real history. Your agent stops describing the work and starts doing it.
 
-## Standard vs pro tier
+That's a bigger shift than it sounds. What your agent builds in there is real: not a snippet for you to copy out and run somewhere else, but an actual script, an actual small app, written and run right there in the session, ready to open and use. PageSpace stops being a place where you talk about the software you want and becomes a place where it gets built.
 
-Every paid plan has a daily AI quota split into two tiers:
+## The machine is yours too
 
-- **Standard** covers smaller and mid-tier models — Gemini Flash, Claude Haiku, GPT mini variants, GLM 4.7, and similar.
-- **Pro** covers frontier flagships — Claude Opus, the GPT-5 family, OpenAI o3, and GLM-5.
+That cloud machine isn't sealed off behind the conversation. Open a terminal pane on the same session and you're looking at the same filesystem your agent is working in, live. Run a command yourself. Check a file it just touched. Nothing your agent does is happening somewhere you can't see or reach.
 
-If you regularly hit the pro daily limit, [upgrade to a higher plan](/pricing) for more pro capacity.
+And because it's a genuine machine, not a sealed sandbox with one door, you're never fenced in. If you've got a CLI tool you already reach for, it runs there too. That's a side benefit of building this the right way, not the headline. The headline is that your PageSpace agent, the one you configured, the one that already knows your workspace, now has somewhere real to work.
 
-## Why we did this
+## One screen, built for more than one agent at a time
 
-Two reasons. Key management was the biggest setup hurdle for new users — most never finished configuring providers, and the experience suffered. Holding encrypted keys for every user was also a meaningful security surface area we didn't need to own. Operators provision once at the deployment level; there's nothing per-user to leak.
+The second half of this release is the screen you actually work in. The Agents screen now splits into panes: side-by-side columns, and rows stacked inside each one.
 
-If a provider you used regularly has disappeared from your model picker, or a model isn't behaving the way you expect, reach out on Discord or email hello@pagespace.ai.
+Put your agent next to the terminal it's driving and watch the work happen in real time instead of taking it on faith. Put it next to the task list it's supposed to be working through, or next to the document it's supposed to be editing, and watch both update as the conversation moves. Run two, three, however many agents you need side by side — a researcher next to a coder next to the doc they're both writing into — and watch them work as a team instead of one at a time in a queue.
+
+This is the difference between a chatbot and a workspace. A chatbot gives you one window and asks you to hold everything else in your head: what it's doing, what it should be doing, what else is true right now. Panes let you keep all of that in view, because none of it is separate from your work. It's the same page.
+
+## Automations that write and run code, on their own
+
+There's a third piece to this release, and it might be the one that matters most if you're not planning to sit and watch: PageSpace Workflows — the automations you already trigger on a schedule, on a webhook, when a task comes due, when a calendar event fires — can now write and run real code too, the same way an interactive session can.
+
+That means an automation isn't limited to reading and summarizing anymore. A workflow that fires every morning can pull data, run a script against it, and commit the result. A webhook from your CI system can trigger an agent that actually runs a fix, not just files a note about one. The same sandbox eligibility applies here as everywhere else — the workflow's agent needs sandbox access turned on, and the drive's owner needs to be on Pro or above — but once that's true, "automation" stops meaning "summary" and starts meaning "does the work while you're not looking."
+
+## Why this is the point
+
+We didn't build sandboxed sessions so agents could run code in a black box, and we didn't build panes so you'd have more windows to manage, and we didn't wire code execution into Workflows just to check a box. We built all three because the real work of building software has never been one conversation, watched once, by one person. It's a plan, a terminal, a file, a task list, and something — a person, an agent, a scheduled job — moving all of them forward, sometimes while you're asleep. Panes make room for that on screen. The sandbox makes sure what's happening in that room is real. Workflows mean it can keep happening without you.
+
+## What it costs
+
+Every PageSpace plan gets the full interface: sessions, chat, panes, and Workflows. The sandbox itself — the actual cloud machine, the terminal, real code execution, whether you trigger it yourself or a workflow does — is a Pro-plan feature — and eligibility follows whoever pays for the workspace. If the drive you're working in is owned by a Pro account, every member with edit access gets the sandbox in that drive's sessions, even members whose own accounts are on Free — your personal Global Assistant still runs on your own plan. If the payer is on Free — your own drives, your own Global Assistant sessions — you'll see everything and can use everything except the machine underneath it, with a clear upgrade prompt wherever that boundary shows up. On Pro and above, sandbox time draws from the same credit balance as everything else in PageSpace — there's no separate line-item charge, just the plan you're already on and the credits you already have.
+
+## It's live
+
+Agent sessions, panes, and code-executing Workflows are open to everyone today. Start a session from the Agents screen, split a pane, open a terminal. If you're on Pro or above, all of it just works. If you're not yet, [upgrade to Pro](/pricing) and it will.
     `,
     author: "Jono",
-    date: "2026-05-01",
-    readTime: "3 min read",
+    date: "2026-08-03",
+    readTime: "7 min read",
     category: "Product",
+    featured: true,
+    image: "/blog/agents-get-a-computer.png",
+  },
+  "build-a-chat-app-on-pagespace": {
+    slug: "build-a-chat-app-on-pagespace",
+    title: "Turn Your PageSpace Docs Into a Support Bot",
+    description:
+      "Your help docs already live in PageSpace. With two connections, a chat API for the conversation and the SDK for your content, they become a support bot on your site and a help center your team runs, with every conversation saved back in PageSpace.",
+    image: "/blog/support-bot/bot-answer.png",
+    content: `
+## What you'll have when you're done
+
+A support bot on your website that answers customers from your own help docs, with every conversation saved back in PageSpace for your team to read or jump into. You build the chat box; PageSpace handles everything behind it: the AI, the instructions it follows, the search through your docs, and the record of every conversation.
+
+Normally a support bot is a week of work that has nothing to do with support. You pick an AI model and pay to run it. You teach it how to answer and keep those instructions up to date. You build a way for it to search your help articles and pull up the right one, the part most teams find hardest. And you store every conversation somewhere your team can see it. If your help content already lives in a PageSpace drive, all of that is already done.
+
+You connect to it in two ways, and both are worth knowing up front:
+
+- **A chat API** runs the conversation. It works the same way most AI chat tools already do, so any chat box can talk to it. This powers the live bot.
+- **The [SDK](/docs/features/sdk)** (a small set of ready-made code a developer plugs into your app) handles your content: reading, searching, and editing the docs the bot answers from. This powers the browsable help center and the admin your team uses to keep the docs current.
+
+One drive sits behind both. Here is what that looks like.
+
+## See it working
+
+Everything in this guide runs in a small reference app we built on exactly those two connections. Three surfaces, one drive behind them.
+
+Keep one thing in mind as you look: this is your own app, so it can look however you want. The screenshots below are one design we mocked up to show the pieces. Because PageSpace is only the backend, the chat box, the help center, and the admin are entirely your frontend: your layout, your branding, your fonts and colors, your components. Nothing about the look is locked to a PageSpace widget. You build the interface; PageSpace supplies the answers and the content behind it.
+
+**Customers ask the bot.** A chat box on your site that answers straight from the docs in your drive, appearing word by word as the bot types:
+
+![The public support bot on a website](/blog/support-bot/public-bot.png)
+
+*The bot on your site is a PageSpace agent (the AI assistant that reads your docs and answers), working through the chat API. Your website only shows the chat box; the AI, its instructions, and the search through your docs all live in PageSpace.*
+
+![The support bot answering a question from the docs](/blog/support-bot/bot-answer.png)
+
+*Ask a real question and the bot finds the right help page and answers from it, with the actual steps. You never built the part that searches your docs; the agent reads your drive directly.*
+
+**Customers browse the same docs.** The same pages the bot reads also become a clean, searchable help center customers can browse themselves:
+
+![A browsable, searchable docs site built on the PageSpace SDK](/blog/support-bot/docs-browser.png)
+
+*The docs are the single source of truth. The bot and the help center read from the exact same content, so they can never fall out of sync.*
+
+**You manage the docs in your own admin.** The bot's knowledge is just those pages, so a support lead can edit an answer in your own admin screen:
+
+![A custom docs admin built on the PageSpace SDK](/blog/support-bot/docs-admin.png)
+
+*Edit an answer here and the next customer question is answered from the new version. No developer, no redeploy: the docs are the bot's knowledge, and updating them updates the bot.*
+
+The help center and the admin above are built with that same **[SDK](/docs/features/sdk)**. Listing, reading, and searching your docs is a few lines, so a developer can build whatever interface you want on top:
+
+\`\`\`ts
+import { PageSpaceClient, StaticTokenProvider } from "@pagespace/sdk";
+
+const ps = new PageSpaceClient({
+  baseUrl: "https://pagespace.ai",
+  auth: new StaticTokenProvider(process.env.PAGESPACE_TOKEN),
+});
+
+const { pages } = await ps.pages.list({ driveId, recursive: true, ls: true }); // the help-center list
+const doc = await ps.pages.read({ operation: "read", pageId });                // one page to show
+const hits = await ps.search.regex({ driveId, pattern: "reset password", searchIn: "content" }); // the search box
+\`\`\`
+
+And because the drive is a real PageSpace workspace, you can skip the custom admin entirely and manage everything natively in the app: edit the docs, adjust the bot, and read every customer conversation as a page your team can open.
+
+![The same agent and its docs, managed natively inside PageSpace](/blog/support-bot/inside-pagespace.png)
+
+*The agent, the docs it reads, and the threads it produces are all pages in one drive. A teammate can open any conversation and take over.*
+
+Now let's build it.
+
+## Set up the support agent
+
+**1. Create the agent in your support drive.** An agent is an AI Chat page. Create one and keep the id it returns:
+
+\`\`\`bash
+pagespace pages create "Support Bot" AI_CHAT --drive <driveId> --json
+# -> { "id": "<agentPageId>", "type": "AI_CHAT", ... }
+\`\`\`
+
+**2. Tell it how to answer, and let it read the drive.** An AI Chat page has a system prompt and a set of tools. Set the prompt so it behaves like support:
+
+\`\`\`bash
+pagespace agents config <agentPageId> --set systemPrompt="You are the support assistant for Acme. Answer only from the docs in this drive. Be concise and friendly. If the docs do not cover a question, say so and offer to hand off to a human. Never invent product behavior."
+\`\`\`
+
+A brand-new agent has no tools enabled, which means it cannot actually search or read the drive and will make things up. Turn on the read-only tools so it answers from your docs instead:
+
+\`\`\`bash
+pagespace agents config <agentPageId> --set enabledTools='["multi_drive_search","regex_search","glob_search","list_pages","read_page"]'
+\`\`\`
+
+Pick a specific model the same way if you want one (\`--set aiModel=<id>\`, and \`pagespace models list\` shows the options), or set all of this in the agent's settings tab in the app. Check your work with \`pagespace agents list --drive <driveId> --json\`: it shows the model, whether a system prompt is set, and the enabled tools.
+
+If you would rather point and click, the same settings live on the agent page in PageSpace:
+
+![The agent's enabled tools, configured in PageSpace](/blog/support-bot/agent-tools.png)
+
+*Turn on the read-only search and read tools and nothing else. A support bot should answer from your docs, not write to them.*
+
+![The agent's workspace context setting in PageSpace](/blog/support-bot/agent-context.png)
+
+*Hand the agent the drive's page tree so it knows what documentation exists before it starts searching.*
+
+**3. Create a key for your server.** The endpoint runs the agent's tools, which need edit access to the page, so create a key that inherits your own access to the drive (leave \`--role\` off). A plain \`member\` key is view-only on an agent page and would get a 403:
+
+\`\`\`bash
+pagespace keys create --drive <driveId> --name support-bot --show-token
+# prints PAGESPACE_TOKEN=mcp_... once. Store it as PAGESPACE_TOKEN on your server, never in the browser.
+\`\`\`
+
+Scope the key to the drive that holds your public help docs and nothing sensitive. If the key cannot see a page, neither can the agent.
+
+## Wire it into your site
+
+**4. Call the agent exactly like OpenAI.** It speaks Chat Completions, so you change three things: the base URL, the key, and the model. The model is your agent, addressed as \`ps-agent://<agentPageId>\`:
+
+\`\`\`ts
+import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "https://pagespace.ai/api/v1",
+  apiKey: process.env.PAGESPACE_TOKEN, // the mcp_ token, server side only
+});
+
+const stream = await client.chat.completions.create({
+  model: "ps-agent://<agentPageId>",
+  stream: true, // the API only streams; stream: false is rejected
+  messages: [{ role: "user", content: "How do I reset my password?" }],
+});
+\`\`\`
+
+The agent answers with its own system prompt and runs its own tools on the server. It searches the drive, reads the right doc, and returns the answer, all inside the key's scope. This is the same credential the [SDK](/docs/features/sdk) and [CLI](/docs/features/cli) use.
+
+**5. Stream it to the customer.** The response is an OpenAI stream, so a Next.js route handler that pipes it to the browser is a dozen lines:
+
+\`\`\`ts
+// app/api/support/route.ts
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+
+  const stream = await client.chat.completions.create({
+    model: "ps-agent://<agentPageId>",
+    stream: true,
+    messages,
+  });
+
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content ?? "";
+          if (delta) controller.enqueue(encoder.encode(delta));
+        }
+        controller.close();
+      },
+    }),
+    { headers: { "Content-Type": "text/plain; charset=utf-8" } },
+  );
+}
+\`\`\`
+
+Your chat box sends the conversation so far to that route and shows the reply as it streams in, word by word. That is the bot.
+
+## Every conversation lands in PageSpace
+
+A support bot is only half done if the conversations vanish. Pass a \`conversation_id\` and the whole conversation is saved in PageSpace: every message is stored, it appears on the AI Chat page in the app, and your support team can read it or open the same thread and reply as a human.
+
+Give each customer session its own \`conversation_id\`. Set \`client_manages_history: true\` so your app keeps control of the running history and the chat interface. With that flag set, PageSpace creates the thread the first time it is used, owned by your key, and stores every message under it, while your app stays in charge of the chat.
+
+Both fields go on the same \`create\` call, right beside \`messages\`:
+
+\`\`\`ts
+const stream = await client.chat.completions.create({
+  model: "ps-agent://<agentPageId>",
+  stream: true,
+  messages,
+  conversation_id: conversationId,   // a fresh id you generate per customer session
+  client_manages_history: true,      // your app owns the running history
+});
+\`\`\`
+
+Those last two are extra fields in the request body. The OpenAI client sends them through as-is; they are not part of its built-in types, so a TypeScript app adds a small cast on the object. (Prefer to create threads up front? \`POST /api/v1/conversations\` with a \`drive_id\` returns an id you reuse.) To let a customer resume where they left off, read the stored messages back:
+
+\`\`\`bash
+curl https://pagespace.ai/api/v1/conversations/<conversationId> \\
+  -H "Authorization: Bearer mcp_your_key_here"
+# -> { "messages": [ { "role": "user", "content": "..." }, ... ] }
+\`\`\`
+
+Refill the chat box from those saved messages and the customer picks up mid conversation. A teammate can open the same thread in PageSpace and take over. The conversation is not trapped in your database. It is a page in the workspace.
+
+## Before you make it public
+
+This is the working bot, but not yet locked down for real public traffic. You do not have to build much more, but two things are on you before it goes live.
+
+First, keep the token on your server. The \`mcp_\` key inherits your drive access, so it never belongs in the browser. Your route handler holds it and the customer only ever talks to your route. The examples above already do this.
+
+Second, add rate limiting. The chat API does not limit how often each visitor can send messages. It caps how many calls run at once and stops when your credits run out, but nothing stops one visitor from sending request after request, and every request spends your drive's credits. On a public page that is an open door to drain your balance. Put a limit in the route that sits in front of the chat API: throttle by IP or session, cap messages per minute, and reject anything over the line before it reaches PageSpace. A few lines in the same route handler that already holds the token.
+
+Look at everything you did not have to build: no AI model to choose and pay a separate vendor to run, no instructions to keep up to date in your code (they live on the agent page, editable by your support lead), no search system to build and maintain so the bot finds the right article (the agent reads your drive directly, since [the drive is the context](/blog/your-workspace-is-the-context)), and no database of past conversations (they are already pages in your workspace). You brought a chat box and a key. PageSpace brought the rest. The full technical reference is in the [Agent API docs](/docs/features/agent-api) and the [SDK docs](/docs/features/sdk).
+`,
+    author: "PageSpace Team",
+    date: "2026-07-14",
+    readTime: "7 min read",
+    category: "Guide",
+  },
+  "usage-based-pricing-and-built-for-scale": {
+    slug: "usage-based-pricing-and-built-for-scale",
+    title:
+      "Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
+    description:
+      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up whenever you run low. Here's how it works, plus the infrastructure move that makes it scale.",
+    image: "/blog/usage-based-pricing-and-built-for-scale.png",
+    content: `
+## Daily limits were a stopgap. We outgrew them.
+
+When PageSpace was small, the simplest way to meter AI was a daily call count. Free got 50 calls a day, Pro got 200. Cross the line and you were done until midnight, even if every call that day was a one-line throwaway. It shipped fast and it was easy to understand. It was also a blunt instrument that didn't really scale, for you or for us.
+
+A quick yes/no question and a ten-step research agent counted the same: one call. The number on the wall had nothing to do with the cost behind it. And we kept leaning into longer, more agentic work: agents that plan, call tools, and run for many steps on your behalf, where a single task can do the work of a hundred old "calls." Stack that on top of better, more expensive models and the call-count math fell apart. We could cap you harder or quietly eat costs we couldn't sustain, and neither is how you build something meant to last.
+
+So we put our big-boy pants on. AI in PageSpace is now usage-based: a pool of credits you spend on exactly what you use, priced on what each model actually costs. It's the model we should have started with. It's what lets us scale, and it's what lets us hand you genuinely better models instead of holding them back.
+
+## Credits, not call counts
+
+Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans. The current amount for each plan is on the [pricing page](/pricing).
+
+On paid plans each renewal adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
+
+Each call draws from your balance based on what that model actually costs. No per-model multipliers, no rounding a fraction-of-a-cent call up to something absurd. A cheap model costs you a little and an expensive one costs you more — keeping the math simple is what lets us open up the best models from every major provider instead of charging extra for the good ones.
+
+That's the whole point of usage-based pricing: what you pay tracks what you actually do.
+
+## Pick the model that fits the job
+
+Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
+
+**Free** runs on fast, capable standard models: GPT-5.6 Luna by default, plus Claude Haiku 4.5, Gemini 3.5 Flash Lite, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your credits stretch a long way across them.
+
+**Pro and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
+
+## When you run low
+
+If your balance runs out, you're not locked out until tomorrow. Top up.
+
+You can add a custom amount in one click, or grab one of the quick-pick packs; the [pricing page](/pricing) lists the packs and the top-up range. Top-up credits never expire, so anything you add during a busy week carries over.
+
+Run low, top up, keep going. No more waiting out a daily reset.
+
+## Built to scale
+
+Pricing is only half of this. PageSpace now runs on scalable, modern infrastructure built to grow:
+
+- **Built to scale out.** Storage and request handling are stateless, so PageSpace can spread across many machines and bring more online as demand rises. Capacity grows with usage instead of capping it.
+- **Faster file delivery.** Your uploads and attachments serve straight from object storage instead of round-tripping through a single app server. Less waiting, more consistent speed.
+- **Bigger uploads, including video.** With files on object storage instead of one machine's disk, upload limits go up and video is in.
+
+This is the foundation the credit model needs. Usage-based pricing only works if the platform can actually absorb the usage, and now it can.
+
+## What's next
+
+**Agents that run real code.** AI agents will execute code in isolated, sandboxed containers right inside your workspace. Not "here's a snippet to copy," but the agent actually running it in a throwaway sandbox. More on that as it lands.
+
+## What doesn't change
+
+Credits only meter AI. Your documents, tasks, channels, files, and collaboration cost nothing and work exactly as before. Nothing about how you and your team work together is changing.
+
+Open your plan to see your balance, pick your models, and top up when you want. Pay for what you use, run what you need.
+    `,
+    author: "Jono",
+    date: "2026-06-03",
+    readTime: "6 min read",
+    category: "Product",
+    featured: false,
   },
   "your-workspace-is-the-context": {
     slug: "your-workspace-is-the-context",
@@ -203,7 +498,7 @@ Your workspace is the context. Make it a good one.
     date: "2026-02-17",
     readTime: "9 min read",
     category: "Product",
-    featured: true,
+    featured: false,
   },
   "pagespace-as-memory-for-coding-agents": {
     slug: "pagespace-as-memory-for-coding-agents",
@@ -403,7 +698,7 @@ Practical example: create a recurring event, "Weekly Metrics Review," every Mond
 
 Another one. Project deadline is Friday. Create an event, "Pre-deadline check," Thursday at 4pm. Attach a project agent with instructions to review the open tasks and post a status summary. Thursday afternoon, the agent runs a check for you while you're still in meetings.
 
-The trigger system checks drive access, agent page existence, and your daily AI usage limit before executing. If any check fails, nothing runs and nothing breaks.
+The trigger system checks drive access, agent page existence, and your available credits before executing. If any check fails, nothing runs and nothing breaks.
 
 The calendar becomes a scheduler for AI work.
 

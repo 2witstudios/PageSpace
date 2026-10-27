@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { browserLoggers } from '@pagespace/lib/logging/logger-browser';
 import { validateBrowserSessionIdHeader } from '@/lib/ai/core/browser-session-id-validation';
 
@@ -58,7 +59,8 @@ export async function resolveTriggeredBy(
         });
         return [] as { name: string | null }[];
       });
-    displayName = user?.name ?? 'Someone';
+    // Decrypt PII at the edge (GDPR #965) so the broadcast actor name is plaintext.
+    displayName = (await decryptField(user?.name)) ?? 'Someone';
   }
 
   return { userId, displayName, browserSessionId };

@@ -8,18 +8,21 @@ import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-triggers';
 import {
-  createCalendarTriggerWorkflow,
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflowInTx,
   validateCalendarAgentTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { agentTriggerBaseSchema } from '@/lib/workflows/agent-trigger-shared';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent, shareEventWithDrive, unshareEventFromDrive } from '@pagespace/lib/services/calendar-event-drive-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
+import { driveDeniedByAppToken, isMcpScoped, toolActor } from './actor-permissions';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
 
@@ -73,7 +76,7 @@ export const calendarWriteTools = {
    */
   create_calendar_event: tool({
     description:
-      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule. Optionally schedule an AI agent to execute when the event time arrives by providing agentTrigger.',
+      'Create a new calendar event. Supports natural language dates like "tomorrow at 3pm" or "next Monday 10am" as well as ISO 8601 format. For recurring events, specify the recurrence rule. To schedule an AI agent at a specific time, prefer set_calendar_trigger (dedicated tool with simpler schema). The agentTrigger param here works as a shortcut when creating the event and trigger together.',
     inputSchema: z.object({
       title: z.string().min(1).max(500).describe('Event title'),
       startAt: z
@@ -99,12 +102,7 @@ export const calendarWriteTools = {
       color: z.string().optional().describe('Color category (default, meeting, deadline, personal, travel, focus)'),
       attendeeIds: z.array(z.string()).optional().describe('User IDs to invite as attendees'),
       pageId: z.string().nullable().optional().describe('Optional page ID to link this event to'),
-      agentTrigger: z.object({
-        agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
-        prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-        instructionPageId: z.string().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
-        contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
-      }).optional().describe('Schedule an AI agent to run when this event time arrives. Requires driveId.'),
+      agentTrigger: agentTriggerBaseSchema.optional().describe('Schedule an AI agent to run when this event time arrives. Requires driveId.'),
     }),
     execute: async (
       {
@@ -158,7 +156,10 @@ export const calendarWriteTools = {
 
         // Validate drive access if driveId is provided
         if (driveId) {
-          const canAccess = await isUserDriveMember(userId, driveId);
+          if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'edit')) {
+            return { success: false, error: 'This token does not have access to this drive.' };
+          }
+          const canAccess = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canAccess) {
             return {
               success: false,
@@ -172,9 +173,6 @@ export const calendarWriteTools = {
         if (agentTrigger) {
           if (!driveId) {
             return { success: false, error: 'Agent triggers require a drive event (driveId must be provided).' };
-          }
-          if (recurrence) {
-            return { success: false, error: 'Agent triggers are not yet supported on recurring events. Create a one-time event instead.' };
           }
           if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
             return { success: false, error: 'Agent trigger needs either a prompt or instructionPageId.' };
@@ -191,7 +189,10 @@ export const calendarWriteTools = {
           if (agent.isTrashed) return { success: false, error: `Agent "${agent.title}" is in trash.` };
           if (!agent.driveId) return { success: false, error: 'Cannot trigger a personal agent page. Use a drive-based agent.' };
           if (agent.driveId !== driveId) {
-            const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
+            if (await driveDeniedByAppToken(ctx as ToolExecutionContext, agent.driveId, 'view')) {
+              return { success: false, error: 'This token does not have access to the drive containing this agent.' };
+            }
+            const canAccessAgentDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), agent.driveId);
             if (!canAccessAgentDrive) return { success: false, error: 'You do not have access to the drive containing this agent.' };
           }
           validatedAgent = { id: agent.id, title: agent.title };
@@ -206,7 +207,10 @@ export const calendarWriteTools = {
             if (instrPage.isTrashed) return { success: false, error: 'Instruction page is in trash.' };
             if (!instrPage.driveId) return { success: false, error: 'Cannot use a personal page as instructions.' };
             if (instrPage.driveId !== driveId) {
-              const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
+              if (await driveDeniedByAppToken(ctx as ToolExecutionContext, instrPage.driveId, 'view')) {
+                return { success: false, error: 'This token does not have access to the instruction page drive.' };
+              }
+              const canAccessInstrDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), instrPage.driveId);
               if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
             }
           }
@@ -251,11 +255,12 @@ export const calendarWriteTools = {
             };
           }
 
-          // For drive events, verify all proposed attendees are drive members
+          // For drive events, verify all proposed attendees are drive members.
+          // New events have no shared drives yet; getDriveRecipientUserIds suffices.
           if (driveId) {
-            const driveMemberIds = await getDriveMemberUserIds(driveId);
-            const driveMemberSet = new Set(driveMemberIds);
-            const nonMembers = otherAttendees.filter((id) => !driveMemberSet.has(id));
+            const memberIds = await getDriveRecipientUserIds(driveId);
+            const memberSet = new Set(memberIds);
+            const nonMembers = otherAttendees.filter((id) => !memberSet.has(id));
 
             if (nonMembers.length > 0) {
               return {
@@ -315,8 +320,7 @@ export const calendarWriteTools = {
 
           let createdTriggerIdLocal: string | null = null;
           if (agentTrigger && driveId && validatedAgent) {
-            const { triggerId: newTriggerId } = await createCalendarTriggerWorkflow({
-              tx,
+            const { triggerId: newTriggerId } = await upsertCalendarTriggerWorkflowInTx(tx, {
               driveId,
               scheduledById: userId,
               calendarEventId: createdEvent.id,
@@ -328,6 +332,8 @@ export const calendarWriteTools = {
                 instructionPageId: agentTrigger.instructionPageId ?? null,
                 contextPageIds: agentTrigger.contextPageIds ?? [],
               },
+              recurrenceRule: recurrence ?? null,
+              recurrenceExceptions: [],
             });
 
             await tx
@@ -380,6 +386,12 @@ export const calendarWriteTools = {
             title: event.title,
             startAt: event.startAt.toISOString(),
             endAt: event.endAt.toISOString(),
+            allDay: event.allDay,
+            timezone: event.timezone,
+            location: event.location,
+            description: event.description,
+            recurrenceRule: event.recurrenceRule,
+            color: event.color,
             driveId: event.driveId,
             visibility: event.visibility,
             attendeesInvited: otherAttendees.length,
@@ -414,7 +426,7 @@ export const calendarWriteTools = {
    */
   update_calendar_event: tool({
     description:
-      'Update an existing calendar event. Only the event creator can update events. Supports partial updates - only specify the fields you want to change.',
+      'Update an existing calendar event. Only the event creator can update events. Supports partial updates - only specify the fields you want to change. To add or change an agent trigger on an existing event, prefer set_calendar_trigger instead.',
     inputSchema: z.object({
       eventId: z.string().describe('The unique ID of the event to update'),
       title: z.string().min(1).max(500).optional().describe('New event title'),
@@ -435,12 +447,7 @@ export const calendarWriteTools = {
       color: z.string().optional().describe('New color category'),
       pageId: z.string().nullable().optional().describe('Page ID to link to'),
       agentTrigger: z.union([
-        z.object({
-          agentPageId: z.string().describe('ID of the AI agent page to execute at event time. Use list_agents to find available agents.'),
-          prompt: z.string().max(10000).optional().describe('Instructions for the agent when it runs'),
-          instructionPageId: z.string().nullable().optional().describe('Page ID containing detailed instructions (for complex tasks)'),
-          contextPageIds: z.array(z.string()).max(10).optional().describe('Page IDs to include as reference context'),
-        }),
+        agentTriggerBaseSchema,
         z.null().describe('Pass null to remove an existing agent trigger.'),
       ]).optional().describe('Upsert (object) or remove (null) the event\'s agent trigger. Requires the event to live in a drive.'),
     }),
@@ -464,6 +471,17 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // A scoped MCP token may only touch events whose drive is in scope,
+        // even for events it created in another drive (no-op for unscoped callers).
+        if (event.driveId && await driveDeniedByAppToken(ctx as ToolExecutionContext, event.driveId, 'edit')) {
+          return { success: false, error: 'This token does not have access to this event’s drive.' };
+        }
+        // A drive-scoped token has no identity power over the owner's PERSONAL
+        // (drive-less) events — it belongs to a workspace, not to all of you.
+        if (!event.driveId && isMcpScoped(ctx as ToolExecutionContext)) {
+          return { success: false, error: 'This token is scoped to drives and cannot modify personal events.' };
         }
 
         // Check edit permission
@@ -516,18 +534,6 @@ export const calendarWriteTools = {
           };
         }
 
-        // Reject agentTrigger upserts on recurring events. The cron poller
-        // fires triggers as one-shot occurrences, so attaching one to a
-        // recurring event would silently misfire on every occurrence after
-        // the first. Mirrors the create_calendar_event guard.
-        const willBeRecurring = recurrence !== undefined ? recurrence !== null : event.recurrenceRule !== null;
-        if (agentTrigger && willBeRecurring) {
-          return {
-            success: false,
-            error: 'Agent triggers are not supported for recurring events.',
-          };
-        }
-
         // Pre-validate agentTrigger BEFORE opening the tx so a bad payload
         // (off-drive agent / context page, missing prompt-or-instruction)
         // doesn't briefly hold row locks during the event update.
@@ -551,6 +557,11 @@ export const calendarWriteTools = {
         // surprise) rolls the event update back too.
         let removedAttendeesCount = 0;
         const updatedEvent = await db.transaction(async (tx) => {
+          // [D-OW-33] ruling: an org-drive event made more visible is refused while the drive's org is lapsed, judged
+          // on the event row locked in this transaction (the same guard as PATCH /api/calendar/events/[eventId]).
+          if (visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, visibility))) {
+            throw new OrgLapsedError();
+          }
           if (visibility === 'PRIVATE' && event.visibility !== 'PRIVATE') {
             const deletedAttendees = await tx
               .delete(eventAttendees)
@@ -588,6 +599,7 @@ export const calendarWriteTools = {
           if (agentTrigger === null) {
             await removeCalendarTrigger(tx, eventId);
           } else if (agentTrigger && event.driveId) {
+            const effectiveRecurrenceRule = recurrence !== undefined ? recurrence : event.recurrenceRule;
             await upsertCalendarTriggerWorkflowInTx(tx, {
               driveId: event.driveId,
               scheduledById: userId,
@@ -595,6 +607,8 @@ export const calendarWriteTools = {
               triggerAt: updated.startAt,
               timezone: updated.timezone ?? 'UTC',
               agentTrigger,
+              recurrenceRule: effectiveRecurrenceRule,
+              recurrenceExceptions: event.recurrenceExceptions ?? [],
             });
           }
 
@@ -638,6 +652,13 @@ export const calendarWriteTools = {
             title: updatedEvent.title,
             startAt: updatedEvent.startAt.toISOString(),
             endAt: updatedEvent.endAt.toISOString(),
+            allDay: updatedEvent.allDay,
+            timezone: updatedEvent.timezone,
+            location: updatedEvent.location,
+            description: updatedEvent.description,
+            recurrenceRule: updatedEvent.recurrenceRule,
+            color: updatedEvent.color,
+            visibility: updatedEvent.visibility,
           },
           summary: summaryParts.join(', '),
           stats: {
@@ -686,6 +707,17 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // A scoped MCP token may only touch events whose drive is in scope,
+        // even for events it created in another drive (no-op for unscoped callers).
+        if (event.driveId && await driveDeniedByAppToken(ctx as ToolExecutionContext, event.driveId, 'edit')) {
+          return { success: false, error: 'This token does not have access to this event’s drive.' };
+        }
+        // A drive-scoped token has no identity power over the owner's PERSONAL
+        // (drive-less) events — it belongs to a workspace, not to all of you.
+        if (!event.driveId && isMcpScoped(ctx as ToolExecutionContext)) {
+          return { success: false, error: 'This token is scoped to drives and cannot modify personal events.' };
         }
 
         // Check edit permission
@@ -907,6 +939,7 @@ export const calendarWriteTools = {
 
       // Apply defaults
       const isOptional = isOptionalInput ?? false;
+      const context = ctx as ToolExecutionContext | undefined;
 
       try {
         // Verify event exists
@@ -919,6 +952,14 @@ export const calendarWriteTools = {
             success: false,
             error: 'Event not found.',
           };
+        }
+
+        // MCP scope ceiling: write operations are gated on the home drive
+        if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+          return { success: false, error: 'Event is outside the scope of your access token.' };
+        }
+        if (context && !event.driveId && isMcpScoped(context)) {
+          return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
         }
 
         // Only creator can add attendees
@@ -940,11 +981,11 @@ export const calendarWriteTools = {
         // Deduplicate userIds
         const uniqueUserIds = [...new Set(userIds)];
 
-        // For drive events, verify all proposed attendees are drive members
+        // For drive events, verify all proposed attendees are members of the
+        // home drive OR any drive the event is shared with.
         if (event.driveId) {
-          const driveMemberIds = await getDriveMemberUserIds(event.driveId);
-          const driveMemberSet = new Set(driveMemberIds);
-          const nonMembers = uniqueUserIds.filter((id) => !driveMemberSet.has(id));
+          const memberIds = await getAllMemberUserIdsForEvent(eventId, event.driveId);
+          const nonMembers = uniqueUserIds.filter((id) => !memberIds.has(id));
 
           if (nonMembers.length > 0) {
             return {
@@ -973,16 +1014,22 @@ export const calendarWriteTools = {
           };
         }
 
-        // Add new attendees
-        await db.insert(eventAttendees).values(
-          newUserIds.map((attendeeId) => ({
-            eventId,
-            userId: attendeeId,
-            status: 'PENDING' as const,
-            isOrganizer: false,
-            isOptional,
-          }))
-        );
+        // Add new attendees. [D-OW-33] ruling: adding attendees to an org-drive event widens who reads org content,
+        // refused while the drive's org is lapsed (read in the insert's transaction). Removing attendees still works.
+        const lapsed = await db.transaction(async (tx) => {
+          if (event.driveId && (await checkDriveMayLoosen(tx, event.driveId, true))) return true;
+          await tx.insert(eventAttendees).values(
+            newUserIds.map((attendeeId) => ({
+              eventId,
+              userId: attendeeId,
+              status: 'PENDING' as const,
+              isOrganizer: false,
+              isOptional,
+            }))
+          );
+          return false;
+        });
+        if (lapsed) return { success: false, error: new OrgLapsedError().message };
 
         // Broadcast to new attendees
         await broadcastCalendarEvent({
@@ -1140,6 +1187,112 @@ export const calendarWriteTools = {
           `Failed to remove attendee: ${error instanceof Error ? error.message : String(error)}`
         );
       }
+    },
+  }),
+
+  share_event_with_drive: tool({
+    description:
+      'Share a calendar event with an additional drive so members of that drive can see it. ' +
+      'No duplicate event is created — the original event appears in both drives. ' +
+      'Triggers remain tied to the home drive and are not affected by sharing.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to share'),
+      driveId: z.string().describe('The ID of the drive to share the event into'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
+      if (context && await driveDeniedByAppToken(context, driveId, 'edit')) {
+        return { success: false, error: 'Target drive is outside the scope of your access token.' };
+      }
+
+      const result = await shareEventWithDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event shared with drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been shared with the drive. Members of that drive can now see it.`,
+        nextSteps: [
+          'Use list_event_drives to see all drives the event is shared with',
+          'Use unshare_event_from_drive to remove the event from a drive',
+        ],
+      };
+    },
+  }),
+
+  unshare_event_from_drive: tool({
+    description:
+      'Remove a calendar event from a shared drive. The event itself is not deleted — ' +
+      'it continues to exist in its home drive. Cannot remove from the home drive.',
+    inputSchema: z.object({
+      eventId: z.string().describe('The ID of the calendar event to unshare'),
+      driveId: z.string().describe('The ID of the drive to remove the event from'),
+    }),
+    execute: async ({ eventId, driveId }, { experimental_context: ctx }) => {
+      const userId = (ctx as ToolExecutionContext)?.userId;
+      if (!userId) throw new Error('Authentication required');
+
+      const context = ctx as ToolExecutionContext | undefined;
+
+      // Load event for scope ceiling on the home drive
+      const event = await db.query.calendarEvents.findFirst({
+        where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
+        columns: { id: true, driveId: true },
+      });
+      if (!event) return { success: false, error: 'Event not found.' };
+
+      if (context && event.driveId && await driveDeniedByAppToken(context, event.driveId, 'edit')) {
+        return { success: false, error: 'Event is outside the scope of your access token.' };
+      }
+      if (context && !event.driveId && isMcpScoped(context)) {
+        return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
+      }
+
+      const result = await unshareEventFromDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
+      if (!result.ok) {
+        return { success: false, error: result.error };
+      }
+
+      calendarWriteLogger.info('Event unshared from drive via AI tool', {
+        eventId: maskIdentifier(eventId),
+        driveId: maskIdentifier(driveId),
+        userId: maskIdentifier(userId),
+      });
+
+      return {
+        success: true,
+        data: { eventId, driveId },
+        summary: `Event has been removed from the drive. It still exists in its home drive.`,
+        nextSteps: [
+          'Use list_event_drives to see the remaining drives the event is shared with',
+          'Use share_event_with_drive to share it again',
+        ],
+      };
     },
   }),
 };

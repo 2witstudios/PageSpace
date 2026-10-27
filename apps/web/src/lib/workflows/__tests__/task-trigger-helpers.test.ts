@@ -87,6 +87,11 @@ vi.mock('../workflow-executor', () => ({
   executeWorkflow: vi.fn(),
 }));
 
+const { mockCreditAdmission } = vi.hoisted(() => ({ mockCreditAdmission: vi.fn() }));
+vi.mock('../workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: {
@@ -170,6 +175,8 @@ describe('task-trigger-helpers', () => {
     mockDelete.mockImplementation(() => ({ where: mockDeleteWhere }));
     mockDeleteWhere.mockResolvedValue(undefined);
 
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
+
     // Default: transaction runs the callback against a fresh tx mock.
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
       const { tx } = makeTxMock();
@@ -235,7 +242,8 @@ describe('task-trigger-helpers', () => {
       id: 'wf-1',
       name: 'task-trigger-completion-task-1',
       driveId: 'drive-1',
-      createdBy: 'user-1',
+      createdBy: 'user-1' as string | null,
+      ownerLeftAt: null as Date | null,
       agentPageId: 'agent-1',
       prompt: 'Do thing',
       contextPageIds: [],
@@ -261,7 +269,7 @@ describe('task-trigger-helpers', () => {
         workflowId: 'wf-1',
         agentPageId: 'agent-1',
         taskContext: { taskItemId: 'task-1', triggerType: 'completion' },
-      }));
+      }), expect.objectContaining({ admit: expect.any(Function) }));
     });
 
     it('given the claim UPDATE, should gate on lastFiredAt IS NULL so concurrent callers cannot double-fire', async () => {
@@ -318,6 +326,58 @@ describe('task-trigger-helpers', () => {
       mockSelect.mockImplementationOnce(() => { throw new Error('DB connection lost'); });
 
       await expect(fireCompletionTrigger('task-1')).resolves.toBeUndefined();
+    });
+
+    describe('credit gate', () => {
+      const claimAndLoad = () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockWorkflow]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+      };
+
+      it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
+        claimAndLoad();
+        const admit = async () => ({ admitted: true as const, release: () => {} });
+        mockCreditAdmission.mockReturnValue(admit);
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
+
+        await fireCompletionTrigger('task-1');
+
+        const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+        expect(options?.admit).toBe(admit);
+        expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+        expect(input.createdBy).toBe('user-1');
+        // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+        expect(input.driveId).toBe('drive-1');
+      });
+
+      it('SPEND-6 (partial) a completion trigger on an owner-left workflow retires with owner_left before any gate or hold ([D-OW-36])', async () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([{ ...mockWorkflow, ownerLeftAt: new Date() }]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+
+        await fireCompletionTrigger('task-1');
+
+        expect(executeWorkflow).not.toHaveBeenCalled();
+        expect(mockCreditAdmission).not.toHaveBeenCalled();
+        expect(mockSet).toHaveBeenCalledWith({ isEnabled: false, lastFireError: expect.stringContaining('owner_left') });
+      });
+
+      it('a refused fire retires the one-shot trigger with the reason', async () => {
+        claimAndLoad();
+        vi.mocked(executeWorkflow).mockResolvedValueOnce({
+          success: false, skipped: true, durationMs: 0, runId: 'run_1', error: 'AI credit gate denied: out_of_credits',
+        });
+
+        await fireCompletionTrigger('task-1');
+
+        await vi.waitFor(() => expect(mockSet).toHaveBeenCalledWith({
+          lastFireError: 'AI credit gate denied: out_of_credits',
+          isEnabled: false,
+        }));
+      });
     });
   });
 
@@ -423,6 +483,21 @@ describe('task-trigger-helpers', () => {
       expect(captured.txUpdate).toHaveBeenCalledTimes(2);
     });
 
+    it('SPEND-6 (partial) re-saving the trigger of an owner-left workflow keeps the workflow switched off and says so ([D-OW-36], review #2831 P3-1)', async () => {
+      const captured = makeTxMock({ existingTriggers: [{ workflowId: 'wf-old', id: 'trg-old' }] });
+      const where = vi.fn()
+        .mockResolvedValueOnce([{ workflowId: 'wf-old', id: 'trg-old' }])
+        .mockResolvedValueOnce([{ ownerLeftAt: new Date() }]);
+      captured.txSelect.mockImplementation(() => ({ from: vi.fn(() => ({ where })) }));
+      mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(captured.tx));
+
+      const result = await createTaskTriggerWorkflow(validParams);
+
+      const workflowSet = (captured.txUpdateSet.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(workflowSet).not.toHaveProperty('isEnabled');
+      expect(result.isEnabled).toBe(false);
+    });
+
     it('given due_date trigger without dueDate, should throw', async () => {
       await expect(createTaskTriggerWorkflow({
         ...validParams,
@@ -441,7 +516,7 @@ describe('task-trigger-helpers', () => {
       mockQueryPages.findFirst.mockResolvedValueOnce(null);
 
       await expect(createTaskTriggerWorkflow(validParams))
-        .rejects.toThrow('Agent trigger target not found or not an AI agent');
+        .rejects.toThrow('Agent page not found or not an AI agent');
     });
 
     it('given agent page in different drive, should throw', async () => {

@@ -178,6 +178,30 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   success: boolean('success').default(true),
   error: text('error'),
   
+  // Feature attribution — which product surface spent the credits (chat, pulse,
+  // memory, voice, page_agent, workflow, integration, tool, other). Drives the
+  // user-facing usage breakdown. Nullable for rows written before this column
+  // existed; the breakdown query folds null/unknown into 'other'.
+  source: text('source'),
+
+  // WAL-5: the wallet this call was charged to. A soft link (no FK), like every id on
+  // this table: usage logs are purged on retention and must never block a wallet delete.
+  // Null on rows written before wallets existed.
+  walletId: text('wallet_id'),
+
+  // SPEND-10: the automation this call ran for when no person was present (a cron, a trigger, a
+  // scheduled run, Zoom enrichment), a typed reference encoded only by lib billing/automation-attribution
+  // (`workflow:<id>` | `zoom:<connectionId>`), so the drive lead sees spend by automation apart from its
+  // creator. A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
+  automationRef: text('automation_ref'),
+
+  /**
+   * WAL-6b fail closed: when a billable call's charge was first found to name no wallet. Never
+   * charged; terminal for the backfill sweeps, and counted (partial index) on the admin billing
+   * panel for an operator to reconcile. Null for every row that was charged or owed nothing.
+   */
+  unattributedAt: timestamp('unattributed_at', { mode: 'date', withTimezone: true }),
+
   // Metadata
   metadata: jsonb('metadata'),
 
@@ -193,15 +217,35 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   messageCount: integer('message_count'), // Number of messages in context
   wasTruncated: boolean('was_truncated').default(false), // Whether context was truncated
   truncationStrategy: text('truncation_strategy'), // 'none' | 'oldest_first' | 'smart'
+
+  // Async cost reconcile (OpenRouter only). Set to 'pending' at write time when the row
+  // carries OpenRouter generation id(s) in metadata.generationIds and was billed on the
+  // returned cost; the reconcile cron fetches the authoritative /generation cost, corrects
+  // billing drift, and marks the row 'reconciled' / 'unavailable' (generation never
+  // resolved) / 'skipped'. NULL = not an OpenRouter row, never reconciled. The other rows
+  // stay NULL so the partial index below only tracks the small reconcile backlog.
+  reconcileStatus: text('reconcile_status'), // null | 'pending' | 'reconciled' | 'unavailable' | 'skipped'
+  reconcileAttempts: integer('reconcile_attempts').default(0).notNull(),
+  reconciledAt: timestamp('reconciled_at', { mode: 'date' }),
 }, (table) => ({
   timestampIdx: index('idx_ai_usage_timestamp').on(table.timestamp),
   userIdIdx: index('idx_ai_usage_user_id').on(table.userId, table.timestamp),
+  userSourceIdx: index('idx_ai_usage_user_source').on(table.userId, table.source, table.timestamp),
   providerIdx: index('idx_ai_usage_provider').on(table.provider, table.model, table.timestamp),
   costIdx: index('idx_ai_usage_cost').on(table.cost),
   conversationIdx: index('idx_ai_usage_conversation').on(table.conversationId),
   conversationContextIdx: index('idx_ai_usage_context').on(table.conversationId, table.timestamp),
   contextSizeIdx: index('idx_ai_usage_context_size').on(table.contextSize),
   expiresAtIdx: index('idx_ai_usage_expires_at').on(table.expiresAt),
+  // Partial: only the small set of rows awaiting cost reconcile, so the cron's
+  // selection scan stays cheap as the table grows.
+  reconcileIdx: index('idx_ai_usage_reconcile')
+    .on(table.reconcileStatus, table.timestamp)
+    .where(sql`reconcile_status = 'pending'`),
+  // Partial: only the (rare) unattributed rows, so the admin panel's count never scans the log.
+  unattributedIdx: index('idx_ai_usage_unattributed')
+    .on(table.unattributedAt)
+    .where(sql`unattributed_at IS NOT NULL`),
 }));
 
 /**
@@ -245,6 +289,22 @@ export const errorLogs = pgTable('error_logs', {
   resolvedIdx: index('idx_errors_resolved').on(table.resolved),
   endpointIdx: index('idx_errors_endpoint').on(table.endpoint),
 }));
+
+/**
+ * Error resolution workflow (#890 Phase 3). Post-cutover the error rows
+ * themselves live in immutable ClickHouse, so the mutable resolved-flag
+ * workflow is keyed off-row here in main PG by the error row's stable id
+ * (same id space for CH rows and legacy PG error_logs rows). Readers fetch
+ * error rows from their store and merge these rows in app code — the two
+ * stores are never SQL-joined; the resolve action writes only this table.
+ */
+export const errorResolutions = pgTable('error_resolutions', {
+  errorId: text('error_id').primaryKey(),
+  resolved: boolean('resolved').default(true).notNull(),
+  resolvedAt: timestamp('resolved_at', { mode: 'date' }).defaultNow().notNull(),
+  resolvedBy: text('resolved_by'),
+  resolution: text('resolution'),
+});
 
 // `activity_operation` is a text column, not an enum. The column stores values
 // constrained at the TS layer via the ActivityOperation string-literal union in
@@ -341,6 +401,15 @@ export const activityLogs = pgTable('activity_logs', {
   stateHashBefore: text('stateHashBefore'),
   stateHashAfter: text('stateHashAfter'),
 
+  // GDPR Art 30 record-of-processing fields (nullable for backfill safety).
+  // Populated on write by the activity-log edge from a pure classifier
+  // (classifyProcessing) so each row carries its lawful-basis / category /
+  // retention / recipient metadata for the record of processing activities.
+  dataCategory: text('dataCategory'),        // e.g. 'content', 'identity', 'usage_metadata'
+  legalBasis: text('legalBasis'),            // e.g. 'contract', 'legitimate_interest', 'consent'
+  retentionPolicy: text('retentionPolicy'),  // human/policy ref e.g. 'account_lifetime', '90d'
+  recipients: jsonb('recipients').$type<string[]>(), // categories of recipients (Art 30(1)(d))
+
   // Retention management
   isArchived: boolean('isArchived').default(false).notNull(),
 
@@ -352,7 +421,16 @@ export const activityLogs = pgTable('activity_logs', {
   logHash: text('logHash'),  // SHA-256 hash of current entry
   chainSeed: text('chainSeed'),  // Initial seed for hash chain verification (only set on first entry)
 }, (table) => ({
-  contentSizeLimit: check('activity_logs_content_size_limit', sql`${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`),
+  // Bounds the INLINE snapshot only. When content is offloaded to the blob
+  // store, `contentRef` points at it and `contentSize` describes that external
+  // object, which is legitimately unbounded — a 1MB+ sheet doc would otherwise
+  // fail this CHECK and roll back the user's page write (the activity insert
+  // shares the mutation transaction). See prepareActivityInsert, which drops an
+  // oversized `contentSnapshot` app-side.
+  contentSizeLimit: check(
+    'activity_logs_content_size_limit',
+    sql`${table.contentRef} IS NOT NULL OR ${table.contentSize} IS NULL OR ${table.contentSize} <= 1048576`
+  ),
   streamPair: check('activity_logs_stream_pair', sql`(${table.streamId} IS NULL) = (${table.streamSeq} IS NULL)`),
   changeGroupPair: check('activity_logs_change_group_pair', sql`(${table.changeGroupId} IS NULL) = (${table.changeGroupType} IS NULL)`),
   timestampIdx: index('idx_activity_logs_timestamp').on(table.timestamp),

@@ -17,6 +17,7 @@ vi.mock('@/lib/repositories/session-repository', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  isScopedOAuthAuth: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
 }));
 
@@ -60,8 +61,11 @@ vi.mock('@pagespace/lib/services/drive-service', () => ({
 }));
 
 import { sessionRepository } from '@/lib/repositories/session-repository';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isScopedOAuthAuth } from '@/lib/auth';
 import { logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
+
+/** The minting session's sign-in ceremony: a new MCP token inherits it, never a fresh time. */
+const SIGNED_IN_AT = new Date('2026-10-12T09:00:00.000Z');
 
 describe('/api/auth/mcp-tokens', () => {
   beforeEach(() => {
@@ -74,8 +78,10 @@ describe('/api/auth/mcp-tokens', () => {
       tokenVersion: 0,
       tokenType: 'session',
       sessionId: 'test-session-id',
+      authentication: { authenticatedAtMs: SIGNED_IN_AT.getTime(), assurance: 'user_verified_passkey' },
     } as never);
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(isScopedOAuthAuth).mockReturnValue(false);
 
     // Default repository mocks
     vi.mocked(sessionRepository.createMcpTokenWithDriveScopes).mockResolvedValue({
@@ -109,7 +115,7 @@ describe('/api/auth/mcp-tokens', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'My API Token' }),
+          body: JSON.stringify({ name: 'My API Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         // Act
@@ -125,12 +131,14 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify repository was called with correct params
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My API Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
 
         // Assert - verify activity logging for token creation (boundary contract)
@@ -154,7 +162,7 @@ describe('/api/auth/mcp-tokens', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         // Act
@@ -163,12 +171,14 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify RESPONSE token has mcp_ prefix (DB stores hash, response returns raw token)
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
         expect(body.token).toBe('mcp_randomBase64UrlString');
       });
@@ -181,7 +191,7 @@ describe('/api/auth/mcp-tokens', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         // Act
@@ -189,12 +199,14 @@ describe('/api/auth/mcp-tokens', () => {
 
         // Assert - verify token is associated with authenticated user
         expect(sessionRepository.createMcpTokenWithDriveScopes).toHaveBeenCalledWith({
+          authenticatedAt: SIGNED_IN_AT,
+          authenticationAssurance: 'user_verified_passkey',
           name: 'My Token',
           userId: 'test-user-id',
           tokenHash: 'mockTokenHash123',
           tokenPrefix: 'mcp_randomBas',
           isScoped: false,
-          driveIds: [],
+          drives: [],
         });
       });
     });
@@ -295,7 +307,7 @@ describe('/api/auth/mcp-tokens', () => {
         expect(response.status).toBe(401);
       });
 
-      it('requires CSRF token for write operations', async () => {
+      it('requires CSRF token for write operations, and no longer accepts OAuth bearer tokens', async () => {
         // Arrange
         const request = new NextRequest('http://localhost/api/auth/mcp-tokens', {
           method: 'POST',
@@ -304,7 +316,7 @@ describe('/api/auth/mcp-tokens', () => {
             Cookie: 'ps_session=valid-token',
             'X-CSRF-Token': 'valid-csrf-token',
           },
-          body: JSON.stringify({ name: 'My Token' }),
+          body: JSON.stringify({ name: 'My Token', stepUpToken: 'ps_stepup_test' }),
         });
 
         // Act
@@ -317,6 +329,7 @@ describe('/api/auth/mcp-tokens', () => {
         );
       });
     });
+
   });
 
   describe('GET /api/auth/mcp-tokens', () => {
@@ -441,7 +454,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: false }
+          { allow: ['session', 'oauth'], requireCSRF: false }
         );
       });
     });
@@ -575,7 +588,7 @@ describe('/api/auth/mcp-tokens', () => {
         // Assert
         expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
           request,
-          { allow: ['session'], requireCSRF: true }
+          { allow: ['session', 'oauth'], requireCSRF: true }
         );
       });
     });

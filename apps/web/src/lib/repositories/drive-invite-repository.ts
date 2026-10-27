@@ -5,11 +5,18 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, gt, lte, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, or, gt, lte, isNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
-import { driveMembers, pagePermissions } from '@pagespace/db/schema/members';
+import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { pendingInvites } from '@pagespace/db/schema/pending-invites';
+import { userEmailMatch, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { decideOrgDriveAdmission } from '@pagespace/lib/permissions/guest-admission';
+import type { GuestAdmissionRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { consumeApprovedInvitation, requestGuestApproval } from '@pagespace/lib/permissions/guest-holds';
+import { OrgLapsedError, checkDriveMayLoosen, guardDriveAccess } from '@pagespace/lib/permissions/org-lapse-guard';
+import { stageOrgAuditEvents, type OrgAuditEvent, type StagedOrgAuditEvent } from '@pagespace/lib/audit/org-audit';
 
 export const driveInviteRepository = {
   async findDriveById(driveId: string) {
@@ -17,26 +24,6 @@ export const driveInviteRepository = {
       .select()
       .from(drives)
       .where(eq(drives.id, driveId))
-      .limit(1);
-    return results.at(0) ?? null;
-  },
-
-  async findAdminMembership(driveId: string, userId: string) {
-    // Match the acceptedAt-IS-NOT-NULL gate used by checkDriveAccess so a
-    // pending invitee with role 'ADMIN' cannot exercise admin powers (sending
-    // further invites, resending invites) before they themselves complete the
-    // invitation acceptance flow.
-    const results = await db
-      .select()
-      .from(driveMembers)
-      .where(
-        and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        )
-      )
       .limit(1);
     return results.at(0) ?? null;
   },
@@ -55,32 +42,6 @@ export const driveInviteRepository = {
     return results.at(0) ?? null;
   },
 
-  async createDriveMember(data: {
-    driveId: string;
-    userId: string;
-    role: 'OWNER' | 'ADMIN' | 'MEMBER';
-    customRoleId: string | null;
-    invitedBy: string;
-    acceptedAt: Date | null;
-  }) {
-    const results = await db
-      .insert(driveMembers)
-      .values(data)
-      .returning();
-    return results[0];
-  },
-
-  async updateDriveMemberRole(
-    memberId: string,
-    role: 'OWNER' | 'ADMIN' | 'MEMBER',
-    customRoleId: string | null
-  ) {
-    await db
-      .update(driveMembers)
-      .set({ role, customRoleId })
-      .where(eq(driveMembers.id, memberId));
-  },
-
   async getValidPageIds(driveId: string): Promise<string[]> {
     const results = await db
       .select({ id: pages.id })
@@ -89,67 +50,19 @@ export const driveInviteRepository = {
     return results.map((p) => p.id);
   },
 
-  async findPagePermission(pageId: string, userId: string) {
-    const results = await db
-      .select()
-      .from(pagePermissions)
-      .where(
-        and(
-          eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, userId)
-        )
-      )
-      .limit(1);
-    return results.at(0) ?? null;
-  },
-
-  async createPagePermission(data: {
-    pageId: string;
-    userId: string;
-    canView: boolean;
-    canEdit: boolean;
-    canShare: boolean;
-    canDelete: boolean;
-    grantedBy: string;
-  }) {
-    const results = await db
-      .insert(pagePermissions)
-      .values(data)
-      .returning();
-    return results[0];
-  },
-
-  async updatePagePermission(
-    permId: string,
-    data: {
-      canView: boolean;
-      canEdit: boolean;
-      canShare: boolean;
-      grantedBy: string;
-      grantedAt: Date;
-    }
-  ) {
-    const results = await db
-      .update(pagePermissions)
-      .set(data)
-      .where(eq(pagePermissions.id, permId))
-      .returning();
-    return results[0];
-  },
-
   async findUserEmail(userId: string): Promise<string | undefined> {
     const user = await db.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { email: true },
     });
-    return user?.email;
+    return user ? await decryptField(user.email) : undefined;
   },
 
   async findUserIdByEmail(
     email: string
   ): Promise<{ id: string; emailVerified: Date | null; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: userEmailMatch(email),
       columns: { id: true, emailVerified: true, suspendedAt: true },
     });
     return user
@@ -165,7 +78,7 @@ export const driveInviteRepository = {
       columns: { email: true, emailVerified: true, suspendedAt: true },
     });
     return user
-      ? { email: user.email, emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
+      ? { email: await decryptField(user.email), emailVerified: user.emailVerified, suspendedAt: user.suspendedAt }
       : null;
   },
 
@@ -177,7 +90,7 @@ export const driveInviteRepository = {
       .where(
         and(
           eq(driveMembers.driveId, driveId),
-          eq(users.email, email),
+          userEmailMatch(email),
           isNull(driveMembers.acceptedAt)
         )
       )
@@ -190,7 +103,7 @@ export const driveInviteRepository = {
       where: eq(users.id, userId),
       columns: { name: true, email: true },
     });
-    return user ? { name: user.name, email: user.email } : null;
+    return user ? decryptUserRow({ name: user.name, email: user.email }) : null;
   },
 
   async deleteDriveMemberById(memberId: string): Promise<void> {
@@ -206,8 +119,21 @@ export const driveInviteRepository = {
     permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
     grantedBy: string;
     validPageIds: Set<string>;
-  }): Promise<{ memberId: string; permissionsGranted: number }> {
+    /** AUD-1: an approver's `org.guest.approved`, staged in this transaction so it commits exactly with the member. */
+    approval?: OrgAuditEvent;
+  }): Promise<
+    | { memberId: string; permissionsGranted: number; staged: StagedOrgAuditEvent[] }
+    | { refused: 'GUEST_POLICY'; refusal: GuestAdmissionRefusal }
+    | { refused: 'ORG_LAPSED' }
+  > {
     return db.transaction(async (tx) => {
+      // POL-2, again at the write and under the org row's share lock: the caller asked the policy before, but guests
+      // may have been turned OFF since; then nothing is written (the change's suspension could not have seen it).
+      const admission = await decideOrgDriveAdmission({ driveId: input.driveId, userId: input.userId }, tx);
+      if (admission.decision === 'refuse') return { refused: 'GUEST_POLICY', refusal: admission.refusal } as const;
+      // [D-OW-33] a new member loosens access: refused while the drive's org is lapsed (an org member too).
+      if (await checkDriveMayLoosen(tx, input.driveId, true)) return { refused: 'ORG_LAPSED' } as const;
+
       const [member] = await tx
         .insert(driveMembers)
         .values({
@@ -235,7 +161,65 @@ export const driveInviteRepository = {
         permissionsGranted += 1;
       }
 
-      return { memberId: member.id, permissionsGranted };
+      const staged = input.approval ? await stageOrgAuditEvents(tx, [input.approval]) : [];
+      return { memberId: member.id, permissionsGranted, staged };
+    });
+  },
+
+  /**
+   * Re-invite of a person who already holds a row: set the invited role and write the page grants, in one
+   * transaction. [D-OW-33] while the drive's org is lapsed this may only restrict: if it gives them more (a higher
+   * role, a wider custom role, a wider grant) guardDriveAccess throws OrgLapsedError and nothing is written.
+   */
+  async upgradeMemberWithPermissions(input: {
+    memberId: string;
+    driveId: string;
+    userId: string;
+    role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
+    permissions: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean }>;
+    grantedBy: string;
+    validPageIds: Set<string>;
+    /** AUD-1: as for createAcceptedMemberWithPermissions. */
+    approval?: OrgAuditEvent;
+  }): Promise<{ permissionsGranted: number; skippedPageIds: string[]; staged: StagedOrgAuditEvent[] }> {
+    return guardDriveAccess(db, input.driveId, { users: [input.userId], agents: false }, async (tx) => {
+      await tx
+        .update(driveMembers)
+        .set({ role: input.role, customRoleId: input.customRoleId })
+        .where(eq(driveMembers.id, input.memberId));
+      let permissionsGranted = 0;
+      const skippedPageIds: string[] = [];
+      for (const perm of input.permissions) {
+        if (!input.validPageIds.has(perm.pageId)) {
+          skippedPageIds.push(perm.pageId);
+          continue;
+        }
+        const [existing] = await tx
+          .select({ id: pagePermissions.id })
+          .from(pagePermissions)
+          .where(and(eq(pagePermissions.pageId, perm.pageId), eq(pagePermissions.userId, input.userId)))
+          .limit(1);
+        if (existing) {
+          await tx
+            .update(pagePermissions)
+            .set({ canView: perm.canView, canEdit: perm.canEdit, canShare: perm.canShare, grantedBy: input.grantedBy, grantedAt: new Date() })
+            .where(eq(pagePermissions.id, existing.id));
+        } else {
+          await tx.insert(pagePermissions).values({
+            pageId: perm.pageId,
+            userId: input.userId,
+            canView: perm.canView,
+            canEdit: perm.canEdit,
+            canShare: perm.canShare,
+            canDelete: false,
+            grantedBy: input.grantedBy,
+          });
+        }
+        permissionsGranted += 1;
+      }
+      const staged = input.approval ? await stageOrgAuditEvents(tx, [input.approval]) : [];
+      return { permissionsGranted, skippedPageIds, staged };
     });
   },
 
@@ -244,12 +228,23 @@ export const driveInviteRepository = {
     email: string;
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     now: Date;
+    /**
+     * AUD-1: an approver's `org.guest.approved`, staged with the invitation. The invitation is a committed change that
+     * stands unless undone (a failed email deletes it), so the event is held deliver-unless-undone, like an org
+     * invitation's: published once the email went out, discarded with the row on an undo, and delivered by the drainer
+     * when the hold ends if the process stopped in between.
+     */
+    approval?: OrgAuditEvent;
   }) {
-    const { tokenHash, email, driveId, role, invitedBy, expiresAt, now } = input;
+    const { tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt, now } = input;
     return db.transaction(async (tx) => {
+      // [D-OW-33] an invitation is a token that admits whoever accepts it: none is issued while the drive's org is
+      // lapsed (acceptance refuses too, for one issued before the lapse).
+      if (await checkDriveMayLoosen(tx, driveId, true)) throw new OrgLapsedError();
       // Sweep any already-expired unconsumed row for this (driveId, email) pair
       // so the partial unique index does not block a legitimate re-invite.
       // Active (unexpired) rows are caught by the route's pre-check + the
@@ -264,9 +259,10 @@ export const driveInviteRepository = {
       );
       const [row] = await tx
         .insert(pendingInvites)
-        .values({ tokenHash, email, driveId, role, invitedBy, expiresAt })
+        .values({ tokenHash, email, driveId, role, customRoleId, invitedBy, expiresAt })
         .returning();
-      return row;
+      const approvalStaged = input.approval ? await stageOrgAuditEvents(tx, [input.approval], { held: true }) : [];
+      return { ...row, approvalStaged };
     });
   },
 
@@ -275,8 +271,9 @@ export const driveInviteRepository = {
     email: string;
     driveId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
-    expiresAt: Date;
+    expiresAt: Date | null;
     consumedAt: Date | null;
     driveName: string;
     inviterName: string;
@@ -287,6 +284,7 @@ export const driveInviteRepository = {
         email: pendingInvites.email,
         driveId: pendingInvites.driveId,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
         invitedBy: pendingInvites.invitedBy,
         expiresAt: pendingInvites.expiresAt,
         consumedAt: pendingInvites.consumedAt,
@@ -298,7 +296,12 @@ export const driveInviteRepository = {
       .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
       .where(eq(pendingInvites.tokenHash, tokenHash))
       .limit(1);
-    return results.at(0) ?? null;
+    const row = results.at(0);
+    if (!row) return null;
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this flows
+    // to the invite/signup screens (legacy plaintext passes through unchanged).
+    row.inviterName = await decryptField(row.inviterName);
+    return row;
   },
 
   async findActivePendingInviteByDriveAndEmail(
@@ -314,7 +317,7 @@ export const driveInviteRepository = {
           eq(pendingInvites.driveId, driveId),
           eq(pendingInvites.email, email),
           isNull(pendingInvites.consumedAt),
-          gt(pendingInvites.expiresAt, now),
+          or(isNull(pendingInvites.expiresAt), gt(pendingInvites.expiresAt, now)),
         )
       )
       .limit(1);
@@ -343,7 +346,7 @@ export const driveInviteRepository = {
     email: string,
   ): Promise<{ id: string; suspendedAt: Date | null } | null> {
     const user = await db.query.users.findFirst({
-      where: eq(users.email, email.trim().toLowerCase()),
+      where: userEmailMatch(email.trim().toLowerCase()),
       columns: { id: true, suspendedAt: true },
     });
     return user ? { id: user.id, suspendedAt: user.suspendedAt } : null;
@@ -369,6 +372,7 @@ export const driveInviteRepository = {
     driveId: string;
     driveName: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
   }>> {
     return db
@@ -377,6 +381,7 @@ export const driveInviteRepository = {
         driveId: pendingInvites.driveId,
         driveName: drives.name,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
         invitedBy: pendingInvites.invitedBy,
       })
       .from(pendingInvites)
@@ -385,7 +390,7 @@ export const driveInviteRepository = {
         and(
           eq(pendingInvites.email, email),
           isNull(pendingInvites.consumedAt),
-          gt(pendingInvites.expiresAt, now),
+          or(isNull(pendingInvites.expiresAt), gt(pendingInvites.expiresAt, now)),
         ),
       );
   },
@@ -394,16 +399,22 @@ export const driveInviteRepository = {
     id: string;
     email: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
+    customRoleName: string | null;
+    customRoleColor: string | null;
     driveId: string;
     invitedByName: string;
     createdAt: Date;
-    expiresAt: Date;
+    expiresAt: Date | null;
   }>> {
-    return db
+    const rows = await db
       .select({
         id: pendingInvites.id,
         email: pendingInvites.email,
         role: pendingInvites.role,
+        customRoleId: pendingInvites.customRoleId,
+        customRoleName: driveRoles.name,
+        customRoleColor: driveRoles.color,
         driveId: pendingInvites.driveId,
         invitedByName: users.name,
         createdAt: pendingInvites.createdAt,
@@ -411,12 +422,21 @@ export const driveInviteRepository = {
       })
       .from(pendingInvites)
       .innerJoin(users, eq(users.id, pendingInvites.invitedBy))
+      .leftJoin(driveRoles, eq(driveRoles.id, pendingInvites.customRoleId))
       .where(
         and(
           eq(pendingInvites.driveId, driveId),
           isNull(pendingInvites.consumedAt),
         ),
       );
+    // Decrypt the inviter's joined name PII at the edge (GDPR #965) — this list
+    // is returned to the member-management UI (legacy plaintext passes through).
+    await Promise.all(
+      rows.map(async (r) => {
+        r.invitedByName = await decryptField(r.invitedByName);
+      }),
+    );
+    return rows;
   },
 
   // Loader for the revoke route (PR 2). Returns expired-unconsumed rows too
@@ -462,20 +482,55 @@ export const driveInviteRepository = {
     driveId: string;
     userId: string;
     role: 'OWNER' | 'ADMIN' | 'MEMBER';
+    customRoleId: string | null;
     invitedBy: string;
     acceptedAt: Date;
   }): Promise<
     | { ok: true; memberId: string }
-    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' }
+    | { ok: false; reason: 'TOKEN_CONSUMED' | 'ALREADY_MEMBER' | 'GUEST_POLICY' | 'GUEST_APPROVAL_PENDING' | 'ORG_LAPSED' }
   > {
-    const { inviteId, driveId, userId, role, invitedBy, acceptedAt } = input;
+    const { inviteId, driveId, userId, role, customRoleId, invitedBy, acceptedAt } = input;
     // The ALREADY_MEMBER signal must roll back the consume — if the user is
     // already a member there is no reason to burn the invite token. We throw
     // a sentinel inside the transaction so Drizzle rolls back, then translate
     // it to a result outside the tx boundary.
     const ALREADY_MEMBER = Symbol('ALREADY_MEMBER');
+    const HELD = 'GUEST_APPROVAL_PENDING' as const;
     try {
-      const memberId = await db.transaction(async (tx) => {
+      const memberId = await db.transaction(async (tx): Promise<string> => {
+        // POL-2, at the moment the membership would be created: an org that has turned guests OFF admits no outsider,
+        // whenever the invitation was sent. Asked BEFORE the token is consumed, so a refusal burns nothing and the
+        // invitation works again if the policy is turned back on. Under `approve`, only an invitation an Owner or
+        // Admin approved (its approval left an `approved` marker) admits; one sent while guests were on, or before the
+        // drive joined the org, is queued for approval instead (independent review of #2762, P2-6).
+        const admission = await decideOrgDriveAdmission({ driveId, userId }, tx);
+        if (admission.decision === 'refuse') throw 'GUEST_POLICY';
+        if (admission.decision === 'hold' && admission.orgId) {
+          // Only THIS invitation's approval admits (re-verify N3), never another approval to the same address.
+          const approved = await consumeApprovedInvitation(tx, { driveId, invite: { kind: 'drive', id: inviteId } });
+          if (!approved) {
+            const consumedForQueue = await tx
+              .update(pendingInvites)
+              .set({ consumedAt: acceptedAt })
+              .where(and(eq(pendingInvites.id, inviteId), isNull(pendingInvites.consumedAt)))
+              .returning({ id: pendingInvites.id });
+            if (consumedForQueue.length === 0) throw 'TOKEN_CONSUMED';
+            await requestGuestApproval({
+              orgId: admission.orgId,
+              driveId,
+              userId,
+              origin: 'invite',
+              request: { role: role === 'MEMBER' ? 'MEMBER' : 'ADMIN', customRoleId, invitedBy },
+              requestedBy: invitedBy,
+            }, tx);
+            return HELD;
+          }
+        }
+
+        // [D-OW-33] accepting adds access: refused while the drive's org is lapsed, BEFORE the token is consumed, so
+        // the invitation works again once the org pays.
+        if (await checkDriveMayLoosen(tx, driveId, true)) throw 'ORG_LAPSED';
+
         const consumed = await tx
           .update(pendingInvites)
           .set({ consumedAt: acceptedAt })
@@ -494,10 +549,20 @@ export const driveInviteRepository = {
         }
 
         try {
+          // A GUEST row (redeemed page share link) is upgraded in place to the
+          // invited role; any other existing row is a real membership and the
+          // conflict stays ALREADY_MEMBER (setWhere leaves it untouched, so
+          // nothing is returned).
           const [member] = await tx
             .insert(driveMembers)
-            .values({ driveId, userId, role, invitedBy, acceptedAt })
+            .values({ driveId, userId, role, customRoleId, invitedBy, acceptedAt })
+            .onConflictDoUpdate({
+              target: [driveMembers.driveId, driveMembers.userId],
+              set: { role, customRoleId, invitedBy, acceptedAt },
+              setWhere: sql`${driveMembers.role} = 'GUEST'`,
+            })
             .returning({ id: driveMembers.id });
+          if (!member) throw ALREADY_MEMBER;
           return member.id;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -511,10 +576,18 @@ export const driveInviteRepository = {
           throw error;
         }
       });
+      // The invitation was answered by the approval queue: nothing granted, the token spent.
+      if (memberId === HELD) return { ok: false, reason: 'GUEST_APPROVAL_PENDING' };
       return { ok: true, memberId };
     } catch (error) {
       if (error === 'TOKEN_CONSUMED') {
         return { ok: false, reason: 'TOKEN_CONSUMED' };
+      }
+      if (error === 'GUEST_POLICY') {
+        return { ok: false, reason: 'GUEST_POLICY' };
+      }
+      if (error === 'ORG_LAPSED') {
+        return { ok: false, reason: 'ORG_LAPSED' };
       }
       if (error === ALREADY_MEMBER) {
         return { ok: false, reason: 'ALREADY_MEMBER' };
@@ -523,5 +596,3 @@ export const driveInviteRepository = {
     }
   },
 };
-
-export type DriveInviteRepository = typeof driveInviteRepository;

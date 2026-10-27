@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { isEmbeddedSearch } from "@/lib/legal-embed";
 
 const GOOGLE_GSI_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 
@@ -21,6 +22,9 @@ export function GoogleOneTap() {
 
   useEffect(() => {
     if (!enabled || !clientId || initializedRef.current) return;
+
+    // Skip on legal pages opened from the iOS app (`?embed=1`): no sign-in prompt there.
+    if (isEmbeddedSearch(window.location.search)) return;
 
     // Skip on mobile / in-app browsers where One Tap has poor support
     if (typeof navigator !== "undefined") {
@@ -52,27 +56,44 @@ export function GoogleOneTap() {
       window.google.accounts.id.prompt();
     };
 
-    // Load or reuse the GSI script
-    const existing = document.querySelector(
-      `script[src="${GOOGLE_GSI_SCRIPT_URL}"]`
-    );
+    // Load or reuse the GSI script. The 98 KB script is ~75% unused on a
+    // marketing page and competes with the hero for bandwidth, so wait until
+    // the browser is idle (or shortly after load where idle callbacks are
+    // unsupported) before injecting it.
+    const load = () => {
+      const existing = document.querySelector(
+        `script[src="${GOOGLE_GSI_SCRIPT_URL}"]`
+      );
 
-    if (existing) {
-      if (window.google?.accounts?.id) {
-        init();
+      if (existing) {
+        if (window.google?.accounts?.id) {
+          init();
+        } else {
+          existing.addEventListener("load", init);
+        }
       } else {
-        existing.addEventListener("load", init);
+        const script = document.createElement("script");
+        script.src = GOOGLE_GSI_SCRIPT_URL;
+        script.async = true;
+        script.defer = true;
+        script.onload = init;
+        document.head.appendChild(script);
       }
+    };
+
+    let idleId: number | undefined;
+    let timeoutId: number | undefined;
+    // typeof, not `in`: with lib.dom declaring requestIdleCallback the `in`
+    // guard narrows `window` to `never` in the else branch (TS2339 in CI).
+    if (typeof window.requestIdleCallback === "function") {
+      idleId = window.requestIdleCallback(load, { timeout: 4000 });
     } else {
-      const script = document.createElement("script");
-      script.src = GOOGLE_GSI_SCRIPT_URL;
-      script.async = true;
-      script.defer = true;
-      script.onload = init;
-      document.head.appendChild(script);
+      timeoutId = window.setTimeout(load, 2500);
     }
 
     return () => {
+      if (idleId !== undefined) window.cancelIdleCallback(idleId);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
       if (window.google?.accounts?.id) {
         window.google.accounts.id.cancel();
       }

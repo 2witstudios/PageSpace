@@ -1,17 +1,16 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
-import {
-  chatMessageRepository,
-  processMessageContentUpdate,
-} from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
+import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -26,9 +25,10 @@ export async function PATCH(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { agentId, conversationId, messageId } = await context.params;
@@ -50,7 +50,7 @@ export async function PATCH(
     }
 
     // Check if user can edit the page (agent) this message belongs to
-    const canEdit = await canUserEditPage(userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       loggers.api.warn('Edit agent message permission denied', {
         userId: maskIdentifier(userId),
@@ -58,14 +58,19 @@ export async function PATCH(
         agentId: maskIdentifier(agentId),
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'PATCH' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actor, agentId, NextResponse.json(
         { error: 'You do not have permission to edit messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -81,32 +86,31 @@ export async function PATCH(
     // Process content, preserving structured format if present
     const updatedContent = processMessageContentUpdate(message.content, content);
 
-    // Update the message content and set editedAt
-    await chatMessageRepository.updateMessageContent(messageId, updatedContent);
+    // Update the message content via the repository choke point: one
+    // transaction with the rev bump, then the legacy chat:message_edited
+    // broadcast + authoritative conversation:message_updated event — both
+    // emitted from the repository, not this route (Agent-Session SSoT §3).
+    await messageRepository.editPageMessage({
+      messageId,
+      pageId: agentId,
+      conversationId,
+      updatedContent,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
-    // Broadcast to remote viewers so their message bubble re-renders without a refetch.
-    // Failure to broadcast must never break the request — wrapped in catch.
-    void (async () => {
-      try {
-        const updated = await chatMessageRepository.getMessageById(messageId);
-        if (!updated) return;
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        const uiMessage = convertDbMessageToUIMessage(updated);
-        await broadcastAiMessageEdited({
-          messageId,
-          pageId: agentId,
-          conversationId,
-          parts: uiMessage.parts,
-          editedAt: (updated.editedAt ?? new Date()).toISOString(),
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast agent message edit', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          agentId: maskIdentifier(agentId),
-        });
+    // Invalidate compaction if the edited message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId, { source: 'page', pageId: agentId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'page', pageId: agentId });
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after agent message edit', err as Error);
+    }
 
     // Log activity for audit trail
     try {
@@ -165,9 +169,10 @@ export async function DELETE(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { agentId, conversationId, messageId } = await context.params;
@@ -180,7 +185,7 @@ export async function DELETE(
     }
 
     // Check if user can edit the page (agent) this message belongs to
-    const canEdit = await canUserEditPage(userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       loggers.api.warn('Delete agent message permission denied', {
         userId: maskIdentifier(userId),
@@ -188,14 +193,19 @@ export async function DELETE(
         agentId: maskIdentifier(agentId),
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent_message', resourceId: messageId, details: { reason: 'no_edit_permission', agentId, conversationId, method: 'DELETE' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actor, agentId, NextResponse.json(
         { error: 'You do not have permission to delete messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get the message to verify it exists, is active, and belongs to this conversation
-    const message = await chatMessageRepository.getMessageById(messageId);
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6); `pageId` is
+    // derived from the conversation, so the binding check just below still
+    // rejects a message that belongs to another agent — or to the global
+    // assistant, whose rows derive `pageId: null` and can never equal agentId.
+    const message = await messageRepository.getMessageById(messageId);
     if (!message || !message.isActive) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
     }
@@ -208,26 +218,28 @@ export async function DELETE(
     // Store content for audit trail before deletion
     const deletedContent = message.content;
 
-    // Soft delete the message
-    await chatMessageRepository.softDeleteMessage(messageId);
+    // Soft delete via the repository choke point (rev bump + legacy
+    // chat:message_deleted + authoritative conversation:message_deleted).
+    await messageRepository.softDeletePageMessage({
+      messageId,
+      pageId: agentId,
+      conversationId,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
-    // Broadcast to remote viewers. Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageDeleted({
-          messageId,
-          pageId: agentId,
-          conversationId,
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast agent message delete', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          agentId: maskIdentifier(agentId),
-        });
+    // Invalidate compaction if the deleted message was in the compacted range.
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId, { source: 'page', pageId: agentId });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range.
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'page', pageId: agentId });
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after agent message delete', err as Error);
+    }
 
     // Log activity for audit trail
     try {

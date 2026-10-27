@@ -1,11 +1,26 @@
-import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { isExternalHttpUrl } from '@/lib/auth/google-avatar';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+
+// Session (browser) and OAuth (CLI `pagespace login` identity confirmation,
+// ADR 0003) both resolve identity the same way; `mcp_*` tokens are scoped
+// agent credentials with no single "current user" concept and stay excluded
+// — a scoped token is its own drive-member principal (ADR 0002 Decision 2),
+// and `auth.userId` here would still resolve to the personal owner behind
+// it, handing that owner's email/name/image to whatever holds the token.
+// `pagespace keys create`'s post-mint `confirmIdentity` call (loopback-flow.ts)
+// also authenticates with the freshly-minted mcp_* token and so no longer
+// resolves — that call's result isn't even read by `keys create` (only
+// `login`/`login-device`/`whoami` render `identity`), and its failure is
+// already caught and silently absorbed (loopback-flow.ts), so this is a
+// no-op UX-wise, not a functional regression.
+const AUTH_OPTIONS = { allow: ['session', 'oauth'] as const, requireCSRF: false };
 
 export async function GET(req: Request) {
-  const auth = await requireAuth(req);
-  if (isAuthError(auth)) return auth;
+  const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS);
+  if (isAuthError(auth)) return auth.error;
 
   const user = await authRepository.findUserById(auth.userId);
 
@@ -30,5 +45,9 @@ export async function GET(req: Request) {
     image: safeImage,
     role: user.role,
     emailVerified: user.emailVerified,
+    // Coerced to the canonical vocabulary here (not left as the raw, untyped
+    // DB column) so every client consumer gets a value `isSandboxAvailable`
+    // and friends can trust directly, same as every server-side tier read.
+    subscriptionTier: toPersonalSubscriptionTier(user.subscriptionTier),
   });
 }

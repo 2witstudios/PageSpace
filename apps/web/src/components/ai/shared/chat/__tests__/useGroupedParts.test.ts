@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { UIMessage } from 'ai';
 import { useGroupedParts } from '../useGroupedParts';
-import { isTextGroupPart, isFileGroupPart, isProcessedToolPart } from '../message-types';
+import { isTextGroupPart, isFileGroupPart, isProcessedToolPart, isToolRunGroupPart, isSpendFallbackPart } from '../message-types';
 
 type Parts = UIMessage['parts'];
 
@@ -86,7 +86,10 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(3);
     expect(isTextGroupPart(result.current[0])).toBe(true);
-    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isToolRunGroupPart(result.current[1])).toBe(true);
+    if (isToolRunGroupPart(result.current[1])) {
+      expect(result.current[1].parts).toHaveLength(1);
+    }
     expect(isTextGroupPart(result.current[2])).toBe(true);
   });
 
@@ -106,7 +109,10 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(3);
     expect(isFileGroupPart(result.current[0])).toBe(true);
-    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isToolRunGroupPart(result.current[1])).toBe(true);
+    if (isToolRunGroupPart(result.current[1])) {
+      expect(result.current[1].parts).toHaveLength(1);
+    }
     expect(isFileGroupPart(result.current[2])).toBe(true);
   });
 
@@ -149,8 +155,9 @@ describe('useGroupedParts', () => {
 
     expect(result.current).toHaveLength(1);
     const group = result.current[0];
-    if (isProcessedToolPart(group)) {
-      expect(group.state).toBe('input-available');
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts[0].state).toBe('input-available');
     }
   });
 
@@ -209,5 +216,219 @@ describe('useGroupedParts', () => {
     if (isFileGroupPart(group)) {
       expect(group.parts).toHaveLength(2);
     }
+  });
+
+  it('given 2+ consecutive non-diff tool calls, should collapse into one tool-run-group', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: { command: 'ls' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: { command: 'pwd' }, output: '/' },
+      { type: 'tool-gh', toolCallId: 'tc-3', toolName: 'gh', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(3);
+      expect(group.parts.map(p => p.toolName)).toEqual(['bash', 'bash', 'gh']);
+    }
+  });
+
+  it('given a single non-diff tool call, should render it as a length-1 run carrying a stable runKey', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(1);
+      expect(group.runKey).toBe('run:tc-1');
+    }
+  });
+
+  it('given a 2nd consecutive call joins an existing run, should keep the same runKey as before it joined', () => {
+    const solo = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result, rerender } = renderHook(({ parts }) => useGroupedParts(parts), {
+      initialProps: { parts: solo },
+    });
+
+    const soloGroup = result.current[0];
+    expect(isToolRunGroupPart(soloGroup)).toBe(true);
+    const soloRunKey = isToolRunGroupPart(soloGroup) ? soloGroup.runKey : undefined;
+
+    const grown = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'input-available', input: {} },
+    ]);
+    rerender({ parts: grown });
+
+    const grownGroup = result.current[0];
+    expect(result.current).toHaveLength(1);
+    expect(isToolRunGroupPart(grownGroup)).toBe(true);
+    if (isToolRunGroupPart(grownGroup)) {
+      expect(grownGroup.parts).toHaveLength(2);
+      expect(grownGroup.runKey).toBe(soloRunKey);
+    }
+  });
+
+  it('given a diff tool call in the middle of a run, should break the run in two with different runKeys', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-edit', toolCallId: 'tc-3', toolName: 'edit', state: 'output-available', input: { file_path: 'foo.ts' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-4', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(3);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    if (isProcessedToolPart(result.current[1])) {
+      expect(result.current[1].toolName).toBe('edit');
+    }
+    expect(isToolRunGroupPart(result.current[2])).toBe(true);
+    if (isToolRunGroupPart(result.current[0]) && isToolRunGroupPart(result.current[2])) {
+      expect(result.current[0].runKey).not.toBe(result.current[2].runKey);
+    }
+  });
+
+  it('given an execute_tool-wrapped diff tool, should still break a run by the inner tool name', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      {
+        type: 'tool-execute_tool',
+        toolCallId: 'tc-3',
+        toolName: 'execute_tool',
+        state: 'output-available',
+        input: { tool_name: 'replace_lines', parameters: { pageId: 'p1' } },
+        output: 'ok',
+      },
+      { type: 'tool-bash', toolCallId: 'tc-4', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(3);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    if (isProcessedToolPart(result.current[1])) {
+      expect(result.current[1].toolName).toBe('execute_tool');
+    }
+    expect(isToolRunGroupPart(result.current[2])).toBe(true);
+  });
+
+  it('given a hidden tool_search call between visible tool calls, should skip it entirely and merge the run across it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-tool_search', toolCallId: 'tc-2', toolName: 'tool_search', state: 'output-available', input: { query: 'edit' }, output: '[]' },
+      { type: 'tool-bash', toolCallId: 'tc-3', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // tool_search is invisible: the two bash calls merge into one run of 2,
+    // and the search call must not appear anywhere in the output.
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(2);
+      expect(group.parts.every(p => p.toolName !== 'tool_search')).toBe(true);
+    }
+  });
+
+  it('given a run consisting only of tool_search calls, should produce no group at all', () => {
+    const parts = asMessageParts([
+      { type: 'tool-tool_search', toolCallId: 'tc-1', toolName: 'tool_search', state: 'output-available', input: { query: 'a' }, output: '[]' },
+      { type: 'tool-tool_search', toolCallId: 'tc-2', toolName: 'tool_search', state: 'output-available', input: { query: 'b' }, output: '[]' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(0);
+  });
+
+  it('given an execute_tool-wrapped tool_search, should also skip it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      {
+        type: 'tool-execute_tool',
+        toolCallId: 'tc-2',
+        toolName: 'execute_tool',
+        state: 'output-available',
+        input: { tool_name: 'tool_search', parameters: { query: 'edit' } },
+        output: '[]',
+      },
+      { type: 'tool-bash', toolCallId: 'tc-3', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    expect(result.current).toHaveLength(1);
+    const group = result.current[0];
+    expect(isToolRunGroupPart(group)).toBe(true);
+    if (isToolRunGroupPart(group)) {
+      expect(group.parts).toHaveLength(2);
+      expect(group.parts.every(p => p.toolName !== 'execute_tool')).toBe(true);
+    }
+  });
+
+  it('given consecutive task tool calls, should NOT collapse them (SPECIAL_HANDLED_TOOLS stand alone)', () => {
+    const parts = asMessageParts([
+      { type: 'tool-update_task', toolCallId: 'tc-1', toolName: 'update_task', state: 'output-available', input: { taskId: 't1' }, output: 'ok' },
+      { type: 'tool-update_task', toolCallId: 'tc-2', toolName: 'update_task', state: 'output-available', input: { taskId: 't2' }, output: 'ok' },
+      { type: 'tool-create_task', toolCallId: 'tc-3', toolName: 'create_task', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // Each task tool call renders standalone — TaskRenderer's own aggregated
+    // list view is how these should be scanned, not a generic run summary.
+    expect(result.current).toHaveLength(3);
+    result.current.forEach((group) => {
+      expect(isProcessedToolPart(group)).toBe(true);
+      expect(isToolRunGroupPart(group)).toBe(false);
+    });
+  });
+
+  it('given consecutive ask_agent calls sandwiched by bash calls, should keep ask_agent standalone and group the bash calls around it', () => {
+    const parts = asMessageParts([
+      { type: 'tool-bash', toolCallId: 'tc-1', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-2', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-ask_agent', toolCallId: 'tc-3', toolName: 'ask_agent', state: 'output-available', input: { question: 'q' }, output: 'ok' },
+      { type: 'tool-ask_agent', toolCallId: 'tc-4', toolName: 'ask_agent', state: 'output-available', input: { question: 'q2' }, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-5', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+      { type: 'tool-bash', toolCallId: 'tc-6', toolName: 'bash', state: 'output-available', input: {}, output: 'ok' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+
+    // bash run, then two standalone ask_agent calls (each its own entry, not
+    // merged with each other), then another bash run.
+    expect(result.current).toHaveLength(4);
+    expect(isToolRunGroupPart(result.current[0])).toBe(true);
+    expect(isProcessedToolPart(result.current[1])).toBe(true);
+    expect(isProcessedToolPart(result.current[2])).toBe(true);
+    if (isProcessedToolPart(result.current[1]) && isProcessedToolPart(result.current[2])) {
+      expect(result.current[1].toolName).toBe('ask_agent');
+      expect(result.current[2].toolName).toBe('ask_agent');
+    }
+    expect(isToolRunGroupPart(result.current[3])).toBe(true);
+  });
+
+  it('SPEND-4 (partial) given a data-spend-fallback part, should keep it as its own group ahead of the text it precedes', () => {
+    const parts = asMessageParts([
+      { type: 'data-spend-fallback', id: 'm1-spend-fallback', data: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-marcus' } },
+      { type: 'text', text: 'Answer' },
+    ]);
+    const { result } = renderHook(() => useGroupedParts(parts));
+    expect(result.current).toHaveLength(2);
+    const [fallback, text] = result.current;
+    expect(isSpendFallbackPart(fallback)).toBe(true);
+    expect(fallback).toEqual({ type: 'data-spend-fallback', id: 'm1-spend-fallback', data: { from: 'drive_wallet', to: 'own_credits', walletId: 'w-marcus' } });
+    expect(isTextGroupPart(text)).toBe(true);
   });
 });

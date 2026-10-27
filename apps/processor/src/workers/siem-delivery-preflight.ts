@@ -5,15 +5,16 @@ import {
 } from '../services/siem-chain-verifier';
 import {
   recomputeActivityLogHash,
-  recomputeSecurityAuditHash,
+  recomputeSecurityAuditHashEraAware,
   type ActivityLogHashableFields,
-  type SecurityAuditHashableFields,
+  type SecurityAuditEraFields,
 } from '../services/siem-chain-hashers';
 import {
   loadAnchorHash,
   loadActivityLogHashableFields,
   loadSecurityAuditHashableFields,
 } from './siem-anchor-loader';
+import type { SiemStorePlane } from '../services/siem-pool-routing';
 import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from '../services/siem-sources';
 
 /**
@@ -26,6 +27,14 @@ import { SIEM_SOURCES, CURSOR_INIT_SENTINEL } from '../services/siem-sources';
  * (services/siem-chain-hashers.ts). Returns `null` if every source verifies
  * clean, or a halt descriptor for the FIRST break encountered so the worker
  * can record a precise error on the correct cursor.
+ *
+ * Post-cutover (#890 Phase 2) the preflight straddles stores, so it takes an
+ * explicit per-purpose client set instead of one client:
+ *   - cursor re-reads      → the cursors store (Admin PG in dedicated mode)
+ *   - activity_logs data   → main (until Phase 5)
+ *   - security_audit_log   → the plane the routing matrix selected; on the
+ *     admin plane verification is ERA-AWARE (emission_hash NULL = legacy
+ *     formula, set = chainer H(emission, prev)).
  *
  * Extracted from the worker for two reasons:
  *   1. Existing worker tests were written pre-preflight and mock the DB at
@@ -42,6 +51,30 @@ interface PgClient {
     text: string,
     params?: unknown[]
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number | null }>;
+}
+
+/**
+ * Per-purpose clients for one preflight run. The worker composes this from
+ * the pool-per-operation matrix (services/siem-pool-routing.ts) so the
+ * preflight itself stays mode-agnostic.
+ */
+export interface PreflightStores {
+  /** siem_delivery_cursors re-reads — both sources. */
+  cursors: PgClient;
+  /** activity_logs anchor + hashable loads. */
+  activityData: PgClient;
+  /** security_audit_log anchor + hashable loads. */
+  securityData: PgClient;
+  /** Which plane securityData points at — selects the hashable SQL shape and era-aware verify. */
+  securityPlane: SiemStorePlane;
+  /**
+   * The legacy main-db security_audit_log store, provided only when
+   * securityData is the dedicated admin store. Used for exactly one thing:
+   * distinguishing "anchor row not yet backfilled" (row still present in the
+   * legacy store → awaiting_backfill, defer the source) from genuine anchor
+   * loss (row in neither store → fail closed).
+   */
+  legacySecurityStore: PgClient | null;
 }
 
 export interface PreflightHalt {
@@ -68,7 +101,21 @@ export interface PreflightDbError {
   message: string;
 }
 
-export type PreflightResult = PreflightHalt | PreflightDbError;
+/**
+ * Transitional cutover state (#890 Phase 2, leaves 7+8): the source's cursor
+ * was seeded from the legacy store, but the anchor row it points at has not
+ * been backfilled into the admin store yet. Not an error — the worker skips
+ * this source's entries for the run (its cursor stays put, so nothing is
+ * lost) and keeps delivering the other sources. Delivery resumes on the
+ * first run after the backfill plants the anchor row.
+ */
+export interface PreflightAwaitingBackfill {
+  kind: 'awaiting_backfill';
+  source: AuditLogSource;
+  anchorId: string;
+}
+
+export type PreflightResult = PreflightHalt | PreflightDbError | PreflightAwaitingBackfill;
 
 /**
  * Run chain verification across every source represented in the merged batch.
@@ -76,8 +123,12 @@ export type PreflightResult = PreflightHalt | PreflightDbError;
  * Contract:
  *   - Returns `null` if verification passes for every source (delivery
  *     proceeds).
- *   - Returns a PreflightHalt if any source's sub-batch fails. Sources are
- *     checked in SIEM_SOURCES order so diagnostics are stable across runs.
+ *   - Returns a PreflightHalt/PreflightDbError for the FIRST break
+ *     encountered. Sources are checked in SIEM_SOURCES order so diagnostics
+ *     are stable across runs.
+ *   - Returns PreflightAwaitingBackfill only when every OTHER source
+ *     verified clean — the worker may then deliver the remaining sources
+ *     after excluding the deferred one.
  *   - Sources whose cursor is still at CURSOR_INIT_SENTINEL are SKIPPED —
  *     the worker never delivers a batch whose anchor hash it can't recover
  *     without also running verification against that anchor, so we trust
@@ -89,7 +140,7 @@ export type PreflightResult = PreflightHalt | PreflightDbError;
  *     would defeat the point of the chain.
  */
 export async function runChainPreflight(
-  client: PgClient,
+  stores: PreflightStores,
   merged: readonly AuditLogEntry[]
 ): Promise<PreflightResult | null> {
   const bySource = new Map<AuditLogSource, AuditLogEntry[]>();
@@ -100,9 +151,13 @@ export async function runChainPreflight(
     bySource.get(entry.source)?.push(entry);
   }
 
+  let awaiting: PreflightAwaitingBackfill | null = null;
+
   for (const source of SIEM_SOURCES) {
     const entries = bySource.get(source) ?? [];
     if (entries.length === 0) continue;
+
+    const dataClient = source === 'activity_logs' ? stores.activityData : stores.securityData;
 
     let verificationResult: VerificationResult;
 
@@ -112,7 +167,7 @@ export async function runChainPreflight(
       // self-contained — the alternative (passing cursor state in from the
       // worker) couples this module to the worker's internal SourceState
       // shape for no real benefit.
-      const cursorResult = await client.query(
+      const cursorResult = await stores.cursors.query(
         'SELECT "lastDeliveredId" FROM siem_delivery_cursors WHERE id = $1',
         [source]
       );
@@ -126,8 +181,27 @@ export async function runChainPreflight(
         continue;
       }
 
-      const anchorHash = await loadAnchorHash(client, source, lastDeliveredId);
+      const anchorHash = await loadAnchorHash(dataClient, source, lastDeliveredId);
       if (anchorHash === null) {
+        if (
+          source === 'security_audit_log' &&
+          stores.securityPlane === 'admin' &&
+          stores.legacySecurityStore !== null
+        ) {
+          // The cursor was seeded from the legacy store at the flip. If the
+          // anchor row still exists over there, the backfill simply hasn't
+          // planted the legacy rows into the admin store yet — defer this
+          // source (cursor untouched, no error) instead of failing closed.
+          const probe = await stores.legacySecurityStore.query(
+            'SELECT 1 FROM security_audit_log WHERE id = $1',
+            [lastDeliveredId]
+          );
+          if ((probe.rowCount ?? probe.rows.length) > 0) {
+            awaiting = { kind: 'awaiting_backfill', source, anchorId: lastDeliveredId };
+            continue;
+          }
+        }
+
         // Fail closed: the anchor row pointed at by the cursor is gone.
         // This could be operational churn (pruning, GDPR erasure) OR
         // tampering — the two are indistinguishable from here, and letting
@@ -147,7 +221,7 @@ export async function runChainPreflight(
 
       if (source === 'activity_logs') {
         const hashableMap = await loadActivityLogHashableFields(
-          client,
+          dataClient,
           entries.map((e) => e.id)
         );
         verificationResult = verifyChainForSource({
@@ -170,22 +244,23 @@ export async function runChainPreflight(
         });
       } else {
         const hashableMap = await loadSecurityAuditHashableFields(
-          client,
-          entries.map((e) => e.id)
+          dataClient,
+          entries.map((e) => e.id),
+          { plane: stores.securityPlane }
         );
         verificationResult = verifyChainForSource({
           anchorHash,
           entries,
           recomputeHash: (entry, previousHash) => {
             const data = hashableMap.get(entry.id) as
-              | SecurityAuditHashableFields
+              | SecurityAuditEraFields
               | undefined;
             if (!data) {
               throw new Error(
                 `Hashable fields missing for security_audit_log entry ${entry.id}`
               );
             }
-            return recomputeSecurityAuditHash(data, previousHash);
+            return recomputeSecurityAuditHashEraAware(data, previousHash);
           },
         });
       }
@@ -207,5 +282,5 @@ export async function runChainPreflight(
     }
   }
 
-  return null;
+  return awaiting;
 }

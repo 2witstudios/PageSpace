@@ -1,0 +1,113 @@
+/**
+ * Sharing policy decisions — pure (Spec POL-2, POL-3, POL-4). No IO: a caller reads the org's policies
+ * (policy-reader.ts) for the drive it is acting in and asks here. `null` policies means the drive has no org
+ * (a personal drive), which no org policy ever restricts.
+ *
+ * A refusal always names the policy, so the caller can answer with the rule that stopped it, and carries a
+ * status so every route answers the same way.
+ */
+import type { SuspensionKind } from '@pagespace/db/schema/organizations';
+import type { OrgPolicies, OrgPolicyKey } from './policies-core';
+
+export const ORG_POLICY_CODE = 'org_policy' as const;
+
+export type PolicyRefusal = {
+  ok: false;
+  code: typeof ORG_POLICY_CODE;
+  /** The same value as `code`, so a refusal fits result unions that discriminate on `reason`. */
+  reason: typeof ORG_POLICY_CODE;
+  policy: OrgPolicyKey;
+  status: 403;
+  message: string;
+};
+export type PolicyDecision = { ok: true } | PolicyRefusal;
+
+const refuse = (policy: OrgPolicyKey, message: string): PolicyRefusal => ({ ok: false, code: ORG_POLICY_CODE, reason: ORG_POLICY_CODE, policy, status: 403, message });
+
+/** The one constructor for an org-policy refusal, shared by every policy decision module. */
+export const policyRefusal = refuse;
+
+export const SHARE_LINKS_OFF_MESSAGE = "This organization doesn't allow public share links. Existing links are paused, not deleted.";
+export const PUBLISHING_OFF_MESSAGE = "This organization doesn't allow publishing to the web. Existing published pages are paused, not deleted.";
+export const CUSTOM_DOMAINS_OFF_MESSAGE = "This organization doesn't allow custom domains. Existing domains are paused, not deleted.";
+
+export const GUESTS_OFF_MESSAGE = "This organization doesn't allow guests from outside it. People who are not members cannot be added to its drives.";
+export const GUESTS_HELD_MESSAGE = 'This organization requires an Owner or Admin to approve guests from outside it. The request is waiting for approval and nothing has been granted yet.';
+
+/** POL-2: the refusal a guest admission answers when the policy is off. */
+export function guestsOffRefusal(): PolicyRefusal {
+  return refuse('guests', GUESTS_OFF_MESSAGE);
+}
+
+/** POL-3: may a public share link be created in this drive? */
+export function shareLinkCreationDecision(policies: OrgPolicies | null): PolicyDecision {
+  return policies === null || policies.publicShareLinks ? { ok: true } : refuse('publicShareLinks', SHARE_LINKS_OFF_MESSAGE);
+}
+
+/**
+ * POL-3: may this link be REDEEMED now? Two independent conditions, either refuses: the policy is off, or the
+ * link carries a suspension marker (set when the policy turned off). Checking both at the moment of redemption is
+ * what makes the suspension hold even for a link whose marker is missing or stale, and for a marker that outlives
+ * a policy someone has just turned back on but not yet reconciled.
+ */
+export function shareLinkUsable(policies: OrgPolicies | null, link: { suspendedByPolicy: SuspensionKind | null }): boolean {
+  if (link.suspendedByPolicy !== null) return false;
+  return policies === null || policies.publicShareLinks;
+}
+
+/** POL-4: may a page be published to the web from this drive? */
+export function publishingDecision(policies: OrgPolicies | null): PolicyDecision {
+  return policies === null || policies.publishWeb ? { ok: true } : refuse('publishWeb', PUBLISHING_OFF_MESSAGE);
+}
+
+/** POL-4: may a custom domain be added to this drive? */
+export function customDomainsDecision(policies: OrgPolicies | null): PolicyDecision {
+  return policies === null || policies.customDomains ? { ok: true } : refuse('customDomains', CUSTOM_DOMAINS_OFF_MESSAGE);
+}
+
+/** Why an outsider was not added: the guests policy is off, or the org is lapsed ([D-OW-33]). */
+export type GuestAdmissionRefusal = 'guests_off' | 'org_lapsed';
+
+export type GuestAdmissionVerdict =
+  | { decision: 'allow' }
+  | { decision: 'hold' }
+  | { decision: 'refuse'; refusal: GuestAdmissionRefusal };
+
+/**
+ * POL-2: an org MEMBER is never a guest. An outsider is refused when guests are off, held for an Owner or Admin
+ * to approve when the policy is `approve`, and allowed when on. A drive with no org has no guest policy.
+ *
+ * [D-OW-33] admitting an outsider loosens access: decideOrgDriveAdmission asks checkOrgMayLoosen for an `allow`
+ * here and refuses `org_lapsed` while the org is lapsed. A held request still queues (it grants nothing, and
+ * approving it is refused while lapsed).
+ */
+export function decideGuestAdmission(policies: OrgPolicies | null, who: { isOrgMember: boolean }): GuestAdmissionVerdict {
+  if (policies === null || who.isOrgMember) return { decision: 'allow' };
+  switch (policies.guests) {
+    case 'off':
+      return { decision: 'refuse', refusal: 'guests_off' };
+    case 'approve':
+      return { decision: 'hold' };
+    case 'on':
+      return { decision: 'allow' };
+  }
+}
+
+/** The four flags of a page grant. */
+export interface PageGrantFlags {
+  canView: boolean;
+  canEdit: boolean;
+  canShare: boolean;
+  canDelete: boolean;
+}
+
+const PAGE_GRANT_FLAGS = ['canView', 'canEdit', 'canShare', 'canDelete'] as const;
+
+/**
+ * POL-2: does writing `next` give a person more than they hold now (`existing`, null when they hold no grant)? Only
+ * a grant that WIDENS access admits someone, so only that asks the guests policy. Narrowing or repeating a grant
+ * never does: a guest can always be given less.
+ */
+export function pageGrantWidensAccess(existing: PageGrantFlags | null, next: PageGrantFlags): boolean {
+  return PAGE_GRANT_FLAGS.some((flag) => next[flag] && !existing?.[flag]);
+}

@@ -2,7 +2,7 @@ import { db } from '@pagespace/db/db'
 import { and, desc, eq, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canActorEditPage, canActorConsultAgent } from '@/lib/ai/tools/actor-permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -10,9 +10,38 @@ import {
   broadcastInboxEvent,
   broadcastThreadReplyCountUpdated,
 } from '@/lib/websocket/socket-utils';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { acquireMentionCreditHold } from '@/lib/channels/mention-credit-gate';
 import { processMentionsInMessage } from '@/lib/ai/core/mention-processor';
+import {
+  commandExecutionDataFromPlan,
+  isSoloBuiltinCommandIgnoringMentions,
+  type CommandExecutionData,
+} from '@/lib/ai/core/command-processor';
+import { planCommandExecutions } from '@/lib/ai/core/command-resolver';
+import { commandsForModel } from '@/lib/ai/core/command-model-policy';
+import { agentRunModel, toolModelContext, type AgentRunModel } from '@/lib/ai/core/tool-model-context';
+import { loadHelpAnswerText } from '@/lib/commands/help-answer';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
-import type { ToolExecutionContext } from '@/lib/ai/core';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import type { ToolExecutionContext } from '@/lib/ai/core/types';
+import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { files, type AttachmentMeta } from '@pagespace/db/schema/storage';
+import type { ChannelMessageAiMeta } from '@pagespace/db/schema/chat';
+import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
+import { generatePresignedUrl, getPresignedUrlTtl, toContentHash } from '@/lib/presigned-url';
+import { isAllowedImageType } from '@/lib/validation/image-validation';
+import {
+  buildRecentImageFileParts,
+  MAX_RECENT_IMAGE_ATTACHMENTS,
+  MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES,
+  type ImageFilePart,
+  type RecentImageFileCandidate,
+} from '@/lib/channels/build-recent-image-file-parts';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const channelMentionLogger = loggers.ai.child({ module: 'channel-agent-mentions' });
 
@@ -20,14 +49,38 @@ const CONTEXT_MESSAGE_LIMIT = 12;
 const MESSAGE_SNIPPET_LIMIT = 320;
 const TRANSCRIPT_CHAR_LIMIT = 5000;
 
-interface MentionedAgent {
+export interface MentionedAgent {
   id: string;
   title: string;
   enabledTools: string[] | null;
+  /** Whether this agent's configured model (falling back to DEFAULT_MODEL) supports vision. */
+  hasVision: boolean;
+  /** POL-8: the provider and model this agent's reply will run (its configured pair, else the default). */
+  runModel: AgentRunModel;
+}
+
+export interface RecentChannelMessage {
+  content: string;
+  createdAt: Date;
+  user: { name: string | null } | null;
+  aiMeta: ChannelMessageAiMeta | null;
+  fileId: string | null;
+  attachmentMeta: AttachmentMeta | null;
+  /** Present since messages gained real attachment rows; ordered by position. */
+  attachments?: Array<{
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }>;
 }
 
 export interface TriggerMentionedAgentResponsesParams {
-  userId: string;
+  /**
+   * The person who posted the mention, as the credential of the request that posted it (D-OW-62): the mentioner gate,
+   * the reply's tools, attachments and commands all run under it, so an org's sign-in policy applies to a mention
+   * exactly as to that request. Never an automation.
+   */
+  sender: AccessActor;
   channelId: string;
   channelTitle: string;
   channelType?: string;
@@ -139,7 +192,7 @@ function buildLocationContext(params: TriggerMentionedAgentResponsesParams): Too
   };
 }
 
-async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
+export async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]> {
   const processed = processMentionsInMessage(content);
   if (processed.mentions.length === 0) {
     return [];
@@ -158,6 +211,7 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
     return [];
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const pagesById = await db.query.pages.findMany({
     where: and(
       inArray(pages.id, mentionOrder),
@@ -168,6 +222,8 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: true,
       title: true,
       enabledTools: true,
+      aiProvider: true,
+      aiModel: true,
     },
   });
 
@@ -187,14 +243,243 @@ async function resolveMentionedAgents(content: string): Promise<MentionedAgent[]
       id: page.id,
       title: page.title || 'Agent',
       enabledTools: Array.isArray(page.enabledTools) ? page.enabledTools : null,
+      hasVision: hasVisionCapability(page.aiModel || DEFAULT_MODEL),
+      runModel: agentRunModel(page),
     });
   }
 
   return orderedAgents;
 }
 
+export async function fetchRecentChannelMessages(channelId: string): Promise<RecentChannelMessage[]> {
+  return db.query.channelMessages.findMany({
+    where: and(eq(channelMessages.pageId, channelId), eq(channelMessages.isActive, true)),
+    columns: {
+      content: true,
+      createdAt: true,
+      aiMeta: true,
+      fileId: true,
+      attachmentMeta: true,
+    },
+    with: {
+      user: {
+        columns: {
+          name: true,
+        },
+      },
+      attachments: {
+        columns: { fileId: true, attachmentMeta: true, position: true },
+      },
+    },
+    orderBy: [desc(channelMessages.createdAt)],
+    limit: CONTEXT_MESSAGE_LIMIT,
+  });
+}
+
+/**
+ * Resolve recent channel image attachments into presigned, access-checked
+ * file parts for ask_agent. Skips the S3/DB round-trips entirely when no
+ * eligible agent can view images (nothing would ever consume the result).
+ *
+ * Everything security-relevant — storage key, mime type, size, and the drive
+ * used for the access check — comes from the `files` row, never from the
+ * message's `attachmentMeta` (client-supplied at message-POST time, so a
+ * crafted message could otherwise pair an accessible fileId with a forged
+ * contentHash and mint a presigned URL for an arbitrary object).
+ * `attachmentMeta` is used only for the display filename.
+ */
+async function resolveImageAttachmentsForContext(
+  actor: AccessActor,
+  contextMessages: RecentChannelMessage[]
+): Promise<ImageFilePart[]> {
+  // Dedup by fileId, keeping each file's MOST RECENT mention: re-sharing the
+  // same screenshot across several of the last 12 messages must not both
+  // (a) redo the access-check/presign per repeat, and (b) crowd out distinct
+  // older images from the eventual 5-slot cap with copies of one image.
+  // Map.delete+set (rather than a plain overwrite) moves the re-seen key to
+  // the end of iteration order, so final ordering reflects last-seen position.
+  //
+  // `contextMessages` arrives OLDEST-FIRST: `fetchRecentChannelMessages` orders
+  // newest-first (it takes the newest CONTEXT_MESSAGE_LIMIT rows) and the sole
+  // caller reverses it before passing it here, because the transcript reads in
+  // reading order. Everything below depends on that: `buildRecentImageFileParts`
+  // keeps the LAST `maxCount` candidates, so oldest-first is what makes the cap
+  // keep the newest images and the dedupe keep each file's latest mention. Do
+  // not "fix" this by reversing again — that inverts both.
+  const latestByFileId = new Map<string, RecentChannelMessage & { fileId: string }>();
+  for (const message of contextMessages) {
+    // Read every attachment on the message, not just the first. A message can
+    // now carry a whole batch of photos, and an agent mentioned on one should
+    // see all of them. Falls back to the legacy column for rows written before
+    // messages had attachment rows.
+    //
+    // Capped per message at the same number of slots the final selection has,
+    // taking the first few in the sender's own order. One message cannot then
+    // contribute more than the whole budget, and which few it contributes
+    // reads the way the batch reads. The final selection keeps the LAST
+    // candidates, so the newest messages win the cap — a ten-photo message
+    // posted just now can fill all five slots, and an older one cannot evict
+    // what came after it.
+    const messageAttachments =
+      message.attachments && message.attachments.length > 0
+        ? [...message.attachments]
+            .sort((a, b) => a.position - b.position)
+            .slice(0, MAX_RECENT_IMAGE_ATTACHMENTS)
+            .map((attachment) => ({
+              fileId: attachment.fileId,
+              attachmentMeta: attachment.attachmentMeta,
+            }))
+        : [{ fileId: message.fileId, attachmentMeta: message.attachmentMeta }];
+
+    for (const attachment of messageAttachments) {
+      if (!attachment.fileId) continue;
+      latestByFileId.delete(attachment.fileId);
+      latestByFileId.set(attachment.fileId, {
+        ...message,
+        fileId: attachment.fileId,
+        attachmentMeta: attachment.attachmentMeta,
+      });
+    }
+  }
+
+  if (latestByFileId.size === 0) {
+    return [];
+  }
+
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
+  const fileRows = await db.query.files.findMany({
+    where: inArray(files.id, [...latestByFileId.keys()]),
+    columns: { id: true, driveId: true, sizeBytes: true, mimeType: true, storagePath: true },
+  });
+  const filesById = new Map(fileRows.map((file) => [file.id, file]));
+
+  const candidates: RecentImageFileCandidate[] = await Promise.all(
+    [...latestByFileId.values()].map(async (message) => {
+      const file = filesById.get(message.fileId);
+      const filename = message.attachmentMeta?.originalName || 'attachment';
+
+      // Missing row, a non-image mime type, an oversized file, or a stub row
+      // with no blob ever persisted (storagePath null — see reap-orphaned-files)
+      // can never become a valid file part, so skip the per-file
+      // access-check/signing work up front rather than signing a dead URL.
+      if (
+        !file ||
+        !file.storagePath ||
+        !file.mimeType ||
+        !isAllowedImageType(file.mimeType) ||
+        file.sizeBytes > MAX_RECENT_IMAGE_ATTACHMENT_SIZE_BYTES
+      ) {
+        return {
+          fileId: message.fileId,
+          url: '',
+          mimeType: file?.mimeType ?? null,
+          filename,
+          sizeBytes: file?.sizeBytes ?? 0,
+          accessible: false,
+        };
+      }
+
+      const accessible = await canUserAccessFile(actor, file.id, file.driveId);
+      const url = accessible
+        ? await generatePresignedUrl(
+            toContentHash(file.storagePath),
+            'original',
+            getPresignedUrlTtl(file.mimeType),
+            undefined,
+            file.mimeType
+          )
+        : '';
+
+      return {
+        fileId: file.id,
+        url,
+        mimeType: file.mimeType,
+        filename,
+        sizeBytes: file.sizeBytes,
+        accessible,
+      };
+    })
+  );
+
+  return buildRecentImageFileParts(candidates);
+}
+
+/**
+ * Whether the agent's saved tool allowlist lets it talk in channels.
+ *
+ * Same semantics as `filterToolsForAgentAllowlist` (tool-filtering.ts):
+ * `null` is an unconfigured agent with NO restriction — the default every
+ * creation path writes — so a member agent replies to mentions out of the
+ * box; `[]` blocks every tool, and an explicit list must name
+ * `send_channel_message`. Treating null as "not enabled" here meant a
+ * freshly created agent could never answer a mention.
+ */
 function canAgentSendChannelMessages(enabledTools: string[] | null): boolean {
-  return Array.isArray(enabledTools) && enabledTools.includes('send_channel_message');
+  if (enabledTools === null) return true;
+  return enabledTools.includes('send_channel_message');
+}
+
+/**
+ * The execution context the mentioner's consult runs under — a plain user
+ * context (no agent chatSource: the human asks, the agent answers), located
+ * in the channel's drive. It is passed to BOTH the preliminary
+ * canActorConsultAgent gate and executeAskAgent, whose own gate is the same
+ * function, so the two can never disagree about a guest agent.
+ */
+function buildMentionerContext(
+  params: TriggerMentionedAgentResponsesParams,
+  conversationId: string,
+  locationContext: ToolExecutionContext['locationContext'],
+  creditSpend?: ToolExecutionContext['creditSpend'],
+): ToolExecutionContext {
+  return {
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
+    conversationId,
+    locationContext,
+    requestOrigin: 'user',
+    agentCallDepth: 0,
+    ...(creditSpend ? { creditSpend } : {}),
+  } as ToolExecutionContext;
+}
+
+/**
+ * The execution context the agent's own reply is authorized under — the same
+ * shape the top-level send passes to `send_channel_message`, so asking
+ * `canActorEditPage` with it up front answers exactly the question that tool
+ * would otherwise answer after the model call has already been paid for.
+ * The thread branch inserts through the repository directly and had no gate
+ * at all; both branches now share this one.
+ */
+function buildAgentActorContext(
+  params: TriggerMentionedAgentResponsesParams,
+  agent: MentionedAgent,
+  conversationId: string,
+  locationContext: ToolExecutionContext['locationContext'],
+  commandExecution?: CommandExecutionData[],
+): ToolExecutionContext {
+  return {
+    userId: params.sender.userId,
+    accessActor: mentionActor(params),
+    conversationId,
+    locationContext,
+    requestOrigin: 'agent',
+    chatSource: {
+      type: 'page',
+      agentPageId: agent.id,
+      agentTitle: agent.title,
+    },
+    ...(commandExecution && { commandExecution }),
+  } as ToolExecutionContext;
+}
+
+/** The actor a mention reply runs as: the sender's credential from the request that posted the mention (D-OW-62). */
+function mentionActor(params: Pick<TriggerMentionedAgentResponsesParams, 'sender'>): AccessActor {
+  return params.sender;
+}
+
+function mentionConversationIdFor(channelId: string, agentId: string): string {
+  return `channel:${channelId}:agent:${agentId}`;
 }
 
 /**
@@ -215,18 +500,20 @@ async function postAgentThreadReply(input: {
   content: string;
   parentId: string;
   agent: MentionedAgent;
+  commandExecution?: CommandExecutionData[];
+  driveId?: string | null;
 }): Promise<void> {
   const result = await channelMessageRepository.insertChannelThreadReply({
     parentId: input.parentId,
     pageId: input.channelId,
     userId: input.userId,
     content: input.content,
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
     aiMeta: {
       senderType: 'agent',
       senderName: input.agent.title,
       agentPageId: input.agent.id,
+      ...(input.commandExecution && { commandExecution: input.commandExecution }),
     },
   });
 
@@ -296,6 +583,17 @@ async function postAgentThreadReply(input: {
       { channelId: input.channelId, parentId: input.parentId }
     );
   }
+
+  // Fire-and-forget mention notifications for the agent's reply content
+  if (input.driveId) {
+    void notifyMentionedUsers({
+      content: input.content,
+      pageId: input.channelId,
+      driveId: input.driveId,
+      triggeredByUserId: input.userId,
+      mentionerNameOverride: input.agent.title,
+    });
+  }
 }
 
 export async function triggerMentionedAgentResponses(
@@ -306,15 +604,19 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
-    const [{ agentCommunicationTools }, { channelTools }] = await Promise.all([
+    // executeAskAgent is the KEPT internal invoke-an-agent engine — the
+    // ask_agent TOOL surface died with the session-family rebuild (spawn/send
+    // with wait absorbed it), but a mention reply is exactly this inline,
+    // ephemeral consult.
+    const [{ executeAskAgent }, { channelTools }] = await Promise.all([
       import('@/lib/ai/tools/agent-communication-tools'),
       import('@/lib/ai/tools/channel-tools'),
     ]);
 
-    const askAgentExecute = agentCommunicationTools.ask_agent.execute;
+    const askAgentExecute = executeAskAgent;
     const sendChannelExecute = channelTools.send_channel_message.execute;
 
-    if (!askAgentExecute || !sendChannelExecute) {
+    if (!sendChannelExecute) {
       channelMentionLogger.warn('Agent mention responder tools are unavailable');
       return;
     }
@@ -324,105 +626,194 @@ export async function triggerMentionedAgentResponses(
       return;
     }
 
+    // POL-9: an agent that answers a mention replies on its own. An org that turned autonomous runs off gets no reply,
+    // checked here before any eligibility query, credit hold or model call; read now, every mention, no cache.
+    const autonomy = agentsAutonomousDecision(params.driveId ? ((await getDrivePolicies(params.driveId))?.policies ?? null) : null);
+    if (!autonomy.ok) {
+      channelMentionLogger.info('Agent mention reply skipped by org policy', { channelId: params.channelId, driveId: params.driveId, policy: autonomy.policy });
+      return;
+    }
+
+    const locationContext = buildLocationContext(params);
+
+    // Three gates, cheapest first, all before any model call: the agent's
+    // allowlist lets it talk in channels; the mentioner may consult it (the
+    // same rule executeAskAgent applies — view its page, or it is a member of
+    // the channel's drive); and it can actually post in THIS channel as
+    // itself (a plain MEMBER agent can, in a non-private channel — the same
+    // rule as a member user).
     const eligibleAgentChecks = await Promise.all(
-      mentionedAgents.map(async (agent) => ({
-        agent,
-        canView: await canUserViewPage(params.userId, agent.id),
-        canSend: canAgentSendChannelMessages(agent.enabledTools),
-      }))
+      mentionedAgents.map(async (agent) => {
+        if (!canAgentSendChannelMessages(agent.enabledTools)) return { agent, eligible: false };
+        const conversationId = mentionConversationIdFor(params.channelId, agent.id);
+        const mentionerContext = buildMentionerContext(params, conversationId, locationContext);
+        if (!(await canActorConsultAgent(mentionerContext, agent.id, params.driveId ?? null))) {
+          return { agent, eligible: false };
+        }
+        const actorContext = buildAgentActorContext(params, agent, conversationId, locationContext);
+        return { agent, eligible: await canActorEditPage(actorContext, params.channelId) };
+      })
     );
 
     const eligibleAgents = eligibleAgentChecks
-      .filter((entry) => entry.canView && entry.canSend)
+      .filter((entry) => entry.eligible)
       .map((entry) => entry.agent);
 
     if (eligibleAgents.length === 0) {
       return;
     }
 
-    const recentMessages = await db.query.channelMessages.findMany({
-      where: and(
-        eq(channelMessages.pageId, params.channelId),
-        eq(channelMessages.isActive, true)
-      ),
-      columns: {
-        content: true,
-        createdAt: true,
-        aiMeta: true,
-      },
-      with: {
-        user: {
-          columns: {
-            name: true,
-          },
-        },
-      },
-      orderBy: [desc(channelMessages.createdAt)],
-      limit: CONTEXT_MESSAGE_LIMIT,
-    });
+    // A mention whose content is nothing but the /help chip (plus the
+    // @mention(s) that got it here at all — reaching this function already
+    // required at least one, see resolveMentionedAgents above, so the
+    // strict isSoloBuiltinCommand could never be satisfied here) answers
+    // directly from code for every eligible agent, below. Computed early
+    // (pure, no I/O) so everything below that exists only to build an
+    // askAgentExecute call — the channel transcript fetch/decrypt, image
+    // attachment resolution, command resolution's dynamic section — can
+    // skip entirely for this case; none of it is read on the solo-help path.
+    const isSoloHelpMention = isSoloBuiltinCommandIgnoringMentions(params.content, 'help');
 
-    const contextMessages = [...recentMessages].reverse();
-    const transcript = buildChannelTranscript(contextMessages);
-    const question = toSingleLine(
-      convertMentionsToDisplayText(params.content),
-      MESSAGE_SNIPPET_LIMIT
-    );
-    const locationContext = buildLocationContext(params);
+    let transcript = '';
+    let question = '';
+    let imageAttachments: ImageFilePart[] = [];
+    if (!isSoloHelpMention) {
+      const recentMessages = await fetchRecentChannelMessages(params.channelId);
 
+      // Decrypt PII at the edge (GDPR #965) so the agent transcript shows plaintext
+      // sender names (legacy plaintext passes through unchanged).
+      const contextMessages = await Promise.all(
+        [...recentMessages].reverse().map(async (m) => ({
+          ...m,
+          user: m.user ? { ...m.user, name: await decryptField(m.user.name) } : null,
+        })),
+      );
+      transcript = buildChannelTranscript(contextMessages);
+      question = toSingleLine(convertMentionsToDisplayText(params.content), MESSAGE_SNIPPET_LIMIT);
+
+      // Only worth resolving presigned URLs/access checks when at least one
+      // eligible agent can actually view images. Resolution failure (S3
+      // misconfigured, transient DB error) must degrade to text-only, not
+      // abort every mentioned agent's reply — this call sits ahead of the
+      // per-agent try/catch below, so an uncaught throw here would propagate
+      // to the function-level catch and silence the whole mention entirely.
+      if (eligibleAgents.some((agent) => agent.hasVision)) {
+        try {
+          imageAttachments = await resolveImageAttachmentsForContext(mentionActor(params), contextMessages);
+        } catch (error) {
+          channelMentionLogger.error(
+            'Failed to resolve recent channel image attachments; continuing with text-only replies',
+            error instanceof Error ? error : undefined,
+            { channelId: params.channelId, sourceMessageId: params.sourceMessageId }
+          );
+        }
+      }
+    }
+
+    // Universal Commands (UX spec §6): a chip is inert in a plain channel
+    // message, but every command chip executes — with the SENDER's
+    // permissions — when this message triggers an agent response.
+    // Resolution degrades, never fails; a skipped command becomes a
+    // one-line notice. Both the prompt injection and the persisted
+    // execution-feedback pill carry every resolved command, in order.
+    //
+    // Skipped entirely for a solo /help mention: planCommandExecutions would
+    // resolve /help's dynamic section (a DB read building the model-facing
+    // command list) only for commandContext, which this path never sends to
+    // a model — and the "used" pill it would also produce is exactly
+    // {label:'help', status:'used'} either way, since a builtin has no entry
+    // page for commandExecutionDataFromPlan to read.
+    const commandPlans = isSoloHelpMention
+      ? []
+      : await planCommandExecutions(params.content, mentionActor(params), {
+          driveId: params.driveId ?? null,
+        });
+
+    // isSoloHelpMention computed above (before command resolution). The
+    // answer itself is sender-scoped (the human's command list), not
+    // agent-scoped, so it's identical regardless of which agent replies —
+    // this skips askAgentExecute/generateText entirely for every one.
     for (const agent of eligibleAgents) {
       try {
-        const mentionConversationId = `channel:${params.channelId}:agent:${agent.id}`;
-        const rawAskResult: unknown = await askAgentExecute(
-          {
-            agentPath: `/${agent.title}`,
-            agentId: agent.id,
-            question,
-            context: [
-              `You were mentioned in the channel "${params.channelTitle}".`,
-              'Respond directly to the latest request and use recent channel context when relevant.',
-              '',
-              'Recent channel transcript (oldest to newest):',
-              transcript,
-            ].join('\n'),
-            conversationId: mentionConversationId,
-          },
-          {
-            toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
-            messages: [],
-            experimental_context: {
-              userId: params.userId,
-              conversationId: mentionConversationId,
-              locationContext,
-              requestOrigin: 'user',
-              agentCallDepth: 0,
-            } as ToolExecutionContext,
+        const mentionConversationId = mentionConversationIdFor(params.channelId, agent.id);
+        // POL-8: a command's pages reach this agent's model only when their org allows the model its reply runs.
+        const agentCommands = await commandsForModel(commandPlans, toolModelContext(agent.runModel));
+        const commandContext = agentCommands.prompt;
+        const commandExecution = isSoloHelpMention
+          ? [{ label: 'help', status: 'used' as const }]
+          : agentCommands.plans.length > 0
+            ? agentCommands.plans.map(commandExecutionDataFromPlan)
+            : undefined;
+
+        let replyContent: string;
+        if (isSoloHelpMention) {
+          replyContent = await loadHelpAnswerText(mentionActor(params), params.driveId ?? null);
+        } else {
+          // SPEND-6: the reply spends the channel's drive wallet or is skipped — never the
+          // sender's credits — gated before the model call and settled on that wallet.
+          const hold = await acquireMentionCreditHold({ userId: params.sender.userId, driveId: params.driveId });
+          if (!hold.allowed) {
+            channelMentionLogger.warn('Mentioned agent skipped (credit gate denied)', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              error: hold.error,
+            });
+            continue;
           }
-        );
+          let rawAskResult: unknown;
+          try {
+            rawAskResult = await askAgentExecute(
+              {
+                agentPath: `/${agent.title}`,
+                agentId: agent.id,
+                question,
+                context: [
+                  `You were mentioned in the channel "${params.channelTitle}".`,
+                  'Respond directly to the latest request and use recent channel context when relevant.',
+                  '',
+                  'Recent channel transcript (oldest to newest):',
+                  transcript,
+                  ...(commandContext ? ['', commandContext] : []),
+                ].join('\n'),
+                conversationId: mentionConversationId,
+                ...(imageAttachments.length > 0 ? { imageAttachments } : {}),
+              },
+              {
+                toolCallId: `channel-mention-ask-${params.sourceMessageId}-${agent.id}`,
+                messages: [],
+                experimental_context: buildMentionerContext(params, mentionConversationId, locationContext, hold.creditSpend),
+              }
+            );
+          } finally {
+            hold.release();
+          }
 
-        if (!isAskAgentResult(rawAskResult)) {
-          channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            receivedType: typeof rawAskResult,
-            receivedKeys:
-              rawAskResult && typeof rawAskResult === 'object'
-                ? Object.keys(rawAskResult as Record<string, unknown>)
-                : null,
-          });
-          continue;
+          if (!isAskAgentResult(rawAskResult)) {
+            channelMentionLogger.error('Mentioned agent returned a malformed result; skipping', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              receivedType: typeof rawAskResult,
+              receivedKeys:
+                rawAskResult && typeof rawAskResult === 'object'
+                  ? Object.keys(rawAskResult as Record<string, unknown>)
+                  : null,
+            });
+            continue;
+          }
+          const askResult = rawAskResult;
+
+          if (!askResult.success || !askResult.response || !askResult.response.trim()) {
+            channelMentionLogger.warn('Mentioned agent returned no response', {
+              channelId: params.channelId,
+              agentId: agent.id,
+              error: askResult.error,
+            });
+            continue;
+          }
+
+          replyContent = askResult.response.trim();
         }
-        const askResult = rawAskResult;
 
-        if (!askResult.success || !askResult.response || !askResult.response.trim()) {
-          channelMentionLogger.warn('Mentioned agent returned no response', {
-            channelId: params.channelId,
-            agentId: agent.id,
-            error: askResult.error,
-          });
-          continue;
-        }
-
-        const replyContent = askResult.response.trim();
         const trimmedParent = (params.parentId ?? '').trim();
         if (trimmedParent.length > 0) {
           // Thread-reply branch: route through the same transactional helper
@@ -432,11 +823,13 @@ export async function triggerMentionedAgentResponses(
           // to the resulting follower set so other followers see the reply
           // in their inbox even though it was posted by the agent.
           await postAgentThreadReply({
-            userId: params.userId,
+            userId: params.sender.userId,
             channelId: params.channelId,
             content: replyContent,
             parentId: trimmedParent,
             agent,
+            commandExecution,
+            driveId: params.driveId,
           });
         } else {
           await sendChannelExecute(
@@ -447,17 +840,13 @@ export async function triggerMentionedAgentResponses(
             {
               toolCallId: `channel-mention-send-${params.sourceMessageId}-${agent.id}`,
               messages: [],
-              experimental_context: {
-                userId: params.userId,
-                conversationId: mentionConversationId,
+              experimental_context: buildAgentActorContext(
+                params,
+                agent,
+                mentionConversationId,
                 locationContext,
-                requestOrigin: 'agent',
-                chatSource: {
-                  type: 'page',
-                  agentPageId: agent.id,
-                  agentTitle: agent.title,
-                },
-              } as ToolExecutionContext,
+                commandExecution,
+              ),
             }
           );
         }

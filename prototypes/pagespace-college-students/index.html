@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PageSpace — The AI Study Workspace for College Students</title>
+<meta name="description" content="Your whole semester in one workspace. PageSpace turns your notes, readings, and syllabus into study guides, flashcards, and a deadline plan — with an AI study buddy that researches, drafts, and quizzes you. Free, on your laptop or your phone." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #fbf8f1;          /* warm paper */
+    --bg2: #f4efe4;         /* notebook margin */
+    --s1: #ffffff;          /* cards */
+    --s2: #fcfaf4;          /* subtle surface */
+    --s3: #f1ece0;          /* wells */
+    --border: #e7dfce;
+    --border2: #d8ceb8;
+    --ink: #211f2e;         /* near-black ink */
+    --mid: #6a6478;         /* muted ink */
+    --dim: #9a93a6;         /* faint ink */
+
+    --grape: #7c5cff;       /* primary */
+    --grape-d: #6240e6;
+    --tangerine: #ff7a3d;   /* energy */
+    --berry: #ff4f86;       /* pink highlighter */
+    --leaf: #21b884;        /* fresh green */
+    --sky: #2bb8d6;         /* cyan-ish for tool tags */
+    --sun: #ffd64d;         /* highlighter yellow */
+
+    --sans: "Inter", system-ui, sans-serif;
+    --disp: "Poppins", system-ui, sans-serif;
+    --mono: "JetBrains Mono", monospace;
+    --maxw: 1140px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  ::selection { background: rgba(124,92,255,0.22); }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* highlighter swipe behind key phrases */
+  .mark {
+    position: relative; white-space: nowrap; z-index: 0;
+  }
+  .mark::after {
+    content: ""; position: absolute; left: -2px; right: -2px; bottom: 0.08em; height: 0.46em;
+    background: var(--sun); z-index: -1; border-radius: 3px;
+    transform: rotate(-1deg);
+  }
+  .mark.pink::after { background: var(--berry); opacity: .55; }
+  .mark.green::after { background: var(--leaf); opacity: .42; }
+  .mark.grape::after { background: var(--grape); opacity: .30; }
+
+  /* ---------- NAV ---------- */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(12px);
+    background: rgba(251,248,241,0.82);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-family: var(--disp); font-weight: 700; font-size: 17px; letter-spacing: -0.4px; }
+  .logo .lm {
+    width: 28px; height: 28px; border-radius: 9px;
+    background: linear-gradient(140deg, var(--grape), var(--berry));
+    display: grid; place-items: center; font-size: 14px; font-weight: 800; color: #fff;
+    box-shadow: 0 4px 14px rgba(124,92,255,0.4);
+  }
+  .nav-links { display: flex; align-items: center; gap: 28px; }
+  .nav-links a { font-size: 14px; font-weight: 500; color: var(--mid); transition: color .15s; }
+  .nav-links a:hover { color: var(--ink); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--sans); font-weight: 600; font-size: 14px;
+    padding: 10px 18px; border-radius: 11px; cursor: pointer; border: none;
+    transition: transform .12s, box-shadow .2s, background .2s;
+  }
+  .btn-primary {
+    background: linear-gradient(140deg, var(--grape), var(--grape-d));
+    color: #fff; box-shadow: 0 6px 20px rgba(124,92,255,0.34);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(124,92,255,0.5); }
+  .btn-ghost { background: var(--s1); color: var(--ink); border: 1px solid var(--border2); }
+  .btn-ghost:hover { background: var(--s2); border-color: var(--grape); }
+  .btn-lg { padding: 15px 28px; font-size: 15.5px; border-radius: 13px; }
+  @media (max-width: 760px) { .nav-links a:not(.btn) { display: none; } }
+
+  /* ---------- HERO ---------- */
+  .hero { position: relative; padding: 92px 0 64px; text-align: center; }
+  .hero::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background:
+      radial-gradient(620px 380px at 50% -6%, rgba(124,92,255,0.16), transparent 70%),
+      radial-gradient(520px 340px at 84% 12%, rgba(255,122,61,0.14), transparent 70%),
+      radial-gradient(520px 360px at 12% 26%, rgba(33,184,132,0.12), transparent 70%);
+  }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.3px;
+    color: var(--grape-d); background: rgba(124,92,255,0.10);
+    border: 1px solid rgba(124,92,255,0.28); padding: 7px 15px; border-radius: 999px;
+    margin-bottom: 26px;
+  }
+  .eyebrow .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--leaf); box-shadow: 0 0 8px var(--leaf); }
+  h1 {
+    font-family: var(--disp);
+    font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+    letter-spacing: -1.6px; line-height: 1.06; margin-bottom: 24px; color: var(--ink);
+  }
+  .sub {
+    font-size: clamp(16px, 2vw, 19px); color: var(--mid); line-height: 1.65;
+    max-width: 640px; margin: 0 auto 36px;
+  }
+  .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 20px; }
+  .micro { font-size: 13px; color: var(--dim); }
+  .micro strong { color: var(--mid); font-weight: 600; }
+
+  /* ---------- HERO MOCK ---------- */
+  .mock {
+    max-width: 1000px; margin: 60px auto 0; text-align: left;
+    border: 1px solid var(--border2); border-radius: 18px; overflow: hidden;
+    background: var(--s1);
+    box-shadow: 0 40px 90px -34px rgba(60,40,120,0.34), 0 2px 0 rgba(255,255,255,0.6) inset;
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+  .mock-bar .d { width: 11px; height: 11px; border-radius: 50%; }
+  .mock-bar .d:nth-child(1){ background:#ff6b5e; } .mock-bar .d:nth-child(2){ background:#ffc043; } .mock-bar .d:nth-child(3){ background:#34c759; }
+  .mock-bar .tab { margin-left: 14px; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+  .mock-body { display: grid; grid-template-columns: 196px 1fr 236px; min-height: 432px; }
+  .mock-side { border-right: 1px solid var(--border); padding: 16px 12px; background: var(--s2); }
+  .mock-side .grp { font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--dim); margin: 14px 8px 8px; font-weight: 600; }
+  .tree-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; font-size: 12.5px; color: var(--mid); }
+  .tree-item.active { background: rgba(124,92,255,0.12); color: var(--ink); font-weight: 600; }
+  .tree-item .ic { font-size: 13px; }
+  .mock-main { padding: 24px 26px; border-right: 1px solid var(--border); }
+  .doc-h { font-family: var(--disp); font-size: 19px; font-weight: 700; letter-spacing: -0.3px; margin-bottom: 4px; }
+  .doc-meta { font-family: var(--mono); font-size: 11px; color: var(--dim); margin-bottom: 18px; }
+  .doc-sub { font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--grape-d); margin: 4px 0 10px; }
+  .doc-line { height: 9px; border-radius: 5px; background: var(--s3); margin-bottom: 11px; }
+  .doc-line.w1 { width: 96%; } .doc-line.w2 { width: 80%; } .doc-line.w3 { width: 90%; }
+  .doc-cite {
+    font-size: 11.5px; font-family: var(--mono); color: var(--sky);
+    background: rgba(43,184,214,0.10); border: 1px solid rgba(43,184,214,0.28);
+    border-radius: 6px; padding: 4px 8px; display: inline-block; margin: 4px 6px 0 0;
+  }
+  .doc-block {
+    margin-top: 18px; border-left: 3px solid var(--tangerine); padding: 10px 14px;
+    background: rgba(255,122,61,0.07); border-radius: 0 9px 9px 0;
+  }
+  .doc-block .lbl { font-size: 10px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--tangerine); font-weight: 700; margin-bottom: 6px; }
+  .doc-block p { font-size: 12.5px; line-height: 1.6; color: var(--mid); }
+  .doc-block p b { color: var(--ink); }
+  .mock-ai { padding: 16px; background: var(--s2); display: flex; flex-direction: column; gap: 12px; }
+  .ai-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 700; color: var(--ink); }
+  .ai-head .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--leaf); box-shadow: 0 0 8px var(--leaf); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 0%,100%{ opacity: 1; } 50%{ opacity: .35; } }
+  .ai-msg { font-size: 12px; line-height: 1.55; border-radius: 11px; padding: 10px 12px; }
+  .ai-msg.bot { background: var(--s1); color: var(--mid); border: 1px solid var(--border); }
+  .ai-msg.bot b { color: var(--ink); }
+  .ai-tool {
+    font-family: var(--mono); font-size: 10.5px; color: var(--grape-d);
+    background: rgba(124,92,255,0.07); border: 1px solid rgba(124,92,255,0.22);
+    border-radius: 8px; padding: 7px 10px; display: flex; align-items: center; gap: 7px;
+  }
+  .ai-tool .sp { width: 6px; height: 6px; border-radius: 50%; background: var(--grape); animation: pulse 1s infinite; flex: none; }
+  @media (max-width: 880px){ .mock-body { grid-template-columns: 1fr; } .mock-side, .mock-ai { display: none; } .mock-main { border-right: none; } }
+
+  /* ---------- STRIP ---------- */
+  .strip { padding: 44px 0 6px; text-align: center; }
+  .strip p { font-size: 11.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); margin-bottom: 20px; font-weight: 600; }
+  .strip-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px 18px; }
+  .strip-row span { font-family: var(--disp); font-size: 14px; font-weight: 600; color: var(--mid); background: var(--s1); border: 1px solid var(--border); border-radius: 999px; padding: 7px 16px; }
+
+  /* ---------- SECTION SHELL ---------- */
+  section { padding: 88px 0; }
+  .sec-head { text-align: center; max-width: 680px; margin: 0 auto 54px; }
+  .kicker { font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--grape-d); margin-bottom: 16px; }
+  h2 { font-family: var(--disp); font-size: clamp(28px, 4vw, 42px); font-weight: 800; letter-spacing: -0.9px; line-height: 1.12; margin-bottom: 18px; }
+  .sec-head p { font-size: 16.5px; color: var(--mid); line-height: 1.65; }
+
+  /* ---------- PROBLEM ---------- */
+  .prob-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .prob-card { background: var(--s1); border: 1px solid var(--border); border-radius: 16px; padding: 26px; box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset; }
+  .prob-card .x { font-size: 26px; margin-bottom: 12px; }
+  .prob-card h3 { font-family: var(--disp); font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+  .prob-card p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .prob-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- WORKFLOW ---------- */
+  .flow { display: flex; flex-direction: column; gap: 0; max-width: 920px; margin: 0 auto; }
+  .step { display: grid; grid-template-columns: 56px 1fr; gap: 24px; position: relative; padding-bottom: 44px; }
+  .step:last-child { padding-bottom: 0; }
+  .step::before { content: ""; position: absolute; left: 27px; top: 56px; bottom: 0; width: 2px; background: linear-gradient(var(--border2), transparent); }
+  .step:last-child::before { display: none; }
+  .step-num {
+    width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center;
+    font-family: var(--disp); font-weight: 800; font-size: 21px; color: #fff;
+    background: linear-gradient(140deg, var(--grape), var(--berry));
+    box-shadow: 0 8px 22px rgba(124,92,255,0.32); z-index: 1;
+  }
+  .step:nth-child(2) .step-num { background: linear-gradient(140deg, var(--tangerine), var(--berry)); box-shadow: 0 8px 22px rgba(255,122,61,0.3); }
+  .step:nth-child(3) .step-num { background: linear-gradient(140deg, var(--leaf), var(--sky)); box-shadow: 0 8px 22px rgba(33,184,132,0.3); }
+  .step:nth-child(4) .step-num { background: linear-gradient(140deg, var(--grape), var(--sky)); box-shadow: 0 8px 22px rgba(124,92,255,0.3); }
+  .step-body { padding-top: 4px; }
+  .step-body h3 { font-family: var(--disp); font-size: 19px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.3px; }
+  .step-body p { font-size: 14.5px; color: var(--mid); line-height: 1.65; max-width: 620px; }
+  .step-body .tags { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag {
+    font-family: var(--mono); font-size: 11px; color: var(--grape-d);
+    background: rgba(124,92,255,0.07); border: 1px solid rgba(124,92,255,0.22);
+    border-radius: 999px; padding: 4px 11px;
+  }
+
+  /* ---------- FEATURES ---------- */
+  .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .feat {
+    background: var(--s1); border: 1px solid var(--border); border-radius: 16px; padding: 26px;
+    transition: transform .15s, border-color .2s, box-shadow .2s;
+  }
+  .feat:hover { transform: translateY(-4px); border-color: var(--border2); box-shadow: 0 18px 40px -22px rgba(80,50,140,0.3); }
+  .feat .ic {
+    width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center;
+    font-size: 22px; margin-bottom: 16px; background: var(--s3); border: 1px solid var(--border);
+  }
+  .feat h3 { font-family: var(--disp); font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+  .feat p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  .ttag { font-family: var(--mono); font-size: 0.86em; color: var(--grape-d); }
+  @media (max-width: 880px){ .feat-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- SPLIT / FLASHCARDS ---------- */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; }
+  .split h2 { text-align: left; }
+  .split .lead { font-size: 16px; color: var(--mid); line-height: 1.7; margin-bottom: 24px; }
+  .check-list { display: flex; flex-direction: column; gap: 16px; }
+  .check { display: grid; grid-template-columns: 26px 1fr; gap: 12px; }
+  .check .c { width: 22px; height: 22px; border-radius: 7px; background: rgba(33,184,132,0.14); border: 1px solid rgba(33,184,132,0.4); color: var(--leaf); display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+  .check h4 { font-size: 14.5px; font-weight: 700; margin-bottom: 3px; }
+  .check p { font-size: 13px; color: var(--mid); line-height: 1.55; }
+  .card-art {
+    background: var(--s1); border: 1px solid var(--border2); border-radius: 18px; overflow: hidden;
+    box-shadow: 0 30px 70px -32px rgba(80,50,140,0.4);
+  }
+  .card-art .bh { padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--bg2); display: flex; align-items: center; justify-content: space-between; }
+  .card-art .bh .t { font-family: var(--disp); font-weight: 700; font-size: 14.5px; }
+  .card-art .bh .m { font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+  .card-art .bb { padding: 18px 20px; }
+  .fc-row { display: grid; grid-template-columns: 1fr 1.3fr 78px; gap: 10px; align-items: center; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .fc-row:last-child { border-bottom: none; }
+  .fc-head { font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--dim); font-weight: 700; padding-bottom: 4px; }
+  .fc-term { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+  .fc-def { font-size: 12px; color: var(--mid); line-height: 1.45; }
+  .chip { font-size: 10.5px; font-weight: 700; padding: 4px 9px; border-radius: 999px; text-align: center; }
+  .chip.got { background: rgba(33,184,132,0.14); color: #1a9e72; border: 1px solid rgba(33,184,132,0.35); }
+  .chip.soso { background: rgba(255,214,77,0.22); color: #a07b00; border: 1px solid rgba(255,214,77,0.5); }
+  .chip.no { background: rgba(255,79,134,0.12); color: var(--berry); border: 1px solid rgba(255,79,134,0.32); }
+  @media (max-width: 880px){ .split { grid-template-columns: 1fr; gap: 36px; } }
+
+  /* ---------- STATS ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+  .stat { text-align: center; padding: 30px 18px; background: var(--s1); border: 1px solid var(--border); border-radius: 16px; }
+  .stat .n { font-family: var(--disp); font-size: 40px; font-weight: 800; letter-spacing: -1.5px; background: linear-gradient(120deg, var(--grape), var(--berry)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .l { font-size: 13px; color: var(--mid); margin-top: 6px; }
+  @media (max-width: 820px){ .stats { grid-template-columns: 1fr 1fr; } }
+
+  /* ---------- USE CASES ---------- */
+  .uc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .uc { background: var(--s1); border: 1px solid var(--border); border-radius: 16px; padding: 26px; }
+  .uc .ic { font-size: 26px; margin-bottom: 14px; }
+  .uc h3 { font-family: var(--disp); font-size: 16.5px; font-weight: 700; margin-bottom: 8px; }
+  .uc p { font-size: 13.5px; color: var(--mid); line-height: 1.6; }
+  @media (max-width: 820px){ .uc-grid { grid-template-columns: 1fr; } }
+
+  /* ---------- QUOTE ---------- */
+  .quote-wrap { text-align: center; max-width: 800px; margin: 0 auto; }
+  .quote-wrap .q { font-family: var(--disp); font-size: clamp(22px, 3.2vw, 31px); font-weight: 600; line-height: 1.38; letter-spacing: -0.5px; margin-bottom: 24px; }
+  .quote-wrap .by { font-size: 14px; color: var(--mid); }
+  .quote-wrap .by b { color: var(--ink); }
+
+  /* ---------- CTA ---------- */
+  .cta {
+    position: relative; text-align: center; border-radius: 26px; overflow: hidden;
+    padding: 74px 32px; border: 1px solid var(--border2);
+    background: linear-gradient(160deg, #fffdf7, #f6f0e4);
+  }
+  .cta::before {
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background: radial-gradient(560px 300px at 50% -20%, rgba(124,92,255,0.20), transparent 70%),
+                radial-gradient(480px 300px at 82% 120%, rgba(255,122,61,0.18), transparent 70%),
+                radial-gradient(420px 280px at 14% 110%, rgba(33,184,132,0.16), transparent 70%);
+  }
+  .cta > * { position: relative; z-index: 1; }
+  .cta h2 { font-size: clamp(28px, 4vw, 44px); }
+  .cta p { font-size: 17px; color: var(--mid); max-width: 540px; margin: 0 auto 32px; line-height: 1.6; }
+
+  /* ---------- FOOTER ---------- */
+  footer { border-top: 1px solid var(--border); padding: 48px 0 40px; background: var(--bg2); }
+  .foot-inner { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 32px; }
+  .foot-brand { max-width: 290px; }
+  .foot-brand p { font-size: 13px; color: var(--mid); line-height: 1.6; margin-top: 14px; }
+  .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  .foot-col h5 { font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ink); margin-bottom: 14px; font-weight: 700; }
+  .foot-col a { display: block; font-size: 13px; color: var(--mid); margin-bottom: 10px; transition: color .15s; }
+  .foot-col a:hover { color: var(--ink); }
+  .foot-bottom { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--dim); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+  .fade { opacity: 0; transform: translateY(24px); transition: opacity .7s ease, transform .7s ease; }
+  .fade.in { opacity: 1; transform: none; }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo"><span class="lm">P</span> PageSpace</div>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#study">Study tools</a>
+      <a href="#usecases">For students</a>
+      <a href="#cta" class="btn btn-primary">Start free</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow"><span class="dot"></span> The AI study workspace for students</div>
+    <h1>Your whole semester,<br>finally in <span class="mark">one place.</span></h1>
+    <p class="sub">Drop in your notes, readings, and syllabus. PageSpace researches the hard parts, drafts your study guide, builds flashcards, and tracks every deadline — with an AI study buddy that quizzes you until it clicks.</p>
+    <div class="hero-cta">
+      <a href="#cta" class="btn btn-primary btn-lg">Start free — no card</a>
+      <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+    </div>
+    <p class="micro">Free to start · <strong>33+ real AI tools</strong> · 100+ models · works on your laptop &amp; phone</p>
+
+    <!-- HERO MOCK -->
+    <div class="mock fade">
+      <div class="mock-bar">
+        <span class="d"></span><span class="d"></span><span class="d"></span>
+        <span class="tab">pagespace.ai / drives / fall-semester / BIO&nbsp;201 — Midterm 2 study guide</span>
+      </div>
+      <div class="mock-body">
+        <aside class="mock-side">
+          <div class="grp">Fall semester</div>
+          <div class="tree-item"><span class="ic">📓</span> Lecture notes</div>
+          <div class="tree-item"><span class="ic">📚</span> Readings &amp; PDFs</div>
+          <div class="tree-item active"><span class="ic">📝</span> Midterm 2 study guide</div>
+          <div class="tree-item"><span class="ic">🗂️</span> Flashcards</div>
+          <div class="grp">Stay on track</div>
+          <div class="tree-item"><span class="ic">✅</span> Deadlines</div>
+          <div class="tree-item"><span class="ic">👥</span> Lab group project</div>
+          <div class="tree-item"><span class="ic">🤖</span> Study buddy</div>
+        </aside>
+        <main class="mock-main">
+          <div class="doc-h">Midterm 2 — Cellular Respiration</div>
+          <div class="doc-meta">built from your notes + 9 sources · edited 3m ago</div>
+          <div class="doc-sub">Key concept · The electron transport chain</div>
+          <div class="doc-line w1"></div>
+          <div class="doc-line w3"></div>
+          <div class="doc-line w2"></div>
+          <span class="doc-cite">📓 Lecture 14</span>
+          <span class="doc-cite">[2] Khan Academy</span>
+          <span class="doc-cite">[5] OpenStax Bio</span>
+          <div class="doc-block">
+            <div class="lbl">★ Likely on the exam</div>
+            <p><b>Compare</b> substrate-level vs. oxidative phosphorylation — Prof flagged this twice in Lecture 14. ATP yield: glycolysis 2, Krebs 2, ETC ~34. Drafted a practice question for it.</p>
+          </div>
+        </main>
+        <aside class="mock-ai">
+          <div class="ai-head"><span class="pulse"></span> Study buddy</div>
+          <div class="ai-tool"><span class="sp"></span> read_page · Lecture 14 notes</div>
+          <div class="ai-tool"><span class="sp"></span> web_search · "ATP yield cellular respiration"</div>
+          <div class="ai-tool"><span class="sp"></span> edit_sheet_cells · Flashcards</div>
+          <div class="ai-tool"><span class="sp"></span> create_task · Review session Thu</div>
+          <div class="ai-msg bot">Turned your Lecture 14 notes into a <b>study guide</b>, pulled <b>9 sources</b> to fill the gaps, and built <b>24 flashcards</b>. Want me to quiz you on the 6 terms you marked shaky?</div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- STRIP -->
+<div class="strip wrap">
+  <p>One workspace for every kind of coursework</p>
+  <div class="strip-row">
+    <span>Essays &amp; papers</span>
+    <span>Exam prep</span>
+    <span>Lab reports</span>
+    <span>Problem sets</span>
+    <span>Group projects</span>
+    <span>Thesis research</span>
+    <span>Reading loads</span>
+  </div>
+</div>
+
+<!-- PROBLEM -->
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Sound familiar?</div>
+      <h2>Five classes, fifty tabs, and the test is <span class="mark pink">tomorrow.</span></h2>
+      <p>Notes in one app. PDFs in another. The group chat somewhere else. Deadlines on a sticky note you lost. Studying turns into finding your stuff before you can even start.</p>
+    </div>
+    <div class="prob-grid">
+      <div class="prob-card fade">
+        <div class="x">🗂️</div>
+        <h3>Everything's scattered</h3>
+        <p>Lecture notes, slides, readings, and that one Google Doc — spread across six apps, none of which talk to each other.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">😵</div>
+        <h3>Cramming doesn't stick</h3>
+        <p>You re-read the chapter at 1am and remember none of it by morning. Re-reading isn't studying — but making real study material takes hours you don't have.</p>
+      </div>
+      <div class="prob-card fade">
+        <div class="x">⏰</div>
+        <h3>Deadlines ambush you</h3>
+        <p>The essay, the problem set, and the group slide deck were all due the same week — and you found out two days before.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how" style="background: var(--bg2); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">How it works</div>
+      <h2>From a pile of notes to a <span class="mark green">plan you can actually follow</span></h2>
+      <p>PageSpace isn't a chatbot you copy answers out of. It's a workspace where an AI agent does the research, drafting, and organizing <em>inside</em> your pages — using real tools.</p>
+    </div>
+    <div class="flow">
+      <div class="step fade">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h3>Drop your notes &amp; syllabus into a drive</h3>
+          <p>Paste lecture notes, upload readings, add the syllabus. Each class is a page in your semester drive. Your study buddy reads everything that's already there for context — so it knows what <em>your</em> professor actually covered.</p>
+          <div class="tags"><span class="tag">create_page</span><span class="tag">read_page</span><span class="tag">multi_drive_search</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h3>It researches and builds your study guide</h3>
+          <p>Stuck on a concept your notes gloss over? The agent runs live web searches, fetches the clearest explanations as clean text, and writes a structured study guide straight into a Document — every fact linked back to where it came from.</p>
+          <div class="tags"><span class="tag">web_search</span><span class="tag">web_fetch</span><span class="tag">create_page</span><span class="tag">replace_lines</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h3>Quiz yourself with a study-buddy agent</h3>
+          <p>Every AI Chat page is a configurable agent. Brief one as a tutor for the course, and it builds flashcards into a Sheet and quizzes you on the terms you keep missing — consult it any time with <span style="font-family:var(--mono);font-size:0.85em;color:var(--grape-d)">ask_agent</span>.</p>
+          <div class="tags"><span class="tag">update_agent_config</span><span class="tag">ask_agent</span><span class="tag">edit_sheet_cells</span></div>
+        </div>
+      </div>
+      <div class="step fade">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h3>Stay ahead of every deadline</h3>
+          <p>The agent turns your syllabus into a Task List and drops exams and due dates onto your calendar — so essays, problem sets, and that group deck never sneak up again. Ask it what's due this week and it just tells you.</p>
+          <div class="tags"><span class="tag">create_task</span><span class="tag">get_assigned_tasks</span><span class="tag">create_calendar_event</span><span class="tag">check_calendar_availability</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">What you get</div>
+      <h2>Everything a semester needs, <span class="mark grape">in one workspace</span></h2>
+      <p>Nine page types, 33+ AI tools, and 100+ models — put to work for the way students actually study, write, and group up.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat fade">
+        <div class="ic">🔎</div>
+        <h3>Research without 40 tabs</h3>
+        <p>Your agent runs live <span class="ttag">web_search</span> and pulls full source text with <span class="ttag">web_fetch</span>, then searches across all your own notes with glob, regex, and multi-drive search.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📝</div>
+        <h3>Essays &amp; papers in the editor</h3>
+        <p>Outline, draft, and revise in a Document page with sources linked inline. The agent makes precise line-level edits with <span class="ttag">replace_lines</span> — you stay the author the whole way.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🗂️</div>
+        <h3>Flashcards that build themselves</h3>
+        <p>Sheet pages the AI reads and writes via <span class="ttag">edit_sheet_cells</span> — term, definition, and how shaky you still feel on each one, ready to quiz from.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🤖</div>
+        <h3>A study buddy per class</h3>
+        <p>Every AI Chat page is a configurable agent. Brief one as your Orgo tutor and another for History — consult either with <span class="ttag">ask_agent</span> whenever you're stuck.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">✅</div>
+        <h3>Deadlines &amp; calendar</h3>
+        <p>Task List pages plus calendar tools — <span class="ttag">create_task</span>, <span class="ttag">create_calendar_event</span> — so every due date, exam, and study block lives in one place.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">👥</div>
+        <h3>Group projects that don't implode</h3>
+        <p>Share a drive, work in real time, assign tasks, and keep the back-and-forth in a Channel with <span class="ttag">send_channel_message</span> — no more lost group chats.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🧠</div>
+        <h3>100+ models, your pick</h3>
+        <p>Route to Anthropic, OpenAI, Google, xAI, or OpenRouter — or run a free local Ollama model on your own laptop when you're watching the budget.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">📱</div>
+        <h3>Laptop, desktop, or phone</h3>
+        <p>PageSpace runs in the browser, as a desktop app, and on iOS and Android — review flashcards on the bus, write the paper at your desk.</p>
+      </div>
+      <div class="feat fade">
+        <div class="ic">🔒</div>
+        <h3>Yours, and private</h3>
+        <p>Passwordless passkey sign-in, no password to leak. Self-host the whole thing if your program needs to keep data in-house.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STUDY SPLIT -->
+<section id="study" style="background: var(--bg2); border-block: 1px solid var(--border);">
+  <div class="wrap split">
+    <div class="fade">
+      <div class="kicker">Study tools</div>
+      <h2>Stop re-reading. <span class="mark pink">Start recalling.</span></h2>
+      <p class="lead">Active recall beats highlighting every time — but making flashcards by hand eats your whole evening. Your study buddy builds them from your own notes, tracks which ones you keep missing, and drills you on exactly those.</p>
+      <div class="check-list">
+        <div class="check"><span class="c">✓</span><div><h4>Built from your notes</h4><p>The agent reads your lecture pages with <span class="ttag">read_page</span> and fills a flashcard Sheet — no copy-pasting.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Knows what you don't</h4><p>Mark a card shaky and it focuses your next session there. Confidence lives in a column it reads and updates.</p></div></div>
+        <div class="check"><span class="c">✓</span><div><h4>Quizzes you out loud</h4><p>Consult your study buddy with <span class="ttag">ask_agent</span> and it runs you through the deck, conversationally.</p></div></div>
+      </div>
+    </div>
+    <div class="card-art fade">
+      <div class="bh">
+        <span class="t">🗂️ BIO 201 — Flashcards</span>
+        <span class="m">Sheet page · 24 cards</span>
+      </div>
+      <div class="bb">
+        <div class="fc-row">
+          <div class="fc-head">Term</div><div class="fc-head">Definition</div><div class="fc-head" style="text-align:center;">Got it?</div>
+        </div>
+        <div class="fc-row">
+          <div class="fc-term">Glycolysis</div>
+          <div class="fc-def">Glucose → 2 pyruvate in the cytoplasm; net 2 ATP.</div>
+          <span class="chip got">Got it</span>
+        </div>
+        <div class="fc-row">
+          <div class="fc-term">Krebs cycle</div>
+          <div class="fc-def">Oxidizes acetyl-CoA; yields NADH, FADH₂, 2 ATP.</div>
+          <span class="chip soso">So-so</span>
+        </div>
+        <div class="fc-row">
+          <div class="fc-term">Electron transport chain</div>
+          <div class="fc-def">Proton gradient across the inner membrane drives ATP synthase.</div>
+          <span class="chip no">Shaky</span>
+        </div>
+        <div class="fc-row">
+          <div class="fc-term">Chemiosmosis</div>
+          <div class="fc-def">ATP made as H⁺ flows back down its gradient.</div>
+          <span class="chip no">Shaky</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- STATS -->
+<section>
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat fade"><div class="n">9</div><div class="l">Page types — docs, sheets, chat &amp; more</div></div>
+      <div class="stat fade"><div class="n">33+</div><div class="l">Real AI tools, not just chat</div></div>
+      <div class="stat fade"><div class="n">100+</div><div class="l">Models across 6 providers</div></div>
+      <div class="stat fade"><div class="n">1</div><div class="l">Drive that holds your whole semester</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- USE CASES -->
+<section id="usecases" style="background: var(--bg2); border-block: 1px solid var(--border);">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker">Built for how you study</div>
+      <h2>Whatever you're <span class="mark">up against this week</span></h2>
+      <p>Midterms, a 12-page paper, or a group project with four flaky teammates — same workspace.</p>
+    </div>
+    <div class="uc-grid">
+      <div class="uc fade"><div class="ic">📚</div><h3>Exam crunch</h3><p>Turn a semester of notes into study guides and flashcards, then drill the terms you keep missing — in an evening, not a week.</p></div>
+      <div class="uc fade"><div class="ic">✍️</div><h3>Essays &amp; research papers</h3><p>Gather sources, keep every claim traceable to a link, and draft the whole thing in the same place you researched it.</p></div>
+      <div class="uc fade"><div class="ic">🧪</div><h3>STEM &amp; lab reports</h3><p>Work problem sets in a Document, keep data in a Sheet, and ask your agent to walk a tough derivation step by step.</p></div>
+      <div class="uc fade"><div class="ic">👥</div><h3>Group projects</h3><p>Share one drive, split the work into assigned tasks, and keep the whole team — and the AI — on the same page in real time.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section>
+  <div class="wrap quote-wrap fade">
+    <div class="q">"I dumped a whole semester of messy notes into one drive and had a study guide and flashcards before dinner. I finally <span class="mark green">quizzed myself instead of re-reading.</span>"</div>
+    <div class="by"><b>Priya N.</b> · Sophomore, Biology &amp; illustrative student persona</div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="wrap">
+    <div class="cta fade">
+      <h2>Get your semester sorted tonight.</h2>
+      <p>Drop in your notes and watch PageSpace research, study-guide, flashcard, and plan it with you — free, no card required.</p>
+      <div class="hero-cta" style="margin-bottom: 14px;">
+        <a href="#" class="btn btn-primary btn-lg">Start free</a>
+        <a href="#how" class="btn btn-ghost btn-lg">See how it works</a>
+      </div>
+      <p class="micro">Browser · desktop · iOS &amp; Android — your notes, your study buddy, everywhere.</p>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-inner">
+      <div class="foot-brand">
+        <div class="logo"><span class="lm">P</span> PageSpace</div>
+        <p>The AI-native workspace where you and an AI study buddy research, write, and remember — together, in one place.</p>
+      </div>
+      <div class="foot-cols">
+        <div class="foot-col">
+          <h5>Product</h5>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#study">Study tools</a>
+          <a href="#usecases">For students</a>
+        </div>
+        <div class="foot-col">
+          <h5>Workspace</h5>
+          <a href="#">Documents &amp; sheets</a>
+          <a href="#">Flashcards</a>
+          <a href="#">Study-buddy agents</a>
+          <a href="#">Tasks &amp; calendar</a>
+        </div>
+        <div class="foot-col">
+          <h5>Run it on</h5>
+          <a href="#">Browser</a>
+          <a href="#">Desktop</a>
+          <a href="#">iOS &amp; Android</a>
+          <a href="#">Self-hosted</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© 2026 PageSpace · pagespace.ai</span>
+      <span>Prototype · college-students landing</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.fade').forEach((el) => io.observe(el));
+</script>
+</body>
+</html>

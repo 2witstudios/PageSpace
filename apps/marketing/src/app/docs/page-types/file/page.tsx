@@ -1,5 +1,14 @@
 import { DocsMarkdown } from "@/components/DocsContent";
 import { createMetadata } from "@/lib/metadata";
+import { STORAGE_ADDON, TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
+
+const limitsOf = (tier: keyof typeof TIER_PLAN_LIMITS) => {
+  const l = TIER_PLAN_LIMITS[tier];
+  return { storage: formatTierBytes(l.quotaBytes, " "), file: formatTierBytes(l.maxFileSize, " "), uploads: l.maxConcurrentUploads };
+};
+const FREE = limitsOf("free");
+const PRO = limitsOf("pro");
+const BUSINESS = limitsOf("business");
 
 export const metadata = createMetadata({
   title: "Files & Uploads — How it Works",
@@ -28,17 +37,17 @@ Drop a file into any drive and it becomes a File page alongside your documents, 
 
 An upload goes in two steps.
 
-**Step 1 — storage.** The processor takes your bytes, computes a SHA-256 hash of the content, and uses that hash as the file's address. If the platform has already seen that exact file (from you or anyone else), the upload is deduplicated: no new bytes are written, and your new page simply points at the existing blob. Before anything is stored, the processor runs the bytes through a content classifier (Magika) that looks at the file, not the extension, to decide what it actually is. Executables, HTML, SVG, and scripts are rejected at this step even if they're renamed.
+**Step 1 — storage.** Each upload is fingerprinted by a SHA-256 hash of its contents, and that hash is the file's address. If the platform has already seen that exact file (from you or anyone else), the upload is deduplicated: no new bytes are written, and your new page simply points at the existing blob. Every upload is also checked by a content classifier (Magika) that looks at the file itself, not the extension — executables, HTML, SVG, and scripts are rejected even if they're renamed.
 
 **Step 2 — processing.** Once the file is stored, jobs are queued based on what the classifier found:
 
-- **PDF, Word (.doc / .docx), plain text, Markdown, CSV, JSON** → text extraction. The extracted text is cached next to the file so AI can read it without re-parsing.
+- **PDF, Word (.docx), plain text, Markdown, CSV, JSON** → text extraction. The extracted text is cached next to the file so AI can read it without re-parsing.
 - **PNG, JPEG, GIF, WebP, TIFF, BMP** → image optimisation. Each image is re-encoded at several preset sizes: a thumbnail for the tree, a preview for inline display, and two sizes tuned for AI (one for chat context, one for vision models). EXIF rotation is applied; originals are kept untouched.
 - **Images** → OCR. Tesseract reads the image and the recognised text is cached alongside the file, so a scanned receipt or a screenshot of a document becomes searchable and readable by AI.
 
 While those jobs run, the File page shows a processing status. Your browser gets live updates over the real-time socket, so the preview and "text available" state appear without a refresh. You can keep working — upload a second file, edit a Document, send an AI message — nothing is blocked on the first file finishing.
 
-Size and concurrency are bounded by your tier. Free gives you 500 MB of storage and accepts files up to 20 MB, with 2 uploads in flight at once. Pro is 2 GB / 50 MB per file / 3 at once. Founder is 10 GB / 50 MB per file / 3 at once. Business is 50 GB / 100 MB per file / 10 at once.
+Size and concurrency are bounded by your tier. Free gives you ${FREE.storage} of storage and accepts files up to ${FREE.file}, with ${FREE.uploads} uploads in flight at once. Pro is ${PRO.storage} / ${PRO.file} per file / ${PRO.uploads} at once. Business is ${BUSINESS.storage} / ${BUSINESS.file} per file / ${BUSINESS.uploads} at once. Pro and Business can add more storage in ${formatTierBytes(STORAGE_ADDON.blockBytes, " ")} blocks.
 
 ## Good to know
 

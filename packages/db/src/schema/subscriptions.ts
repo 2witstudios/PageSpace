@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index, integer } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -12,10 +12,19 @@ export const subscriptions = pgTable('subscriptions', {
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date' }).notNull(),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date' }).notNull(),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),
+  gifted: boolean('gifted').default(false).notNull(),
   // Schedule tracking for pending plan changes (downgrades)
   stripeScheduleId: text('stripeScheduleId'),
   scheduledPriceId: text('scheduledPriceId'),
   scheduledChangeDate: timestamp('scheduledChangeDate', { mode: 'date' }),
+  // Storage add-on (STORAGE_ADDON blocks): the Stripe item carrying the storage
+  // price and its quantity, mirrored from Stripe. After a decrease the blocks
+  // already paid for stay entitled until storageGraceUntil (removal at period end).
+  stripeStorageItemId: text('stripeStorageItemId'),
+  storageBlocks: integer('storageBlocks').default(0).notNull(),
+  storageGraceBlocks: integer('storageGraceBlocks').default(0).notNull(),
+  storageGraceUntil: timestamp('storageGraceUntil', { mode: 'date' }),
+  storageRevision: integer('storageRevision').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
@@ -29,7 +38,11 @@ export const subscriptions = pgTable('subscriptions', {
 export const stripeEvents = pgTable('stripe_events', {
   id: text('id').primaryKey(), // Stripe event.id as primary key for idempotency
   type: text('type').notNull(),
-  processedAt: timestamp('processedAt', { mode: 'date' }).defaultNow().notNull(),
+  // Nullable + NO default: the row is INSERTed to claim the event id for idempotency,
+  // and processedAt is set only once processing actually finishes. A null processedAt
+  // therefore means "claimed but not yet processed" (in flight or failed mid-way), which
+  // the webhook uses to decide between acking a true duplicate and forcing a Stripe retry.
+  processedAt: timestamp('processedAt', { mode: 'date' }),
   error: text('error'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => {

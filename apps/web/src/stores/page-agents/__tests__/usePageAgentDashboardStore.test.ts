@@ -6,6 +6,9 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { usePageAgentDashboardStore, type AgentInfo, type SidebarTab } from '../usePageAgentDashboardStore';
+// REAL conversation cache: the store's loaders commit messages there (PR 5B, leaf 5.3),
+// and what lands in the cache is the behavior under test.
+import { useConversationMessagesStore } from '@/stores/useConversationMessagesStore';
 
 // Mock fetchWithAuth
 const mockFetchWithAuth = vi.fn();
@@ -57,12 +60,13 @@ describe('usePageAgentDashboardStore', () => {
     usePageAgentDashboardStore.setState({
       selectedAgent: null,
       isInitialized: false,
+      identity: { status: 'idle' },
       conversationId: null,
-      conversationMessages: [],
       isConversationLoading: false,
       conversationAgentId: null,
       activeTab: 'history',
     });
+    useConversationMessagesStore.setState({ byConversationId: {} });
 
     // Clear all mocks
     vi.clearAllMocks();
@@ -115,10 +119,6 @@ describe('usePageAgentDashboardStore', () => {
       expect(result.current.conversationId).toBeNull();
     });
 
-    it('should have empty conversationMessages', () => {
-      const { result } = renderHook(() => usePageAgentDashboardStore());
-      expect(result.current.conversationMessages).toEqual([]);
-    });
   });
 
   // ============================================
@@ -209,7 +209,6 @@ describe('usePageAgentDashboardStore', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
-        conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
         conversationAgentId: mockAgent.id,
       });
 
@@ -220,7 +219,6 @@ describe('usePageAgentDashboardStore', () => {
 
       expect(result.current.selectedAgent).toEqual(mockAgent2);
       expect(result.current.conversationId).toBeNull();
-      expect(result.current.conversationMessages).toEqual([]);
       expect(result.current.conversationAgentId).toBeNull();
     });
 
@@ -231,7 +229,6 @@ describe('usePageAgentDashboardStore', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
-        conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
         conversationAgentId: mockAgent.id,
       });
 
@@ -245,43 +242,6 @@ describe('usePageAgentDashboardStore', () => {
   });
 
   // ============================================
-  // setConversationMessages Tests
-  // ============================================
-  describe('setConversationMessages', () => {
-    it('should update conversation messages', () => {
-      const { result } = renderHook(() => usePageAgentDashboardStore());
-
-      const messages = [
-        { id: 'msg-1', role: 'user', content: 'Hello' },
-        { id: 'msg-2', role: 'assistant', content: 'Hi!' },
-      ] as never[];
-
-      act(() => {
-        result.current.setConversationMessages(messages);
-      });
-
-      expect(result.current.conversationMessages).toEqual(messages);
-    });
-
-    it('should replace existing messages', () => {
-      const { result } = renderHook(() => usePageAgentDashboardStore());
-
-      const initialMessages = [{ id: 'msg-1', role: 'user', content: 'First' }] as never[];
-      const newMessages = [{ id: 'msg-2', role: 'user', content: 'Second' }] as never[];
-
-      act(() => {
-        result.current.setConversationMessages(initialMessages);
-      });
-
-      act(() => {
-        result.current.setConversationMessages(newMessages);
-      });
-
-      expect(result.current.conversationMessages).toEqual(newMessages);
-    });
-  });
-
-  // ============================================
   // clearConversation Tests
   // ============================================
   describe('clearConversation', () => {
@@ -291,7 +251,6 @@ describe('usePageAgentDashboardStore', () => {
       // Set up conversation state
       usePageAgentDashboardStore.setState({
         conversationId: 'conv-123',
-        conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
         conversationAgentId: 'agent-123',
       });
 
@@ -300,7 +259,6 @@ describe('usePageAgentDashboardStore', () => {
       });
 
       expect(result.current.conversationId).toBeNull();
-      expect(result.current.conversationMessages).toEqual([]);
       expect(result.current.conversationAgentId).toBeNull();
     });
 
@@ -310,7 +268,6 @@ describe('usePageAgentDashboardStore', () => {
       usePageAgentDashboardStore.setState({
         selectedAgent: mockAgent,
         conversationId: 'conv-123',
-        conversationMessages: [{ id: 'msg-1', role: 'user', content: 'Hello' }] as never[],
       });
 
       act(() => {
@@ -319,6 +276,425 @@ describe('usePageAgentDashboardStore', () => {
 
       expect(result.current.selectedAgent).toEqual(mockAgent);
       expect(result.current.conversationId).toBeNull();
+    });
+  });
+
+  // ============================================
+  // createNewConversation Tests
+  // ============================================
+  describe('createNewConversation', () => {
+    it('given an agent is selected, should set conversationId synchronously with a client-generated id before the create request resolves', async () => {
+      let resolveFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation(() => new Promise((resolve) => { resolveFetch = resolve; }));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+
+      // Identity must be set before the network request resolves.
+      const generatedId = result.current.conversationId;
+      expect(typeof generatedId).toBe('string');
+      expect(generatedId).not.toBeNull();
+      expect(result.current.conversationAgentId).toBe(mockAgent.id);
+      // The just-minted id is seeded loaded-empty in the conversation cache, so no
+      // loading state shows and nothing ever fetches for it (PR 5B).
+      expect(useConversationMessagesStore.getState().getEntry(generatedId as string).loadStatus).toBe('loaded');
+
+      resolveFetch({ ok: true, json: async () => ({ conversationId: generatedId }) });
+      const resolvedId = await act(() => createPromise);
+      expect(resolvedId).toBe(generatedId);
+    });
+
+    it('given no agent is selected, should return null and not touch conversation state', async () => {
+      usePageAgentDashboardStore.setState({ selectedAgent: null });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+
+      const resolvedId = await act(() => createPromise);
+      expect(resolvedId).toBeNull();
+      expect(result.current.conversationId).toBeNull();
+    });
+
+    it('given the create request ultimately fails, should not retract the already-issued conversationId', async () => {
+      mockFetchWithAuth.mockResolvedValue({ ok: false });
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let createPromise!: Promise<string | null>;
+      act(() => {
+        createPromise = result.current.createNewConversation();
+      });
+      const issuedId = result.current.conversationId;
+
+      await act(() => createPromise);
+      expect(result.current.conversationId).toBe(issuedId);
+    });
+  });
+
+  // ============================================
+  // loadMostRecentConversation -> createNewConversation fallback
+  // ============================================
+  describe('loadMostRecentConversation falling back to createNewConversation', () => {
+    it('given the agent has no existing conversations, should not leave isConversationLoading stuck true', async () => {
+      // First fetch (fetchMostRecentAgentConversation) resolves with no conversations;
+      // second fetch (the create POST) resolves ok.
+      mockFetchWithAuth
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ conversations: [] }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ conversationId: 'new-conv' }) });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      await act(() => result.current.loadMostRecentConversation());
+
+      expect(result.current.isConversationLoading).toBe(false);
+      expect(result.current.conversationId).not.toBeNull();
+    });
+  });
+
+  // ============================================
+  // Conversation identity race guards
+  // ============================================
+  describe('conversation identity race guards', () => {
+    it('given loadConversation is called, should set conversationId synchronously — before its own messages fetch resolves', async () => {
+      let resolveFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadPromise!: Promise<void>;
+      act(() => {
+        loadPromise = result.current.loadConversation('picked-from-history');
+      });
+
+      expect(result.current.conversationId).toBe('picked-from-history');
+
+      resolveFetch({ ok: true, json: async () => ({ messages: [] }) });
+      await act(() => loadPromise);
+    });
+
+    it('given loadConversation is called, the cache entry should read loading until its messages fetch resolves', async () => {
+      let resolveFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadPromise!: Promise<void>;
+      act(() => {
+        loadPromise = result.current.loadConversation('picked-from-history');
+      });
+
+      // Identity is already 'ready' (ungates sends), but messages are still loading.
+      expect(result.current.conversationId).toBe('picked-from-history');
+      expect(useConversationMessagesStore.getState().getEntry('picked-from-history').loadStatus).toBe('loading');
+
+      await act(async () => {
+        resolveFetch({ ok: true, json: async () => ({ messages: [{ id: 'msg-1', role: 'user', parts: [] }] }) });
+        await loadPromise;
+      });
+
+      const entry = useConversationMessagesStore.getState().getEntry('picked-from-history');
+      expect(entry.loadStatus).toBe('loaded');
+      expect(entry.messages).toEqual([{ id: 'msg-1', role: 'user', parts: [] }]);
+    });
+
+    it('given loadConversation is called, the messages fetch should carry includeStreaming=1 (history rejoin sees the in-flight placeholder — absorbed E2 D task)', async () => {
+      mockFetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ messages: [] }) });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      await act(() => result.current.loadConversation('picked-from-history'));
+
+      const messagesFetch = mockFetchWithAuth.mock.calls.find(([url]) =>
+        (url as string).includes('/messages'),
+      );
+      expect(messagesFetch?.[0]).toContain('includeStreaming=1');
+    });
+
+    it("given loadConversation's messages fetch fails, the cache entry should read error and keep any prior snapshot", async () => {
+      mockFetchWithAuth.mockRejectedValue(new Error('network down'));
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      await act(() => result.current.loadConversation('picked-from-history'));
+
+      expect(useConversationMessagesStore.getState().getEntry('picked-from-history').loadStatus).toBe('error');
+    });
+
+    it('given createNewConversation is called while a prior loadConversation fetch is still in-flight, the new conversation must not show a loading state and the stale fetch must not clobber it', async () => {
+      let resolveStaleFetch!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('/conversations') && !url.includes('limit=50')) {
+          return Promise.resolve({ ok: true, json: async () => ({ id: 'server-conv-id' }) });
+        }
+        return new Promise((resolve) => { resolveStaleFetch = resolve; });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      act(() => {
+        void result.current.loadConversation('stale-conv');
+      });
+      expect(useConversationMessagesStore.getState().getEntry('stale-conv').loadStatus).toBe('loading');
+
+      let newId!: string | null;
+      await act(async () => {
+        newId = await result.current.createNewConversation();
+      });
+
+      // The new conversation's own cache entry is loaded-empty — no spinner for it.
+      expect(useConversationMessagesStore.getState().getEntry(newId as string).loadStatus).toBe('loaded');
+
+      // The stale fetch resolving afterward commits to ITS OWN conversation entry,
+      // never the new one's.
+      await act(async () => {
+        resolveStaleFetch({ ok: true, json: async () => ({ messages: [{ id: 'stale-msg', role: 'user', parts: [] }] }) });
+        await Promise.resolve();
+      });
+      expect(useConversationMessagesStore.getState().getEntry(newId as string).messages).toEqual([]);
+    });
+
+    it('given loadMostRecentConversation resolves AFTER createNewConversation already set a newer identity, should not clobber the newer conversationId', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        // The stale conversation's message fetch, and createNewConversation's
+        // persist POST, both resolve immediately — only the list lookup is delayed.
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      // User creates a new conversation while loadMostRecentConversation is still in flight.
+      let newId!: string | null;
+      await act(async () => {
+        newId = await result.current.createNewConversation();
+      });
+      expect(result.current.conversationId).toBe(newId);
+
+      // The stale loadMostRecentConversation fetch now resolves with a DIFFERENT,
+      // older conversation — it must not overwrite the just-created one.
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [{ id: 'stale-old-conv' }] }) });
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe(newId);
+      expect(useConversationMessagesStore.getState().getEntry(newId as string).messages).toEqual([]);
+    });
+
+    it('given loadMostRecentConversation applies messages, should drop them if the user switched conversation before the fetch resolved', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      let resolveMostRecentMessages!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        if (url.includes('stale-most-recent')) {
+          return new Promise((resolve) => { resolveMostRecentMessages = resolve; });
+        }
+        // loadConversation's own messages fetch (for the user's picked conversation).
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [{ id: 'stale-most-recent' }] }) });
+        // Let the list-fetch .then chain run so the messages fetch is issued
+        // (and resolveMostRecentMessages captured) before the user switches away.
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      act(() => {
+        result.current.loadConversation('user-picked-conv');
+      });
+      expect(result.current.conversationId).toBe('user-picked-conv');
+
+      await act(async () => {
+        resolveMostRecentMessages({ ok: true, json: async () => ({ messages: [{ id: 'stale-msg' }] }) });
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe('user-picked-conv');
+      // Conversation-keyed cache: the stale conversation's result can only ever land
+      // under its own id — the picked conversation's entry stays untouched.
+      expect(useConversationMessagesStore.getState().getEntry('user-picked-conv').messages).toEqual([]);
+    });
+
+    it('given loadMostRecentConversation fails AFTER a newer identity already won, should NOT fall back to creating a new conversation', async () => {
+      let rejectMostRecentList!: (err: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((_resolve, reject) => { rejectMostRecentList = reject; });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      // User picks an existing conversation while the failing fetch is still in flight.
+      let newId!: string | null;
+      await act(async () => {
+        newId = await result.current.createNewConversation();
+      });
+      expect(result.current.conversationId).toBe(newId);
+
+      // The stale loadMostRecentConversation fetch now rejects — its catch
+      // block must not fall back to creating yet another conversation on top
+      // of the one the user already switched to.
+      await act(async () => {
+        rejectMostRecentList(new Error('network down'));
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe(newId);
+    });
+
+    it('given loadMostRecentConversation finds no conversation AFTER a newer identity already won, should NOT fall back to creating a new conversation', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+
+      let newId!: string | null;
+      await act(async () => {
+        newId = await result.current.createNewConversation();
+      });
+      expect(result.current.conversationId).toBe(newId);
+
+      // The stale fetch resolves with an empty list — must not clobber the
+      // conversation the user already switched to in the meantime.
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [] }) });
+        await loadMostRecentPromise;
+      });
+
+      expect(result.current.conversationId).toBe(newId);
+    });
+
+    it("given a rapid A→B agent switch, agent A's late resolution must NOT claim agent B's pending identity (CR3)", async () => {
+      let resolveAgentAList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          // First call = agent A's most-recent lookup: delayed. Later calls resolve empty.
+          if (!resolveAgentAList) {
+            return new Promise((resolve) => { resolveAgentAList = resolve; });
+          }
+          return new Promise((resolve) => { resolveAgentAList = resolve; });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [], conversations: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadAPromise!: Promise<void>;
+      act(() => {
+        loadAPromise = result.current.loadMostRecentConversation();
+      });
+      const resolveA = resolveAgentAList;
+
+      // User switches to agent B while A's lookup is in flight; B starts its own
+      // resolution (its list fetch hangs — identity stays 'resolving', the exact
+      // state a stale RESOLVED could otherwise claim).
+      act(() => {
+        result.current.selectAgent(mockAgent2);
+      });
+      expect(usePageAgentDashboardStore.getState().selectedAgent?.id).toBe(mockAgent2.id);
+
+      // A's lookup now resolves with A's conversation — it must be dropped.
+      await act(async () => {
+        resolveA({ ok: true, json: async () => ({ conversations: [{ id: 'agent-a-conv' }] }) });
+        await loadAPromise;
+      });
+
+      expect(usePageAgentDashboardStore.getState().conversationId).not.toBe('agent-a-conv');
+      expect(usePageAgentDashboardStore.getState().selectedAgent?.id).toBe(mockAgent2.id);
+    });
+
+    it('given a stale RESOLVED dispatch is a guaranteed no-op (a newer identity already won), should not write to the store at all', async () => {
+      let resolveMostRecentList!: (value: unknown) => void;
+      mockFetchWithAuth.mockImplementation((url: string) => {
+        if (url.includes('limit=1')) {
+          return new Promise((resolve) => { resolveMostRecentList = resolve; });
+        }
+        // The stale conversation's message fetch, and createNewConversation's
+        // persist POST, both resolve immediately.
+        return Promise.resolve({ ok: true, json: async () => ({ messages: [] }) });
+      });
+
+      usePageAgentDashboardStore.setState({ selectedAgent: mockAgent });
+      const { result } = renderHook(() => usePageAgentDashboardStore());
+
+      let loadMostRecentPromise!: Promise<void>;
+      act(() => {
+        loadMostRecentPromise = result.current.loadMostRecentConversation();
+      });
+      await act(async () => {
+        await result.current.createNewConversation();
+      });
+
+      const notify = vi.fn();
+      const unsubscribe = usePageAgentDashboardStore.subscribe(notify);
+
+      // The stale loadMostRecentConversation fetch now resolves with a
+      // DIFFERENT, older conversation — applyIdentity's RESOLVED dispatch is
+      // a guaranteed no-op per the reducer (identity already moved to
+      // 'ready' via IDENTITY_SET), so this must not write to the store —
+      // not even to re-set the same identity fields.
+      await act(async () => {
+        resolveMostRecentList({ ok: true, json: async () => ({ conversations: [{ id: 'stale-old-conv' }] }) });
+        await loadMostRecentPromise;
+      });
+
+      unsubscribe();
+      expect(notify).not.toHaveBeenCalled();
     });
   });
 

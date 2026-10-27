@@ -131,7 +131,7 @@ export function MonthView({ currentDate, events, tasks, handlers, driveColorMap,
                     {/* Events first (take precedence) */}
                     {dayEvents.slice(0, MAX_VISIBLE_EVENTS).map((event) => (
                       <EventPill
-                        key={event.id}
+                        key={`${event.id}-${event.startAt}`}
                         event={event}
                         colors={resolveEventColor(event, context, driveColorMap ?? null)}
                         onClick={(e) => {

@@ -192,7 +192,7 @@ describe('loadSecurityAuditHashableFields', () => {
   it('empty id array short-circuits with empty map', async () => {
     const client = createMockClient([]);
 
-    const result = await loadSecurityAuditHashableFields(client, []);
+    const result = await loadSecurityAuditHashableFields(client, [], { plane: 'main' });
 
     assert({
       given: 'an empty id array',
@@ -216,7 +216,7 @@ describe('loadSecurityAuditHashableFields', () => {
     };
     const client = createMockClient([{ rows: [row], rowCount: 1 }]);
 
-    const result = await loadSecurityAuditHashableFields(client, ['sec_1']);
+    const result = await loadSecurityAuditHashableFields(client, ['sec_1'], { plane: 'main' });
 
     assert({
       given: 'one security_audit_log id',
@@ -235,6 +235,86 @@ describe('loadSecurityAuditHashableFields', () => {
         client.calls[0].sql.includes('FROM security_audit_log') &&
         client.calls[0].sql.includes('WHERE id = ANY($1)'),
       expected: true,
+    });
+  });
+
+  it('main plane never selects emission_hash (legacy table has no such column) and pins emissionHash to null', async () => {
+    const row = {
+      id: 'sec_1',
+      eventType: 'auth.login.success',
+      serviceId: null,
+      resourceType: null,
+      resourceId: null,
+      details: null,
+      riskScore: null,
+      anomalyFlags: null,
+      timestamp: new Date('2026-04-10T09:00:00Z'),
+    };
+    const client = createMockClient([{ rows: [row], rowCount: 1 }]);
+
+    const result = await loadSecurityAuditHashableFields(client, ['sec_1'], { plane: 'main' });
+
+    assert({
+      given: 'a main-plane load',
+      should: 'not reference emission_hash in the SQL',
+      actual: client.calls[0].sql.includes('emission_hash'),
+      expected: false,
+    });
+    assert({
+      given: 'a main-plane row',
+      should: 'carry emissionHash null (legacy era)',
+      actual: result.get('sec_1')?.emissionHash,
+      expected: null,
+    });
+  });
+
+  it('admin plane selects emission_hash and threads it through as the era discriminator', async () => {
+    const rows = [
+      {
+        id: 'legacy_1',
+        eventType: 'auth.login.success',
+        serviceId: null,
+        resourceType: null,
+        resourceId: null,
+        details: null,
+        riskScore: null,
+        anomalyFlags: null,
+        timestamp: new Date('2026-04-10T09:00:00Z'),
+        emissionHash: null,
+      },
+      {
+        id: 'chainer_1',
+        eventType: 'data.read',
+        serviceId: 'web',
+        resourceType: 'page',
+        resourceId: 'p1',
+        details: null,
+        riskScore: null,
+        anomalyFlags: null,
+        timestamp: new Date('2026-04-10T09:01:00Z'),
+        emissionHash: 'a'.repeat(64),
+      },
+    ];
+    const client = createMockClient([{ rows, rowCount: 2 }]);
+
+    const result = await loadSecurityAuditHashableFields(client, ['legacy_1', 'chainer_1'], {
+      plane: 'admin',
+    });
+
+    assert({
+      given: 'an admin-plane load',
+      should: 'select emission_hash aliased to emissionHash',
+      actual: client.calls[0].sql.includes('emission_hash AS "emissionHash"'),
+      expected: true,
+    });
+    assert({
+      given: 'a backfilled legacy row and a chainer row in one batch',
+      should: 'preserve NULL vs set emission hashes per row',
+      actual: {
+        legacy: result.get('legacy_1')?.emissionHash,
+        chainer: result.get('chainer_1')?.emissionHash,
+      },
+      expected: { legacy: null, chainer: 'a'.repeat(64) },
     });
   });
 });

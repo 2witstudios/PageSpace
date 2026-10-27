@@ -16,17 +16,45 @@ export interface ProviderSettings {
   currentProvider: string;
   currentModel: string;
   providers: Partial<Record<
-    | 'pagespace'
-    | 'openrouter'
-    | 'openrouter_free'
-    | 'google'
     | 'openai'
     | 'anthropic'
+    | 'google'
     | 'xai'
+    | 'deepseek'
+    | 'qwen'
+    | 'mistral'
+    | 'moonshot'
+    | 'minimax'
+    | 'meta'
+    | 'bytedance'
+    | 'aion-labs'
+    | 'amazon'
+    | 'apodex'
+    | 'arcee-ai'
+    | 'cohere'
+    | 'dots-studio'
+    | 'ibm-granite'
+    | 'inclusionai'
+    | 'kwaipilot'
+    | 'liquid'
+    | 'meituan'
+    | 'nex-agi'
+    | 'nvidia'
+    | 'poolside'
+    | 'rekaai'
+    | 'relace'
+    | 'sakana'
+    | 'sao10k'
+    | 'stepfun'
+    | 'tencent'
+    | 'thedrummer'
+    | 'thinkingmachines'
+    | 'upstage'
+    | 'xiaomi'
+    | 'inception'
+    | 'writer'
     | 'ollama'
     | 'lmstudio'
-    | 'glm'
-    | 'minimax'
     | 'azure_openai',
     ProviderAvailability
   >>;
@@ -57,6 +85,10 @@ export interface ConversationData {
   createdAt: Date;
   updatedAt: Date;
   messageCount: number;
+  isShared: boolean;
+  isOwner: boolean;
+  /** The session (workspace) the thread was born into — null for a plain chat. */
+  sessionId: string | null;
   lastMessage: {
     role: string;
     timestamp: Date;
@@ -73,6 +105,9 @@ export interface RawConversationData {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  isShared?: boolean;
+  isOwner?: boolean;
+  sessionId?: string | null;
   lastMessage: {
     role: string;
     timestamp: string;
@@ -115,6 +150,9 @@ export interface AgentConfig {
 export function parseConversationData(raw: RawConversationData): ConversationData {
   return {
     ...raw,
+    isShared: raw.isShared ?? false,
+    isOwner: raw.isOwner ?? false,
+    sessionId: raw.sessionId ?? null,
     createdAt: new Date(raw.createdAt),
     updatedAt: new Date(raw.updatedAt),
     lastMessage: {

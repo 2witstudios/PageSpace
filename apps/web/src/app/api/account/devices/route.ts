@@ -8,6 +8,8 @@ import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { getUserDeviceTokens, revokeAllUserDeviceTokens, createDeviceTokenRecord, revokeExpiredDeviceTokens } from '@pagespace/lib/auth/device-auth-utils';
 import { isValidTokenFormat, getTokenType } from '@pagespace/lib/auth/opaque-tokens';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -99,7 +101,12 @@ export async function DELETE(req: Request) {
 
     // Extract device info from current token BEFORE incrementing tokenVersion
     // With opaque tokens, we look up the device record by tokenHash (not JWT decode)
-    let currentDeviceInfo: { deviceId: string; platform: 'web' | 'desktop' | 'ios' | 'android'; deviceName: string | null } | null = null;
+    let currentDeviceInfo: {
+      deviceId: string;
+      platform: 'web' | 'desktop' | 'ios' | 'android';
+      deviceName: string | null;
+      authentication: VerifiedAuthentication | null;
+    } | null = null;
     if (currentDeviceToken && currentDeviceTokenHash) {
       // Validate opaque token format
       if (isValidTokenFormat(currentDeviceToken) && getTokenType(currentDeviceToken) === 'dev') {
@@ -112,13 +119,18 @@ export async function DELETE(req: Request) {
             isNull(deviceTokens.revokedAt),
             gt(deviceTokens.expiresAt, new Date())
           ),
-          columns: { deviceId: true, platform: true, deviceName: true },
+          columns: { deviceId: true, platform: true, deviceName: true, authenticatedAt: true, authenticationAssurance: true },
         });
         if (oldDeviceRecord) {
           currentDeviceInfo = {
             deviceId: oldDeviceRecord.deviceId,
             platform: oldDeviceRecord.platform,
             deviceName: oldDeviceRecord.deviceName,
+            // The rotated token stands for the same sign-in ceremony as the one it replaces (D-OW-45).
+            authentication: parseVerifiedAuthentication({
+              authenticatedAtMs: oldDeviceRecord.authenticatedAt?.getTime(),
+              assurance: oldDeviceRecord.authenticationAssurance,
+            }, Date.now()),
           };
         }
       }
@@ -158,9 +170,10 @@ export async function DELETE(req: Request) {
         currentDeviceInfo.platform,
         newTokenVersion,
         {
+          authentication: currentDeviceInfo.authentication,
           deviceName: currentDeviceInfo.deviceName || undefined,
           userAgent: req.headers.get('user-agent') ?? undefined,
-          ipAddress: req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || undefined,
+          ipAddress: getClientIP(req),
         }
       );
 

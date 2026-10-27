@@ -5,25 +5,15 @@
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, inArray, type InferSelectModel } from '@pagespace/db/operators'
-import { socketTokens, deviceTokens, mcpTokens, mcpTokenDrives } from '@pagespace/db/schema/auth'
+import { eq, and, inArray, isNull, type InferSelectModel } from '@pagespace/db/operators'
+import { deviceTokens, mcpTokens } from '@pagespace/db/schema/auth'
+import { mcpTokenDrives } from '@pagespace/db/schema/members'
 import { drives } from '@pagespace/db/schema/core';
 
 export type DeviceToken = InferSelectModel<typeof deviceTokens>;
 export type McpToken = InferSelectModel<typeof mcpTokens>;
 
 export const sessionRepository = {
-  /**
-   * Store a hashed socket token for Socket.IO authentication.
-   */
-  async createSocketToken(data: {
-    tokenHash: string;
-    userId: string;
-    expiresAt: Date;
-  }): Promise<void> {
-    await db.insert(socketTokens).values(data);
-  },
-
   /**
    * Update a device token's deviceId (one-time OAuth migration fix).
    * Returns the updated record, or null if not found.
@@ -43,20 +33,35 @@ export const sessionRepository = {
   /**
    * Create an MCP token with optional drive scopes in a transaction.
    * If drive scope insertion fails, the token is not created.
+   *
+   * `txClient`, when given, runs both inserts against that caller-owned
+   * transaction instead of opening a new one — needed so a caller minting an
+   * `mcp_tokens` row as a side effect of a LARGER atomic operation (e.g. the
+   * OAuth authorization-code exchange, see `oauth-repository.ts`) gets a
+   * single all-or-nothing commit, not two independent transactions where the
+   * outer one could roll back after this one already committed.
    */
-  async createMcpTokenWithDriveScopes(data: {
-    userId: string;
-    tokenHash: string;
-    tokenPrefix: string;
-    name: string;
-    isScoped: boolean;
-    driveIds: string[];
-  }): Promise<McpToken> {
-    return db.transaction(async (tx) => {
+  async createMcpTokenWithDriveScopes(
+    data: {
+      userId: string;
+      authenticatedAt?: Date | null;
+      authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
+      tokenHash: string;
+      tokenPrefix: string;
+      name: string;
+      isScoped: boolean;
+      // role null = INHERIT (the key acts as its owner in that drive)
+      drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[];
+    },
+    txClient?: Pick<typeof db, 'insert'>,
+  ): Promise<McpToken> {
+    const run = async (tx: Pick<typeof db, 'insert'>): Promise<McpToken> => {
       const [token] = await tx
         .insert(mcpTokens)
         .values({
           userId: data.userId,
+          authenticatedAt: data.authenticatedAt ?? null,
+          authenticationAssurance: data.authenticationAssurance ?? null,
           tokenHash: data.tokenHash,
           tokenPrefix: data.tokenPrefix,
           name: data.name,
@@ -64,17 +69,22 @@ export const sessionRepository = {
         })
         .returning();
 
-      if (data.driveIds.length > 0) {
+      if (data.drives.length > 0) {
         await tx.insert(mcpTokenDrives).values(
-          data.driveIds.map((driveId) => ({
+          data.drives.map(({ id: driveId, role, customRoleId }) => ({
             tokenId: token.id,
             driveId,
+            role,
+            customRoleId: customRoleId ?? null,
+            addedBy: data.userId,
           }))
         );
       }
 
       return token;
-    });
+    };
+
+    return txClient ? run(txClient) : db.transaction(run);
   },
 
   /**
@@ -83,6 +93,7 @@ export const sessionRepository = {
   async findDrivesByIds(
     driveIds: string[]
   ): Promise<{ id: string; name: string }[]> {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     return db.query.drives.findMany({
       where: inArray(drives.id, driveIds),
       columns: { id: true, name: true },
@@ -94,22 +105,27 @@ export const sessionRepository = {
    * Filters out scopes where the drive has been deleted.
    */
   async findUserMcpTokensWithDrives(userId: string) {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const tokens = await db.query.mcpTokens.findMany({
       where: (tokens, { eq, isNull, and }) =>
         and(eq(tokens.userId, userId), isNull(tokens.revokedAt)),
       columns: {
         id: true,
         name: true,
+        tokenPrefix: true,
         lastUsed: true,
         createdAt: true,
         isScoped: true,
       },
       with: {
         driveScopes: {
-          columns: { driveId: true },
+          columns: { driveId: true, role: true, customRoleId: true },
           with: {
             drive: {
               columns: { id: true, name: true },
+            },
+            customRole: {
+              columns: { id: true, name: true, color: true },
             },
           },
         },
@@ -119,6 +135,7 @@ export const sessionRepository = {
     return tokens.map((token) => ({
       id: token.id,
       name: token.name,
+      tokenPrefix: token.tokenPrefix,
       lastUsed: token.lastUsed,
       createdAt: token.createdAt,
       isScoped: token.isScoped,
@@ -127,8 +144,45 @@ export const sessionRepository = {
         .map((scope) => ({
           id: scope.drive.id,
           name: scope.drive.name,
+          role: scope.role,
+          customRoleId: scope.customRoleId,
+          customRoleName: scope.customRole?.name ?? null,
         })),
     }));
+  },
+
+  /**
+   * The metadata a key needs to describe ITSELF (`GET /api/auth/key`).
+   *
+   * Scoped by `userId` as well as `tokenId` for the same reason
+   * `findMcpTokenByIdAndUser` is: the id comes from a validated credential, so
+   * the owner check can only ever hold — and it stays here so a future caller
+   * that gets its id from somewhere less trustworthy cannot read another
+   * person's key row through this method. Deliberately narrow: no token hash,
+   * and nothing about the owning USER, since the whole point of keeping
+   * `/api/auth/me` closed to mcp_* tokens is that holding a key must not yield
+   * the person behind it.
+   *
+   * `isScoped` is deliberately NOT selected. It records what the key was minted
+   * as; whether the key is confined RIGHT NOW is `isDriveScopedPrincipal`, read
+   * off the same `allowedDriveIds` every authorization decision uses. Returning
+   * the stored flag beside a live answer derived from something else would
+   * invite the two to disagree in the response — and the one case where they
+   * could (a scoped key whose drives were all deleted) never reaches any route
+   * at all: `validateMCPToken` fails it closed before authentication succeeds.
+   */
+  async findMcpTokenSelfById(tokenId: string, userId: string) {
+    const token = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
+      columns: {
+        id: true,
+        name: true,
+        tokenPrefix: true,
+        createdAt: true,
+        lastUsed: true,
+      },
+    });
+    return token ?? null;
   },
 
   /**
@@ -146,6 +200,25 @@ export const sessionRepository = {
   },
 
   /**
+   * Ownership check that additionally requires the token to be un-revoked —
+   * the gate for the `update_key` consent flow (an in-place re-scope of a
+   * revoked key would silently resurrect a credential the user already killed).
+   * A revoked, foreign, or nonexistent token are deliberately indistinguishable
+   * (all `null`): the consent screen turns every one of them into the same
+   * uniform `invalid_scope`, so probing token ids yields no oracle.
+   */
+  async findActiveMcpTokenByIdAndUser(
+    tokenId: string,
+    userId: string
+  ): Promise<{ id: string; name: string } | null> {
+    const token = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)),
+      columns: { id: true, name: true },
+    });
+    return token ?? null;
+  },
+
+  /**
    * Revoke an MCP token (soft delete by setting revokedAt).
    */
   async revokeMcpToken(tokenId: string, userId: string): Promise<void> {
@@ -154,6 +227,63 @@ export const sessionRepository = {
       .set({ revokedAt: new Date() })
       .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)));
   },
-};
 
-export type SessionRepository = typeof sessionRepository;
+  /**
+   * Replace all drive scopes on an existing MCP token transactionally.
+   *
+   * Once a token is scoped, it stays scoped (isScoped is never set to false).
+   * If drives is empty, all existing scopes are removed but the token remains
+   * scoped (fail-closed: scoped + no drives = deny all access).
+   *
+   * Returns the updated token record, or null if the token doesn't belong to
+   * the given user or has been revoked (re-scoping a revoked key would
+   * resurrect a credential the user already killed).
+   *
+   * `txClient`, when given, runs everything (ownership check included)
+   * against that caller-owned transaction instead of opening a new one —
+   * same reasoning as `createMcpTokenWithDriveScopes`: the OAuth
+   * authorization-code exchange applies this update as part of a LARGER
+   * atomic operation (consume code + re-scope, see `oauth-repository.ts`)
+   * and needs a single all-or-nothing commit.
+   */
+  async updateMcpTokenDriveScopes(
+    tokenId: string,
+    userId: string,
+    drives: { id: string; role: 'ADMIN' | 'MEMBER' | null; customRoleId?: string }[],
+    txClient?: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>,
+  ): Promise<McpToken | null> {
+    const run = async (tx: Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>): Promise<McpToken | null> => {
+      // Ownership + un-revoked check and the "stays scoped" write are ONE
+      // atomic UPDATE (row-locked until the transaction commits): a plain
+      // SELECT-then-write would let a revoke that commits in between slip
+      // through, silently re-scoping a just-killed credential. An empty
+      // RETURNING is the not-owned/revoked/nonexistent result.
+      const [updated] = await tx
+        .update(mcpTokens)
+        .set({ isScoped: true })
+        .where(and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId), isNull(mcpTokens.revokedAt)))
+        .returning();
+      if (!updated) return null;
+
+      // Delete all existing drive scopes for this token
+      await tx.delete(mcpTokenDrives).where(eq(mcpTokenDrives.tokenId, tokenId));
+
+      // Insert new scopes
+      if (drives.length > 0) {
+        await tx.insert(mcpTokenDrives).values(
+          drives.map(({ id: driveId, role, customRoleId }) => ({
+            tokenId,
+            driveId,
+            role,
+            customRoleId: customRoleId ?? null,
+            addedBy: userId,
+          }))
+        );
+      }
+
+      return updated;
+    };
+
+    return txClient ? run(txClient) : db.transaction(run);
+  },
+};

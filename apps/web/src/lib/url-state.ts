@@ -47,18 +47,6 @@ export const setConversationId = (id: string | null, mode: UrlUpdateMode = 'push
   updateUrlParams({ conversationId: id }, mode);
 };
 
-export const setAgentId = (id: string | null, mode: UrlUpdateMode = 'push') => {
-  updateUrlParams({ agentId: id }, mode);
-};
-
-export const clearConversationId = (mode: UrlUpdateMode = 'push') => {
-  updateUrlParams({ conversationId: null }, mode);
-};
-
-export const clearAgentId = (mode: UrlUpdateMode = 'push') => {
-  updateUrlParams({ agentId: null }, mode);
-};
-
 export const setChatParams = (updates: ChatUrlParamsUpdate, mode: UrlUpdateMode = 'push') => {
   updateUrlParams(updates, mode);
 };

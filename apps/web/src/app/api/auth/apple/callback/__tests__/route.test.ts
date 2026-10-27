@@ -25,7 +25,8 @@ import crypto from 'crypto';
 // Mock dependencies BEFORE imports
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByAppleIdOrEmail: vi.fn(),
+    findUserByAppleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -99,8 +100,8 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -136,7 +137,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -145,7 +146,12 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
 import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
@@ -155,7 +161,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   consumeAnyInviteIfPresent,
@@ -209,7 +215,8 @@ describe('POST /api/auth/apple/callback', () => {
     };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(isSafeReturnUrl).mockReturnValue(true);
-    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -238,7 +245,7 @@ describe('POST /api/auth/apple/callback', () => {
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
 
     // vi.resetAllMocks() above wipes the vi.mock factory implementations of
     // the dispatcher; re-prime them so the route's await-and-destructure
@@ -247,7 +254,7 @@ describe('POST /api/auth/apple/callback', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -410,6 +417,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Desktop platform should use device info from state
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'dev-abc',
           deviceName: 'My Mac',
         })
@@ -428,6 +436,15 @@ describe('POST /api/auth/apple/callback', () => {
       const location = response.headers.get('Location')!;
 
       expect(location).toContain('/dashboard');
+    });
+
+    it('SEC-2 (partial) an Apple callback records single-factor evidence on the session it creates (D-OW-45)', async () => {
+      const before = Date.now();
+      await POST(createCallbackRequest({ id_token: 'valid-token', state: createSignedState({ platform: 'web' }) }));
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance: 'single_factor' });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
   });
 
@@ -593,7 +610,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: null,
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -610,6 +628,44 @@ describe('POST /api/auth/apple/callback', () => {
       expect(authRepository.createUser).not.toHaveBeenCalled();
     });
 
+    // SECURITY (M5): an unverified Apple email must never link to / authenticate
+    // an existing account; only a subject-id (appleId) match may.
+    it('redirects to oauth_error and never links when email matches an existing account but is unverified', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: {
+          providerId: 'attacker-apple-sub',
+          email: 'victim@example.com',
+          emailVerified: false,
+        },
+      });
+      // No appleId subject match; only the email collides with an existing account.
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
+        id: 'victim-id',
+        name: 'Victim',
+        email: 'victim@example.com',
+        image: null,
+        emailVerified: new Date(),
+        tokenVersion: 0,
+        appleId: null,
+      } as never);
+
+      const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
+      const request = createCallbackRequest({ id_token: 'valid-token', state });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(307);
+      const location = response.headers.get('Location')!;
+      expect(location).toContain('/auth/signin?error=oauth_error');
+      // No account was linked, created, or signed in.
+      expect(authRepository.updateUser).not.toHaveBeenCalled();
+      expect(authRepository.createUser).not.toHaveBeenCalled();
+      expect(sessionService.createSession).not.toHaveBeenCalled();
+    });
+
     it('updates existing user missing name', async () => {
       const existingUser = {
         id: 'existing-id',
@@ -621,7 +677,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: 'apple-sub-123',
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -648,7 +705,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: 'apple-sub-123',
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(existingUser as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -673,7 +731,8 @@ describe('POST /api/auth/apple/callback', () => {
               appleId: null,
       };
 
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -691,7 +750,7 @@ describe('POST /api/auth/apple/callback', () => {
 
   describe('drive provisioning', () => {
     it('redirects to provisioned drive when newly created', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'provisioned-drive-id',
         created: true,
       });
@@ -709,7 +768,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('uses original returnUrl when drive already exists', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'existing-drive-id',
         created: false,
       });
@@ -727,7 +786,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
       const request = createCallbackRequest({
@@ -739,7 +798,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(response.status).toBe(307);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: mockNewUser.id, provider: 'apple' }
       );
@@ -879,7 +938,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('includes isNewUser flag in deep link for new users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -935,6 +994,7 @@ describe('POST /api/auth/apple/callback', () => {
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -978,6 +1038,7 @@ describe('POST /api/auth/apple/callback', () => {
       // Should use createId() as fallback for deviceId
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceId: 'mock-cuid',
           platform: 'ios',
         })
@@ -985,7 +1046,7 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('includes isNewUser flag for newly provisioned iOS users', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive',
         created: true,
       });
@@ -1129,7 +1190,8 @@ describe('POST /api/auth/apple/callback', () => {
         tokenVersion: 0,
         appleId: null,
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -1152,7 +1214,8 @@ describe('POST /api/auth/apple/callback', () => {
         tokenVersion: 0,
         appleId: null,
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'test', appleId: 'apple-sub-123' } as never);
 
       const state = createSignedState({ returnUrl: '/dashboard', platform: 'web' });
@@ -1198,7 +1261,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
         drivesAccepted: 0,
@@ -1212,7 +1275,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-apple-789',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1235,14 +1298,15 @@ describe('POST /api/auth/apple/callback', () => {
     });
 
     it('calls consumeAnyInviteIfPresent with isNewUser=false for existing users when inviteToken is in state', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValue(mockExistingUser as never);
 
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
         kind: 'drive',
         invitedDriveId: 'drive-existing-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
       const state = createSignedState({
         returnUrl: '/dashboard',
@@ -1288,7 +1352,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -1311,7 +1375,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -1332,7 +1396,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-desktop-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1355,7 +1419,7 @@ describe('POST /api/auth/apple/callback', () => {
         kind: 'drive',
         invitedDriveId: 'drive-ios-apple',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const state = createSignedState({
@@ -1375,4 +1439,105 @@ describe('POST /api/auth/apple/callback', () => {
     });
   });
 
+  describe('Apple refresh token capture (TN3194)', () => {
+    beforeEach(() => {
+      process.env.APPLE_REDIRECT_URI = 'https://example.com/api/auth/apple/callback';
+      vi.mocked(captureAppleRefreshToken).mockResolvedValue('stored');
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.web',
+      });
+    });
+
+    const webRequest = (fields: Record<string, string> = {}) =>
+      createCallbackRequest({
+        id_token: 'valid-token',
+        state: createSignedState({ returnUrl: '/dashboard', platform: 'web' }),
+        ...fields,
+      });
+
+    it('given Apple posts a code, should capture the refresh token with the verified client and the flow\'s redirect_uri', async () => {
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(response.status).toBe(307);
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-web-code',
+        clientId: 'ai.pagespace.web',
+        expectedSub: 'apple-sub-123',
+        redirectUri: 'https://example.com/api/auth/apple/callback',
+      });
+    });
+
+    it('given a slow Apple exchange, should redirect the signed-in user without waiting for it', async () => {
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.headers.get('location')).toContain('auth=success');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still complete the sign-in', async () => {
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(webRequest({ code: 'apple-web-code' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given the desktop flow, should also capture the refresh token', async () => {
+      const response = await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-desktop-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'desktop', deviceId: 'desktop-dev-1' }),
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-desktop-code' }));
+    });
+
+    it('given the iOS web flow, should also capture the refresh token', async () => {
+      await POST(
+        createCallbackRequest({
+          id_token: 'valid-token',
+          code: 'apple-ios-code',
+          state: createSignedState({ returnUrl: '/dashboard', platform: 'ios', deviceId: 'ios-dev-1' }),
+        }),
+      );
+
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith(expect.objectContaining({ code: 'apple-ios-code' }));
+    });
+
+    it('given no code in the post, should sign in without attempting a capture', async () => {
+      const response = await POST(webRequest());
+
+      expect(response.headers.get('location')).toContain('auth=success');
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given the sign-in fails verification, should never attempt a capture', async () => {
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({ success: false, error: 'bad token' });
+
+      await POST(webRequest({ code: 'apple-web-code' }));
+
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -8,6 +8,13 @@ interface MessageActionButtonsProps {
   onRetry?: () => void; // Only available for last assistant message
   onUndoFromHere?: () => void; // Undo from this message forward (AI messages with tool calls)
   disabled?: boolean;
+  /**
+   * Retry only. A retry is a send, and once one is in flight the composer is already locked and
+   * showing Stop — but this button stayed live and enabled, so a second click fired a SECOND
+   * retry (a second regeneration, double-billed). Edit and delete stay usable, hence a prop of
+   * its own rather than widening `disabled`.
+   */
+  retryDisabled?: boolean;
   compact?: boolean; // For sidebar compact view
 }
 
@@ -17,6 +24,7 @@ export const MessageActionButtons: React.FC<MessageActionButtonsProps> = ({
   onRetry,
   onUndoFromHere,
   disabled = false,
+  retryDisabled = false,
   compact = false,
 }) => {
   const buttonSize = 'sm' as const;
@@ -29,7 +37,8 @@ export const MessageActionButtons: React.FC<MessageActionButtonsProps> = ({
           variant="ghost"
           size={buttonSize}
           onClick={onRetry}
-          disabled={disabled}
+          disabled={disabled || retryDisabled}
+          data-testid="message-retry"
           className="h-5 px-1"
           title="Retry this message"
         >

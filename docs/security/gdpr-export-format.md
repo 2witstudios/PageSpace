@@ -1,0 +1,97 @@
+# GDPR Data Export Format
+
+`GET /api/account/export` returns a ZIP archive of all data held about the
+authenticated user (GDPR Art 15 access / Art 20 portability). Every bundle is
+self-describing via a `manifest.json` at its root.
+
+## Choosing a format — `?format=`
+
+| `format` | Contents |
+|----------|----------|
+| `native` (default, or any unrecognized value) | One JSON file per data category, mirroring PageSpace's internal structure. |
+| `portable` | A single `data.json` in the documented, interoperable [schema.org](https://schema.org) vocabulary. |
+
+Example: `GET /api/account/export?format=portable`
+
+## `manifest.json`
+
+Present in every export. Lets a recipient interpret the bundle without
+out-of-band knowledge.
+
+```json
+{
+  "schemaVersion": "1.1.0",
+  "generator": "PageSpace GDPR export",
+  "exportedAt": "2026-06-24T00:00:00.000Z",
+  "format": "native",
+  "files": [
+    { "name": "pages.json", "description": "Pages across your drives", "recordCount": 42 }
+  ]
+}
+```
+
+- `schemaVersion` — bumped when the bundle structure/inventory changes.
+- `files[]` — the inventory: each file's name, a human description, and its record
+  count (array length; `1` for the singular profile / personalization).
+
+## Native format
+
+Per-category JSON files: `profile.json`, `drives.json`, `pages.json`,
+`messages.json`, `files-metadata.json`, `activity.json`, `system-logs.json`,
+`api-metrics.json`, `error-logs.json`, `ai-usage.json`, `tasks.json`,
+`sessions.json`, `notifications.json`, `display-preferences.json`,
+`settings.json`, `agent-workspaces.json`, `stream-state.json`,
+`personalization-candidates.json`, `content-tags.json`, and
+`personalization.json` (only when the user has personalization).
+
+This list is a hand-maintained copy of `buildNativeExportFiles`, and it had
+drifted: four categories added by earlier work (`settings`, `agent-workspaces`,
+`stream-state`, `personalization-candidates`) were missing from it, so a
+recipient reading this doc did not know they existed. The authoritative list is
+the function; `gdpr-export-coverage.test.ts` asserts that every registered
+category actually ships a file, which is the guard this prose does not have.
+
+`content-tags.json` carries the tags the subject APPLIED — the act of
+classification, with the tag's name joined in and, for an anchored tag, the
+passage they selected. The tag VOCABULARY itself belongs to the drive rather
+than the person and is not exported.
+
+Shapes are the `*Export` interfaces in
+`packages/lib/src/compliance/export/gdpr-export.ts`. `system-logs.json`,
+`api-metrics.json`, and `error-logs.json` cover rows in the monitoring tables
+keyed to the user's (nullable, non-FK) `userId` — a deliberately
+redaction-conscious subset that excludes raw stack traces, IP addresses, user
+agents, session/request correlation IDs, and internal admin references
+(e.g. `resolvedBy`), keeping only what/when/where fields (timestamp,
+level/name, message, category, endpoint, method, duration/status,
+file/line/column, resolved).
+
+## Portable format (schema.org)
+
+A single `data.json` mapping the data onto widely-supported schema.org types so
+it can be ingested by other tools without bespoke parsers:
+
+- The data subject → [`Person`](https://schema.org/Person) (`@context:
+  "https://schema.org"`), with `identifier`, `name`, `email`, `image`,
+  `dateCreated`, `dateModified`.
+- Drives → [`CreativeWork`](https://schema.org/CreativeWork) under `owns`.
+- Pages → `CreativeWork` under `creativeWork` (`name`, `text`, `additionalType`
+  = page type, `isPartOf` = drive id, `dateCreated`/`dateModified`).
+- Messages → [`Message`](https://schema.org/Message) under `message` (`text`,
+  `dateSent`, `messageAttachment` = source surface).
+- Files → [`MediaObject`](https://schema.org/MediaObject) under `subjectOf`
+  (`encodingFormat`, `contentSize`, `contentUrl`, `isPartOf`, `dateCreated`).
+
+The portable format is **lossless**: categories without a natural schema.org
+type (activity, system logs, API metrics, error logs, AI usage, tasks,
+sessions, notifications, display preferences, personalization) are carried
+verbatim as
+[`PropertyValue`](https://schema.org/PropertyValue) entries under
+`additionalProperty`, so the portable bundle contains exactly the same data as
+the native export.
+
+All dates are ISO-8601 strings. Empty sections are emitted as empty arrays.
+
+The mapping is a pure transform (`toPortableExport` in
+`packages/lib/src/compliance/export/export-format.ts`), so the format is stable
+and testable independent of the database.

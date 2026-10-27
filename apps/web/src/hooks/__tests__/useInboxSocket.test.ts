@@ -1,0 +1,431 @@
+/**
+ * useInboxSocket regression coverage.
+ *
+ * Root cause (commit b922d5643, #1230): the hook used to reconstruct its own
+ * SWR cache key (`driveId ? ... : '/api/inbox?limit=20'`), while every
+ * consumer subscribes to SWR under a `type=`-qualified key. SWR keys by exact
+ * string value, so `mutate(cacheKey, ...)` was writing into a cache entry
+ * with zero subscribers — every socket-driven unread update was silently
+ * discarded until the page was reloaded.
+ *
+ * The fix has the hook take the consumer's literal cache key instead of
+ * rebuilding it. The most valuable regression test is therefore proving that
+ * each consumer passes `useInboxSocket` the identical expression it passes to
+ * `useSWR` — checked here directly against each consumer's source, so any
+ * future PR that changes one call site without the other fails CI instead of
+ * silently killing live updates again. Hook *behavior* against those same
+ * literal keys (scope filtering, stale-replay, the mutate() call itself) is
+ * covered separately below with the real hook and a fake socket — full DOM
+ * rendering of the sidebar/list components was deliberately avoided: it pulls
+ * in Radix ScrollArea, which loops on ref-callback resize measurement under
+ * jsdom (no real layout signal to settle on) for reasons unrelated to this fix.
+ */
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+import { createMockSocket } from '@/test/socket-mocks';
+import { useEditingStore } from '@/stores/useEditingStore';
+
+const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const sourceCache = new Map<string, string>();
+const readSource = (relPath: string) => {
+  const cached = sourceCache.get(relPath);
+  if (cached !== undefined) return cached;
+  const content = readFileSync(resolve(srcRoot, relPath), 'utf8');
+  sourceCache.set(relPath, content);
+  return content;
+};
+
+// ---------------------------------------------------------------------------
+// Hoisted mocks shared across all tests. `mockSocket` is built from the real
+// (unmocked) `createMockSocket`, so it must stay out of vi.hoisted — that
+// callback runs before other imports are initialized.
+// ---------------------------------------------------------------------------
+const { mockMutate } = vi.hoisted(() => ({ mockMutate: vi.fn() }));
+const mockSocket = createMockSocket();
+
+vi.mock('../useSocket', () => ({
+  useSocket: () => mockSocket,
+}));
+
+vi.mock('swr', () => ({
+  useSWRConfig: () => ({ mutate: mockMutate }),
+}));
+
+import { useInboxSocket } from '../useInboxSocket';
+import type { InboxEventPayload } from '@/lib/websocket/socket-utils';
+import type { InboxResponse } from '@pagespace/lib/types';
+
+const CHANNEL_KEY = '/api/inbox?type=channel&limit=20';
+const DM_KEY = '/api/inbox?type=dm&limit=20';
+
+const renderInboxSocket = (overrides: Partial<Parameters<typeof useInboxSocket>[0]> = {}) =>
+  renderHook(() => useInboxSocket({
+    cacheKey: CHANNEL_KEY,
+    scope: 'channel',
+    hasLoadedRef: { current: true },
+    ...overrides,
+  }));
+
+const channelPayload = (overrides: Partial<InboxEventPayload> = {}): InboxEventPayload => ({
+  operation: 'channel_updated',
+  type: 'channel',
+  id: 'ch-1',
+  lastMessageAt: '2026-07-28T12:00:00.000Z',
+  unreadCount: 3,
+  ...overrides,
+});
+
+const dmPayload = (overrides: Partial<InboxEventPayload> = {}): InboxEventPayload => ({
+  operation: 'dm_updated',
+  type: 'dm',
+  id: 'dm-1',
+  lastMessageAt: '2026-07-28T12:00:00.000Z',
+  unreadCount: 2,
+  ...overrides,
+});
+
+describe('useInboxSocket', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useEditingStore.setState({ activeSessions: new Map(), pendingSends: new Set() });
+  });
+
+  afterEach(() => {
+    useEditingStore.setState({ activeSessions: new Map(), pendingSends: new Set() });
+  });
+
+  // -------------------------------------------------------------------------
+  // AC1/AC4/AC6: cache key parity between each consumer's useSWR call and the
+  // cacheKey it hands to useInboxSocket, checked directly against each
+  // consumer's current source. This is the assertion that catches the
+  // b922d5643 regression class: any divergence between the two means
+  // mutate() writes into a cache entry with no subscriber.
+  // -------------------------------------------------------------------------
+  describe('consumer cache-key parity', () => {
+    const CONSUMERS = [
+      { file: 'components/layout/left-sidebar/ChannelsSidebar.tsx', scope: 'channel', expectsDriveId: true },
+      { file: 'components/layout/left-sidebar/DMSidebar.tsx', scope: 'dm', expectsDriveId: false },
+      { file: 'components/inbox/ChannelsCenterList.tsx', scope: 'channel', expectsDriveId: true },
+      { file: 'components/inbox/DMCenterList.tsx', scope: 'dm', expectsDriveId: false },
+    ] as const;
+
+    it.each(CONSUMERS)('$file passes useInboxSocket the exact key it passes to useSWR', ({ file, scope, expectsDriveId }) => {
+      const source = readSource(file);
+
+      const swrMatch = source.match(/useSWR<InboxResponse>\(\s*([\w$]+)\s*,\s*fetcher/);
+      expect(swrMatch, `${file}: could not find a useSWR<InboxResponse>(key, fetcher, ...) call`).toBeTruthy();
+      const swrKey = swrMatch![1];
+
+      // Lazy [\s\S]*? (not [^}]*) so this still matches if the object literal
+      // is reformatted across multiple lines. It still can't handle a nested
+      // object literal inlined as one of the args (e.g. hasLoadedRef: { current:
+      // false } instead of a variable) — none of these consumers do that today.
+      const socketCallMatch = source.match(/useInboxSocket\(\{([\s\S]*?)\}\s*\)/);
+      expect(socketCallMatch, `${file}: could not find a useInboxSocket({ ... }) call`).toBeTruthy();
+      const socketCallArgs = socketCallMatch![1];
+
+      const cacheKeyMatch = socketCallArgs.match(/cacheKey:\s*([\w$]+)/);
+      expect(cacheKeyMatch, `${file}: useInboxSocket call has no cacheKey`).toBeTruthy();
+      expect(cacheKeyMatch![1]).toBe(swrKey);
+
+      expect(socketCallArgs).toMatch(new RegExp(`scope:\\s*'${scope}'`));
+
+      // Channel views scoped to one drive must forward driveId, or a channel
+      // event from an unrelated drive passes the scope check, misses every
+      // item in this cache, and triggers a spurious full-revalidation
+      // refetch. DM views have no per-drive cache, so driveId must be absent.
+      if (expectsDriveId) {
+        expect(socketCallArgs, `${file}: channel view should scope by driveId`).toMatch(/driveId/);
+      } else {
+        expect(socketCallArgs, `${file}: dm view has no per-drive cache`).not.toMatch(/driveId/);
+      }
+    });
+
+    it('the four consumers each enable revalidateOnFocus (self-healing on missed events)', () => {
+      const files = CONSUMERS.map((c) => c.file);
+      for (const file of files) {
+        const source = readSource(file);
+        expect(source, `${file}: revalidateOnFocus should be true`).toMatch(/revalidateOnFocus:\s*true/);
+      }
+    });
+  });
+
+  it('the hook never re-derives an /api/inbox URL itself', () => {
+    const source = readSource('hooks/useInboxSocket.ts');
+    expect(source).not.toMatch(/\/api\/inbox/);
+  });
+
+  // -------------------------------------------------------------------------
+  // AC2: scope filtering
+  // -------------------------------------------------------------------------
+  describe('scope filtering', () => {
+    it('given scope "channel", a dm-typed payload causes zero cache writes', () => {
+      renderInboxSocket();
+
+      act(() => {
+        mockSocket._trigger('inbox:dm_updated', dmPayload());
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('given scope "dm", a channel-typed payload causes zero cache writes', () => {
+      renderInboxSocket({ cacheKey: DM_KEY, scope: 'dm' });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('given a matching scope, the payload is written to the cache', () => {
+      renderInboxSocket();
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(
+        CHANNEL_KEY,
+        expect.any(Function),
+        { revalidate: false }
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Drive scoping: a channel event for a drive other than the one this cache
+  // is scoped to must not be treated as belonging here (flagged in PR #2247
+  // review — a drive-scoped channels view otherwise refetches on every other
+  // active drive's channel traffic, the same class of bug the scope filter
+  // above fixes, one dimension deeper).
+  // -------------------------------------------------------------------------
+  describe('drive scoping', () => {
+    it('given a driveId, a channel payload for a different drive causes zero cache writes', () => {
+      renderInboxSocket({ driveId: 'drive-a' });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-b' }));
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+
+    it('given a driveId, a channel payload for the same drive is written to the cache', () => {
+      renderInboxSocket({ driveId: 'drive-a' });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-a' }));
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(
+        CHANNEL_KEY,
+        expect.any(Function),
+        { revalidate: false }
+      );
+    });
+
+    it('without a driveId (a cross-drive view), a channel payload for any drive is written', () => {
+      renderInboxSocket();
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload({ driveId: 'drive-a' }));
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(
+        CHANNEL_KEY,
+        expect.any(Function),
+        { revalidate: false }
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Duplicate-handler idempotency: a sidebar and its matching center list
+  // (e.g. DMSidebar + DMCenterList, both mounted simultaneously on
+  // /dashboard/dms via Layout) share this exact cacheKey and each mount their
+  // own useInboxSocket, so one socket event runs this updater twice. Flagged
+  // by automated review (chatgpt-codex-connector, P1) after the driveId fix;
+  // verified empirically first (see PR #2247 discussion) that SWR's
+  // functional mutate() applies synchronously, so the second call's
+  // currentData already reflects the first call's write. Simulated here by
+  // invoking the captured updater twice in sequence, chaining the return
+  // value — exactly how two independent handlers would observe the cache.
+  // -------------------------------------------------------------------------
+  describe('duplicate-handler idempotency (shared cacheKey)', () => {
+    const seedData: InboxResponse = {
+      items: [{
+        id: 'dm-1',
+        type: 'dm',
+        name: 'Test User',
+        avatarUrl: null,
+        lastMessageAt: '2026-07-28T12:00:00.000Z',
+        lastMessagePreview: 'old message',
+        lastMessageSender: null,
+        unreadCount: 0,
+      }],
+      pagination: { hasMore: false, nextCursor: null },
+    };
+
+    const runUpdaterTwice = (payload: InboxEventPayload, currentData: InboxResponse) => {
+      // Fresh render + clean mock state each call: this simulates exactly
+      // one hook instance receiving one socket event, so the two applications
+      // below are of the *same* captured updater (standing in for two
+      // sibling hook instances), not an artifact of a stale prior render.
+      const rendered = renderInboxSocket({ cacheKey: DM_KEY, scope: 'dm' });
+      mockMutate.mockClear();
+
+      act(() => {
+        mockSocket._trigger('inbox:dm_updated', payload);
+      });
+
+      expect(mockMutate.mock.calls).toHaveLength(1);
+      const updater = mockMutate.mock.calls[0][1] as (data: InboxResponse) => InboxResponse;
+      const afterFirstHandler = updater(currentData);
+      const afterSecondHandler = updater(afterFirstHandler);
+      rendered.unmount();
+      return { afterFirstHandler, afterSecondHandler };
+    };
+
+    it('one message increments unreadCount exactly once, not twice, across two handlers', () => {
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(1);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(1);
+    });
+
+    it('two distinct messages still each increment unreadCount once (guard is not overzealous)', () => {
+      const firstPayload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler: afterFirstMessage } = runUpdaterTwice(firstPayload, seedData);
+      expect(afterFirstMessage.items[0].unreadCount).toBe(1);
+
+      const secondPayload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T14:00:00.000Z', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(secondPayload, afterFirstMessage);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(2);
+    });
+
+    it('an explicit server-provided unreadCount is naturally idempotent without the guard', () => {
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', unreadCount: 5 });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(5);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(5);
+    });
+
+    it('two distinct messages that collide on the same millisecond timestamp still each increment (flagged in PR #2247 review)', () => {
+      // toISOString() is millisecond-precision, so two genuinely distinct
+      // messages sent in rapid succession can share an identical
+      // lastMessageAt. Distinct preview text is what tells them apart here.
+      const collidingTimestamp = '2026-07-28T13:00:00.000Z';
+      const firstPayload = dmPayload({ id: 'dm-1', lastMessageAt: collidingTimestamp, lastMessagePreview: 'first message', unreadCount: undefined });
+      const { afterFirstHandler: afterFirstMessage } = runUpdaterTwice(firstPayload, seedData);
+      expect(afterFirstMessage.items[0].unreadCount).toBe(1);
+
+      const secondPayload = dmPayload({ id: 'dm-1', lastMessageAt: collidingTimestamp, lastMessagePreview: 'second message', unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(secondPayload, afterFirstMessage);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(2);
+      expect(afterSecondHandler.items[0].lastMessagePreview).toBe('second message');
+    });
+
+    it('a preview-less payload (e.g. an attachment-only message) still dedupes correctly across two handlers', () => {
+      // Regression guard for the previewMatches fallback: comparing
+      // payload.lastMessagePreview directly against existingItem's (instead
+      // of falling back to true when the payload has none) would make
+      // every no-preview message look like a "different" message to the
+      // second handler and double-increment it.
+      const payload = dmPayload({ id: 'dm-1', lastMessageAt: '2026-07-28T13:00:00.000Z', lastMessagePreview: undefined, unreadCount: undefined });
+      const { afterFirstHandler, afterSecondHandler } = runUpdaterTwice(payload, seedData);
+
+      expect(afterFirstHandler.items[0].unreadCount).toBe(1);
+      expect(afterSecondHandler.items[0].unreadCount).toBe(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // AC3: never silently drop an event mid-edit
+  // -------------------------------------------------------------------------
+  describe('stale-replay on editing end', () => {
+    it('replays a dropped update once editing ends, with no page reload', () => {
+      renderInboxSocket();
+
+      act(() => {
+        useEditingStore.getState().startEditing('doc-1', 'document');
+      });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      // Dropped, not written, while editing is active.
+      expect(mockMutate).not.toHaveBeenCalled();
+
+      act(() => {
+        useEditingStore.getState().endEditing('doc-1');
+      });
+
+      // Editing store subscription replays via a full revalidation of the
+      // same key once every editing session ends.
+      expect(mockMutate).toHaveBeenCalledWith(CHANNEL_KEY);
+    });
+
+    it('does not replay while any other editing session remains active', () => {
+      renderInboxSocket();
+
+      act(() => {
+        useEditingStore.getState().startEditing('doc-1', 'document');
+        useEditingStore.getState().startEditing('doc-2', 'document');
+      });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      act(() => {
+        useEditingStore.getState().endEditing('doc-1');
+      });
+
+      // doc-2 is still editing — isAnyEditing() is still true, so no replay yet.
+      expect(mockMutate).not.toHaveBeenCalled();
+
+      act(() => {
+        useEditingStore.getState().endEditing('doc-2');
+      });
+
+      expect(mockMutate).toHaveBeenCalledWith(CHANNEL_KEY);
+    });
+
+    it('does not replay when no update was dropped', () => {
+      renderInboxSocket();
+
+      act(() => {
+        useEditingStore.getState().startEditing('doc-1', 'document');
+      });
+      act(() => {
+        useEditingStore.getState().endEditing('doc-1');
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('hasLoadedRef race guard', () => {
+    it('ignores events until hasLoadedRef.current is true', () => {
+      renderInboxSocket({ hasLoadedRef: { current: false } });
+
+      act(() => {
+        mockSocket._trigger('inbox:channel_updated', channelPayload());
+      });
+
+      expect(mockMutate).not.toHaveBeenCalled();
+    });
+  });
+});

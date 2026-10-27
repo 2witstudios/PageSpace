@@ -1,0 +1,631 @@
+/**
+ * credit-core — the PURE decision layer for prepaid AI-credits billing.
+ *
+ * INVARIANT: this module has zero I/O. No db, no Stripe SDK, no env, no clock.
+ * Every input is an explicit argument; every output is a value. All billing
+ * decisions live here so they can be tested exhaustively and deterministically;
+ * the imperative shells (credit-consume / credit-funding / credit-gate /
+ * credit-backfill / the webhook) read state, call these functions, and persist
+ * the result. The purity invariant is enforced by a test in __tests__.
+ *
+ * Money is always whole cents of customer-facing credit value. Two buckets:
+ *   - monthly: the subscription allowance; ACCUMULATES across periods (rollover)
+ *   - topup:   one-time purchased packs; NEVER expires
+ * Spend always draws monthly first.
+ */
+
+// Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
+// is itself a pure, zero-I/O module, so this doesn't break the invariant above.
+import type { AIUsageSource } from '../monitoring/usage-source';
+import type { SpendKind } from '@pagespace/db/schema/credits';
+// The ONE definition of a credit (MON-5): the conversions below are pure functions of
+// their arguments. money-model's own env knobs (MARKUP_BPS, top-up bounds) are never read
+// here — markupBps is always passed in.
+import {
+  centsFromDollars,
+  chargedCentsFromProviderDollars,
+  chargedMillicentsFromProviderDollars,
+  dollarsFromCents,
+} from './money-model';
+
+export interface Balance {
+  monthlyCents: number;
+  topupCents: number;
+  /**
+   * Outstanding overage owed, stored as a NON-NEGATIVE magnitude. Net spendable is
+   * `monthly + topup − debt`, so debt drags the net below zero (and the gate denies)
+   * until it's paid down by a purchase or netted against carry at the next renewal. Defaults to 0.
+   */
+  debtCents?: number;
+}
+
+/**
+ * Convert a real provider cost (in dollars) into the customer-facing charge in
+ * whole cents, applying the markup. Non-positive or non-finite cost yields 0.
+ */
+export function markupCents(realCostDollars: number, markupBps: number): number {
+  if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
+  return Math.round(chargedCentsFromProviderDollars(realCostDollars, markupBps));
+}
+
+/**
+ * Convert a real provider cost (dollars) into the customer-facing charge in
+ * MILLICENTS (1/1000 of a cent), applying the markup. Millicents is the fine unit
+ * we accumulate so that sub-cent costs aren't silently rounded down to $0 and
+ * billed nothing on high-volume cheap calls. Non-positive or non-finite cost
+ * yields 0. Integer-only — no float ever reaches stored state.
+ */
+export function chargeMillicents(realCostDollars: number, markupBps: number): number {
+  if (!Number.isFinite(realCostDollars) || realCostDollars <= 0) return 0;
+  return Math.round(chargedMillicentsFromProviderDollars(realCostDollars, markupBps));
+}
+
+export interface AccrualResult {
+  /** Whole cents to debit from the balance now. */
+  wholeCents: number;
+  /** Sub-cent remainder to carry to the next call; always in [0, 1000). */
+  newPending: number;
+}
+
+/**
+ * Fold a call's charge (already in millicents) into the per-user fractional
+ * remainder, yielding the whole cents to debit now and the leftover to carry.
+ * This is what stops a stream of sub-cent calls from each rounding to $0: their
+ * fractions accumulate in `pending` until they cross a whole cent. Inputs are
+ * clamped to non-negative integers; `newPending` is always in [0, 1000).
+ */
+export function accruePending(pendingMillicents: number, chargeMc: number): AccrualResult {
+  const total = Math.max(0, Math.round(pendingMillicents)) + Math.max(0, Math.round(chargeMc));
+  const wholeCents = Math.floor(total / 1000);
+  return { wholeCents, newPending: total - wholeCents * 1000 };
+}
+
+/**
+ * Convenience composition of {@link chargeMillicents} + {@link accruePending}:
+ * compute a call's charge from dollars and fold it into the remainder in one step.
+ */
+export function accrueCharge(
+  pendingMillicents: number,
+  realCostDollars: number,
+  markupBps: number,
+): AccrualResult {
+  return accruePending(pendingMillicents, chargeMillicents(realCostDollars, markupBps));
+}
+
+export interface SpendResult {
+  monthlyCents: number;
+  topupCents: number;
+  spentMonthly: number;
+  spentTopup: number;
+  /** What actually left the balance (spentMonthly + spentTopup); <= amount spent. */
+  appliedCents: number;
+  shortfallCents: number;
+}
+
+/**
+ * Draw `amountCents` from the balance, monthly bucket first then top-up.
+ * Buckets clamp at zero; any uncovered remainder is reported as `shortfallCents`.
+ * `appliedCents` is what truly came out of the balance — the figure the ledger
+ * must record so the books reconcile against the balance delta (the uncovered
+ * `shortfallCents` is owed as debt, not silently dropped).
+ */
+export function allocateSpend(balance: Balance, amountCents: number): SpendResult {
+  const amount = Math.max(0, Math.round(amountCents));
+  const spentMonthly = Math.min(balance.monthlyCents, amount);
+  const afterMonthly = amount - spentMonthly;
+  const spentTopup = Math.min(balance.topupCents, afterMonthly);
+  const shortfallCents = afterMonthly - spentTopup;
+  return {
+    monthlyCents: balance.monthlyCents - spentMonthly,
+    topupCents: balance.topupCents - spentTopup,
+    spentMonthly,
+    spentTopup,
+    appliedCents: spentMonthly + spentTopup,
+    shortfallCents,
+  };
+}
+
+export type GateReason =
+  | 'unlimited'
+  | 'ok'
+  | 'out_of_credits'
+  | 'needs_init'
+  | 'too_many_in_flight'
+  // Per-user/day runaway-spend backstop tripped: today's charged spend plus this
+  // call's reservation would exceed the configured daily ceiling. Independent of the
+  // credit-balance math (evaluateDailyCap, not evaluateGate). Maps to HTTP 429.
+  | 'daily_cap_exceeded'
+  // The source the call named is empty, paused, or not this person's to spend, or none was
+  // named where several exist (SPEND-4). Nothing is reserved or charged, and the gate never
+  // switches to another wallet; the refusal names the source and the remaining options.
+  | 'source_refused';
+
+export interface DailyCapInput {
+  /** This user's charged spend (whole cents) since the start of the current UTC day. */
+  dailyChargedCents: number;
+  /** This call's reservation (whole cents), counted against the cap up front. */
+  estCostCents: number;
+  /** The per-day ceiling in whole cents. `null` disables the cap (always allowed). */
+  capCents: number | null;
+}
+
+export interface DailyCapResult {
+  allowed: boolean;
+  reason: 'ok' | 'daily_cap_exceeded';
+}
+
+/**
+ * Per-user/day runaway-spend backstop, independent of the credit-balance decision in
+ * {@link evaluateGate}. Denies when the day's already-charged spend plus this call's
+ * reservation would exceed the cap. `capCents === null` (cap disabled) always allows.
+ * Pure — the shell supplies the day's charged total (summed from the ledger) and owns
+ * the clock that defines "today". Inputs are clamped to non-negative integers.
+ */
+export function evaluateDailyCap(input: DailyCapInput): DailyCapResult {
+  if (input.capCents === null) return { allowed: true, reason: 'ok' };
+  const cap = Math.max(0, Math.round(input.capCents));
+  const spent = Math.max(0, Math.round(input.dailyChargedCents));
+  const est = Math.max(0, Math.round(input.estCostCents));
+  if (spent + est > cap) return { allowed: false, reason: 'daily_cap_exceeded' };
+  return { allowed: true, reason: 'ok' };
+}
+
+export interface GateInput {
+  billingEnabled: boolean;
+  balance: Balance | null;
+  reserveFloorCents: number;
+  /**
+   * Sum of this user's already-placed, non-expired holds (estimated spend on
+   * calls still in flight). Subtracted from spendable so concurrent calls can't
+   * collectively overshoot the balance. Defaults to 0 (no outstanding holds).
+   */
+  reservedCents?: number;
+  /** This call's own reservation, also subtracted from spendable. Defaults to 0. */
+  estCostCents?: number;
+  /** Count of this user's non-expired holds (calls currently in flight). Defaults to 0. */
+  inFlightCount?: number;
+  /**
+   * Max concurrent in-flight calls for this user. `undefined`/`null` means no cap
+   * (paid tiers are bounded by credits alone). The free-tier cap stops a single
+   * user from fanning out many simultaneous streams that each overshoot.
+   */
+  maxInFlight?: number | null;
+}
+
+export interface GateResult {
+  allowed: boolean;
+  reason: GateReason;
+  /** Set by the gate shell when a hold row was inserted for an allowed request. */
+  holdId?: string;
+  /**
+   * Net spendable cents after all active holds (including this request's) and debt,
+   * threaded into the stream so onStepFinish can check remaining headroom without an
+   * extra DB read. Equal to `evaluateGate`'s `spendable` at gate time.
+   */
+  balanceSnapshot?: { netSpendableCents: number };
+}
+
+/**
+ * The prepaid hard-cap decision. Billing-disabled deployments (tenant/onprem)
+ * are always allowed. A missing balance row returns `needs_init` so the shell
+ * can lazy-init and re-evaluate.
+ *
+ * Two limiters, checked in order:
+ *   1. in-flight cap — deny (`too_many_in_flight`) when this user already has
+ *      `maxInFlight` non-expired holds. Checked first so a user fanning out many
+ *      simultaneous calls is bounded even while they still have credits.
+ *   2. credits — allow only while spendable, AFTER subtracting outstanding holds
+ *      and this call's own reservation, exceeds the reserve floor. The floor +
+ *      per-call reservation together bound how far concurrent calls can overshoot.
+ */
+export function evaluateGate(input: GateInput): GateResult {
+  if (!input.billingEnabled) return { allowed: true, reason: 'unlimited' };
+  if (input.balance === null) return { allowed: false, reason: 'needs_init' };
+
+  const inFlightCount = Math.max(0, input.inFlightCount ?? 0);
+  if (input.maxInFlight != null && inFlightCount >= input.maxInFlight) {
+    return { allowed: false, reason: 'too_many_in_flight' };
+  }
+
+  const reserved = Math.max(0, input.reservedCents ?? 0);
+  const estCost = Math.max(0, input.estCostCents ?? 0);
+  // Outstanding debt drags net spendable down: a user in the red must get back to
+  // net-positive (above the floor) before they can spend again. Clamp to >= 0 so a
+  // missing/negative debtCents is treated as no debt.
+  const debt = Math.max(0, input.balance.debtCents ?? 0);
+  const spendable = input.balance.monthlyCents + input.balance.topupCents - debt - reserved - estCost;
+  if (spendable > input.reserveFloorCents) return { allowed: true, reason: 'ok' };
+  return { allowed: false, reason: 'out_of_credits' };
+}
+
+/**
+ * Normalize the configured per-call hold estimate into a whole-cent reservation.
+ * Clamps to a non-negative integer; a non-finite or non-positive estimate yields
+ * 0 (the hold still counts toward the in-flight cap, it just reserves no spend).
+ */
+export function reservationCents(estimateCents: number): number {
+  if (!Number.isFinite(estimateCents) || estimateCents <= 0) return 0;
+  return Math.round(estimateCents);
+}
+
+/**
+ * Per-call chat hold estimate, in whole cents, clamped to [floorCents, ceilingCents].
+ *
+ * Takes a PRE-markup real-cost estimate for the call (dollars — the shell derives it
+ * from the model catalog and a token estimate), applies the markup, and clamps. The
+ * model-awareness lives in the dollar estimate the shell passes; this stays pure (no
+ * catalog, env, or clock). The floor keeps a sub-cent call from reserving nothing; the
+ * ceiling caps the reservation at the legacy flat hold so a pricey model can't lock up
+ * an unbounded slice of spendable. A misconfigured ceiling below the floor coerces up
+ * to the floor so the range is never inverted. Sits alongside {@link reservationCents}
+ * (the flat-estimate path); this is the cost-derived path.
+ */
+export function estimateChatHoldCents(
+  estimatedRealCostDollars: number,
+  markupBps: number,
+  floorCents: number,
+  ceilingCents: number,
+): number {
+  const floor = Math.max(0, Math.round(floorCents));
+  const ceiling = Math.max(floor, Math.round(ceilingCents));
+  const charged = markupCents(estimatedRealCostDollars, markupBps);
+  return Math.min(ceiling, Math.max(floor, charged));
+}
+
+/**
+ * The instant a hold placed at `nowMs` should expire, in epoch ms. Pure (operates
+ * on numbers only — the shell converts to/from Date). A hold lives long enough to
+ * cover the longest stream plus its post-call settle; after that the reconcile
+ * cron treats it as abandoned and sweeps it so a crashed stream's reservation
+ * can't permanently shrink spendable.
+ */
+export function holdExpiresAt(nowMs: number, ttlMs: number): number {
+  return nowMs + Math.max(0, ttlMs);
+}
+
+export interface MonthlyRefill {
+  monthlyRemainingCents: number;
+  monthlyAllowanceCents: number;
+  /**
+   * Always 0: debt is netted against the carried balance before the new allowance is
+   * added (see `computeMonthlyRefill`), so it is fully absorbed — never forwarded.
+   */
+  debtCents: 0;
+}
+
+/**
+ * Compute the rollover state for a new billing period: outstanding debt is netted
+ * against the carried balance, then `allowanceCents` is added. Credits accumulate
+ * across periods (rollover); debt is absorbed into `monthlyRemainingCents`, not
+ * forwarded as a field. `monthlyRemainingCents` is clamped to 0 — the DB schema
+ * enforces `monthlyRemainingCents >= 0`, and any debt exceeding (remaining + allowance)
+ * is forgiven rather than written as a negative balance. Defaults to 0 for backward
+ * compat when no prior balance or debt exists.
+ *
+ * The allowance is DERIVED by the caller (MON-2): `allowanceCentsForPaidCents` from
+ * the invoice that was actually paid, or `tierAllowanceCents` from the list price
+ * when there is no invoice. This function never looks a tier up in a table. A
+ * negative or non-finite allowance grants nothing.
+ */
+export function computeMonthlyRefill(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): MonthlyRefill {
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
+  const netCarried = currentRemainingCents - Math.max(0, currentDebtCents);
+  // Clamp to 0: the DB schema enforces monthlyRemainingCents >= 0. Excess debt beyond
+  // (remaining + allowance) is absorbed here rather than written as a negative balance.
+  return { monthlyRemainingCents: Math.max(0, netCarried + allowance), monthlyAllowanceCents: allowance, debtCents: 0 };
+}
+
+/**
+ * The debt a refill FORGIVES (computeMonthlyRefill clamps `monthlyRemainingCents` at 0): what is
+ * left of the debt once the carried balance and the new allowance have absorbed what they can.
+ * Ledgered as its own row (debt_forgiven), so the wallet's books still balance (WAL-5).
+ */
+export function forgivenAtRefillCents(
+  allowanceCents: number,
+  currentRemainingCents: number = 0,
+  currentDebtCents: number = 0,
+): number {
+  const allowance = Number.isFinite(allowanceCents) ? Math.max(0, Math.floor(allowanceCents)) : 0;
+  return Math.max(0, Math.max(0, currentDebtCents) - currentRemainingCents - allowance);
+}
+
+export interface PaymentToDebtResult {
+  /** Remaining debt after the payment (>= 0). */
+  debtCents: number;
+  /** New top-up balance after crediting the post-debt remainder. */
+  topupCents: number;
+  /** How much of the payment went to clearing debt. */
+  paidDebt: number;
+}
+
+/**
+ * Apply a purchase to a user in (or out of) debt: pay outstanding debt FIRST, then
+ * credit whatever's left to the never-expiring top-up bucket. This is the within-period
+ * recovery path — a negative user buys credits to get back to net-positive, and only
+ * the surplus beyond what they owed becomes spendable top-up. With no debt the whole
+ * payment lands in top-up. A negative/non-finite payment is a programming error and throws.
+ */
+export function applyPaymentToDebt(
+  debtCents: number,
+  topupCents: number,
+  paymentCents: number,
+): PaymentToDebtResult {
+  if (!Number.isFinite(paymentCents) || paymentCents < 0) {
+    throw new Error(`applyPaymentToDebt: paymentCents must be a non-negative number, got ${paymentCents}`);
+  }
+  const payment = Math.round(paymentCents);
+  const debt = Math.max(0, Math.round(debtCents));
+  const paidDebt = Math.min(debt, payment);
+  return {
+    debtCents: debt - paidDebt,
+    topupCents: topupCents + (payment - paidDebt),
+    paidDebt,
+  };
+}
+
+export type StripeAction =
+  | { kind: 'monthly_refill' }
+  | { kind: 'topup'; packCents: number }
+  | { kind: 'tier_change' }
+  | { kind: 'ignore' };
+
+/**
+ * Structural subset of a Stripe.Event we need to route funding. Kept minimal so
+ * this stays pure and trivially testable without the Stripe SDK types.
+ */
+export interface ClassifiableEvent {
+  type: string;
+  data: {
+    object: {
+      mode?: string | null;
+      metadata?: Record<string, string> | null;
+    };
+  };
+}
+
+/**
+ * Map a Stripe webhook event to the funding action it should trigger.
+ *   invoice.paid                       -> monthly_refill (subscription renewal)
+ *   checkout.session.completed (pack)  -> topup
+ *   customer.subscription.*            -> tier_change
+ *   everything else                    -> ignore
+ */
+export function classifyStripeEvent(event: ClassifiableEvent): StripeAction {
+  if (event.type === 'invoice.paid') {
+    return { kind: 'monthly_refill' };
+  }
+  if (event.type === 'checkout.session.completed') {
+    const obj = event.data.object;
+    if (obj.mode === 'payment' && obj.metadata?.kind === 'credit_pack') {
+      // Strict: only a canonical unsigned-integer string credits. parseInt would
+      // accept "2500usd"; for a money amount from event metadata we require digits.
+      const raw = obj.metadata.packCents ?? '';
+      if (/^\d+$/.test(raw)) {
+        const packCents = Number.parseInt(raw, 10);
+        if (packCents > 0) return { kind: 'topup', packCents };
+      }
+    }
+    return { kind: 'ignore' };
+  }
+  if (
+    event.type === 'customer.subscription.updated' ||
+    event.type === 'customer.subscription.created'
+  ) {
+    return { kind: 'tier_change' };
+  }
+  return { kind: 'ignore' };
+}
+
+export interface PendingLedgerRow {
+  id: string;
+}
+
+export interface OrphanUsageRow {
+  aiUsageLogId: string;
+  userId: string;
+  costDollars: number;
+  /**
+   * The usage row's recorded `source` (aiUsageLogs.source — the canonical
+   * `AIUsageSource` closed set from monitoring/usage-source.ts, though the raw
+   * DB column is untyped `text`, so a legacy/malformed value is possible), used
+   * to reconstruct which markup this call should recover at — an orphan never
+   * went through `consumeCredits` the first time, so there is no ledger row to
+   * read a stored markup back from. A source with no entry in
+   * `markupBpsOverridesBySource` falls back to the shared global markup (see
+   * `computeBackfillActions`).
+   */
+  source?: AIUsageSource | string | null;
+  /**
+   * The wallet the call was charged to, recorded on the usage row (WAL-5). Re-settled there,
+   * so an org pool's compute is never re-billed to the recorded person's own wallet. A row that
+   * names none is never charged (WAL-6b fail closed): it is left unattributed for reconciliation.
+   */
+  walletId?: string | null;
+  /** The usage row's metadata, whose explicit compute `spendKind` is carried to the re-settle. */
+  metadata?: unknown;
+  /** SPEND-10: the automation the call ran for (aiUsageLogs.automation_ref), carried to the re-settle. */
+  automationRef?: string | null;
+}
+
+export type BackfillAction =
+  | { kind: 'retry_pending'; ledgerId: string }
+  | {
+      kind: 'apply_orphan';
+      aiUsageLogId: string;
+      userId: string;
+      costDollars: number;
+      markupBpsOverride?: number;
+      walletId: string;
+      spendKind: SpendKind;
+      /** WAL-6b: the chosen wallet a drive rule moved the call off (usage metadata.fallbackFromWalletId). */
+      fallbackFromWalletId?: string;
+      /** SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it. */
+      automationRef?: string;
+    }
+  /**
+   * WAL-6b fail closed: a usage row that names no wallet. Nothing chose a wallet for it, so no
+   * wallet is charged (never the recorded person's own by default); it is logged and left for
+   * reconciliation.
+   */
+  | { kind: 'unattributed_orphan'; aiUsageLogId: string; userId: string; costDollars: number };
+
+/** The chosen wallet a fallback moved a call off, as its usage row's metadata records it (WAL-6b); else null. */
+export function orphanFallbackFromWalletId(metadata: unknown): string | null {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { fallbackFromWalletId?: unknown }).fallbackFromWalletId : undefined;
+  return typeof marked === 'string' && marked.length > 0 ? marked : null;
+}
+
+/** What a live hold says about its call: the wallet it reserves on and the fallback origin it records. */
+export interface HoldSettleFacts {
+  walletId: string;
+  fallbackFromWalletId: string | null;
+}
+
+export type SettleTarget =
+  | { kind: 'charge'; walletId: string; fallbackFromWalletId: string | null }
+  | { kind: 'mismatch'; holdWalletId: string; requestedWalletId: string }
+  | { kind: 'unattributed' };
+
+/**
+ * The wallet a settle charges (WAL-5, WAL-6b). A live hold names it; a caller naming another
+ * wallet than its hold is refused (neither is charged). With no live hold, the wallet the caller
+ * names. With neither, the settle FAILS CLOSED (`unattributed`): no wallet was chosen for this
+ * charge, so none is charged — never the person's own credits by default. The fallback origin
+ * comes from the hold, else from what the caller carried.
+ */
+export function decideSettleTarget(input: {
+  hold: HoldSettleFacts | null;
+  requestedWalletId: string | undefined;
+  carriedFallbackFromWalletId: string | null | undefined;
+}): SettleTarget {
+  const carried = input.carriedFallbackFromWalletId ?? null;
+  if (input.hold) {
+    if (input.requestedWalletId !== undefined && input.requestedWalletId !== input.hold.walletId) {
+      return { kind: 'mismatch', holdWalletId: input.hold.walletId, requestedWalletId: input.requestedWalletId };
+    }
+    return { kind: 'charge', walletId: input.hold.walletId, fallbackFromWalletId: input.hold.fallbackFromWalletId ?? carried };
+  }
+  if (typeof input.requestedWalletId === 'string' && input.requestedWalletId.length > 0) {
+    return { kind: 'charge', walletId: input.requestedWalletId, fallbackFromWalletId: carried };
+  }
+  return { kind: 'unattributed' };
+}
+
+/**
+ * What an orphan usage row's spend was FOR, read from the EXPLICIT marker its writer stamped
+ * (`metadata.spendKind`, AIMonitoring.trackUsage) — never inferred from its source. Anything
+ * else is 'ai', which every row written before compute was marked was.
+ */
+export function orphanSpendKind(metadata: unknown): SpendKind {
+  const marked = typeof metadata === 'object' && metadata !== null ? (metadata as { spendKind?: unknown }).spendKind : undefined;
+  return marked === 'compute' || marked === 'drive_compute' ? marked : 'ai';
+}
+
+/**
+ * Plan the reconcile work: retry every unsettled ('pending') ledger row, then
+ * apply a decrement for every usage row that has no ledger entry at all. The
+ * DB query is responsible for selection (status/age/orphan); this just maps the
+ * already-filtered rows into actions so the cron shell stays dumb.
+ *
+ * `markupBpsOverridesBySource` is injected (not imported — this module has
+ * zero I/O, see the module doc) as a source -> markup-bps lookup, so e.g. a
+ * `source: 'terminal'` orphan recovers at terminal's own floor instead of
+ * silently falling back to the shared global markup: a terminal usage row can
+ * reach `aiUsageLogs` (via `writeAiUsage`) and then crash before
+ * `consumeCredits` ever claims a ledger row, in which case this sweep — not the
+ * original call — is what actually bills it. A lookup (rather than a single
+ * hardcoded source check) means adding a second per-source floor later is a
+ * one-line addition at the call site, not a change to this function.
+ */
+export function computeBackfillActions(
+  pending: PendingLedgerRow[],
+  orphans: OrphanUsageRow[],
+  markupBpsOverridesBySource: Partial<Record<AIUsageSource, number>>,
+): BackfillAction[] {
+  return [
+    ...pending.map((row): BackfillAction => ({ kind: 'retry_pending', ledgerId: row.id })),
+    ...orphans.map((row): BackfillAction => {
+      if (typeof row.walletId !== 'string' || row.walletId.length === 0) {
+        return { kind: 'unattributed_orphan', aiUsageLogId: row.aiUsageLogId, userId: row.userId, costDollars: row.costDollars };
+      }
+      const markupBpsOverride = row.source
+        ? markupBpsOverridesBySource[row.source as AIUsageSource]
+        : undefined;
+      const fallbackFromWalletId = orphanFallbackFromWalletId(row.metadata);
+      return {
+        kind: 'apply_orphan',
+        aiUsageLogId: row.aiUsageLogId,
+        userId: row.userId,
+        costDollars: row.costDollars,
+        ...(markupBpsOverride !== undefined ? { markupBpsOverride } : {}),
+        walletId: row.walletId,
+        spendKind: orphanSpendKind(row.metadata),
+        ...(fallbackFromWalletId ? { fallbackFromWalletId } : {}),
+        ...(row.automationRef ? { automationRef: row.automationRef } : {}),
+      };
+    }),
+  ];
+}
+
+export interface CostDriftInput {
+  /** What we already billed this call's real cost at: round(aiUsageLogs.cost * 100). */
+  billedRealCostCents: number;
+  /** Authoritative real cost from OpenRouter's /generation (summed across ids), in dollars. */
+  authoritativeRealCostDollars: number;
+  /** Absolute floor: never correct a drift at/under this many cents. */
+  toleranceCents: number;
+  /** Relative band (basis points of the billed cost): drift must exceed this too. */
+  toleranceBps: number;
+}
+
+export interface CostDriftResult {
+  /** True when the |drift| exceeds BOTH the absolute and relative tolerance. */
+  shouldCorrect: boolean;
+  /** Signed real-cost delta in cents (authoritative − billed): + = undercharged, − = overcharged. */
+  deltaRealCostCents: number;
+  /** The signed customer charge (millicents) to apply for the delta, markup included. */
+  deltaChargeMillicents: number;
+}
+
+/**
+ * Compare a call's already-billed real cost against OpenRouter's authoritative
+ * /generation cost and decide whether to write a correcting adjustment. Correction
+ * fires only when the absolute drift exceeds BOTH a fixed floor (toleranceCents) and a
+ * relative band (toleranceBps of the billed cost) — so sub-cent noise and tiny
+ * proportional wobble never churn the ledger. The signed delta drives the correction:
+ * positive = we undercharged (additional debit), negative = we overcharged (refund). The
+ * customer-facing charge delta carries the markup, computed on the magnitude via
+ * {@link chargeMillicents} (which rejects negatives) and re-signed. Pure.
+ */
+export function computeCostDrift(input: CostDriftInput, markupBps: number): CostDriftResult {
+  const authCents = centsFromDollars(Math.max(0, input.authoritativeRealCostDollars));
+  const billed = Math.round(input.billedRealCostCents);
+  const delta = authCents - billed;
+  const absDelta = Math.abs(delta);
+
+  const relTol = Math.round((Math.max(0, billed) * Math.max(0, input.toleranceBps)) / 10000);
+  const tol = Math.max(Math.max(0, input.toleranceCents), relTol);
+  const shouldCorrect = absDelta > tol;
+
+  const deltaChargeMillicents =
+    Math.sign(delta) * chargeMillicents(dollarsFromCents(Math.abs(delta)), markupBps);
+
+  return { shouldCorrect, deltaRealCostCents: delta, deltaChargeMillicents };
+}
+
+/**
+ * True when the credits charged for some usage fail to cover its real provider cost by
+ * the required margin floor — i.e. we're (near-)losing money on that account. With no
+ * real cost the margin is undefined, so it is never flagged. `marginFloorBps` of 0 means
+ * "charged must at least equal real cost"; a positive floor demands headroom above it.
+ * Pure.
+ */
+export function isNegativeMargin(realCostCents: number, chargedCents: number, marginFloorBps: number): boolean {
+  if (!(realCostCents > 0)) return false;
+  const required = realCostCents * (1 + Math.max(0, marginFloorBps) / 10000);
+  return chargedCents < required;
+}

@@ -23,10 +23,17 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -60,18 +67,26 @@ vi.mock('@/lib/websocket', () => ({
 }));
 
 // Mock AI tools for validation
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: {},
     list_pages: {},
     create_page: {},
     update_page: {},
     delete_page: {},
+    // A sandbox tool is a VALID name to store — which is exactly why storing
+    // one can silently grant nothing (issue #2460).
+    bash: {},
   },
 }));
 
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn(),
+  // POL-8: the real mapping's shape — an error carrying an org-policy refusal becomes its 403 body.
+  orgModelPolicyErrorResponse: (error: unknown) => {
+    const refusal = (error as { refusal?: { message: string; code: string; policy: string; status: 403 } } | null)?.refusal;
+    return refusal ? { body: { error: refusal.message, code: refusal.code, policy: refusal.policy }, status: refusal.status } : null;
+  },
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {
     currentRevision: number;
     expectedRevision?: number;
@@ -88,11 +103,17 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
+  resolveEnvInDrive: vi.fn(),
+}));
+
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -122,6 +143,9 @@ const mockAgent = (overrides: Partial<{
   enabledTools: string[] | null;
   aiProvider: string | null;
   aiModel: string | null;
+  toolExposureMode: 'upfront' | 'search' | null;
+  sandboxEnabled: boolean;
+  defaultEnvId: string | null;
   isTrashed: boolean;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
@@ -133,6 +157,9 @@ const mockAgent = (overrides: Partial<{
   enabledTools: overrides.enabledTools ?? ['read_page'],
   aiProvider: overrides.aiProvider ?? 'openrouter',
   aiModel: overrides.aiModel ?? 'claude-3-opus',
+  toolExposureMode: overrides.toolExposureMode ?? 'upfront',
+  sandboxEnabled: overrides.sandboxEnabled ?? false,
+  defaultEnvId: overrides.defaultEnvId ?? null,
   isTrashed: overrides.isTrashed ?? false,
 });
 
@@ -390,6 +417,133 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
 
       expect(response.status).toBe(200);
       expect(body.updatedFields).toContain('visibleToGlobalAssistant');
+    });
+
+    it('should update toolExposureMode to "search"', async () => {
+      const request = createRequest(mockAgentId, {
+        toolExposureMode: 'search',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.updatedFields).toContain('toolExposureMode');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({ toolExposureMode: 'search' }),
+        })
+      );
+    });
+
+    it('should update sandboxEnabled — the switch that decides whether a stored sandbox allowlist means anything', async () => {
+      const request = createRequest(mockAgentId, { sandboxEnabled: true });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.updatedFields).toContain('sandboxEnabled');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({ sandboxEnabled: true }),
+        })
+      );
+    });
+
+    it('should report the EFFECTIVE tool surface, not just the stored allowlist (issue #2460)', async () => {
+      vi.mocked(pageAgentRepository.getAgentById).mockResolvedValue(
+        mockAgent({ enabledTools: ['read_page', 'bash'], sandboxEnabled: false })
+      );
+      const request = createRequest(mockAgentId, { enabledTools: ['read_page', 'bash'] });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.agentConfig.enabledTools).toEqual(['read_page', 'bash']);
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page']);
+      expect(body.agentConfig.blockedTools).toEqual([
+        { tool: 'bash', gate: 'sandbox_disabled' },
+      ]);
+      expect(String(body.warnings.join(' '))).toContain('sandboxEnabled');
+    });
+
+    it('should return 400 for a non-boolean sandboxEnabled — "false" must not enable the sandbox', async () => {
+      const request = createRequest(mockAgentId, { sandboxEnabled: 'false' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('should update defaultEnvId when the env exists in the agent\'s own drive', async () => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue({ id: 'env_1', driveId: mockDriveId } as never);
+      const request = createRequest(mockAgentId, { defaultEnvId: 'env_1' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(resolveEnvInDrive).toHaveBeenCalledWith('env_1', mockDriveId);
+      expect(body.updatedFields).toContain('defaultEnvId');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: 'env_1' }) })
+      );
+      expect(body.agentConfig.defaultEnvId).toBe('env_1');
+    });
+
+    it('should clear defaultEnvId with an explicit null, without resolving anything', async () => {
+      const request = createRequest(mockAgentId, { defaultEnvId: null });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(200);
+      expect(resolveEnvInDrive).not.toHaveBeenCalled();
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: null }) })
+      );
+    });
+
+    it('should return 404 for an unresolvable defaultEnvId — same response whether it does not exist or belongs to another drive (resolveEnvInDrive collapses both)', async () => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
+      const request = createRequest(mockAgentId, { defaultEnvId: 'env_elsewhere' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(404);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for an empty-string defaultEnvId rather than treating it as null', async () => {
+      const request = createRequest(mockAgentId, { defaultEnvId: '' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(resolveEnvInDrive).not.toHaveBeenCalled();
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for an invalid toolExposureMode value', async () => {
+      const request = createRequest(mockAgentId, {
+        toolExposureMode: 'invalid',
+      });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
     });
 
     it('should update multiple fields at once', async () => {

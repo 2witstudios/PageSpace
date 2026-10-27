@@ -150,12 +150,12 @@ export default function NewConversationPage() {
                     onClick={() => setSelectedUserId(u.id)}
                     className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors ${
                       isSelected
-                        ? 'bg-accent border-2 border-primary'
+                        ? 'bg-primary-soft border-2 border-primary'
                         : 'hover:bg-accent border-2 border-transparent'
                     }`}
                   >
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={u.avatarUrl || u.image || ''} />
+                      <AvatarImage src={u.image || u.avatarUrl || ''} />
                       <AvatarFallback>
                         {displayName.charAt(0).toUpperCase()}
                       </AvatarFallback>

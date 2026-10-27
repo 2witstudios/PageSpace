@@ -3,20 +3,37 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
-  checkStorageQuota,
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
   getUserStorageQuota,
   STORAGE_TIERS
 } from '@pagespace/lib/services/storage-limits';
+import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
+import { countLiveUploadsForUser } from '@pagespace/lib/services/pending-uploads';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
-import { checkMemoryMiddleware } from '@pagespace/lib/services/memory-monitor';
 import { safeParseBody } from '@/lib/validation/parse-body';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
 const storageCheckSchema = z.object({
   fileSize: z.number().positive('Invalid file size'),
+  driveId: z.string().min(1).optional(),
 });
+
+/**
+ * The drive whose quota a drop is checked against (WAL-9, #2719 review P1-1): the drop's drive,
+ * but only when the permissions seam says the caller may upload into it (drive-wide edit, as
+ * presign requires). A missing or inaccessible drive fails CLOSED to the caller's personal
+ * quota, and answers the same whether the drive does not exist or the caller cannot see it.
+ */
+async function quotaDriveId(actor: AccessActor, driveId: string | undefined): Promise<string | null> {
+  if (!driveId) return null;
+  const drivePerms = await getUserDrivePermissions(actor, driveId);
+  return drivePerms?.canEdit ? driveId : null;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,20 +48,11 @@ export async function POST(request: NextRequest) {
       return parsed.response;
     }
 
-    const { fileSize } = parsed.data;
+    const { fileSize, driveId } = parsed.data;
 
-    // Check memory availability first
-    const memCheck = await checkMemoryMiddleware();
-    if (!memCheck.allowed) {
-      return NextResponse.json({
-        allowed: false,
-        reason: memCheck.reason || 'Server is busy',
-        memoryStatus: memCheck.status
-      }, { status: 503 }); // Service Unavailable
-    }
-
-    // Check storage quota
-    const quotaCheck = await checkStorageQuota(userId, fileSize);
+    // The quota presign will check this upload against: an org drive's org, else the caller's.
+    const quotaTarget = await resolveUploadQuotaTarget(userId, await quotaDriveId(actorFromAuth(auth), driveId));
+    const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
     if (!quotaCheck.allowed) {
       return NextResponse.json({
         allowed: false,
@@ -54,14 +62,30 @@ export async function POST(request: NextRequest) {
       }, { status: 413 }); // Payload Too Large
     }
 
-    // Get user's storage tier
-    const quota = await getUserStorageQuota(userId);
-    if (!quota) {
+    // The per-user concurrency limit is the uploader's own tier, as presign's atomic reserve
+    // (reserveConcurrentUploadSlot) enforces it; the replica semaphore takes the target's tier,
+    // as presign's acquireUploadSlot does.
+    const personalQuota = quotaTarget?.payer.kind === 'user' ? quotaTarget.quota : await getUserStorageQuota(userId);
+    if (!quotaTarget || !personalQuota) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
+    const { quota } = quotaTarget;
 
-    // Check if user can acquire an upload slot
-    const canUpload = await uploadSemaphore.canAcquireSlot(userId, quota.tier);
+    // Check if user can acquire an upload slot: the per-user tier limit reads
+    // the same pending_uploads rows presign's atomic reserve enforces
+    // (#2225 review — Codex round 5), since the process-local semaphore alone
+    // can't see slots reserved on other web replicas. The replaced
+    // `canAcquireSlot` ALSO covered THIS replica's global concurrency limit
+    // (a separate, deliberately process-local cap — see upload-semaphore.ts),
+    // which countLiveUploadsForUser doesn't know about; dropping it would let
+    // this preflight say "allowed" while presign's acquireUploadSlot on the
+    // same replica then rejects at the global limit (#2225 review — Codex
+    // round 6). Both checks are required.
+    const [hasGlobalCapacity, liveUploads] = await Promise.all([
+      uploadSemaphore.canAcquireSlot(userId, quota.tier),
+      countLiveUploadsForUser(userId),
+    ]);
+    const canUpload = hasGlobalCapacity && liveUploads < STORAGE_TIERS[personalQuota.tier].maxConcurrentUploads;
     if (!canUpload) {
       return NextResponse.json({
         allowed: false,
@@ -101,9 +125,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Could not retrieve storage quota' }, { status: 500 });
     }
 
-    // Get semaphore status
-    const semaphoreStatus = uploadSemaphore.getStatus();
-    const userActiveUploads = semaphoreStatus.userUploads.get(userId) || 0;
+    // Cross-process live-upload count (#2225 review — Codex round 5), same
+    // basis presign's atomic reserve enforces. Also checked alongside this
+    // replica's global semaphore capacity (#2225 review — CodeRabbit round 7)
+    // so GET's canUpload can't disagree with what POST /check (and presign
+    // itself) would decide on the same replica.
+    const [hasGlobalCapacity, userActiveUploads] = await Promise.all([
+      uploadSemaphore.canAcquireSlot(userId, quota.tier),
+      countLiveUploadsForUser(userId),
+    ]);
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'storage', resourceId: userId });
 
@@ -111,7 +141,7 @@ export async function GET(request: NextRequest) {
       quota,
       tierLimits: STORAGE_TIERS[quota.tier],
       activeUploads: userActiveUploads,
-      canUpload: userActiveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads
+      canUpload: hasGlobalCapacity && userActiveUploads < STORAGE_TIERS[quota.tier].maxConcurrentUploads
     });
 
   } catch (error) {

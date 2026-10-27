@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS "form_targets_token_hash_idx";--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "form_targets_one_active_per_page_idx" ON "form_targets" USING btree ("page_id") WHERE "form_targets"."status" = 'active';

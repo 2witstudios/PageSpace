@@ -19,15 +19,21 @@ vi.mock('@pagespace/lib/services/drive-role-service', () => ({
     listDriveRoles: vi.fn(),
     createDriveRole: vi.fn(),
     validateRolePermissions: vi.fn(),
+    OpenRoleFloorError: class OpenRoleFloorError extends Error {
+      readonly code = 'org_policy';
+      readonly policy = 'openDriveRoleFloor';
+      readonly status = 403;
+    },
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
 }));
 
-import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 
 // ============================================================================
 // Test Fixtures
@@ -75,6 +81,7 @@ const createRoleFixture = (overrides: {
   color: '#000000',
   isDefault: overrides.isDefault ?? false,
   permissions: overrides.permissions ?? { page_1: { canView: true, canEdit: false, canShare: false } },
+  driveWidePermissions: null,
   position: overrides.position ?? 0,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
@@ -96,6 +103,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -122,7 +130,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: false }
+        { allow: ['session', 'mcp'], requireCSRF: false }
       );
     });
   });
@@ -167,7 +175,7 @@ describe('GET /api/drives/[driveId]/roles', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForRoles).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call listDriveRoles with driveId', async () => {
@@ -269,6 +277,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(validateRolePermissions).mockReturnValue(true);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
   });
 
   describe('authentication', () => {
@@ -302,7 +311,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
         request,
-        { allow: ['session'], requireCSRF: true }
+        { allow: ['session', 'mcp'], requireCSRF: true }
       );
     });
   });
@@ -462,6 +471,7 @@ describe('POST /api/drives/[driveId]/roles', () => {
         color: '#ff0000',
         isDefault: true,
         permissions,
+        driveWidePermissions: null,
       });
     });
   });
@@ -506,6 +516,23 @@ describe('POST /api/drives/[driveId]/roles', () => {
 
       expect(response.status).toBe(409);
       expect(body.error).toBe('A role with this name already exists');
+    });
+
+    it('POL-6 (partial) a new default role below the org floor is refused 403 naming the policy', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(createDriveRole).mockRejectedValueOnce(new OpenRoleFloorError('edit'));
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles`, {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Default', permissions: {}, isDefault: true }),
+      });
+      const response = await POST(request, createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'openDriveRoleFloor' });
     });
 
     it('should return 500 for other database errors', async () => {

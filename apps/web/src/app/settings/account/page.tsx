@@ -11,14 +11,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
-import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone } from "lucide-react";
+import { User, Mail, Calendar, AlertTriangle, Loader2, ArrowLeft, Upload, X, CheckCircle2, AlertCircle, Download, Clock, Smartphone, Link2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { patch, post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useAuthStore } from "@/stores/useAuthStore";
 import { DeleteAccountDialog } from "@/components/dialogs/DeleteAccountDialog";
+import { AppStoreSubscriptionDeletionNotice } from "@/components/account/AppStoreSubscriptionDeletionNotice";
+import type { AppleSignInRevocation } from "@/components/account/SignInWithAppleDeletionNotice";
+import { postDeletionDestination } from "@/lib/account/post-deletion-destination";
 import { DriveOwnershipDialog } from "@/components/dialogs/DriveOwnershipDialog";
 import { ImageCropperDialog } from "@/components/dialogs/ImageCropperDialog";
 import { DeviceList } from "@/components/devices/DeviceList";
 import { RevokeAllDevicesDialog } from "@/components/devices/RevokeAllDevicesDialog";
+import { ConnectedAppsList } from "@/components/oauth-grants/ConnectedAppsList";
 import { useDevices } from "@/hooks/useDevices";
 import { PasskeyManager } from "@/components/settings/PasskeyManager";
 
@@ -76,6 +81,7 @@ export default function AccountPage() {
   const [isOwnershipDialogOpen, setIsOwnershipDialogOpen] = useState(false);
   const [multiMemberDrives, setMultiMemberDrives] = useState<MultiMemberDrive[]>([]);
   const [soloDrivesCount, setSoloDrivesCount] = useState(0);
+  const [appleSignInRevocation, setAppleSignInRevocation] = useState<AppleSignInRevocation | undefined>(undefined);
 
   // Data export state
   const [isExporting, setIsExporting] = useState(false);
@@ -84,6 +90,37 @@ export default function AccountPage() {
   // Devices state
   const { devices, refetch: refetchDevices } = useDevices();
   const [isRevokeAllDialogOpen, setIsRevokeAllDialogOpen] = useState(false);
+
+  const uploadAvatarFile = async (file: File): Promise<void> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    // Use fetchWithAuth directly - post() helper sets Content-Type: application/json
+    // which breaks FormData uploads. fetchWithAuth lets browser set correct boundary.
+    const response = await fetchWithAuth('/api/account/avatar', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const data: unknown = await response.json().catch(() => ({}));
+      const errorMessage =
+        data && typeof data === 'object' && 'error' in data && typeof data.error === 'string'
+          ? data.error
+          : 'Failed to upload avatar';
+      throw new Error(errorMessage);
+    }
+
+    const data: unknown = await response.json().catch(() => ({}));
+    const avatarUrl =
+      data && typeof data === 'object' && 'avatarUrl' in data && typeof data.avatarUrl === 'string'
+        ? data.avatarUrl
+        : null;
+
+    if (avatarUrl) {
+      setAvatarPreview(avatarUrl);
+    }
+  };
 
   // Load user data into form
   useEffect(() => {
@@ -96,27 +133,37 @@ export default function AccountPage() {
     }
   }, [user]);
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated — except while deleting the account, which nulls
+  // `user` on purpose (endSession) and then hard-navigates to the marketing home.
+  // Without this guard that deliberate exit races with a client push to /auth/signin,
+  // flashing the sign-in page at the user for a second on their way out.
   useEffect(() => {
-    if (!authLoading && !user) {
+    if (!authLoading && !user && !isDeletingAccount) {
       router.push("/auth/signin");
     }
-  }, [authLoading, user, router]);
+  }, [authLoading, user, isDeletingAccount, router]);
 
   const handleProfileUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
+    const pendingAvatarFile = avatarFile;
     setIsSavingProfile(true);
+    if (pendingAvatarFile) {
+      setIsUploadingAvatar(true);
+    }
 
     try {
       await patch("/api/account", { name, email });
 
-      if (mutate) {
-        await mutate(); // Refresh user data
+      if (pendingAvatarFile) {
+        await uploadAvatarFile(pendingAvatarFile);
+        setAvatarFile(null);
       }
     } catch (error) {
       console.error("Profile update error:", error);
       toast.error(error instanceof Error ? error.message : "Failed to update profile");
     } finally {
+      mutate?.();
+      setIsUploadingAvatar(false);
       setIsSavingProfile(false);
     }
   };
@@ -163,22 +210,9 @@ export default function AccountPage() {
     if (!avatarFile) return;
 
     setIsUploadingAvatar(true);
-    const formData = new FormData();
-    formData.append('file', avatarFile);
 
     try {
-      // Use fetchWithAuth directly - post() helper sets Content-Type: application/json
-      // which breaks FormData uploads. fetchWithAuth lets browser set correct boundary.
-      const response = await fetchWithAuth('/api/account/avatar', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to upload avatar');
-      }
-
+      await uploadAvatarFile(avatarFile);
       setAvatarFile(null);
 
       // Refresh user data to get new avatar URL
@@ -273,6 +307,21 @@ export default function AccountPage() {
   };
 
   const handleInitiateAccountDeletion = async () => {
+    // Sign in with Apple status for the dialog's notice (Guideline 5.1.1(v)).
+    // Best-effort: it must never stand in the way of deleting the account.
+    // Cleared first so a reopened dialog never shows the previous answer.
+    setAppleSignInRevocation(undefined);
+    void fetchWithAuth("/api/account/apple-sign-in")
+      .then(async (response) => {
+        if (!response.ok) {
+          setAppleSignInRevocation(undefined);
+          return;
+        }
+        const status = (await response.json()) as { revocation?: AppleSignInRevocation };
+        setAppleSignInRevocation(status.revocation);
+      })
+      .catch(() => setAppleSignInRevocation(undefined));
+
     try {
       // Fetch drives status
       const response = await fetchWithAuth("/api/account/drives-status");
@@ -306,11 +355,20 @@ export default function AccountPage() {
   const handleDeleteAccount = async (emailConfirmation: string) => {
     setIsDeletingAccount(true);
     try {
-      await del("/api/account", { emailConfirmation });
+      const result = await del<{ appleSignIn?: string }>("/api/account", { emailConfirmation });
 
-      // Clear authentication and redirect to home
+      // Tear down the session before leaving: the account is gone, so the persisted
+      // auth store and the token-refresh poller must not survive the navigation.
+      useAuthStore.getState().endSession();
+
+      // Deliberately a HARD navigation, so nothing from the ended session (stores,
+      // SWR caches, the refresh poller) survives into the next page. The target is
+      // the public in-app /auth/account-deleted page, never `/`: that is the
+      // marketing site, which inside the iOS shell would put its pricing nav on the
+      // path App Review walks (Guideline 3.1.1). An Apple user PageSpace could not
+      // disconnect also sees the "Stop Using Sign in with Apple" steps there (TN3194).
       setTimeout(() => {
-        window.location.href = "/";
+        window.location.href = postDeletionDestination(result?.appleSignIn);
       }, 1000);
     } catch (error) {
       console.error("Account deletion error:", error);
@@ -370,6 +428,7 @@ export default function AccountPage() {
                 </Avatar>
                 {avatarPreview && (
                   <Button
+                    type="button"
                     size="icon"
                     variant="destructive"
                     className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
@@ -402,6 +461,7 @@ export default function AccountPage() {
                   </Label>
                   {avatarFile && (
                     <Button
+                      type="button"
                       size="sm"
                       onClick={handleAvatarUpload}
                       disabled={isUploadingAvatar}
@@ -607,6 +667,23 @@ export default function AccountPage() {
         </CardContent>
       </Card>
 
+      {/* Connected Apps Section */}
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Link2 className="h-5 w-5" />
+            Connected Apps
+          </CardTitle>
+          <CardDescription>
+            Apps and CLIs authorized to access your account. Revoking access here takes effect
+            immediately, even if the device that authorized it is lost or offline.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ConnectedAppsList />
+        </CardContent>
+      </Card>
+
       {/* Account Info */}
       <Card className="mb-6">
         <CardHeader>
@@ -677,6 +754,7 @@ export default function AccountPage() {
               Account deletion is permanent and cannot be undone. All your data will be permanently deleted.
             </AlertDescription>
           </Alert>
+          <AppStoreSubscriptionDeletionNotice />
           <Button
             variant="destructive"
             className="mt-4"
@@ -689,12 +767,14 @@ export default function AccountPage() {
       </Card>
 
       {/* Drive Ownership Dialog */}
-      <DriveOwnershipDialog
-        isOpen={isOwnershipDialogOpen}
-        onClose={() => setIsOwnershipDialogOpen(false)}
-        onAllDrivesHandled={handleAllDrivesHandled}
-        multiMemberDrives={multiMemberDrives}
-      />
+      {isOwnershipDialogOpen && (
+        <DriveOwnershipDialog
+          isOpen={isOwnershipDialogOpen}
+          onClose={() => setIsOwnershipDialogOpen(false)}
+          onAllDrivesHandled={handleAllDrivesHandled}
+          multiMemberDrives={multiMemberDrives}
+        />
+      )}
 
       {/* Delete Account Dialog */}
       <DeleteAccountDialog
@@ -704,6 +784,7 @@ export default function AccountPage() {
         userEmail={user.email || ""}
         isDeleting={isDeletingAccount}
         soloDrivesCount={soloDrivesCount}
+        appleSignInRevocation={appleSignInRevocation}
       />
 
       {/* Revoke All Devices Dialog */}

@@ -1,9 +1,12 @@
 import { createHash } from 'crypto';
+import { getClientIP } from '../security/client-ip';
 
 /**
  * Server-side device fingerprinting utilities for detecting token theft
  * and generating stable device identifiers
  */
+
+export { getClientIP };
 
 /**
  * Parse User-Agent to extract browser family and OS
@@ -50,28 +53,6 @@ export interface DeviceFingerprint {
   ipAddress: string;
   platform: 'web' | 'desktop' | 'ios' | 'android';
   location?: string;
-}
-
-/**
- * Extract client IP address from request
- * Handles X-Forwarded-For, X-Real-IP, and direct connection
- */
-export function getClientIP(request: Request): string {
-  // Check X-Forwarded-For (set by proxies/load balancers)
-  const forwardedFor = request.headers.get('x-forwarded-for');
-  if (forwardedFor) {
-    // Take the first IP in the chain
-    return forwardedFor.split(',')[0].trim();
-  }
-
-  // Check X-Real-IP (set by some proxies)
-  const realIP = request.headers.get('x-real-ip');
-  if (realIP) {
-    return realIP.trim();
-  }
-
-  // Fallback to unknown (Next.js doesn't expose socket in edge runtime)
-  return 'unknown';
 }
 
 /**

@@ -4,14 +4,15 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
-import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
-import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
-import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
-import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import { eq } from '@pagespace/db/operators'
+import { drives } from '@pagespace/db/schema/core'
+import { driveRoleOf } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
+import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -41,174 +42,82 @@ export async function POST(request: Request) {
 
     const { pageIds, targetDriveId, targetParentId } = parseResult.data;
 
-    // Verify target drive exists
-    const targetDrive = await db.query.drives.findFirst({
-      where: eq(drives.id, targetDriveId),
-    });
-
-    if (!targetDrive) {
-      return NextResponse.json({ error: 'Target drive not found' }, { status: 404 });
-    }
-
-    // Check MCP token scope for target drive
+    // Check MCP token scope for target drive. Stays in the route because it
+    // returns the route's own NextResponse; the service's scope hook below
+    // therefore only has the SOURCE drives left to gate.
     const targetScopeError = checkMCPDriveScope(auth, targetDriveId);
     if (targetScopeError) {
       return targetScopeError;
     }
 
-    // Check user has edit access to target drive
-    const isOwner = targetDrive.ownerId === userId;
-    let canEditDrive = isOwner;
-
-    if (!isOwner) {
-      // Authz read: a pending invitee (acceptedAt IS NULL) with role ADMIN
-      // would otherwise pass the role check and be allowed to write into a
-      // drive they have not accepted into. Closes Review C2.
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, targetDriveId),
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
-      canEditDrive = membership?.role === 'OWNER' || membership?.role === 'ADMIN';
-    }
-
-    if (!canEditDrive) {
-      return NextResponse.json(
-        { error: 'You do not have permission to move pages to this drive' },
-        { status: 403 }
-      );
-    }
-
-    // Verify target parent exists if specified
-    if (targetParentId) {
-      const targetParent = await db.query.pages.findFirst({
-        where: and(
-          eq(pages.id, targetParentId),
-          eq(pages.driveId, targetDriveId),
-          eq(pages.isTrashed, false)
-        ),
-      });
-      if (!targetParent) {
-        return NextResponse.json({ error: 'Target folder not found' }, { status: 404 });
-      }
-    }
-
-    // Check user has edit access to all source pages
-    const sourcePages = await db.query.pages.findMany({
-      where: inArray(pages.id, pageIds),
-    });
-
-    if (sourcePages.length !== pageIds.length) {
-      return NextResponse.json({ error: 'Some pages not found' }, { status: 404 });
-    }
-
-    // Check MCP token scope for all source pages
     const allowedDriveIds = getAllowedDriveIds(auth);
-    if (allowedDriveIds.length > 0) {
-      const allowedSet = new Set(allowedDriveIds);
-      for (const page of sourcePages) {
-        if (!allowedSet.has(page.driveId)) {
-          return NextResponse.json(
-            { error: 'This token does not have access to one or more source pages' },
-            { status: 403 }
-          );
-        }
-      }
-    }
+    const allowedSet = allowedDriveIds.length > 0 ? new Set(allowedDriveIds) : null;
 
-    // Verify edit permissions for all pages
-    for (const page of sourcePages) {
-      const canEdit = await canUserEditPage(userId, page.id);
-      if (!canEdit) {
-        return NextResponse.json(
-          { error: `You do not have permission to move page: ${page.title}` },
-          { status: 403 }
-        );
-      }
-    }
+    const result = await movePagesToDrive({
+      pageIds,
+      targetDriveId,
+      targetParentId,
+      userId,
+      authorize: {
+        isDriveInScope: (driveId) =>
+          // The target drive was already gated by checkMCPDriveScope above;
+          // allowedDriveIds gates the source drives, exactly as before.
+          driveId === targetDriveId || !allowedSet || allowedSet.has(driveId),
 
-    // Validate move doesn't create circular references
-    for (const pageId of pageIds) {
-      if (targetParentId) {
-        const validation = await validatePageMove(pageId, targetParentId);
-        if (!validation.valid) {
-          return NextResponse.json({ error: validation.error }, { status: 400 });
-        }
-      }
-    }
+        // Check the principal has edit access to target drive. A scoped MCP token
+        // is its own drive member — use the TOKEN's role, not its owning user's.
+        canAdministerDrive: async (driveId) => {
+          const targetDrive = await db.query.drives.findFirst({
+            where: eq(drives.id, driveId),
+            columns: { id: true, ownerId: true, orgId: true, orgVisibility: true },
+          });
 
-    // Get the max position in target parent
-    const lastPage = await db.query.pages.findFirst({
-      where: and(
-        eq(pages.driveId, targetDriveId),
-        targetParentId ? eq(pages.parentId, targetParentId) : isNull(pages.parentId),
-        eq(pages.isTrashed, false)
-      ),
-      orderBy: [desc(pages.position)],
-    });
+          const tokenMembership = isScopedMCPAuth(auth)
+            ? await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId)
+            : null;
+          if (isScopedMCPAuth(auth) && tokenMembership?.role !== null) {
+            // Explicit-role keys need OWNER/ADMIN; inherited keys (role null) fall
+            // through to the owner's own authority below.
+            return tokenMembership?.role === 'OWNER' || tokenMembership?.role === 'ADMIN';
+          }
 
-    let nextPosition = (lastPage?.position || 0) + 1;
+          if (!targetDrive) return false;
 
-    // Track affected drives for broadcast events
-    const affectedDriveIds = new Set<string>();
-    affectedDriveIds.add(targetDriveId);
+          // The drive's lead or an effective OWNER/ADMIN (the org-aware membership reads ACCEPTED
+          // rows only, so a pending ADMIN invitee cannot write into a drive they have not joined).
+          const role = driveRoleOf(await loadDriveRelationship(actorFromAuth(auth), targetDrive));
+          return role === 'OWNER' || role === 'ADMIN';
+        },
 
-    // Move pages in transaction
-    await db.transaction(async (tx) => {
-      for (const page of sourcePages) {
-        const sourceDriveId = page.driveId;
-        affectedDriveIds.add(sourceDriveId);
-
-        // Update page with new drive, parent, and position
-        await tx.update(pages)
-          .set({
-            driveId: targetDriveId,
-            parentId: targetParentId,
-            position: nextPosition,
-            updatedAt: new Date(),
-          })
-          .where(eq(pages.id, page.id));
-
-        // If moving to a different drive, recursively update all children's driveId
-        if (page.driveId !== targetDriveId) {
-          await updateChildrenDriveId(tx, page.id, targetDriveId);
-        }
-
-        nextPosition += 1;
-      }
-    });
-
-    // Log activity for each moved page
-    const actorInfo = await getActorInfo(userId);
-    const isMCP = isMCPAuthResult(auth);
-    const changeGroupId = createChangeGroupId();
-    for (const page of sourcePages) {
-      logPageActivity(userId, 'move', {
-        id: page.id,
-        title: page.title ?? undefined,
-        driveId: targetDriveId,
-      }, {
-        ...actorInfo,
-        changeGroupId,
+        canEditPage: (pageId) => canPrincipalEditPage(auth, pageId),
+      },
+      activity: {
         changeGroupType: 'user',
-        updatedFields: ['driveId', 'parentId', 'position'],
-        previousValues: { driveId: page.driveId, parentId: page.parentId },
-        newValues: { driveId: targetDriveId, parentId: targetParentId },
         metadata: {
           bulkOperation: 'move',
           totalPages: pageIds.length,
-          ...(isMCP && { source: 'mcp' }),
+          ...(isMCPAuthResult(auth) && { source: 'mcp' }),
         },
-      });
+      },
+    });
+
+    if (!result.success) {
+      // POL-8: an org-policy refusal names its policy, as every org refusal does.
+      const orgPolicy = result.code === 'ORG_POLICY' ? { code: 'org_policy', policy: result.policy } : {};
+      return NextResponse.json({ error: result.message, ...orgPolicy }, { status: result.status });
     }
 
     // Broadcast events
-    for (const driveId of affectedDriveIds) {
+    for (const driveId of result.affectedDriveIds) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, '', 'moved')
       );
+    }
+
+    // Sync the subdomain root for drives whose home page was bulk-moved away.
+    // Fire-and-forget: never blocks the response; syncPublishedHomeRoot swallows errors.
+    for (const driveId of result.clearedHomePageDriveIds) {
+      void syncPublishedHomeRoot(driveId);
     }
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: 'bulk', details: { operation: 'bulk_move', count: pageIds.length } });
@@ -223,25 +132,5 @@ export async function POST(request: Request) {
       { error: 'Failed to move pages' },
       { status: 500 }
     );
-  }
-}
-
-// Recursively update driveId for all children
-async function updateChildrenDriveId(
-  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
-  parentId: string,
-  newDriveId: string
-) {
-  const children = await tx.query.pages.findMany({
-    where: eq(pages.parentId, parentId),
-  });
-
-  for (const child of children) {
-    await tx.update(pages)
-      .set({ driveId: newDriveId })
-      .where(eq(pages.id, child.id));
-
-    // Recursively update grandchildren
-    await updateChildrenDriveId(tx, child.id, newDriveId);
   }
 }

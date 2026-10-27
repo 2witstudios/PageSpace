@@ -68,6 +68,7 @@ const mockLogAudit = vi.fn();
 const mockDeps: ExecuteToolDependencies = {
   loadConnection: mockLoadConnection,
   logAudit: mockLogAudit,
+  getDriveOrgPolicies: async () => null,
 };
 
 // Create test fixtures

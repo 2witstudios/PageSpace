@@ -75,6 +75,13 @@ describe('GET /api/user/assistant-config audit', () => {
       { eventType: 'data.read', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
     );
   });
+
+  it('returns the config fields', async () => {
+    const request = new Request('http://localhost/api/user/assistant-config');
+    const response = await GET(request);
+    const body = await response.json();
+    expect(body.config.inheritDriveIntegrations).toBe(true);
+  });
 });
 
 describe('PUT /api/user/assistant-config audit', () => {
@@ -96,6 +103,23 @@ describe('PUT /api/user/assistant-config audit', () => {
     expect(auditRequest).toHaveBeenCalledWith(
       request,
       { eventType: 'data.write', userId: mockUserId, resourceType: 'assistant_config', resourceId: 'self' }
+    );
+  });
+
+  it('persists driveOverrides merged with existing', async () => {
+    mockGetOrCreateConfig.mockResolvedValue(mockConfig);
+    const request = new Request('http://localhost/api/user/assistant-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driveOverrides: { drive1: { enabled: true } } }),
+    });
+
+    await PUT(request);
+
+    expect(mockUpdateConfig).toHaveBeenCalledWith(
+      expect.anything(),
+      mockUserId,
+      expect.objectContaining({ driveOverrides: { drive1: { enabled: true } } }),
     );
   });
 });

@@ -1,178 +1,169 @@
 'use client';
 
-import { useMemo, useRef, useEffect } from 'react';
+import { useMemo } from 'react';
 import {
   startOfWeek,
   endOfWeek,
+  startOfMonth,
+  endOfMonth,
   eachDayOfInterval,
   format,
-  addWeeks,
-  subWeeks,
-  isSameDay,
+  isSameMonth,
 } from 'date-fns';
 import { cn } from '@/lib/utils';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { ChevronDown } from 'lucide-react';
 import {
   CalendarEvent,
   TaskWithDueDate,
   EventColorConfig,
   getEventsForDay,
   getTasksForDay,
+  isSameDay,
   isToday,
   resolveEventColor,
 } from './calendar-types';
 
 interface MobileWeekStripProps {
-  currentDate: Date;
   selectedDate: Date;
+  /**
+   * The month the grid shows when expanded. Separate from `selectedDate`, which
+   * scroll-sync moves: deriving the grid from it rebuilt the whole month under
+   * the user as soon as scrolling reached a trailing day of the next one.
+   */
+  monthDate: Date;
   events: CalendarEvent[];
   tasks: TaskWithDueDate[];
   onDateSelect: (date: Date) => void;
-  onWeekChange: (date: Date) => void;
+  /** True while the strip is pulled down into a full month grid. */
+  expanded: boolean;
+  onToggleExpanded: () => void;
   driveColorMap?: Map<string | null, EventColorConfig> | null;
   context?: 'user' | 'drive';
 }
 
 const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
+/**
+ * A week of date pills that pulls down into the month grid. Month is a state of
+ * this strip rather than a separate view, so it navigates the same agenda
+ * instead of owning a second layout.
+ */
 export function MobileWeekStrip({
-  currentDate,
   selectedDate,
+  monthDate,
   events,
   tasks,
   onDateSelect,
-  onWeekChange,
+  expanded,
+  onToggleExpanded,
   driveColorMap,
   context = 'drive',
 }: MobileWeekStripProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Calculate the week days
-  const weekDays = useMemo(() => {
-    const weekStart = startOfWeek(currentDate);
-    const weekEnd = endOfWeek(currentDate);
-    return eachDayOfInterval({ start: weekStart, end: weekEnd });
-  }, [currentDate]);
-
-  // Scroll selected day into view on mount
-  useEffect(() => {
-    const selectedIndex = weekDays.findIndex((d) => isSameDay(d, selectedDate));
-    if (selectedIndex !== -1 && scrollRef.current) {
-      const dayElement = scrollRef.current.children[selectedIndex] as HTMLElement;
-      if (dayElement) {
-        dayElement.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-      }
+  const visibleDays = useMemo(() => {
+    if (expanded) {
+      return eachDayOfInterval({
+        start: startOfWeek(startOfMonth(monthDate)),
+        end: endOfWeek(endOfMonth(monthDate)),
+      });
     }
-  }, [selectedDate, weekDays]);
-
-  const handlePrevWeek = () => {
-    onWeekChange(subWeeks(currentDate, 1));
-  };
-
-  const handleNextWeek = () => {
-    onWeekChange(addWeeks(currentDate, 1));
-  };
+    return eachDayOfInterval({
+      start: startOfWeek(selectedDate),
+      end: endOfWeek(selectedDate),
+    });
+  }, [expanded, monthDate, selectedDate]);
 
   return (
-    <div className="bg-background border-b">
-      {/* Month/Year header with week navigation */}
-      <div className="flex items-center justify-between px-4 py-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handlePrevWeek}
-          aria-label="Previous week"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <span className="text-sm font-medium">
-          {format(currentDate, 'MMMM yyyy')}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8"
-          onClick={handleNextWeek}
-          aria-label="Next week"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
-
-      {/* Week days strip */}
+    <div className="flex-none bg-background border-b">
       <div
-        ref={scrollRef}
-        className="flex justify-around px-2 pb-3"
+        className={cn(
+          'grid grid-cols-7 px-2',
+          expanded ? 'gap-y-0.5 pb-1' : 'pb-2'
+        )}
       >
-        {weekDays.map((day, index) => {
+        {expanded &&
+          WEEKDAY_LABELS.map((label, index) => (
+            <span
+              key={`head-${index}`}
+              className="pb-1 text-center text-[10px] font-semibold tracking-wider text-muted-foreground"
+            >
+              {label}
+            </span>
+          ))}
+
+        {visibleDays.map((day, index) => {
           const dayEvents = getEventsForDay(events, day);
           const dayTasks = getTasksForDay(tasks, day);
-          const hasItems = dayEvents.length > 0 || dayTasks.length > 0;
           const isTodayDate = isToday(day);
           const isSelected = isSameDay(day, selectedDate);
-
-          // Get the primary event color for the indicator
-          const primaryEventColor = dayEvents.length > 0
-            ? resolveEventColor(dayEvents[0], context, driveColorMap ?? null).dot
-            : null;
+          const outsideMonth = expanded && !isSameMonth(day, monthDate);
+          const primaryEventColor =
+            dayEvents.length > 0
+              ? resolveEventColor(dayEvents[0], context, driveColorMap ?? null).dot
+              : null;
 
           return (
             <button
               key={day.toISOString()}
-              className="flex flex-col items-center gap-1 min-w-[40px] py-1 rounded-lg transition-colors"
               onClick={() => onDateSelect(day)}
+              aria-current={isSelected ? 'date' : undefined}
+              // The visible label is a bare number; say which date it is.
+              aria-label={format(day, 'EEEE, MMMM d')}
+              className="flex flex-col items-center gap-0.5 rounded-lg py-1"
             >
-              {/* Weekday label */}
+              {!expanded && (
+                <span
+                  className={cn(
+                    'text-[10px] font-semibold tracking-wider',
+                    isSelected ? 'text-primary' : 'text-muted-foreground'
+                  )}
+                >
+                  {WEEKDAY_LABELS[index % 7]}
+                </span>
+              )}
               <span
                 className={cn(
-                  'text-xs font-medium',
-                  isSelected ? 'text-primary' : 'text-muted-foreground'
-                )}
-              >
-                {WEEKDAY_LABELS[index]}
-              </span>
-
-              {/* Day number */}
-              <div
-                className={cn(
-                  'w-9 h-9 flex items-center justify-center rounded-full text-sm font-semibold transition-all',
+                  'flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold tabular-nums transition-colors',
                   isSelected && 'bg-primary text-primary-foreground',
-                  !isSelected && isTodayDate && 'bg-primary/20 text-primary',
-                  !isSelected && !isTodayDate && 'hover:bg-muted'
+                  !isSelected && isTodayDate && 'text-primary font-bold',
+                  outsideMonth && !isSelected && 'text-muted-foreground/50'
                 )}
               >
                 {format(day, 'd')}
-              </div>
-
-              {/* Event indicator dots */}
-              <div className="h-1.5 flex items-center justify-center gap-0.5">
-                {hasItems && (
-                  <>
-                    {dayEvents.length > 0 && (
-                      <div
-                        className={cn(
-                          'w-1.5 h-1.5 rounded-full',
-                          isSelected ? 'bg-primary-foreground/70' : primaryEventColor
-                        )}
-                      />
+              </span>
+              <span className="flex h-1.5 items-center gap-0.5">
+                {dayEvents.length > 0 && (
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full',
+                      isSelected ? 'bg-primary-foreground/70' : primaryEventColor
                     )}
-                    {dayTasks.length > 0 && (
-                      <div
-                        className={cn(
-                          'w-1.5 h-1.5 rounded-full',
-                          isSelected ? 'bg-primary-foreground/50' : 'bg-muted-foreground/50'
-                        )}
-                      />
-                    )}
-                  </>
+                  />
                 )}
-              </div>
+                {dayTasks.length > 0 && (
+                  <span
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full',
+                      isSelected ? 'bg-primary-foreground/50' : 'bg-muted-foreground/50'
+                    )}
+                  />
+                )}
+              </span>
             </button>
           );
         })}
       </div>
+
+      <button
+        onClick={onToggleExpanded}
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Collapse to week' : 'Expand to month'}
+        className="flex w-full items-center justify-center py-1 text-muted-foreground active:bg-muted/50"
+      >
+        <ChevronDown
+          className={cn('h-4 w-4 transition-transform', expanded && 'rotate-180')}
+          aria-hidden="true"
+        />
+      </button>
     </div>
   );
 }

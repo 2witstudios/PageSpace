@@ -1,20 +1,33 @@
 # syntax=docker/dockerfile:1.6
 # Install dependencies only when needed
-FROM node:22.17.0-alpine AS deps
+FROM node:24.16.0-alpine AS deps
 WORKDIR /app
 
-# Enable corepack and pin pnpm (with basic retry for transient network issues)
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy only package files for dependency installation
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json bun.lock ./
 COPY packages/db/package.json ./packages/db/
 COPY packages/lib/package.json ./packages/lib/
-COPY apps/web/package.json ./apps/web/
+COPY packages/editor/package.json ./packages/editor/
+COPY packages/browser-worker/package.json ./packages/browser-worker/
+COPY packages/sdk/package.json ./packages/sdk/
+COPY packages/cli/package.json ./packages/cli/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/android/package.json ./apps/android/
+COPY apps/atlas/package.json ./apps/atlas/
+COPY apps/control-plane/package.json ./apps/control-plane/
+COPY apps/desktop/package.json ./apps/desktop/
+COPY apps/e2e/package.json ./apps/e2e/
+COPY apps/imago/package.json ./apps/imago/
+COPY apps/ios/package.json ./apps/ios/
+COPY apps/marketing/package.json ./apps/marketing/
+COPY apps/processor/package.json ./apps/processor/
 COPY apps/realtime/package.json ./apps/realtime/
+COPY apps/web/package.json ./apps/web/
 
 # Install ALL dependencies for the entire monorepo
-RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store pnpm config set store-dir /pnpm/store && pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache bun install --frozen-lockfile
 
 # Now copy source code AFTER dependencies are installed
 COPY packages ./packages
@@ -23,9 +36,10 @@ COPY tsconfig.json ./
 COPY types ./types
 
 # Rebuild the source code only when needed
-FROM node:22.17.0-alpine AS builder
+FROM node:24.16.0-alpine AS builder
 WORKDIR /app
-RUN corepack enable && (corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate || corepack prepare pnpm@10.13.1 --activate)
+
+COPY --from=oven/bun:1.3.12-alpine /usr/local/bin/bun /usr/local/bin/bun
 
 # Copy the installed dependencies and the entire source code
 COPY --from=deps /app .
@@ -38,32 +52,59 @@ ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
 ARG NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
 ARG NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=""
+ARG NEXT_PUBLIC_ADMIN_APP_URL=""
+ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV4=""
+ARG NEXT_PUBLIC_PUBLISH_EDGE_IPV6=""
+ARG NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=""
+ARG NEXT_PUBLIC_COOKIE_DOMAIN=""
+# Imago rollout flag (IMG-10.7): only the exact value "true" shows "Try Imago".
+# Baked at build time, so flipping it means rebuilding web with this arg set.
+ARG NEXT_PUBLIC_IMAGO_ENABLED="false"
+# Imago v3 look for sign-in and other signed-out pages, and /imago as the post-flow
+# landing. Separate from the rollout flag above; only "true" turns it on.
+ARG NEXT_PUBLIC_IMAGO_V3_AUTH="false"
 
 ENV NEXT_PUBLIC_REALTIME_URL=$NEXT_PUBLIC_REALTIME_URL
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 ENV NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=$NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB
 ENV NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID
 ENV NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID
+ENV NEXT_PUBLIC_ADMIN_APP_URL=$NEXT_PUBLIC_ADMIN_APP_URL
+ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV4=$NEXT_PUBLIC_PUBLISH_EDGE_IPV4
+ENV NEXT_PUBLIC_PUBLISH_EDGE_IPV6=$NEXT_PUBLIC_PUBLISH_EDGE_IPV6
+ENV NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=$NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET
+ENV NEXT_PUBLIC_COOKIE_DOMAIN=$NEXT_PUBLIC_COOKIE_DOMAIN
+ENV NEXT_PUBLIC_IMAGO_ENABLED=$NEXT_PUBLIC_IMAGO_ENABLED
+ENV NEXT_PUBLIC_IMAGO_V3_AUTH=$NEXT_PUBLIC_IMAGO_V3_AUTH
+ARG NEXT_PUBLIC_SENTRY_DSN=""
+ENV NEXT_PUBLIC_SENTRY_DSN=$NEXT_PUBLIC_SENTRY_DSN
+ARG SENTRY_AUTH_TOKEN=""
+ENV SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN
+ARG SENTRY_ORG=""
+ENV SENTRY_ORG=$SENTRY_ORG
+ARG SENTRY_PROJECT=""
+ENV SENTRY_PROJECT=$SENTRY_PROJECT
 
 # Next.js collects telemetry data by default.
 # Learn more here: https://nextjs.org/telemetry
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# We are installing devDependencies via the --prod=false flag, so this is not needed
-# ENV NODE_ENV=development
-
 # Build dependent packages first (db + lib must compile before web)
-RUN pnpm --filter @pagespace/db build && pnpm --filter @pagespace/lib build
+RUN bun run --filter '@pagespace/db' build && bun run --filter '@pagespace/lib' build && bun run --filter '@pagespace/editor' build && bun run --filter '@pagespace/browser-worker' build
 
-# Build with development env to ensure Tailwind v4 processes correctly
-# Increased memory for Scribe.js and other heavy dependencies
-RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=4096" pnpm build
+# Build with development env to ensure Tailwind v4 processes correctly.
+# Next's production build of apps/web peaks just under Node's ~4GB default heap and
+# OOMs on builder luck; the default matches CI's ceiling (ci.yml, #2740) and fits the
+# 16GB ubuntu-latest runner docker-images.yml builds on. A self-hosted builder with
+# less memory can lower it: --build-arg WEB_BUILD_MAX_OLD_SPACE_MB=<mb>.
+ARG WEB_BUILD_MAX_OLD_SPACE_MB=6144
+RUN cd apps/web && NODE_OPTIONS="--max-old-space-size=${WEB_BUILD_MAX_OLD_SPACE_MB}" bun run build
 
 # Reset NODE_ENV for production runtime
 ENV NODE_ENV=production
 
 # Production image, copy all the files and run next
-FROM node:22.17.0-alpine AS runner
+FROM node:24.16.0-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

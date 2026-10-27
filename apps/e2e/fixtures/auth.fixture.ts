@@ -1,9 +1,9 @@
 import { test as base } from '@playwright/test';
-import { seedState } from './seed-state';
+import { getSeedState } from './seed-state';
 
 export const test = base.extend<{ driveId: string }>({
   driveId: async ({}, use) => {
-    await use(seedState.driveId);
+    await use(getSeedState().driveId);
   },
 });
 

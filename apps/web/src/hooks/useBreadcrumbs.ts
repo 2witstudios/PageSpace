@@ -1,11 +1,12 @@
 import { useRef, useEffect } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { PageTypeValue } from '@pagespace/lib/utils/enums';
 
 interface BreadcrumbItem {
   id: string;
   title: string;
-  type: 'FOLDER' | 'DOCUMENT' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
+  type: PageTypeValue;
   parentId: string | null;
   driveId: string;
   drive: { id: string; slug: string; name: string } | null;

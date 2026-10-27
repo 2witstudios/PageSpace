@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Send TOS/Privacy Policy update notifications to all users
  *

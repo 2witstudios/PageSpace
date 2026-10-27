@@ -68,7 +68,14 @@ export const getConfig = async (
 export const updateConfig = async (
   database: typeof defaultDb,
   userId: string,
-  data: Partial<Pick<GlobalAssistantConfig, 'enabledUserIntegrations' | 'driveOverrides' | 'inheritDriveIntegrations'>>
+  data: Partial<
+    Pick<
+      GlobalAssistantConfig,
+      | 'enabledUserIntegrations'
+      | 'driveOverrides'
+      | 'inheritDriveIntegrations'
+    >
+  >
 ): Promise<GlobalAssistantConfig> => {
   // Ensure config exists (race-safe)
   await getOrCreateConfig(database, userId);

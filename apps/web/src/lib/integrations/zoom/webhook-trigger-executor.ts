@@ -1,0 +1,172 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { pages } from '@pagespace/db/schema/core';
+import { workflows } from '@pagespace/db/schema/workflows';
+import type { ZoomConnection } from '@pagespace/db/schema/zoom';
+import type { WebhookTrigger } from '@pagespace/db/schema/webhook-triggers';
+import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
+import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
+
+const logger = loggers.api.child({ module: 'webhook-trigger-executor' });
+
+export interface ZoomWebhookEvent {
+  event: string;
+  payload: unknown;
+}
+
+/**
+ * Execute a single webhook-triggered agent invocation.
+ *
+ * Mirrors executeCalendarTrigger: the webhook_triggers row holds only the
+ * (connection, eventType → workflow) wiring, so we load the linked workflows
+ * row for the execution payload, preflight access + agent page, and delegate
+ * to the shared executor. Per-fire state lives in workflow_runs (written by
+ * the executor).
+ */
+export async function executeWebhookTrigger(
+  trigger: WebhookTrigger,
+  event: ZoomWebhookEvent,
+  connection: ZoomConnection,
+): Promise<WorkflowExecutionResult> {
+  const startTime = Date.now();
+
+  try {
+    // 1. Load the linked workflows row (the trigger holds only the wiring)
+    const [workflow] = await db
+      .select()
+      .from(workflows)
+      .where(eq(workflows.id, trigger.workflowId));
+
+    if (!workflow) {
+      const error = `Linked workflow ${trigger.workflowId} not found`;
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left) or deleted their account is skipped before any check, gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      logger.info('Webhook trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error: owner.error };
+    }
+
+    // 2. Verify the connection owner still has access to the workflow's drive
+    // An automation runs as the connection owner (D-OW-34): membership applies, sign-in policy does not.
+    const hasDriveAccess = await isUserDriveMember(automationActor(connection.userId, 'zoom-webhook-trigger', inDrives(workflow.driveId)), workflow.driveId);
+    if (!hasDriveAccess) {
+      const error = 'Connection owner no longer has access to the drive';
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 3. Cheap preflight: verify agent page still exists. Zoom triggers are
+    //    AI-only — a step-based workflow without an agent cannot run here.
+    if (!workflow.agentPageId) {
+      const error = 'Workflow has no agent page (step-based workflows are not supported by Zoom triggers)';
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+    const [agentPage] = await db
+      .select({ id: pages.id, isTrashed: pages.isTrashed })
+      .from(pages)
+      .where(eq(pages.id, workflow.agentPageId));
+
+    if (!agentPage || agentPage.isTrashed) {
+      const error = `Trigger agent page ${workflow.agentPageId} not found or trashed`;
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 4. Credit gate — blocks out-of-credits users before the model is invoked.
+    //    skipDailyCap: server-triggered, not interactive fan-out.
+    //    The run is the workflow OWNER's ([D-OW-34]): its gate, tier, caps and identity follow the
+    //    workflow, so a reassignment ([D-OW-36]) moves it to the new owner. The connection is only the
+    //    trigger source; step 2 checks it can still reach the drive (review #2831 P2-1).
+    const ownerId = owner.ownerId;
+    const [workflowOwner] = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, ownerId));
+    //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
+    //    or is skipped, never anyone's own credits or allowance.
+    const spend = automationSpend(workflow.driveId);
+    const gate = await canConsumeAI(
+      ownerId,
+      toPersonalSubscriptionTier(workflowOwner?.subscriptionTier),
+      { spend, skipDailyCap: true },
+    );
+    if (!gate.allowed) {
+      logger.info('Webhook trigger: skipped (credit gate denied)', {
+        triggerId: trigger.id,
+        reason: gate.reason,
+        refusal: gate.refusal?.reason,
+      });
+      return { success: false, durationMs: Date.now() - startTime, error: creditDeniedError(gate.reason, gate.refusal) };
+    }
+    const holdId = gate.holdId;
+
+    // 5. Build the prompt from the workflow's stored prompt + Zoom event context
+    const promptOverride = buildWebhookTriggerPrompt(workflow.prompt, event);
+
+    // 6. Compose execution input — the executor writes workflow_runs
+    const input: WorkflowExecutionInput = {
+      workflowId: workflow.id,
+      workflowName: `webhook-trigger-${trigger.id}`,
+      driveId: workflow.driveId,
+      createdBy: ownerId,
+      agentPageId: workflow.agentPageId,
+      prompt: workflow.prompt,
+      contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
+      instructionPageId: workflow.instructionPageId,
+      timezone: workflow.timezone,
+      source: { table: 'webhookTriggers', id: trigger.id, triggerAt: new Date() },
+      eventContext: { promptOverride },
+    };
+
+    // executeWorkflow calls AIMonitoring.trackUsage → consumeCredits internally.
+    // Release the hold here so the user's spendable balance is accurate after execution.
+    let result: WorkflowExecutionResult;
+    try {
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId: gate.walletId } });
+    } finally {
+      if (holdId) void releaseHold(holdId).catch(() => {});
+    }
+
+    logger.info('Webhook trigger executed', {
+      triggerId: trigger.id,
+      workflowId: workflow.id,
+      eventType: event.event,
+      success: result.success,
+      durationMs: result.durationMs,
+    });
+
+    return result;
+  } catch (error) {
+    const durationMs = Date.now() - startTime;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    logger.error('Webhook trigger execution failed', {
+      triggerId: trigger.id,
+      error: errorMessage,
+      durationMs,
+    });
+
+    return { success: false, durationMs, error: errorMessage };
+  }
+}
+
+function buildWebhookTriggerPrompt(workflowPrompt: string, event: ZoomWebhookEvent): string {
+  const parts: string[] = [];
+  parts.push('<zoom-event>');
+  parts.push(`Event: ${event.event}`);
+  parts.push(`Payload: ${JSON.stringify(event.payload)}`);
+  parts.push('</zoom-event>');
+  parts.push(`\n${workflowPrompt}`);
+  return parts.join('\n');
+}

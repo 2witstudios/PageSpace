@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { ensureTestDb } from '@/test/ensure-test-db';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -21,6 +22,12 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 describe('Admin Role Versioning', () => {
   let adminUserId: string;
   let regularUserId: string;
+
+  // This suite writes real rows — fail fast with an actionable message when
+  // the test Postgres isn't provisioned (direct vitest run outside `bun run test`).
+  beforeAll(async () => {
+    await ensureTestDb();
+  });
 
   beforeEach(async () => {
     // Create an admin user
@@ -155,7 +162,7 @@ describe('Admin Role Versioning', () => {
         expiresAt: new Date(Date.now() + 3600000),
       });
 
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: adminUserId,
         type: 'user',
         scopes: ['*'],
@@ -190,7 +197,7 @@ describe('Admin Role Versioning', () => {
         expiresAt: new Date(Date.now() + 3600000),
       });
 
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: regularUserId,
         type: 'user',
         scopes: ['*'],

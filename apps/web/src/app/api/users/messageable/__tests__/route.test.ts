@@ -13,17 +13,24 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
+// Operators build an inspectable predicate tree so a test can see which
+// filters each query carries.
 vi.mock('@pagespace/db/operators', () => ({
-  eq: vi.fn(),
-  and: vi.fn(),
-  or: vi.fn(),
-  ne: vi.fn(),
-  isNotNull: vi.fn(),
-  inArray: vi.fn(),
+  eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ ne: [a, b] })),
+  isNotNull: vi.fn((a: unknown) => ({ isNotNull: a })),
+  inArray: vi.fn((a: unknown, b: unknown) => ({ inArray: [a, b] })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
 vi.mock('@pagespace/db/schema/members', () => ({
-  driveMembers: {},
+  driveMembers: {
+    driveId: 'driveMembers.driveId',
+    userId: 'driveMembers.userId',
+    acceptedAt: 'driveMembers.acceptedAt',
+    role: 'driveMembers.role',
+  },
   userProfiles: {},
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -45,6 +52,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 import { GET } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
+import { driveMembers } from '@pagespace/db/schema/members';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const userId = 'user_self';
@@ -60,12 +68,34 @@ const mockAuth = () => {
   });
 };
 
+/** Every `.from(table).where(predicate)` the route issued, in order. */
+let queries: Array<{ table: unknown; predicate: unknown }> = [];
+
 function fromWhere(rows: unknown[]) {
   return {
-    from: vi.fn().mockReturnValue({
-      where: vi.fn().mockResolvedValue(rows),
-    }),
+    from: vi.fn((table: unknown) => ({
+      where: vi.fn((predicate: unknown) => {
+        queries.push({ table, predicate });
+        return Promise.resolve(rows);
+      }),
+    })),
   } as unknown as ReturnType<typeof db.select>;
+}
+
+function containsAcceptedGate(predicate: unknown): boolean {
+  if (predicate === null || typeof predicate !== 'object') return false;
+  if ('isNotNull' in predicate && predicate.isNotNull === driveMembers.acceptedAt) return true;
+  return Object.values(predicate).some((v) =>
+    Array.isArray(v) ? v.some(containsAcceptedGate) : containsAcceptedGate(v)
+  );
+}
+
+function containsGuestExclusion(predicate: unknown): boolean {
+  if (predicate === null || typeof predicate !== 'object') return false;
+  if ('ne' in predicate && Array.isArray(predicate.ne) && predicate.ne[0] === driveMembers.role && predicate.ne[1] === 'GUEST') return true;
+  return Object.values(predicate).some((v) =>
+    Array.isArray(v) ? v.some(containsGuestExclusion) : containsGuestExclusion(v)
+  );
 }
 
 function fromLeftJoinWhere(rows: unknown[]) {
@@ -94,7 +124,51 @@ function userRow(id: string, displayName: string) {
 describe('GET /api/users/messageable', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    queries = [];
     mockAuth();
+  });
+
+  // A pending, unaccepted invitation is not an established shared context
+  // (apps/web/src/lib/users/visibility.ts): the invitee must not resolve other
+  // members' identities (name, email, bio, avatar) from the DM picker, and
+  // members must not resolve the invitee's. Both drive_members reads — the
+  // caller's own drives and the co-members of those drives — must therefore
+  // carry the acceptedAt gate.
+  it('gates both drive_members reads on acceptedAt so a pending invitee resolves no roster', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(fromWhere([])) // owned drives
+      .mockReturnValueOnce(fromWhere([{ driveId: 'drive_1' }])) // member drives
+      .mockReturnValueOnce(fromWhere([])) // other owners
+      .mockReturnValueOnce(fromWhere([])) // other members
+      .mockReturnValueOnce(fromWhere([])); // relationships
+
+    const response = await GET(new Request('http://localhost/api/users/messageable'));
+
+    expect(response.status).toBe(200);
+    const memberReads = queries.filter((q) => q.table === driveMembers);
+    expect(memberReads).toHaveLength(2);
+    for (const read of memberReads) {
+      expect(containsAcceptedGate(read.predicate)).toBe(true);
+    }
+  });
+
+  // A GUEST row (redeemed page share link) is not a shared context either: a
+  // guest must not resolve the drive's people, nor they the guest.
+  it('excludes GUEST rows from both drive_members reads', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(fromWhere([])) // owned drives
+      .mockReturnValueOnce(fromWhere([{ driveId: 'drive_1' }])) // member drives
+      .mockReturnValueOnce(fromWhere([])) // other owners
+      .mockReturnValueOnce(fromWhere([])) // other members
+      .mockReturnValueOnce(fromWhere([])); // relationships
+
+    await GET(new Request('http://localhost/api/users/messageable'));
+
+    const memberReads = queries.filter((q) => q.table === driveMembers);
+    expect(memberReads).toHaveLength(2);
+    for (const read of memberReads) {
+      expect(containsGuestExclusion(read.predicate)).toBe(true);
+    }
   });
 
   it('returns empty users array when user has no drives or connections', async () => {

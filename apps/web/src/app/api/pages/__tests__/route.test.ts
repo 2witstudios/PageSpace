@@ -26,6 +26,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPCreateScope: vi.fn(() => null), // Allow all creates by default
   isMCPAuthResult: vi.fn().mockReturnValue(false),
+  isScopedMCPAuth: vi.fn().mockReturnValue(false),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -36,6 +38,15 @@ vi.mock('@/lib/websocket', () => ({
     type,
     ...data,
   })),
+}));
+
+// The route's own enabledTools scope-filter validation only needs tool names;
+// mock this to avoid pulling in the full real AI tool registry's heavy import graph.
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {
+    read_page: { description: 'Read a page' },
+    create_drive: { description: 'Create a drive' },
+  },
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -59,6 +70,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
     getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+    isDocumentPage: vi.fn((type: string) => type === 'DOCUMENT'),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -70,6 +82,7 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPC
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { isDocumentPage } from '@pagespace/lib/content/page-types.config';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -180,7 +193,6 @@ describe('POST /api/pages', () => {
 
       expect(response.status).toBe(400);
       expect(body.error).toContain('Invalid option');
-      expect(body.error).not.toContain('TERMINAL');
       expect(pageService.createPage).not.toHaveBeenCalled();
     });
 
@@ -254,10 +266,10 @@ describe('POST /api/pages', () => {
       expect(body.error).toMatch(/not found/i);
     });
 
-    it('returns 403 when user is not owner or admin', async () => {
+    it('returns 403 when user is not a drive member (root level)', async () => {
       vi.mocked(pageService.createPage).mockResolvedValue({
         success: false,
-        error: 'Only drive owners and admins can create pages',
+        error: 'You must be a drive member to create pages',
         status: 403,
       });
 
@@ -269,7 +281,56 @@ describe('POST /api/pages', () => {
       const body = await response.json();
 
       expect(response.status).toBe(403);
-      expect(body.error).toMatch(/owner|admin/i);
+      expect(body.error).toMatch(/member/i);
+    });
+
+    it('returns 403 when user lacks edit permission on parent page', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Insufficient permissions to create pages in this folder',
+        status: 403,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_456',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toMatch(/permission/i);
+    });
+
+    it('returns 400 when parent page belongs to a different drive', async () => {
+      vi.mocked(pageService.createPage).mockResolvedValue({
+        success: false,
+        error: 'Parent page not found in this drive',
+        status: 400,
+      });
+
+      const response = await POST(createRequest({
+        title: 'Test Page',
+        type: 'DOCUMENT',
+        driveId: mockDriveId,
+        parentId: 'parent_other_drive',
+      }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not found/i);
+    });
+
+    it('rejects MACHINE as an unknown page type (the Machine page type is gone)', async () => {
+      const response = await POST(createRequest({
+        title: 'Prod Shell',
+        type: 'MACHINE',
+        driveId: mockDriveId,
+      }));
+
+      expect(response.status).toBe(400);
+      expect(pageService.createPage).not.toHaveBeenCalled();
     });
   });
 
@@ -284,7 +345,7 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           title: 'New Document',
           type: 'DOCUMENT',
@@ -292,7 +353,7 @@ describe('POST /api/pages', () => {
           parentId: 'parent_123',
           content: '<p>Custom content</p>',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
 
@@ -314,15 +375,115 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({
           systemPrompt: 'You are a helpful assistant',
           enabledTools: ['read_page'],
           aiProvider: 'anthropic',
           aiModel: 'claude-3',
         }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
+    });
+
+    // #2463: a machine-written DOCUMENT defaults to markdown, whose line numbers
+    // are the document's own newlines. html mode stores TipTap markup and numbers
+    // lines against a normalized projection of it — the mode an agent writing raw
+    // JSON or markdown should never land in by accident.
+    describe('contentMode default', () => {
+      // The suite's beforeEach resets every mock implementation, including the
+      // module factory's, so restore this one per test.
+      beforeEach(() => {
+        vi.mocked(isDocumentPage).mockImplementation((type: unknown) => type === 'DOCUMENT');
+      });
+
+      it('defaults an MCP-created DOCUMENT to markdown', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
+      it('leaves a browser-session DOCUMENT on the editor default', async () => {
+        // The rich-text editor IS html; flipping the UI's default would change
+        // what every human-created document stores.
+        await POST(createRequest({ title: 'Human Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      // Finding from review: the route takes a `content` body too. An existing
+      // API-key client that POSTs Tiptap HTML and no contentMode would have
+      // landed in markdown mode, where that whole blob is ONE line and line
+      // editing is unusable — #2463 inverted, and silent.
+      it('does not force markdown onto a body that is actually HTML', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '<h1>Title</h1><p>Body</p>',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      it('still defaults to markdown when the body is markdown or JSON', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '# Title\n\n- one\n- two',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
+      it('honours an explicit contentMode from either caller', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId, contentMode: 'html',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: 'html' }),
+          expect.anything(),
+        );
+      });
+
+      it('does not touch non-document types', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Folder', type: 'FOLDER', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          expect.objectContaining({ userId: mockUserId }),
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
     });
 
     it('passes MCP context when authenticated via MCP', async () => {
@@ -335,9 +496,12 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ title: 'MCP Page' }),
-        { context: { metadata: { source: 'mcp' } } },
+        expect.objectContaining({
+          context: { metadata: { source: 'mcp' } },
+          authorizeEdit: expect.any(Function),
+        }),
       );
     });
   });
@@ -493,9 +657,9 @@ describe('POST /api/pages', () => {
       }));
 
       expect(pageService.createPage).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         expect.objectContaining({ contentMode: 'markdown' }),
-        undefined,
+        expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
     });
   });

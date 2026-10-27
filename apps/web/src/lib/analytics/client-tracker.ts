@@ -4,6 +4,23 @@
  */
 
 import { post } from '../auth/auth-fetch';
+import { shouldFireAnalytics } from '@pagespace/lib/consent';
+import { getDeploymentMode } from '../deployment-mode';
+import { getConsentStateFromCookie, CONSENT_CHANGED_EVENT } from '@/stores/useConsentStore';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
+
+/**
+ * Single GDPR/ePrivacy gate for all analytics sends: fires only with analytics consent
+ * AND on a mode where analytics is permitted (never on onprem). Read at call time so a
+ * later consent decision takes effect immediately.
+ *
+ * Never in the native apps: they show no consent prompt (App Review reads one as
+ * tracking), so a grant stored earlier must not switch analytics back on there.
+ */
+function analyticsAllowed(): boolean {
+  if (isCapacitorApp()) return false;
+  return shouldFireAnalytics(getConsentStateFromCookie(), getDeploymentMode());
+}
 
 interface TrackingEvent {
   event: string;
@@ -47,6 +64,9 @@ class ClientTracker {
    * Track an event - fire and forget
    */
   track(event: string, data?: Record<string, unknown>): void {
+    // GDPR/ePrivacy: no non-essential analytics network call without consent (and never on onprem).
+    if (!analyticsAllowed()) return;
+
     const trackingEvent: TrackingEvent = {
       event,
       data,
@@ -181,6 +201,13 @@ class ClientTracker {
   private flushQueue(): void {
     if (this.queue.length === 0) return;
 
+    // Re-check consent at flush time: the user may have withdrawn analytics consent
+    // (or this is onprem) while events sat queued offline. Drop them rather than send.
+    if (!analyticsAllowed()) {
+      this.queue = [];
+      return;
+    }
+
     const events = [...this.queue];
     this.queue = [];
 
@@ -205,30 +232,18 @@ export const track = (event: string, data?: Record<string, unknown>) =>
 export const trackPageView = (path: string, title?: string) => 
   tracker.trackPageView(path, title);
 
-export const trackFeature = (feature: string, metadata?: Record<string, unknown>) => 
-  tracker.trackFeature(feature, metadata);
-
-export const trackAction = (action: string, resource?: string, resourceId?: string, metadata?: Record<string, unknown>) => 
-  tracker.trackAction(action, resource, resourceId, metadata);
-
-export const trackClick = (element: string, metadata?: Record<string, unknown>) => 
-  tracker.trackClick(element, metadata);
-
-export const trackSearch = (query: string, resultCount?: number, searchType?: string) => 
-  tracker.trackSearch(query, resultCount, searchType);
-
-export const trackError = (errorMessage: string, errorType?: string, context?: Record<string, unknown>) => 
-  tracker.trackError(errorMessage, errorType, context);
-
-export const trackTiming = (category: string, variable: string, duration: number) => 
-  tracker.trackTiming(category, variable, duration);
-
 // Auto-track page views on route changes (for Next.js)
 if (typeof window !== 'undefined') {
-  // Track initial page view
+  // Track initial page view (the tracker's own consent gate suppresses the send until
+  // analytics consent is granted; no-op on onprem).
   setTimeout(() => {
     trackPageView(window.location.pathname);
   }, 0);
+
+  // When the user grants consent later, capture the current page view that was suppressed.
+  window.addEventListener(CONSENT_CHANGED_EVENT, () => {
+    trackPageView(window.location.pathname);
+  });
   
   // Track route changes
   const originalPushState = history.pushState;
@@ -253,5 +268,3 @@ if (typeof window !== 'undefined') {
     trackPageView(window.location.pathname);
   });
 }
-
-export default tracker;

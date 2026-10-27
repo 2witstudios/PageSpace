@@ -40,9 +40,14 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
+  }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn().mockResolvedValue(false),
 }));
 
@@ -59,6 +64,7 @@ import {
   upsertCalendarTriggerWorkflow,
   removeCalendarTrigger,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user_creator';
 const OUTSIDER_ID = 'user_outsider';
@@ -231,15 +237,22 @@ describe('PUT /api/calendar/events/[eventId]/triggers', () => {
     expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
   });
 
-  it('rejects an upsert on a recurring event', async () => {
+  it('accepts an upsert on a recurring event and passes recurrenceRule to the helper', async () => {
+    // Recurring events now support agent triggers — this PR adds that capability.
     (db.query.calendarEvents.findFirst as Mock).mockResolvedValue({
       ...baseEvent,
       recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      recurrenceExceptions: [],
     });
     const res = await PUT(mkRequest('PUT', { agentPageId: 'agent-1', prompt: 'p' }), ctx());
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/recur/i);
-    expect(upsertCalendarTriggerWorkflow).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(upsertCalendarTriggerWorkflow).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+        recurrenceExceptions: [],
+      }),
+    );
   });
 
   it('returns 403 when an outsider asks', async () => {

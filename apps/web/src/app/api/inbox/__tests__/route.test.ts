@@ -16,11 +16,17 @@ vi.mock('@pagespace/db/db', () => ({
 
 vi.mock('@pagespace/db/operators', () => {
   // Capture the literal text chunks so tests can identify which CTE ran.
-  const sql = (strings: TemplateStringsArray, ..._values: unknown[]) => ({
-    __sqlText: strings.join('?'),
-  });
+  const sql = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ __sqlText: strings.join('?'), __values: values }),
+    { param: (value: unknown) => ({ __param: value }) },
+  );
   return { sql };
 });
+
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => ['drive_member']),
+}));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -33,13 +39,29 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: vi.fn(),
 }));
 
+// Wrap (not replace) the real decryptFieldValuesOnce so call counts and batch
+// contents can be asserted at the route's call boundary — proves the route
+// batches decryption once per request instead of once per row (the actual
+// regression this test guards). A bare `vi.spyOn` doesn't work here because
+// `@pagespace/lib` resolves to its built CJS dist output, and the inner
+// per-value decrypt (decryptField) is a *nested* require inside that compiled
+// module, invisible to any mock declared at this level. encryptField stays
+// real via the spread.
+vi.mock('@pagespace/lib/encryption/field-crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/encryption/field-crypto')>();
+  return { ...actual, decryptFieldValuesOnce: vi.fn(actual.decryptFieldValuesOnce) };
+});
+
 import { GET } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { getBatchPagePermissions } from '@pagespace/lib/permissions/permissions';
+import { decryptFieldValuesOnce, encryptField } from '@pagespace/lib/encryption/field-crypto';
 
 const mockUserId = 'user_123';
 
@@ -61,6 +83,7 @@ const dmRow = {
   other_user_name: 'Alice',
   other_user_display_name: 'Alice',
   other_user_avatar_url: null,
+  other_user_image: '/api/avatar/alice/avatar.png?t=1',
   unread_count: '0',
 };
 
@@ -123,6 +146,14 @@ describe('GET /api/inbox ?type filter', () => {
     expect(isDmQuery(sqlArg)).toBe(true);
   });
 
+  it('uses users.image as the DM avatar when the profile avatar is blank', async () => {
+    const res = await GET(new Request('http://localhost/api/inbox?type=dm&limit=20'));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.items[0].avatarUrl).toBe('/api/avatar/alice/avatar.png?t=1');
+  });
+
   it('returns only channels when type=channel', async () => {
     const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
     expect(res.status).toBe(200);
@@ -146,5 +177,220 @@ describe('GET /api/inbox ?type filter', () => {
     const body = await res.json();
     const types = body.items.map((i: { type: string }) => i.type).sort();
     expect(types).toEqual(['channel', 'dm']);
+  });
+});
+
+describe('GET /api/inbox PII decryption dedup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const allowChannels = (ids: string[]) => {
+    (getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map(ids.map((id) => [id, { canView: true, canEdit: false, canShare: false, canDelete: false }]))
+    );
+  };
+
+  const mockExecute = (dmRows: unknown[], channelRows: unknown[]) => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (arg: unknown) => {
+      if (isDmQuery(arg)) return { rows: dmRows };
+      if (isChannelQuery(arg)) return { rows: channelRows };
+      return { rows: [] };
+    });
+  };
+
+  it('decrypts one encrypted sender shared across many channel rows only once (dedup)', async () => {
+    const encryptedSender = await encryptField('Real Sender');
+    const channelRows = Array.from({ length: 5 }, (_, i) => ({
+      ...channelRow,
+      id: `ch_${i}`,
+      sender_name: encryptedSender,
+    }));
+    mockExecute([], channelRows);
+    allowChannels(channelRows.map((row) => row.id as string));
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(5);
+    for (const item of body.items) {
+      expect(item.lastMessageSender).toBe('Real Sender');
+    }
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 5 channel rows.
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrypts DM sender names and channel sender names in ONE batch for a type=all request', async () => {
+    const encryptedDmName = await encryptField('Dm Counterpart');
+    const encryptedSender = await encryptField('Channel Sender');
+    mockExecute(
+      [{ ...dmRow, other_user_display_name: null, other_user_name: encryptedDmName }],
+      [{ ...channelRow, sender_name: encryptedSender }]
+    );
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+    expect(dm.name).toBe('Dm Counterpart');
+    expect(channel.lastMessageSender).toBe('Channel Sender');
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('decrypts a repeated encrypted sender once in the drive-scoped inbox', async () => {
+    const encryptedSender = await encryptField('Drive Sender');
+    const channelRows = Array.from({ length: 3 }, (_, i) => ({
+      ...channelRow,
+      id: `ch_${i}`,
+      sender_name: encryptedSender,
+    }));
+    mockExecute([], channelRows);
+    allowChannels(channelRows.map((row) => row.id as string));
+
+    const res = await GET(new Request('http://localhost/api/inbox?driveId=drv_1&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(3);
+    for (const item of body.items) {
+      expect(item.lastMessageSender).toBe('Drive Sender');
+    }
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes through plaintext AI sender names and profile display names unchanged', async () => {
+    const encryptedDmName = await encryptField('Hidden Name');
+    mockExecute(
+      // displayName present: users.name must not be needed (nor surfaced).
+      [{ ...dmRow, other_user_display_name: 'Profile Display', other_user_name: encryptedDmName }],
+      // COALESCE'd AI senderName is plaintext and must pass through unchanged.
+      [{ ...channelRow, sender_name: 'AI Agent' }]
+    );
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+    expect(dm.name).toBe('Profile Display');
+    expect(channel.lastMessageSender).toBe('AI Agent');
+  });
+
+  it('keeps a null last-message sender null (channel with no messages)', async () => {
+    mockExecute([], [{ ...channelRow, sender_name: null, last_message: null, last_message_at: null }]);
+    allowChannels(['ch_1']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items[0].lastMessageSender).toBeNull();
+  });
+
+  // The permission filter must run BEFORE the decrypt batch is built: a
+  // non-viewable channel's sender_name never entered the old per-row decrypt
+  // path, and an undecryptable value on such a row must not be able to fail
+  // (or even reach) the batch for the rest of the inbox.
+  const mixedVisibilityChannels = (visibleSender: string, hiddenSender: string) => {
+    (getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([
+        ['ch_visible', { canView: true, canEdit: false, canShare: false, canDelete: false }],
+        ['ch_hidden', { canView: false, canEdit: false, canShare: false, canDelete: false }],
+      ])
+    );
+    return [
+      { ...channelRow, id: 'ch_visible', sender_name: visibleSender },
+      { ...channelRow, id: 'ch_hidden', sender_name: hiddenSender },
+    ];
+  };
+
+  it('never decrypts sender names of channels the requester cannot view (drive inbox)', async () => {
+    const visibleSender = await encryptField('Visible Sender');
+    const hiddenSender = await encryptField('Hidden Sender');
+    mockExecute([], mixedVisibilityChannels(visibleSender, hiddenSender));
+
+    const res = await GET(new Request('http://localhost/api/inbox?driveId=drv_1&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Visible Sender');
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
+    expect(batched).toHaveLength(1);
+  });
+
+  it('never decrypts sender names of channels the requester cannot view (dashboard inbox)', async () => {
+    const visibleSender = await encryptField('Visible Sender');
+    const hiddenSender = await encryptField('Hidden Sender');
+    mockExecute([], mixedVisibilityChannels(visibleSender, hiddenSender));
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=20'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Visible Sender');
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
+    expect(batched).toHaveLength(1);
+  });
+
+  it('never decrypts sender names of rows the page limit discards (decrypt after slice)', async () => {
+    const survivingSender = await encryptField('Surviving Sender');
+    const slicedSender = await encryptField('Sliced Sender');
+    // Distinct timestamps make the survivor deterministic: the newer row wins
+    // the lastMessageAt sort, the older row is sliced off by limit=1.
+    const channelRows = [
+      { ...channelRow, id: 'ch_new', sender_name: survivingSender, last_message_at: '2026-05-02T00:00:00.000Z' },
+      { ...channelRow, id: 'ch_old', sender_name: slicedSender, last_message_at: '2026-05-01T00:00:00.000Z' },
+    ];
+    mockExecute([], channelRows);
+    allowChannels(['ch_new', 'ch_old']);
+
+    const res = await GET(new Request('http://localhost/api/inbox?type=channel&limit=1'));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].lastMessageSender).toBe('Surviving Sender');
+    expect(body.pagination.hasMore).toBe(true);
+    // Only the surviving row's value enters the batch — the sliced row's
+    // ciphertext is never decrypted.
+    expect(vi.mocked(decryptFieldValuesOnce)).toHaveBeenCalledTimes(1);
+    const batched = vi.mocked(decryptFieldValuesOnce).mock.calls[0][0];
+    expect(batched).toEqual([survivingSender]);
+  });
+});
+
+describe('GET /api/inbox channel candidates (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    setupDb();
+  });
+
+  const channelSql = () =>
+    vi.mocked(db.execute).mock.calls.map(([arg]) => arg as unknown as { __sqlText: string; __values: unknown[] })
+      .find((arg) => isChannelQuery(arg)) as { __sqlText: string; __values: unknown[] };
+
+  it.each([
+    ['every drive', 'http://localhost/api/inbox?type=channel'],
+    ['one drive', 'http://localhost/api/inbox?driveId=drv_1'],
+  ])('DRV-5 (partial) X-6 (partial) %s: candidates come from the org-aware member-drive set; the SQL reads neither drive_members nor drives.ownerId', async (_label, url) => {
+    const res = await GET(new Request(url));
+
+    expect(res.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), { includeTrashed: true });
+    const { __sqlText, __values } = channelSql();
+    expect(__sqlText).not.toMatch(/drive_members/);
+    expect(__sqlText).not.toMatch(/"ownerId"/);
+    expect(__values).toContainEqual({ __param: ['drive_member'] });
   });
 });

@@ -2,54 +2,82 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     selectDistinct: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
     where: vi.fn(),
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
+    insert: vi.fn(),
+    // The repair path seeds the ancestor's vocabulary and then conforms any
+    // rows already in the list to it — two set-based UPDATEs that match nothing
+    // in these fixtures, but still have to be callable.
+    update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
       taskLists: { findFirst: vi.fn() },
-      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
-      chatMessages: { findFirst: vi.fn() },
+      taskStatusConfigs: {
+        // The sweep reads the replacement statuses one at a time, directly,
+        // rather than paging the vocabulary — nothing caps how many a list has.
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       channelMessages: { findMany: vi.fn() },
     },
-  },
-}));
+  };
+  // The repair runs in one transaction now: a half-applied repair is permanent,
+  // because it only ever fires while the vocabulary is empty. The tx is the same
+  // surface as `db` here.
+  dbMock.transaction = vi.fn(async (cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  ne: vi.fn(),
   and: vi.fn(),
   asc: vi.fn(),
   desc: vi.fn(),
   isNull: vi.fn(),
   isNotNull: vi.fn(),
   inArray: vi.fn(),
+  notInArray: vi.fn(),
   sql: vi.fn(),
   count: vi.fn(),
   max: vi.fn(),
   min: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
-  drives: { id: 'id' },
-  chatMessages: {
+vi.mock('@pagespace/db/schema/conversations', () => ({
+  conversations: { id: 'id', type: 'type', contextId: 'contextId' },
+  messages: {
     id: 'id',
-    pageId: 'pageId',
     conversationId: 'conversationId',
     isActive: 'isActive',
     createdAt: 'createdAt',
     content: 'content',
     role: 'role',
     userId: 'userId',
+    status: 'status',
+    sourceAgentId: 'sourceAgentId',
   },
 }));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', type: 'type', isTrashed: 'isTrashed' },
+  drives: { id: 'id' },
+}));
 vi.mock('@pagespace/db/schema/tasks', () => ({
-  taskItems: { pageId: 'pageId', taskListId: 'taskListId', position: 'position' },
+  taskItems: { pageId: 'pageId', position: 'position' },
   taskLists: { pageId: 'pageId' },
   taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
   DEFAULT_TASK_STATUSES: [
@@ -68,9 +96,10 @@ vi.mock('@pagespace/db/schema/chat', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    getUserDriveAccess: vi.fn(),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     getUserAccessLevel: vi.fn(),
     getUserAccessiblePagesInDriveWithDetails: vi.fn(),
+    getUserDriveAccess: vi.fn(),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
@@ -103,15 +132,37 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@/lib/logging/mask', () => ({
   maskIdentifier: vi.fn((id) => `***${id?.slice(-4) || ''}`),
 }));
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  checkDriveAccess: vi.fn(),
+}));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  getTab: (...args: unknown[]) => mockGetTab(...args as []),
+  listTabs: (...args: unknown[]) => mockListTabs(...args as []),
+  readRows: (...args: unknown[]) => mockReadRows(...args as []),
+}));
+const mockGetTab = vi.hoisted(() => vi.fn());
+const mockListTabs = vi.hoisted(() => vi.fn());
+const mockReadRows = vi.hoisted(() => vi.fn());
+
+vi.mock('../../core/image-preset-fetch', () => ({
+  fetchCachedImagePreset: vi.fn(),
+}));
 
 import { pageReadTools } from '../page-read-tools';
+import { SHEET_LIST_PREVIEW_ROWS } from '../sheet-view';
 import { db } from '@pagespace/db/db';
-import { getUserDriveAccess, getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
-import type { ToolExecutionContext } from '../../core';
+import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { fetchCachedImagePreset } from '../../core/image-preset-fetch';
+import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockDb = vi.mocked(db);
-const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
 const mockGetUserAccessLevel = vi.mocked(getUserAccessLevel);
+const mockGetUserAccessiblePagesInDrive = vi.mocked(getUserAccessiblePagesInDriveWithDetails);
+const mockGetUserDriveAccess = vi.mocked(getUserDriveAccess);
+const mockCheckDriveAccess = vi.mocked(checkDriveAccess);
+const mockFetchCachedImagePreset = vi.mocked(fetchCachedImagePreset);
 
 const createMockPage = (content: string, type = 'DOCUMENT') => ({
   id: 'page-1',
@@ -122,10 +173,12 @@ const createMockPage = (content: string, type = 'DOCUMENT') => ({
   driveId: 'drive-1',
 });
 
+const sheetTab = { id: 'tab-1', tabIndex: 0, name: 'Sheet1', rowCount: 500, columnCount: 16 };
+
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
   messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 // Helper for mock access levels - getUserAccessLevel returns an object with permission booleans
@@ -135,6 +188,27 @@ const createMockAccessLevel = (level: 'viewer' | 'editor' | 'admin') => ({
   canShare: level === 'admin',
   canDelete: level === 'admin',
 });
+
+
+/**
+ * Chainable drizzle SELECT stub.
+ *
+ * The unified-message readers join `conversations` to derive the page from
+ * `contextId` (epic "Agent-Session Single Source of Truth", Phase 4 / D6 —
+ * reader cutover), so a mocked chain must tolerate `.innerJoin(...)` between
+ * `.from(...)` and `.where(...)`. Non-terminal steps return the chain; the
+ * terminals a given test needs are supplied by name.
+ */
+function mockSelectChain(terminals: Record<string, unknown>) {
+  const chain: Record<string, unknown> = {};
+  for (const step of ['from', 'innerJoin', 'leftJoin', 'where', 'orderBy', 'groupBy', 'limit']) {
+    chain[step] = vi.fn(() => chain);
+  }
+  for (const [name, value] of Object.entries(terminals)) {
+    chain[name] = vi.fn().mockResolvedValue(value);
+  }
+  return chain;
+}
 
 describe('page-read-tools', () => {
   beforeEach(() => {
@@ -155,19 +229,942 @@ describe('page-read-tools', () => {
       ).rejects.toThrow('User authentication required');
     });
 
-    it('throws error when drive not found', async () => {
-      mockGetUserDriveAccess.mockResolvedValue(false);
+    it('returns error when actor has no accessible pages in drive', async () => {
+      mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
+      };
+
+      const result = await pageReadTools.list_pages.execute!(
+        { driveId: 'non-existent', driveSlug: 'test-drive' },
+        context
+      );
+      expect(result).toMatchObject({ success: false });
+    });
+
+    // driveId used to be required, which pushed the model into guessing a
+    // workspace whenever it didn't have one in its arguments.
+    describe('resolving an omitted driveId', () => {
+      const contextInDrive = (driveId: string) => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
+          locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
+        } as ToolExecutionContext,
+      });
+
+      const allowDrive = () => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue([] as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+        });
+      };
+
+      // The echo matters: a defaulted scope that looked in the wrong workspace
+      // returns an empty list, and an empty list reads as "it doesn't exist"
+      // unless the model can see where we actually looked.
+      it('lists the workspace in view and echoes the scope it used', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({
+          success: true,
+          driveId: 'drive-loc',
+          scopeSource: 'current_location',
+        });
+      });
+
+      it('marks an explicitly supplied driveId as an explicit scope', async () => {
+        allowDrive();
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId: 'drive-explicit' },
+          contextInDrive('drive-loc')
+        ) as Record<string, unknown>;
+
+        expect(result).toMatchObject({ driveId: 'drive-explicit', scopeSource: 'explicit' });
+      });
+
+      it('asks rather than guessing when no workspace is in view', async () => {
+        allowDrive();
+
+        await expect(
+          pageReadTools.list_pages.execute!({}, createAuthContext())
+        ).rejects.toThrow('no workspace is currently in view');
+      });
+
+      // Defaulting must not widen reach.
+      it('still denies a defaulted drive the actor cannot access', async () => {
+        mockGetUserDriveAccess.mockResolvedValue(false as unknown as never);
+
+        const result = await pageReadTools.list_pages.execute!(
+          {},
+          contextInDrive('drive-forbidden')
+        ) as Record<string, unknown>;
+
+        expect(result.success).toBe(false);
+        // driveSlug is absent on a defaulted scope — the message must not say "undefined".
+        expect(result.error).toContain('drive-forbidden');
+      });
+    });
+
+    describe('ls-mode navigation (new behavior)', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const rootFolder = { id: 'folder-1', title: 'Docs', type: 'FOLDER', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const rootDoc = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const childPage = { id: 'child-1', title: 'Setup Guide', type: 'DOCUMENT', parentId: 'folder-1', position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccess = () => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue([rootFolder, rootDoc, childPage] as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+      };
+
+      it('returns only root-level pages when no parentId supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'return success',
+          actual: result.success,
+          expected: true,
+        });
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'return only root-level pages (2, not 3)',
+          actual: pages.length,
+          expected: 2,
+        });
+
+        assert({
+          given: 'list_pages with no parentId',
+          should: 'not include nested child page',
+          actual: pages.some(p => p.id === 'child-1'),
+          expected: false,
+        });
+      });
+
+      it('treats parentId: "" the same as omitting parentId at drive root', async () => {
+        setupDriveAccess();
+        const omittedResult = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+        const emptyStringResult = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: '' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return success',
+          actual: emptyStringResult.success,
+          expected: true,
+        });
+
+        const omittedPageIds = (omittedResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+        const emptyStringPageIds = (emptyStringResult.pages as Array<{ id: string }>).map(p => p.id).sort();
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same pages as omitting parentId',
+          actual: emptyStringPageIds,
+          expected: omittedPageIds,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'return the same location as omitting parentId',
+          actual: emptyStringResult.location,
+          expected: omittedResult.location,
+        });
+
+        assert({
+          given: 'list_pages with parentId: "" at drive root',
+          should: 'not include the nested child page',
+          actual: emptyStringPageIds.includes('child-1'),
+          expected: false,
+        });
+      });
+
+      it('includes hasChildren flag indicating whether folder has children', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string; hasChildren: boolean }>;
+        const folder = pages.find(p => p.id === 'folder-1');
+        const doc = pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a folder that has children',
+          should: 'have hasChildren: true',
+          actual: folder?.hasChildren,
+          expected: true,
+        });
+
+        assert({
+          given: 'a document with no children',
+          should: 'have hasChildren: false',
+          actual: doc?.hasChildren,
+          expected: false,
+        });
+      });
+
+      it('returns only children of parentId when supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'folder-1' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with parentId = folder-1',
+          should: 'return only direct children of that folder',
+          actual: pages.length,
+          expected: 1,
+        });
+
+        assert({
+          given: 'list_pages with parentId = folder-1',
+          should: 'return the child page',
+          actual: pages[0]?.id,
+          expected: 'child-1',
+        });
+      });
+
+      it('returns error when parentId is not accessible', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'nonexistent-id' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages with inaccessible parentId',
+          should: 'return success: false',
+          actual: result.success,
+          expected: false,
+        });
+      });
+
+      it('returns all pages when recursive is true', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, recursive: true },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const pages = result.pages as Array<{ id: string }>;
+        assert({
+          given: 'list_pages with recursive: true',
+          should: 'return all 3 pages',
+          actual: pages.length,
+          expected: 3,
+        });
+      });
+
+      it('includes totalInDrive to signal overall drive scale', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        assert({
+          given: 'list_pages',
+          should: 'include totalInDrive count',
+          actual: result.totalInDrive,
+          expected: 3,
+        });
+      });
+
+      it('includes breadcrumb when parentId is supplied', async () => {
+        setupDriveAccess();
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, parentId: 'folder-1' },
+          createAuthContext()
+        ) as Record<string, unknown>;
+
+        const breadcrumb = result.breadcrumb as Array<{ id: string; title: string }>;
+        assert({
+          given: 'list_pages navigating into a folder',
+          should: 'include breadcrumb with parent folder',
+          actual: breadcrumb.length,
+          expected: 1,
+        });
+
+        assert({
+          given: 'breadcrumb entry',
+          should: 'contain folder id and title',
+          actual: breadcrumb[0],
+          expected: { id: 'folder-1', title: 'Docs' },
+        });
+      });
+    });
+
+    describe('include=content', () => {
+      const driveSlug = 'my-drive';
+      const driveId = 'drive-1';
+
+      const docPage = { id: 'doc-1', title: 'README', type: 'DOCUMENT', parentId: null, position: 1, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const codePage = { id: 'code-1', title: 'index.ts', type: 'CODE', parentId: null, position: 2, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const taskListPage = { id: 'tasks-1', title: 'Sprint Tasks', type: 'TASK_LIST', parentId: null, position: 3, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const channelPage = { id: 'channel-1', title: 'General', type: 'CHANNEL', parentId: null, position: 4, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+      const filePage = { id: 'file-1', title: 'report.pdf', type: 'FILE', parentId: null, position: 5, driveId, isTrashed: false, permissions: { canView: true, canEdit: true, canShare: false, canDelete: false } };
+
+      const setupDriveAccessWithContent = (
+        visiblePages: unknown[],
+        contentRows: Array<{ id: string; content: string; contentMode: string; type: string }>,
+      ) => {
+        mockGetUserDriveAccess.mockResolvedValue(true as unknown as never);
+        mockGetUserAccessiblePagesInDrive.mockResolvedValue(visiblePages as unknown as never);
+        (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue([]),
+          }),
+        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockResolvedValue(contentRows),
+          }),
+        });
+      };
+
+      it('returns content for a DOCUMENT and CODE page', async () => {
+        setupDriveAccessWithContent(
+          [docPage, codePage],
+          [
+            { id: 'doc-1', content: 'Hello world', contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'code-1', content: 'export const x = 1;', contentMode: 'markdown', type: 'CODE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const code = result.pages.find(p => p.id === 'code-1');
+
+        assert({
+          given: 'include=content with a DOCUMENT page',
+          should: 'attach serialized content',
+          actual: doc?.content,
+          expected: 'Hello world',
+        });
+
+        assert({
+          given: 'include=content with a CODE page',
+          should: 'attach raw content untouched',
+          actual: code?.content,
+          expected: 'export const x = 1;',
+        });
+
+        assert({
+          given: 'text-serializable pages',
+          should: 'not set contentOmitted',
+          actual: [doc?.contentOmitted, code?.contentOmitted],
+          expected: [undefined, undefined],
+        });
+      });
+
+      it('previews a SHEET as bounded rows, within the same per-page char budget', async () => {
+        // Row count alone does not bound this: a five-row preview of a WIDE
+        // sheet is five rows of many columns, across up to 50 pages in one
+        // call. The budget that has to hold is the per-page character cap
+        // every other type obeys here.
+        const sheetPage = {
+          id: 'sheet-1', title: 'Members', type: 'SHEET', parentId: null, position: 6, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const wideCells = Object.fromEntries(
+          Array.from({ length: 60 }, (_, i) => [
+            String.fromCharCode(65 + (i % 26)) + (i < 26 ? '' : 'A'),
+            { raw: 'y'.repeat(110), value: 'y'.repeat(110) },
+          ]),
+        );
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 5 }, (_, index) => ({ rowIndex: index, cells: wideCells })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-1', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-1');
+        expect(sheet?.content).toContain('500 rows x 16 columns');
+        expect(sheet?.content).toContain('read_sheet');
+        expect(sheet?.content).not.toContain('PAGESPACE_SHEETDOC');
+        // The whole entry, header included, stays inside the batch's budget.
+        expect((sheet?.content ?? '').length).toBeLessThanOrEqual(8000 + 200);
+      });
+
+      it('falls back to the text for a SHEET page that never held a spreadsheet', async () => {
+        // Reporting "no data yet" would drop the content. Falling through to
+        // the shared text path also means the clip is newline-aligned rather
+        // than a raw character offset.
+        const sheetPage = {
+          id: 'sheet-2', title: 'Notes', type: 'SHEET', parentId: null, position: 7, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([]);
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-2', content: '<p>Never a grid</p>', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-2');
+        expect(sheet?.content).toContain('Never a grid');
+        expect(sheet?.content).not.toContain('No data yet');
+      });
+
+      it('says a sheet has rows too wide to preview rather than reporting it empty', async () => {
+        // "First 0 row(s) below" reads as an empty sheet. At this budget a
+        // single row of 35+ columns overflows, so the reader must be able to
+        // tell a blank sheet from one it cannot preview.
+        const sheetPage = {
+          id: 'sheet-3', title: 'Wide', type: 'SHEET', parentId: null, position: 8, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const wideCells = Object.fromEntries(
+          Array.from({ length: 120 }, (_, i) => [`C${i}`, { raw: 'y'.repeat(120), value: 'y'.repeat(120) }]),
+        );
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue([{ rowIndex: 0, cells: wideCells }]);
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-3', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-3');
+        expect(sheet?.content).toContain('too wide to preview');
+        expect(sheet?.content).not.toContain('First 0 row(s)');
+        expect(sheet?.content).not.toContain('No data yet');
+      });
+
+      it('marks a partial sheet preview as clipped, as the description promises', async () => {
+        // A 5-row preview of a 500-row sheet is partial content. Leaving
+        // contentClipped unset told an agent branching on the flag, rather than
+        // reading the prose inside content, that it held the whole sheet.
+        const sheetPage = {
+          id: 'sheet-4', title: 'Big', type: 'SHEET', parentId: null, position: 9, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 5 }, (_, i) => ({ rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } } })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-4', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean; contentClippedAfterLine?: number }>; contentClippedCount?: number };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-4');
+        expect(sheet?.contentClipped).toBe(true);
+        expect(result.contentClippedCount).toBeGreaterThan(0);
+        // Deliberately absent: it promises read_page's lineStart continues the
+        // read, and the rest of a sheet is reached with read_sheet.
+        expect(sheet?.contentClippedAfterLine).toBeUndefined();
+      });
+
+      it('sends a clipped sheet to read_sheet and a clipped doc to read_page', async () => {
+        // One `contentClipped` flag, two different ways to continue. The batch
+        // guidance used to name only read_page's lineStart, which on a sheet
+        // resolves to `undefined + 1` — an agent following it calls read_page
+        // with NaN. Each kind has to name the continuation that works for it.
+        const docPage = {
+          id: 'doc-9', title: 'Long doc', type: 'DOCUMENT', parentId: null, position: 1, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const sheetPage = {
+          id: 'sheet-9', title: 'Wide', type: 'SHEET', parentId: null, position: 2, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const bigTab = { id: 'tab-9', tabIndex: 0, name: 'S', rowCount: 500, columnCount: 4 };
+        mockListTabs.mockResolvedValue([bigTab]);
+        mockGetTab.mockResolvedValue(bigTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: SHEET_LIST_PREVIEW_ROWS }, (_, i) => ({
+            rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } },
+          })),
+        );
+        setupDriveAccessWithContent(
+          [docPage, sheetPage],
+          [
+            { id: 'doc-9', content: 'x'.repeat(60_000), contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'sheet-9', content: '', contentMode: 'html', type: 'SHEET' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean; contentClippedAfterLine?: number }>; nextSteps: string[] };
+
+        const doc = result.pages.find(p => p.id === 'doc-9');
+        const sheet = result.pages.find(p => p.id === 'sheet-9');
+        expect(doc?.contentClipped).toBe(true);
+        expect(doc?.contentClippedAfterLine).toBeGreaterThan(0);
+        expect(sheet?.contentClipped).toBe(true);
+        expect(sheet?.contentClippedAfterLine).toBeUndefined();
+
+        const steps = result.nextSteps.join('\n');
+        // The doc sentence counts ONLY the doc, and the sheet sentence sends
+        // the sheet somewhere that can actually read it.
+        const docStep = result.nextSteps.find(s => s.includes('contentClippedAfterLine + 1'));
+        expect(docStep).toBeDefined();
+        expect(docStep).toContain('1 page had text content clipped');
+        const sheetStep = result.nextSteps.find(s => s.includes('read_sheet with that page ID'));
+        expect(sheetStep).toBeDefined();
+        expect(sheetStep).toContain('1 sheet');
+        // No sentence may offer a lineStart resume for the sheet count.
+        expect(steps).not.toMatch(/1 sheet[^\n]*lineStart/);
+      });
+
+      it('does not call a small sheet clipped just because its GRID is bigger', async () => {
+        // create_page starts a sheet at 20x10. Three stored rows under a
+        // declared 20 is the whole sheet — deriving the flag from the declared
+        // count reported "clipped" for a complete preview, and an agent
+        // branching on it paid a wasted read_sheet for every small sheet in a
+        // folder. The rule is the fetch, not the grid.
+        const smallTab = { id: 'tab-s', tabIndex: 0, name: 'Small', rowCount: 20, columnCount: 10 };
+        const sheetPage = {
+          id: 'sheet-5', title: 'Small', type: 'SHEET', parentId: null, position: 10, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([smallTab]);
+        mockGetTab.mockResolvedValue(smallTab);
+        // Three rows, fewer than the 5-row preview limit → nothing follows.
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 3 }, (_, i) => ({ rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } } })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-5', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean }>; contentClippedCount?: number };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-5');
+        expect(sheet?.contentClipped).toBeUndefined();
+        expect(result.contentClippedCount).toBe(0);
+      });
+
+      it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
+        setupDriveAccessWithContent(
+          [taskListPage, channelPage, filePage],
+          [
+            { id: 'tasks-1', content: '', contentMode: 'html', type: 'TASK_LIST' },
+            { id: 'channel-1', content: '', contentMode: 'html', type: 'CHANNEL' },
+            { id: 'file-1', content: '', contentMode: 'html', type: 'FILE' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string; contentOmitted?: string }> };
+
+        for (const id of ['tasks-1', 'channel-1', 'file-1']) {
+          const entry = result.pages.find(p => p.id === id);
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'not include a content field',
+            actual: entry?.content,
+            expected: undefined,
+          });
+          assert({
+            given: `a structured page type (${id})`,
+            should: 'include a contentOmitted explanation',
+            actual: typeof entry?.contentOmitted,
+            expected: 'string',
+          });
+        }
+      });
+
+      it('reports the guardrail when the page count exceeds the content cap', async () => {
+        const manyPages = Array.from({ length: 60 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = manyPages
+          .slice(0, 50)
+          .map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(manyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+          contentPageCap: number;
+          nextSteps: string[];
+        };
+
+        assert({
+          given: '60 pages with include=content and a cap of 50',
+          should: 'flag contentTruncated as true',
+          actual: result.contentTruncated,
+          expected: true,
+        });
+
+        assert({
+          given: '60 pages with include=content',
+          should: 'only attach content to the first 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+
+        assert({
+          given: 'truncated content batch',
+          should: 'report what was dropped in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('50') && s.includes('60')),
+          expected: true,
+        });
+      });
+
+      it('clips a single page whose content exceeds the per-page character cap', async () => {
+        const hugeContent = 'x'.repeat(10000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: hugeContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+          contentClippedCount: number;
+          contentCharCapPerPage: number;
+          nextSteps: string[];
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'a page whose content exceeds the per-page char cap with no newlines to cut at',
+          should: 'fall back to a hard clip at the cap length',
+          actual: doc?.content?.length,
+          expected: result.contentCharCapPerPage,
+        });
+
+        assert({
+          given: 'a clipped page',
+          should: 'flag contentClipped: true on that entry',
+          actual: doc?.contentClipped,
+          expected: true,
+        });
+
+        assert({
+          given: 'a clipped page with no newlines',
+          should: 'report a single-line contentClippedAfterLine',
+          actual: doc?.contentClippedAfterLine,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with one clipped page',
+          should: 'report contentClippedCount',
+          actual: result.contentClippedCount,
+          expected: 1,
+        });
+
+        assert({
+          given: 'a batch with a clipped page',
+          should: 'mention the clip in nextSteps rather than staying silent',
+          actual: result.nextSteps.some(s => s.includes('clipped')),
+          expected: true,
+        });
+      });
+
+      it('cuts a clipped page at the last newline instead of mid-line', async () => {
+        // 900 lines of 10 chars + newline = 9900 chars, over the 8000 cap.
+        // The clip should land on a line boundary, not mid-line.
+        const lines = Array.from({ length: 900 }, (_, i) => `line${String(i).padStart(5, '0')}`);
+        const longContent = lines.join('\n');
+
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: longContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean; contentClippedAfterLine?: number }>;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+        const clippedLines = doc?.content?.split('\n') ?? [];
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'not end mid-line (every line is a full "lineNNNNN" token)',
+          actual: clippedLines.every(l => /^line\d{5}$/.test(l)),
+          expected: true,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'stay under the char cap',
+          actual: (doc?.content?.length ?? Infinity) <= 8000,
+          expected: true,
+        });
+
+        assert({
+          given: '900 ten-char lines clipped at an 8000-char cap (800 full lines fit exactly)',
+          should: 'keep exactly 800 complete lines',
+          actual: clippedLines.length,
+          expected: 800,
+        });
+
+        assert({
+          given: 'clipped content cut at a newline boundary',
+          should: 'report contentClippedAfterLine matching the number of lines kept',
+          actual: doc?.contentClippedAfterLine,
+          expected: clippedLines.length,
+        });
+      });
+
+      it('does not clip content exactly at the per-page character cap', async () => {
+        const exactContent = 'x'.repeat(8000);
+        setupDriveAccessWithContent(
+          [docPage],
+          [{ id: 'doc-1', content: exactContent, contentMode: 'html', type: 'DOCUMENT' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string; contentClipped?: boolean }>;
+          contentClippedCount: number;
+        };
+
+        const doc = result.pages.find(p => p.id === 'doc-1');
+
+        assert({
+          given: 'content exactly at the per-page char cap (not exceeding it)',
+          should: 'not be clipped',
+          actual: doc?.contentClipped,
+          expected: undefined,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'keep the full content',
+          actual: doc?.content?.length,
+          expected: 8000,
+        });
+
+        assert({
+          given: 'content exactly at the per-page char cap',
+          should: 'report contentClippedCount of 0',
+          actual: result.contentClippedCount,
+          expected: 0,
+        });
+      });
+
+      it('does not truncate content when exactly at the page-count cap (50 pages)', async () => {
+        const exactlyFiftyPages = Array.from({ length: 50 }, (_, i) => ({
+          id: `page-${i}`,
+          title: `Page ${i}`,
+          type: 'DOCUMENT',
+          parentId: null,
+          position: i,
+          driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        }));
+        const contentRows = exactlyFiftyPages.map(p => ({ id: p.id, content: 'x', contentMode: 'html', type: 'DOCUMENT' }));
+
+        setupDriveAccessWithContent(exactlyFiftyPages, contentRows);
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as {
+          pages: Array<{ id: string; content?: string }>;
+          contentTruncated: boolean;
+        };
+
+        assert({
+          given: 'exactly 50 pages (the page-count cap) with include=content',
+          should: 'not flag contentTruncated',
+          actual: result.contentTruncated,
+          expected: false,
+        });
+
+        assert({
+          given: 'exactly 50 pages with include=content',
+          should: 'attach content to all 50 pages',
+          actual: result.pages.filter(p => p.content !== undefined).length,
+          expected: 50,
+        });
+      });
+    });
+
+  });
+
+  describe('list_trash', () => {
+    it('has correct tool definition', () => {
+      expect(pageReadTools.list_trash).toBeDefined();
+      expect(pageReadTools.list_trash.description).toContain('trash');
+    });
+
+    it('requires user authentication', async () => {
+      const context = { toolCallId: '1', messages: [], experimental_context: {} };
+
+      await expect(
+        pageReadTools.list_trash.execute!({ driveSlug: 'my-drive', driveId: 'drive-1' }, context)
+      ).rejects.toThrow('User authentication required');
+    });
+
+    // Regression test for #1774: list_trash's output had no page id, so an
+    // agent that just listed trash had nothing to pass to restore_page (which
+    // requires { id }) — it could see a trashed page but not restore it.
+    it('includes the page id for each trashed page, so restore_page can act on it', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            orderBy: vi.fn().mockResolvedValue([
+              {
+                id: 'page-trashed-1',
+                title: 'Old Notes',
+                type: 'DOCUMENT',
+                trashedAt: new Date('2026-01-01'),
+                parentId: null,
+                position: 0,
+                driveId: 'drive-1',
+              },
+            ]),
+          }),
+        }),
+      });
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const trashedPages = result.trashedPages as Array<{ id: string; title: string }>;
+      assert({
+        given: 'list_trash result',
+        should: 'include the id of each trashed page',
+        actual: trashedPages[0]?.id,
+        expected: 'page-trashed-1',
+      });
+    });
+
+    // ========================================================================
+    // Regression coverage for #1772: list_trash only required drive
+    // membership, unlike GET /api/drives/[driveId]/trash which requires
+    // owner/admin. The bars must agree.
+    // ========================================================================
+    it('denies a plain drive member (not owner or admin) from listing trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: true, drive: null });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'member-user' , accessActor: credentialActor('member-user', null)} as ToolExecutionContext,
       };
 
       await expect(
-        pageReadTools.list_pages.execute!({ driveId: 'non-existent' }, context)
-      ).rejects.toThrow(); // Throws an error when drive access is denied
+        pageReadTools.list_trash.execute!(
+          { driveSlug: 'my-drive', driveId: 'drive-1' },
+          context
+        )
+      ).rejects.toThrow('Only drive owners and admins');
     });
 
+    it('allows the drive owner to list trash', async () => {
+      mockCheckDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, drive: null });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'owner-user' , accessActor: credentialActor('owner-user', null)} as ToolExecutionContext,
+      };
+
+      const result = await pageReadTools.list_trash.execute!(
+        { driveSlug: 'my-drive', driveId: 'drive-1' },
+        context
+      ) as { success: boolean };
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('read_page', () => {
@@ -192,7 +1189,7 @@ describe('page-read-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -201,6 +1198,494 @@ describe('page-read-tools', () => {
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');
+    });
+
+    it('returns a SHEET as bounded rows, not as thousands of lines of TOML', async () => {
+      // The defect in issue #2467: a 500-row sheet came back as ~23,700
+      // numbered lines of SheetDoc TOML, one table per cell, with no way to ask
+      // for a row range. What comes back now is the sheet's shape plus a window.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `row-${index}`, value: `row-${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      assert({
+        given: 'a 500-row sheet read with no range',
+        should: 'report its true dimensions and return only the preview window',
+        actual: { dimensions: result.dimensions, rowsReturned: result.rowsReturned },
+        expected: { dimensions: { rowCount: 500, columnCount: 16 }, rowsReturned: 25 },
+      });
+      // 25 rows + one column header line, not 23,715 lines of TOML.
+      expect(String(result.content).split('\n')).toHaveLength(26);
+      expect(String(result.content)).not.toContain('PAGESPACE_SHEETDOC');
+      expect(result.hasMoreRows).toBe(true);
+      expect(String((result.nextSteps as string[]).join(' '))).toContain('read_sheet');
+    });
+
+    it('reads lineStart/lineEnd on a SHEET as row numbers', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 4, cells: { A: { raw: 'five', value: 'five' } } },
+        { rowIndex: 5, cells: { A: { raw: 'six', value: 'six' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 5, lineEnd: 6 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const [, options] = mockReadRows.mock.calls[0] as [string, { fromRow: number; limit: number }];
+      assert({
+        given: 'lineStart 5 and lineEnd 6 on a sheet',
+        should: 'fetch rows 5 and 6, translating to the store\'s 0-based index',
+        actual: options,
+        expected: { fromRow: 4, limit: 2 },
+      });
+      expect(result.content).toBe('columns→A\n5→five\n6→six');
+    });
+
+    it('clips a sparse sheet window to the requested last row', async () => {
+      // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
+      // window that starts inside the range can still run past its end.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: { A: { raw: 'one', value: 'one' } } },
+        { rowIndex: 400, cells: { A: { raw: 'far', value: 'far' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 1, lineEnd: 2 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect((result.rows as { rowNumber: number }[]).map(row => row.rowNumber)).toEqual([1]);
+    });
+
+    it('reads a sheet whose rows were never migrated, from its stored document', async () => {
+      // The legacy path, end to end through read_page rather than through
+      // loadSheetWindow directly: `documentContent: page.content` is the only
+      // wiring that makes an unmigrated sheet read as its data instead of as an
+      // empty spreadsheet, and nothing else covers that argument being passed.
+      const document = [
+        '#%PAGESPACE_SHEETDOC v1',
+        'page_id = "page-1"',
+        '',
+        '[[sheets]]',
+        'name = "Legacy"',
+        'order = 0',
+        '',
+        '[sheets.meta]',
+        'row_count = 2',
+        'column_count = 2',
+        '',
+        '[sheets.cells.A1]',
+        'value = "Item"',
+        'type = "string"',
+        '',
+        '[sheets.cells.B2]',
+        'formula = "=1+1"',
+        'value = 2',
+        'type = "number"',
+      ].join('\n');
+
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage(document, 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      // No tabs in the row store — the sheet predates it.
+      mockListTabs.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Legacy', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.dimensions).toEqual({ rowCount: 2, columnCount: 2 });
+      expect(String(result.content)).toContain('1→Item');
+      // A formula still reads as its computed value, with the formula kept.
+      expect(result.formulas).toEqual({ B2: '=1+1' });
+      expect(String(result.content)).not.toContain('PAGESPACE_SHEETDOC');
+      // Reading must never have materialised anything.
+      expect(mockReadRows).not.toHaveBeenCalled();
+    });
+
+    it('offers a continuation that does not require a tool the caller may not have', async () => {
+      // An agent whose saved enabledTools allowlist predates read_sheet cannot
+      // call it. Pointing only there would leave it with 25 rows of a 500-row
+      // sheet and no way forward, which is a capability REGRESSION against the
+      // old whole-document read. read_page's own lineStart pages the same sheet
+      // and is always available to whoever just called read_page.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // A FULL page is what signals "there may be more" — a short page proves
+      // there is not, whatever the tab's declared rowCount says.
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const steps = (result.nextSteps as string[]).join(' ');
+      expect(steps).toContain('read_sheet (startRow: 26)');
+      expect(steps).toContain('read_page again (lineStart: 26)');
+    });
+
+    it('never tells the agent to resume at the row it just asked for', async () => {
+      // A tab can DECLARE more rows than it stores — 500 declared, rows only up
+      // to 60; a new sheet declares 20 and stores none. Deriving "more rows"
+      // from the declared count meant an empty window answered
+      // hasMoreRows: true, nextStartRow: <the row just requested> — a loop with
+      // no exit. `readRows` selects rowIndex >= from, so an empty fetch proves
+      // nothing follows.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 100 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      assert({
+        given: 'a window past the last STORED row of a tab that declares more',
+        should: 'report no further rows rather than pointing back at the same call',
+        actual: { hasMoreRows: result.hasMoreRows, nextStartRow: result.nextStartRow },
+        expected: { hasMoreRows: false, nextStartRow: undefined },
+      });
+      // The sheet's real size is still reported — empty window, not empty sheet.
+      expect(result.dimensions).toEqual({ rowCount: 500, columnCount: 16 });
+    });
+
+    it('never resumes at the requested row when clipping emptied the window', async () => {
+      // Sparse sheet: rows 1-3 then 500+. Asking for rows 4-10 fetches from
+      // index 3, gets row 500, and clips it. `rows` is empty but the FETCH was
+      // not — the earlier fix only covered the empty-fetch case, and this path
+      // still pointed back at the call that had just returned nothing.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 499, cells: { A: { raw: 'far', value: 'far' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 4, lineEnd: 10 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.rowsReturned).toBe(0);
+      // The fetch ran past lineEnd, which PROVES rows 4-10 hold nothing — so
+      // the bounded request is answered, not continued. Claiming more rows here
+      // both cost an empty call and contradicted this response's own
+      // rangeMessage ("No rows are stored in rows 4-10").
+      expect(result.hasMoreRows).toBe(false);
+      expect('nextStartRow' in result).toBe(false);
+      expect(String(result.rangeMessage)).toContain('No rows are stored');
+    });
+
+    it('still points past the last returned row when rows really do follow', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // Full page → there may be more. A short page would prove otherwise.
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.hasMoreRows).toBe(true);
+      expect(result.nextStartRow).toBe(26);
+    });
+
+    it('shows a SHEET page holding legacy text rather than calling it an empty grid', async () => {
+      // parseSheetContentSafe reports non-sheet text as an EMPTY sheet — not a
+      // parse failure, because there is no sheet data to lose. Taken at face
+      // value that answers "20 rows x 10 columns, nothing stored" and hides
+      // content the old path displayed.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(
+        createMockPage('<p>Notes that were never a spreadsheet</p>', 'SHEET')
+      );
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Odd sheet', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      // The ordinary text path answers, so the content is line-NUMBERED and
+      // `totalLines` counts real lines — not the fake 20-row grid the sheet
+      // parser reports for text it does not recognise.
+      expect(String(result.content)).toContain('never a spreadsheet');
+      expect(String(result.content)).toMatch(/^1→/);
+      // `totalLines` counts the real text, not the 20-row grid the sheet parser
+      // reports for content it does not recognise as a sheet.
+      expect(result.totalLines).toBe(String(result.content).split('\n').length);
+      expect(result.totalLines).not.toBe(20);
+    });
+
+    it('pages a sparse sheet to exhaustion: terminates, no repeats, no skips, no wasted calls', async () => {
+      // Three separate defects have been found in this paging logic — pointing
+      // at the same call, pointing past the last fetched row, and trusting the
+      // declared rowCount. Individual cases kept missing the next one, so this
+      // drives the loop an agent actually writes and asserts the properties
+      // together. It needs MORE rows than one page holds, or nothing pages; and
+      // it counts calls, because the rowCount defect shows up only as a
+      // guaranteed-empty extra round trip, not as a wrong row set.
+      // The layout matters. The last stored row must sit well BELOW the tab's
+      // declared rowCount (500), or `nextFromRow` lands exactly on it and the
+      // declared-count defect gives the same answer as the fix. And the final
+      // page must be partial, or the loop legitimately costs one extra call.
+      const indexes = [
+        ...Array.from({ length: 30 }, (_, i) => i),        // dense block
+        ...Array.from({ length: 25 }, (_, i) => 200 + i),  // gap, then more
+      ];
+      const stored = indexes.map((rowIndex) => ({
+        rowIndex,
+        cells: { A: { raw: `r${rowIndex}`, value: `r${rowIndex}` } },
+      }));
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // Serve like the real store: rowIndex >= fromRow, ascending, capped.
+      mockReadRows.mockImplementation(async (_id: string, o: { fromRow?: number; limit?: number }) =>
+        stored.filter(r => r.rowIndex >= (o.fromRow ?? 0)).slice(0, o.limit ?? 200));
+
+      const seen: number[] = [];
+      let lineStart: number | undefined;
+      let calls = 0;
+      for (;;) {
+        if (++calls > 20) throw new Error('paging did not terminate');
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'Members', pageId: 'page-1', ...(lineStart !== undefined && { lineStart }) },
+          createAuthContext()
+        ) as Record<string, unknown>;
+        const batch = (result.rows as { rowNumber: number }[]).map(r => r.rowNumber);
+        // No call may come back empty: that is the wasted round trip the
+        // declared-rowCount defect produced.
+        expect(batch.length).toBeGreaterThan(0);
+        seen.push(...batch);
+        if (!result.hasMoreRows) break;
+        const next = result.nextStartRow as number;
+        expect(next).not.toBe(lineStart ?? 1);   // never resume where we started
+        lineStart = next;
+      }
+
+      const expected = indexes.map(i => i + 1);
+      expect(seen).toEqual(expected);                 // every row, in order, no skips
+      expect(new Set(seen).size).toBe(seen.length);   // and none twice
+      // 55 rows at 25 per page: 25 + 25 + 5. A fourth call means a wasted one.
+      expect(calls).toBe(3);
+    });
+
+    it('does not claim more rows when a bounded range is fully satisfied', async () => {
+      // A dense sheet read with lineStart: 1, lineEnd: 10 fetches exactly 10
+      // rows, so the window is "full" and sheet.hasMore is true — but the
+      // CALLER's range is complete. Measuring against the sheet rather than the
+      // request pointed at row 11, past the lineEnd they asked for.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 10 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 1, lineEnd: 10 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.rowsReturned).toBe(10);
+      expect(result.hasMoreRows).toBe(false);
+      expect('nextStartRow' in result).toBe(false);
+    });
+
+    it('answers a missing tab rather than throwing a generic read failure', async () => {
+      // list_pages and read_sheet both handle this; read_page was the one call
+      // site that let it reach the outer catch as "Failed to read document".
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      // Tabs exist, but none at index 0 — what a backfill could leave behind.
+      mockListTabs.mockResolvedValue([{ ...sheetTab, tabIndex: 1 }]);
+      mockGetTab.mockResolvedValue(null);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Sheet tab not found');
+      expect(result.tabs).toBeDefined();
+    });
+
+    it('never loops when a row is too wide for the table budget', async () => {
+      // A single row whose rendered line exceeds the table budget left
+      // rowsShown at 0, which emptied `rows`, which made the resume point fall
+      // back to that same row. An agent following nextStartRow re-read the
+      // identical empty result forever — the third door into the loop the two
+      // guards above already close.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // One row far wider than the 20k table budget, then a normal one.
+      const wideCells = Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`C${i}`, { raw: 'x'.repeat(120), value: 'x'.repeat(120) }]),
+      );
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: wideCells },
+        { rowIndex: 1, cells: { A: { raw: 'next', value: 'next' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Wide', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      // The data survives even though the table could not render it...
+      expect((result.rows as unknown[]).length).toBeGreaterThan(0);
+      // ...and the resume point never points back at the same call.
+      if (result.hasMoreRows) {
+        expect(result.nextStartRow).not.toBe(1);
+      }
+      expect(String((result.nextSteps as string[]).join(' '))).toContain('too wide to render');
+    });
+
+    it('distinguishes an empty window from an empty sheet', async () => {
+      // Reading past the end, or into a gap in a sparse sheet, must still
+      // report the sheet's real size and say which case it was. "0 rows" with
+      // no explanation reads as an empty spreadsheet.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([]);
+
+      const past = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 900 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(past.dimensions).toEqual({ rowCount: 500, columnCount: 16 });
+      expect(String(past.rangeMessage)).toContain('past the last row');
+      expect(String(past.summary)).toContain('500 rows');
+      // Nothing should tell the agent to keep paging an empty window.
+      expect((past.nextSteps as string[]).join(' ')).not.toContain('startRow: 1');
+    });
+
+    it('keeps formulas and errors reachable on a SHEET read', async () => {
+      // The spreadsheets skill documents reading a sheet back to confirm a
+      // formula was stored and to see the expected cross-page-reference error.
+      // A read that showed only computed values would break that workflow and
+      // could not tell "5" from "=2+3".
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        {
+          rowIndex: 3,
+          cells: {
+            B: { raw: '=SUM(B2:B3)', value: 2200 },
+            C: { raw: '=OTHER!A1', error: { type: 'error', message: 'Cross-page references are not supported in this context' } },
+          },
+        },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Budget', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.formulas).toEqual({ B4: '=SUM(B2:B3)', C4: '=OTHER!A1' });
+      expect(result.errors).toEqual({
+        C4: 'Cross-page references are not supported in this context',
+      });
+    });
+
+    it('keeps the machine value reachable on a SHEET read, beside the formulas', async () => {
+      // `read_page` shares `sheet-view`'s window with `read_sheet`, so the same
+      // lossy display string reaches it: a currency cell reads back as
+      // `$1,200.00` with no way to recover the 1200 a formula would add up.
+      // Flattened by A1 address alongside `formulas` and `errors` — a caller
+      // that finds `formulas.B2` but no equivalent for the value would
+      // reasonably conclude there is nothing to recover.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue({
+        ...sheetTab,
+        columnFormats: { B: { number: { kind: 'currency', currency: 'USD', thousands: true, decimals: 2 } } },
+      });
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 1, cells: { A: { raw: 'Rent', value: 'Rent' }, B: { raw: '1200', value: 1200 } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Budget', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      // The display is what a person sees, and it stays that.
+      expect((result.rows as { cells: Record<string, string> }[])[0].cells.B).toBe('$1,200.00');
+      // The number underneath is recoverable, and only for the cell that needs it.
+      expect(result.unformatted).toEqual({ B2: 1200 });
     });
 
     it('returns channel messages when reading a CHANNEL page', async () => {
@@ -259,6 +1744,94 @@ describe('page-read-tools', () => {
         should: 'include structured channelMessages array',
         actual: Array.isArray((result as { channelMessages: unknown[] }).channelMessages),
         expected: true,
+      });
+    });
+
+    describe('visual FILE pages', () => {
+      const createMockVisualFilePage = () => ({
+        id: 'page-1',
+        title: 'diagram.png',
+        type: 'FILE',
+        isTrashed: false,
+        driveId: 'drive-1',
+        processingStatus: 'visual',
+        mimeType: 'image/png',
+        contentHash: 'hash-abc',
+        fileSize: 5000,
+        originalFileName: 'diagram.png',
+      });
+
+      const createVisionAuthContext = (userId = 'user-123') => ({
+        toolCallId: '1',
+        messages: [],
+        experimental_context: {
+          userId, accessActor: credentialActor(userId, null),
+          modelCapabilities: { hasVision: true, hasTools: true, model: 'gpt-5.4', provider: 'openai' },
+        } as ToolExecutionContext,
+      });
+
+      beforeEach(() => {
+        mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+        mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      });
+
+      it('returns delivered image content for a visual FILE page on a vision-capable model', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue({
+          base64: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+          mediaType: 'image/jpeg',
+          preset: 'ai-vision',
+        });
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string; imageBase64: string; mimeType: string; originalMimeType: string; success: boolean };
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'return a visual_content_delivered result',
+          actual: result.type,
+          expected: 'visual_content_delivered',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: 'deliver the base64 bytes from fetchCachedImagePreset',
+          actual: result.imageBase64,
+          expected: 'ZmFrZS1pbWFnZS1ieXRlcw==',
+        });
+
+        assert({
+          given: 'a visual FILE page and a vision-capable model',
+          should: "deliver the fetched preset's mediaType rather than the page's declared mimeType",
+          actual: result.mimeType,
+          expected: 'image/jpeg',
+        });
+
+        assert({
+          given: "a visual FILE page whose delivered preset was re-encoded to a different format (png page, jpeg preset)",
+          should: "still carry the page's true mimeType as originalMimeType, for correct reporting if this result later degrades to metadata-only",
+          actual: result.originalMimeType,
+          expected: 'image/png',
+        });
+      });
+
+      it('falls back to metadata-only when no cached preset is available', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockVisualFilePage());
+        mockFetchCachedImagePreset.mockResolvedValue(null);
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'diagram.png', pageId: 'page-1' },
+          createVisionAuthContext()
+        ) as { type: string };
+
+        assert({
+          given: 'a visual FILE page with no usable cached preset',
+          should: 'fall back to the existing visual_content_metadata result',
+          actual: result.type,
+          expected: 'visual_content_metadata',
+        });
       });
     });
 
@@ -469,10 +2042,21 @@ describe('page-read-tools', () => {
           }),
         } as unknown as typeof mockDb.query.taskLists;
         mockDb.query.taskStatusConfigs = {
+          // findFirst too: the post-seed sweep reads its replacement statuses
+          // one at a time rather than paging the vocabulary, since nothing caps
+          // how many statuses a list may define.
+          findFirst: vi.fn().mockResolvedValue(undefined),
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
+        // Default no-op insert: most of these tests aren't asserting on the
+        // legacy-backfill insert this triggers when statusConfigs is empty
+        // (see the dedicated backfill test below, which overrides this).
+        mockDb.insert = vi.fn(() => ({
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
+        })) as unknown as typeof mockDb.insert;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
+        // db.select().from().innerJoin().where().groupBy() for sub-task count aggregates
         mockDb.select = vi.fn(() => ({
           from: vi.fn().mockReturnThis(),
           innerJoin: vi.fn().mockReturnThis(),
@@ -491,6 +2075,13 @@ describe('page-read-tools', () => {
               pageId: `page-task-${i}`,
             }))
           ),
+          groupBy: vi.fn().mockResolvedValue([]),
+          // ensureTaskListForPage now walks the page tree to inherit its nearest
+          // ancestor task list's status vocabulary before seeding, which adds a
+          // `.where().limit()` shape. An empty result ends the walk immediately
+          // and the seed falls back to DEFAULT_TASK_STATUSES — what these cases
+          // assert.
+          limit: vi.fn().mockResolvedValue([]),
         })) as unknown as typeof mockDb.select;
 
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
@@ -595,6 +2186,182 @@ describe('page-read-tools', () => {
           expected: 67,
         });
       });
+
+      it('persists a task_lists row AND seeds task_status_configs when auto-creating (not just the response fallback)', async () => {
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }] });
+
+        // No taskLists row exists yet for this page.
+        mockDb.query.taskLists = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+        } as unknown as typeof mockDb.query.taskLists;
+        // Simulates the findMany the tool runs right after creation seeing the rows
+        // ensureTaskListForPage just inserted, so the separate empty-configs backfill
+        // check doesn't also fire and double-insert.
+        mockDb.query.taskStatusConfigs = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
+          findMany: vi.fn().mockResolvedValue([
+            { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+          ]),
+        } as unknown as typeof mockDb.query.taskStatusConfigs;
+
+        const taskListInserts: Array<Record<string, unknown>> = [];
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn((table: { pageId?: string }) => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            if (table?.pageId === 'pageId') {
+              taskListInserts.push(vals as Record<string, unknown>);
+              return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
+            }
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a TASK_LIST page with no task_lists row yet',
+          should: 'insert exactly one task_lists row',
+          actual: taskListInserts.length,
+          expected: 1,
+        });
+        assert({
+          given: 'a newly auto-created task_lists row',
+          should: 'persist the 4 default task_status_configs (not just return them in the response)',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the persisted status configs',
+          should: 'link each row to the new task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-new'),
+          expected: true,
+        });
+      });
+
+      it('backfills status configs for a legacy task_lists row that exists but has none', async () => {
+        // Reproduces the gap flagged in review: a task_lists row created by a pre-fix
+        // lazy-init path (or one seeded before this fix shipped) has zero configs.
+        // ensureTaskListForPage no-ops since the row already exists, so read_page
+        // itself must backfill once it observes the empty configs, instead of
+        // leaving that row permanently half-initialized.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        const statusConfigInserts: Array<Record<string, unknown>> = [];
+        mockDb.insert = vi.fn(() => ({
+          values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+            statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
+          },
+        })) as unknown as typeof mockDb.insert;
+
+        await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        );
+
+        assert({
+          given: 'a task_lists row that already exists but has zero status configs',
+          should: 'backfill the 4 default status configs',
+          actual: statusConfigInserts.map(c => c.slug),
+          expected: ['pending', 'in_progress', 'blocked', 'completed'],
+        });
+        assert({
+          given: 'the backfilled status configs',
+          should: 'link each row to the existing task_lists id',
+          actual: statusConfigInserts.every(c => c.taskListId === 'list-1'),
+          expected: true,
+        });
+        assert({
+          given: 'a repair that both writes configs and rewrites task statuses',
+          should: 'run as one transaction, since a half-applied repair is permanent',
+          // It fires only while the vocabulary is empty, so once the configs
+          // commit there is no later read that would come back and finish the
+          // job. Structural, but the alternative is unobservable through a mock.
+          // Two: the create-path seed opens one as well now, since it runs the
+          // same two-write sequence and a page can hold task rows before its own
+          // task_lists row exists. That one wraps a pair of reads on the common
+          // path where the list is already there — a BEGIN/COMMIT for a
+          // correctness cliff is a trade worth making.
+          actual: (mockDb.transaction as unknown as { mock: { calls: unknown[] } }).mock.calls.length,
+          expected: 2,
+        });
+      });
+
+      it('reports the vocabulary it just seeded, not the one it read before seeding', async () => {
+        // statusConfigs is read BEFORE the repair. Without a re-read the same
+        // response that seeds icebox/shipped tells the agent the statuses are
+        // the four built-ins — and the agent then writes a status the list does
+        // not define, which PATCH rejects.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+        const seeded = [
+          { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+          { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+        ];
+        vi.mocked(mockDb.query.taskStatusConfigs.findMany)
+          .mockResolvedValueOnce([] as never)
+          .mockResolvedValue(seeded as never);
+        mockDb.insert = vi.fn(() => ({
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses?: Array<{ slug: string }> };
+
+        assert({
+          given: 'a read that repaired the vocabulary on its way through',
+          should: 'return the seeded slugs AND re-read the rows the repair moved',
+          // Both halves, because the repair writes twice. Re-reading only the
+          // vocabulary reports statuses beside rows the sweep has already moved
+          // off — naming slugs the same response says do not exist, which is the
+          // pairing this block exists to prevent.
+          actual: {
+            statuses: result.availableStatuses?.map(s => s.slug),
+            // The task read specifically — this route selects several other
+            // shapes, so a bare call count is already >1 without the re-read.
+            taskReads: (mockDb.select as ReturnType<typeof vi.fn>).mock.calls
+              .filter((c) => !!c[0] && 'completedAt' in (c[0] as Record<string, unknown>)).length,
+          },
+          expected: { statuses: ['icebox', 'shipped'], taskReads: 2 },
+        });
+      });
+
+      it('still returns the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
+        // The backfill is best-effort: this branch used to be a pure read (no
+        // write) that could never fail. A transient DB error on the backfill
+        // insert must not turn a previously-safe display fallback into a
+        // failed tool call -- it should log and let the read still succeed.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+
+        // The failure has to come from the awaited call. Seeding is
+        // `.values(...).onConflictDoNothing()`, so rejecting at `values()`
+        // would build a promise nothing ever awaits — an unhandled rejection
+        // that fails the run while every test still reports green.
+        mockDb.insert = vi.fn(() => ({
+          values: () => ({
+            onConflictDoNothing: () => Promise.reject(new Error('connection reset')),
+          }),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses: Array<{ slug: string }> };
+
+        assert({
+          given: 'a legacy list whose backfill insert fails with an unrelated error',
+          should: 'still return the documented default statuses instead of throwing',
+          actual: result.availableStatuses.map(s => s.slug).sort(),
+          expected: ['blocked', 'completed', 'in_progress', 'pending'],
+        });
+      });
     });
 
   });
@@ -681,13 +2448,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty conversations query
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ groupBy: [] }),
+      );
 
       const result = await pageReadTools.list_conversations.execute!(
         { pageId: 'page-1', title: 'Test Agent' },
@@ -713,34 +2476,27 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
 
-      // Mock the main select for conversation aggregation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            groupBy: vi.fn().mockResolvedValue([
-              {
-                conversationId: 'conv-1',
-                messageCount: 5,
-                lastActivity: new Date('2025-01-15'),
-              },
-              {
-                conversationId: 'conv-2',
-                messageCount: 10,
-                lastActivity: new Date('2025-01-20'),
-              },
-            ]),
-          }),
+      // Both selects in this tool share one chain stub: the aggregation
+      // terminates on `.groupBy(...)`, the first-message preview on
+      // `.limit(1)` (a plain SELECT since the cutover, where it used to be
+      // `db.query.chatMessages.findFirst`).
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({
+          groupBy: [
+            {
+              conversationId: 'conv-1',
+              messageCount: 5,
+              lastActivity: new Date('2025-01-15'),
+            },
+            {
+              conversationId: 'conv-2',
+              messageCount: 10,
+              lastActivity: new Date('2025-01-20'),
+            },
+          ],
+          limit: [{ content: 'Hello, how can I help?', role: 'user', userId: 'user-1' }],
         }),
-      });
-
-      // Mock the chatMessages.findFirst for getting first message preview
-      mockDb.query.chatMessages = {
-        findFirst: vi.fn().mockResolvedValue({
-          content: 'Hello, how can I help?',
-          role: 'user',
-          userId: 'user-1',
-        }),
-      } as unknown as typeof mockDb.query.chatMessages;
+      );
 
       // Mock selectDistinct for participants
       (mockDb.selectDistinct as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -837,13 +2593,9 @@ describe('page-read-tools', () => {
       mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       // Mock empty messages for this conversation
-      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-        from: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            orderBy: vi.fn().mockResolvedValue([]),
-          }),
-        }),
-      });
+      (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+        mockSelectChain({ orderBy: [] }),
+      );
 
       const result = await pageReadTools.read_conversation.execute!(
         { pageId: 'page-1', conversationId: 'non-existent', title: 'Test Agent' },
@@ -879,13 +2631,9 @@ describe('page-read-tools', () => {
         mockDb.query.pages.findMany = vi.fn()
           .mockResolvedValue([{ id: 'global-assistant-id', title: 'Global Assistant' }]);
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(mockMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: mockMessages }),
+        );
       });
 
       it('returns all messages when no line params', async () => {
@@ -957,13 +2705,9 @@ describe('page-read-tools', () => {
       beforeEach(() => {
         mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'AI_CHAT'));
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
-        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue({
-          from: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              orderBy: vi.fn().mockResolvedValue(fiveMessages),
-            }),
-          }),
-        });
+        (mockDb.select as ReturnType<typeof vi.fn>).mockReturnValue(
+          mockSelectChain({ orderBy: fiveMessages }),
+        );
       });
 
       it('returns only messages in range when lineStart and lineEnd provided', async () => {

@@ -1,17 +1,20 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { canActorEditPage } from './actor-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members'
 import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
+import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { broadcastInboxEvent } from '@/lib/websocket/socket-utils';
-import { type ToolExecutionContext } from '../core';
+import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 
 const channelLogger = loggers.ai.child({ module: 'channel-tools' });
 
@@ -88,7 +91,7 @@ export const channelTools = {
         }
 
         // Check edit permissions
-        const canEdit = await canUserEditPage(userId, channel.id);
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, channel.id);
         if (!canEdit) {
           throw new Error('Insufficient permissions to send messages in this channel');
         }
@@ -108,6 +111,13 @@ export const channelTools = {
               senderType: senderIdentity.senderType,
               senderName: senderIdentity.senderName,
               ...(senderIdentity.agentPageId && { agentPageId: senderIdentity.agentPageId }),
+              // Universal Commands (§7): execution feedback for the reply,
+              // threaded in by the agent-mention responder. Guard on a
+              // non-empty array, not mere truthiness — an empty array is
+              // truthy in JS and would otherwise persist `commandExecution: []`.
+              ...((context as ToolExecutionContext).commandExecution?.length && {
+                commandExecution: (context as ToolExecutionContext).commandExecution,
+              }),
             },
           })
           .returning();
@@ -150,25 +160,12 @@ export const channelTools = {
             channelLogger.warn('Failed to get actor info for activity logging');
           });
 
-        // Fetch the complete message with user info for broadcasting
-        const newMessage = await db.query.channelMessages.findFirst({
-          where: eq(channelMessages.id, createdMessage.id),
-          with: {
-            user: {
-              columns: { id: true, name: true, image: true },
-            },
-            file: {
-              columns: { id: true, mimeType: true, sizeBytes: true },
-            },
-            reactions: {
-              with: {
-                user: {
-                  columns: { id: true, name: true },
-                },
-              },
-            },
-          },
-        });
+        // Fetch the complete message with user info for broadcasting. Routed
+        // through the repository loader so the joined author/reactor name PII is
+        // decrypted at the edge (GDPR #965) before this payload is broadcast to
+        // every channel member — an inline query here would leak ciphertext once
+        // the flag is on (legacy plaintext passes through unchanged).
+        const newMessage = await channelMessageRepository.loadChannelMessageWithRelations(createdMessage.id);
 
         // Broadcast to real-time channel
         if (process.env.INTERNAL_REALTIME_URL && newMessage) {
@@ -192,34 +189,18 @@ export const channelTools = {
         // Broadcast inbox updates to channel members
         try {
           if (channel.driveId) {
-            // Pending admins (acceptedAt IS NULL) must not receive inbox
-            // notifications for channels in a drive they have not joined.
-            const members = await db.query.driveMembers.findMany({
-              where: and(
-                eq(driveMembers.driveId, channel.driveId),
-                isNotNull(driveMembers.acceptedAt)
-              ),
-              columns: { userId: true },
-            });
-
-            const driveOwnerId = channel.drive?.ownerId;
-            const memberUserIds = new Set(members.map(m => m.userId));
-            if (driveOwnerId && !memberUserIds.has(driveOwnerId)) {
-              members.push({ userId: driveOwnerId });
-            }
+            // The drive's members, lead included, from the one org-aware enumeration: a pending
+            // invitation or a stale org row receives no inbox notification.
+            const members = (await getDriveRecipientUserIds(channel.driveId)).map((memberId) => ({ userId: memberId }));
 
             const messagePreview = content.length > 100
               ? content.substring(0, 100) + '...'
               : content;
 
-            const memberPermissions = await Promise.all(
-              members
-                .filter(m => !treatAsSelfAuthored || m.userId !== userId)
-                .map(async member => ({
-                  userId: member.userId,
-                  canView: await canUserViewPage(member.userId, channelId),
-                }))
-            );
+            // Who else can see the channel is an audience question about third parties, not the caller's access.
+            const candidates = members.filter(m => !treatAsSelfAuthored || m.userId !== userId).map(m => m.userId);
+            const viewers = await getUsersWhoCanViewPage(channelId, candidates);
+            const memberPermissions = candidates.map(memberId => ({ userId: memberId, canView: viewers.has(memberId) }));
 
             const broadcastPromises = memberPermissions
               .filter(m => m.canView)
@@ -241,6 +222,17 @@ export const channelTools = {
           channelLogger.error('Failed to broadcast inbox update for AI message', error instanceof Error ? error : undefined);
         }
 
+        // Fire-and-forget mention notifications — never fail the send
+        if (channel.driveId) {
+          void notifyMentionedUsers({
+            content: content.trim(),
+            pageId: channelId,
+            driveId: channel.driveId,
+            triggeredByUserId: userId,
+            mentionerNameOverride: senderIdentity.senderName,
+          });
+        }
+
         return {
           success: true,
           messageId: createdMessage.id,
@@ -258,6 +250,128 @@ export const channelTools = {
           channelId: maskIdentifier(channelId),
         });
         throw new Error(`Failed to send channel message: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    },
+  }),
+
+  /**
+   * Delete a message from a channel
+   */
+  delete_channel_message: tool({
+    description:
+      'Delete a message from a channel. Can only delete messages that were sent by or on behalf of the authenticated user (including AI-generated messages). Use this to clean up test messages, remove erroneous posts, or manage channel content.',
+    inputSchema: z.object({
+      channelId: z.string().describe('The unique ID of the channel page containing the message'),
+      messageId: z.string().describe('The unique ID of the message to delete'),
+    }),
+    execute: async ({ channelId, messageId }, { experimental_context: context }) => {
+      const userId = (context as ToolExecutionContext)?.userId;
+      if (!userId) {
+        throw new Error('User authentication required');
+      }
+
+      try {
+        // Verify the channel exists
+        const channel = await db.query.pages.findFirst({
+          where: and(eq(pages.id, channelId), eq(pages.isTrashed, false)),
+          columns: { id: true, title: true, type: true, driveId: true },
+        });
+        if (!channel) {
+          throw new Error(`Channel with ID "${channelId}" not found`);
+        }
+
+        if (channel.type !== 'CHANNEL') {
+          return {
+            success: false,
+            error: 'Page is not a channel',
+            message: `This page is a ${channel.type}. Use delete_channel_message only on CHANNEL pages.`,
+          };
+        }
+
+        // Check edit permissions
+        const canEdit = await canActorEditPage(context as ToolExecutionContext, channel.id);
+        if (!canEdit) {
+          throw new Error('Insufficient permissions to delete messages in this channel');
+        }
+
+        // Verify the message exists in this channel
+        const message = await channelMessageRepository.findChannelMessageInPage({ messageId, pageId: channelId });
+        if (!message) {
+          return {
+            success: false,
+            error: 'Message not found',
+            message: `Message "${messageId}" was not found in channel "${channel.title}". It may have already been deleted.`,
+          };
+        }
+
+        // Only the user who authored (or triggered) the message may delete it
+        if (message.userId !== userId) {
+          return {
+            success: false,
+            error: 'Permission denied',
+            message: 'You can only delete messages that were sent by or on behalf of you.',
+          };
+        }
+
+        const deleted = await channelMessageRepository.softDeleteChannelMessage(messageId);
+        if (deleted === 0) {
+          return {
+            success: false,
+            error: 'Message already deleted',
+            message: `Message "${messageId}" has already been deleted.`,
+          };
+        }
+
+        // Log activity for audit trail (fire-and-forget)
+        const toolContext = context as ToolExecutionContext;
+        getActorInfo(userId)
+          .then(actorInfo => {
+            logMessageActivity(userId, 'message_delete', {
+              id: messageId,
+              pageId: channelId,
+              driveId: channel.driveId,
+              conversationType: 'channel',
+            }, actorInfo, {
+              isAiGenerated: true,
+              aiProvider: toolContext.aiProvider ?? 'unknown',
+              aiModel: toolContext.aiModel ?? 'unknown',
+              aiConversationId: toolContext.conversationId,
+            });
+          })
+          .catch(() => {
+            channelLogger.warn('Failed to get actor info for activity logging');
+          });
+
+        // Broadcast deletion to real-time channel (fire-and-forget)
+        if (process.env.INTERNAL_REALTIME_URL) {
+          const requestBody = JSON.stringify({
+            channelId,
+            event: 'message_deleted',
+            payload: { messageId },
+          });
+          fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+            method: 'POST',
+            headers: createSignedBroadcastHeaders(requestBody),
+            body: requestBody,
+          }).catch(() => {
+            channelLogger.error('Failed to broadcast message_deleted from delete_channel_message tool');
+          });
+        }
+
+        return {
+          success: true,
+          messageId,
+          channelId,
+          channelTitle: channel.title,
+          message: `Successfully deleted message from channel "${channel.title}"`,
+        };
+      } catch (error) {
+        channelLogger.error('Failed to delete channel message', error instanceof Error ? error : undefined, {
+          userId: maskIdentifier(userId),
+          channelId: maskIdentifier(channelId),
+          messageId: maskIdentifier(messageId),
+        });
+        throw new Error(`Failed to delete channel message: ${error instanceof Error ? error.message : String(error)}`);
       }
     },
   }),

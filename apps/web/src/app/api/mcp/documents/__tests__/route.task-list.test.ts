@@ -1,0 +1,524 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextRequest } from 'next/server';
+
+const mockAuthenticateMCPRequest = vi.fn();
+const mockGetUserAccessLevel = vi.fn();
+const mockFindFirstPage = vi.fn();
+const mockFindFirstTaskList = vi.fn();
+const mockFindManyStatusConfigs = vi.fn();
+const mockInsertReturning = vi.fn();
+const mockInsertStatusConfigValues = vi.fn();
+const mockSelectChildPages = vi.fn();
+const mockBackfillMissingTaskItems = vi.fn();
+const mockFetchEnrichedTasks = vi.fn();
+const mockSerializeTaskItem = vi.fn();
+
+vi.mock('@/lib/auth', () => ({
+  authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
+  isAuthError: (result: unknown) => 'error' in (result as object),
+  isMCPAuthResult: (result: unknown) =>
+    !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
+  getPrincipalAccessLevel: async (_auth: unknown, _pageId: string) => ({
+    canView: true,
+    canEdit: false,
+    canShare: false,
+    canDelete: false,
+  }),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
+}));
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppAccessLevel: vi.fn(),
+}));
+vi.mock('@pagespace/lib/utils/enums', () => ({
+  PageType: { TASK_LIST: 'TASK_LIST' },
+}));
+vi.mock('@pagespace/lib/sheets/sheet', () => ({
+  isSheetType: vi.fn(() => false),
+  parseSheetContentSafe: vi.fn(),
+  serializeSheetContent: vi.fn(),
+  updateSheetCells: vi.fn(),
+  isValidCellAddress: vi.fn(() => true),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+    security: { warn: vi.fn() },
+  },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  getActorInfo: vi.fn(),
+}));
+vi.mock('@/lib/websocket', () => ({
+  broadcastPageEvent: vi.fn(),
+  createPageEventPayload: vi.fn(),
+}));
+vi.mock('@/services/api/page-mutation-service', () => ({
+  applyPageMutation: vi.fn(),
+  PageRevisionMismatchError: class extends Error {},
+}));
+
+const mockTransaction = vi.fn();
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
+    query: {
+      pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
+      taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
+      taskStatusConfigs: { findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
+    },
+    insert: (table: { pageId?: string }) => ({
+      values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
+        if (table?.pageId === 'taskLists.pageId') {
+          return { returning: (...args: unknown[]) => mockInsertReturning(...args) };
+        }
+        mockInsertStatusConfigValues(vals);
+        // Seeding goes through ON CONFLICT DO NOTHING (see
+        // seedInheritedTaskStatusConfigs — catching 23505 inside a transaction
+        // would abort it), so the values builder must offer that.
+        return { onConflictDoNothing: () => Promise.resolve(undefined) };
+      },
+    }),
+    // Chainable, because ensureTaskListForPage now walks the page tree to inherit
+    // its nearest ancestor task list's status vocabulary before seeding — that
+    // walk adds `.limit()` / `.orderBy()` to the shapes this mock has to answer.
+    // Here the walk finds no resolvable parent, ends immediately, and falls back
+    // to DEFAULT_TASK_STATUSES, which is what these cases assert.
+    select: () => {
+      const chain: Record<string, unknown> = {
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(mockSelectChildPages()).then(resolve, reject),
+      };
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.innerJoin = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      return chain;
+    },
+    // The vocabulary sweep issues two set-based UPDATEs after seeding; they
+    // match nothing in these fixtures but still have to be callable.
+    update: () => ({ set: () => ({ where: () => Promise.resolve(undefined) }) }),
+  };
+  // The repair runs in ONE transaction now — a half-applied one is permanent,
+  // since it only ever fires while the vocabulary is empty.
+  dbMock.transaction = mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
+
+// ensureTaskListForPage is real (not mocked) — it's the fix under test, exercised
+// against the mocked `db` above so we can assert the status configs actually persist.
+vi.mock('@/services/api/task-sync-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/api/task-sync-service')>();
+  return {
+    ...actual,
+    backfillMissingTaskItems: (...args: unknown[]) => mockBackfillMissingTaskItems(...args),
+  };
+});
+
+// task-sync-service (real, unmocked below) also imports `desc`/`inArray` for its
+// other exports (addTaskItemUnderParent, backfillMissingTaskItems); include them
+// even though the code paths under test here don't call them.
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn(),
+  asc: vi.fn(),
+  and: vi.fn(),
+  desc: vi.fn(),
+  inArray: vi.fn(),
+  // The vocabulary sweep's two set-based UPDATEs.
+  notInArray: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
+}));
+
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'pages.id' },
+}));
+
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: { pageId: 'taskLists.pageId' },
+  taskItems: { pageId: 'taskItems.pageId', status: 'taskItems.status', completedAt: 'taskItems.completedAt' },
+  taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
+  DEFAULT_TASK_STATUSES: [
+    { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
+    { slug: 'in_progress', name: 'In Progress', group: 'in_progress', position: 1, color: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300' },
+    { slug: 'blocked', name: 'Blocked', group: 'in_progress', position: 2, color: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+    { slug: 'completed', name: 'Done', group: 'done', position: 3, color: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+  ],
+}));
+
+vi.mock('@/lib/ai/tools/task-helpers', () => ({
+  fetchEnrichedTasks: (...args: unknown[]) => mockFetchEnrichedTasks(...args),
+  serializeTaskItem: (...args: unknown[]) => mockSerializeTaskItem(...args),
+}));
+
+const TASK_LIST_PAGE = {
+  id: 'page_tl',
+  title: 'My Task List',
+  content: '',
+  type: 'TASK_LIST',
+  revision: 1,
+  parentId: null,
+  driveId: 'drive_123',
+};
+
+const DOCUMENT_PAGE = {
+  id: 'page_doc',
+  title: 'My Doc',
+  content: 'line 1\nline 2\nline 3',
+  type: 'DOCUMENT',
+  revision: 1,
+  parentId: null,
+  driveId: 'drive_123',
+};
+
+const EXISTING_TASK_LIST = {
+  id: 'tl_1',
+  pageId: 'page_tl',
+  userId: 'user_123',
+  title: 'My Task List',
+  status: 'pending',
+  description: null,
+  metadata: null,
+};
+
+function makeRequest(body: Record<string, unknown>) {
+  return new NextRequest('http://localhost/api/mcp/documents', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+describe('MCP Documents API — TASK_LIST read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    mockAuthenticateMCPRequest.mockResolvedValue({
+      userId: 'user_123',
+      tokenType: 'mcp',
+      tokenId: 'token_123',
+      role: 'user',
+      tokenVersion: 1,
+      adminRoleVersion: 0,
+      allowedDriveIds: [],
+    });
+
+    mockFindFirstPage.mockResolvedValue(TASK_LIST_PAGE);
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+    mockSelectChildPages.mockResolvedValue([{ id: 'child_1' }, { id: 'child_2' }]);
+    mockBackfillMissingTaskItems.mockResolvedValue(undefined);
+    mockFetchEnrichedTasks.mockResolvedValue([]);
+    mockSerializeTaskItem.mockImplementation((t: unknown) => t);
+  });
+
+  it('returns structured task list data AND the page body for TASK_LIST pages', async () => {
+    mockFindFirstPage.mockResolvedValue({ ...TASK_LIST_PAGE, content: 'task body line 1\ntask body line 2' });
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+
+    expect(data.pageType).toBe('TASK_LIST');
+    expect(data.taskListId).toBe('tl_1');
+    expect(data.tasks).toBeDefined();
+    expect(data.availableStatuses).toBeDefined();
+    expect(data.progress).toBeDefined();
+    // The page's own content body is rendered alongside the task view.
+    expect(data.numberedLines).toBeDefined();
+    expect(data.content).toBe('task body line 1\ntask body line 2');
+    expect(data.totalLines).toBe(2);
+  });
+
+  it('returns numberedLines for non-TASK_LIST pages (regression guard)', async () => {
+    mockFindFirstPage.mockResolvedValue(DOCUMENT_PAGE);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_doc' }));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+
+    expect(data.numberedLines).toBeDefined();
+    expect(data.content).toBeDefined();
+    expect(data.pageType).toBeUndefined();
+    expect(data.tasks).toBeUndefined();
+  });
+
+  it('auto-creates taskLists record when none exists', async () => {
+    mockFindFirstTaskList.mockResolvedValue(null);
+    mockInsertReturning.mockResolvedValue([{ ...EXISTING_TASK_LIST, id: 'tl_new' }]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.taskListId).toBe('tl_new');
+    expect(mockInsertReturning).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not insert when taskLists record already exists', async () => {
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertReturning).not.toHaveBeenCalled();
+  });
+
+  it('persists the default task_status_configs (not just the response fallback) when auto-creating', async () => {
+    mockFindFirstTaskList.mockResolvedValue(null);
+    mockInsertReturning.mockResolvedValue([{ ...EXISTING_TASK_LIST, id: 'tl_new' }]);
+    // Simulates the findMany the route runs right after creation seeing the rows
+    // ensureTaskListForPage just inserted, so the separate empty-configs backfill
+    // check below doesn't also fire and double-insert.
+    mockFindManyStatusConfigs.mockResolvedValue([
+      { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+    ]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
+    expect(inserted).toHaveLength(4);
+    expect(inserted.map((c: { slug: string }) => c.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+    expect(inserted.every((c: { taskListId: string }) => c.taskListId === 'tl_new')).toBe(true);
+  });
+
+  it('does not insert status configs when the task list already has configs', async () => {
+    mockFindManyStatusConfigs.mockResolvedValue([
+      { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+    ]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).not.toHaveBeenCalled();
+  });
+
+  it('backfills status configs for a legacy task_lists row that exists but has none', async () => {
+    // Reproduces the gap flagged in review: a task_lists row created by a pre-fix
+    // lazy-init path (or one seeded before this fix shipped) has zero configs.
+    // ensureTaskListForPage no-ops since the row already exists, so the read path
+    // itself must backfill once it observes the empty configs, instead of leaving
+    // that row permanently half-initialized.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockInsertStatusConfigValues).toHaveBeenCalledTimes(1);
+    const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
+    expect(inserted).toHaveLength(4);
+    expect(inserted.every((c: { taskListId: string }) => c.taskListId === EXISTING_TASK_LIST.id)).toBe(true);
+  });
+
+  it('reports the vocabulary and the rows the repair just wrote, in one transaction', async () => {
+    // Everything above the repair is read BEFORE it, and the repair writes
+    // twice: it seeds the vocabulary and then conforms the rows to it. Report
+    // either half stale and the response names statuses it also says do not
+    // exist — which an agent echoes straight back into a 400.
+    //
+    // And in ONE transaction: the repair only ever fires while the vocabulary
+    // is empty, so a half-applied one is permanent.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+        { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+      ]);
+    mockFetchEnrichedTasks
+      .mockResolvedValueOnce([{ id: 't1', title: 'T', status: 'pending', priority: 'medium' }])
+      .mockResolvedValue([{ id: 't1', title: 'T', status: 'icebox', priority: 'medium' }]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+    const data = await response.json();
+
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual(['icebox', 'shipped']);
+    expect(data.tasks.map((t: { status: string }) => t.status)).toEqual(['icebox']);
+    expect(mockFetchEnrichedTasks).toHaveBeenCalledTimes(2);
+    // Two: the repair opens one, and the create-path seed above it opens
+    // another — it runs the same two-write sequence, and a page can hold task
+    // rows before its own task_lists row exists. Neither may be three
+    // autocommits: a half-applied repair is a permanent one.
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('still returns 200 with the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
+    // The backfill is best-effort: this branch used to be a pure read (no write)
+    // that could never fail. A transient DB error on the backfill insert must
+    // not turn a previously-safe display fallback into a failed request.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+    mockInsertStatusConfigValues.mockImplementationOnce(() => {
+      throw new Error('connection reset');
+    });
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+  });
+
+  it('uses custom status configs when present', async () => {
+    const customConfigs = [
+      { slug: 'backlog', name: 'Backlog', group: 'todo', position: 0, color: '#aaa' },
+      { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: '#0f0' },
+    ];
+    mockFindManyStatusConfigs.mockResolvedValue(customConfigs);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.availableStatuses).toHaveLength(2);
+    expect(data.availableStatuses[0].slug).toBe('backlog');
+    expect(data.availableStatuses[0].label).toBe('Backlog');
+    expect(data.availableStatuses[1].slug).toBe('shipped');
+  });
+
+  it('falls back to DEFAULT_TASK_STATUSES when no custom configs exist', async () => {
+    mockFindManyStatusConfigs.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.availableStatuses).toHaveLength(4);
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual([
+      'pending', 'in_progress', 'blocked', 'completed',
+    ]);
+  });
+
+  it('computes progress from task statuses', async () => {
+    const enrichedTasks = [
+      { id: 't1', status: 'pending', completedAt: null },
+      { id: 't2', status: 'in_progress', completedAt: null },
+      { id: 't3', status: 'completed', completedAt: new Date().toISOString() },
+      { id: 't4', status: 'completed', completedAt: new Date().toISOString() },
+    ];
+    mockFetchEnrichedTasks.mockResolvedValue(enrichedTasks);
+    mockSerializeTaskItem.mockImplementation((t: unknown) => t);
+    // custom configs so 'completed' maps to 'done'
+    mockFindManyStatusConfigs.mockResolvedValue([
+      { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
+      { slug: 'in_progress', name: 'In Progress', group: 'in_progress', position: 1, color: '#blue' },
+      { slug: 'completed', name: 'Done', group: 'done', position: 2, color: '#green' },
+    ]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.progress.total).toBe(4);
+    expect(data.progress.percentage).toBe(50); // 2/4 done
+    expect(data.progress.byGroup.done).toBe(2);
+    expect(data.progress.byGroup.in_progress).toBe(1);
+    expect(data.progress.byGroup.todo).toBe(1);
+    expect(data.progress.bySlug.completed).toBe(2);
+    expect(data.progress.bySlug.pending).toBe(1);
+  });
+
+  it('reports 0% progress for empty task list', async () => {
+    mockFetchEnrichedTasks.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.progress.total).toBe(0);
+    expect(data.progress.percentage).toBe(0);
+  });
+
+  it('calls fetchEnrichedTasks with the correct pageId', async () => {
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockFetchEnrichedTasks).toHaveBeenCalledWith('page_tl');
+  });
+
+  it('calls backfillMissingTaskItems with child page ids before fetching tasks', async () => {
+    mockSelectChildPages.mockResolvedValue([{ id: 'cp_1' }, { id: 'cp_2' }]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockBackfillMissingTaskItems).toHaveBeenCalledWith(
+      expect.anything(), // db
+      { parentId: 'page_tl', childPageIds: ['cp_1', 'cp_2'], userId: 'user_123' },
+    );
+  });
+
+  it('skips backfill when task list has no child pages', async () => {
+    mockSelectChildPages.mockResolvedValue([]);
+
+    const { POST } = await import('../route');
+    await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    expect(mockBackfillMissingTaskItems).not.toHaveBeenCalled();
+  });
+
+  it('maps enriched tasks through serializeTaskItem and flags tasks that have a description', async () => {
+    const raw = [{ id: 't1', status: 'pending', completedAt: null, page: { title: 'Task 1', content: 'do the thing' } }];
+    const serialized = { id: 't1', title: 'Task 1', status: 'pending' };
+    mockFetchEnrichedTasks.mockResolvedValue(raw);
+    mockSerializeTaskItem.mockReturnValue(serialized);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(mockSerializeTaskItem).toHaveBeenCalledWith(raw[0]);
+    // Only a boolean flag is exposed — never the child page body, which belongs
+    // to a page this principal may not be authorized to read.
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: true, subTaskCount: 0, subTaskCompletedCount: 0 });
+  });
+
+  it('reports hasContent false when the linked task page has no description', async () => {
+    const raw = [{ id: 't1', status: 'pending', completedAt: null }];
+    const serialized = { id: 't1', title: 'Task 1', status: 'pending' };
+    mockFetchEnrichedTasks.mockResolvedValue(raw);
+    mockSerializeTaskItem.mockReturnValue(serialized);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.tasks[0]).toEqual({ ...serialized, hasContent: false, subTaskCount: 0, subTaskCompletedCount: 0 });
+  });
+
+  it('never returns child task page bodies (no inheritance: parent grant must not leak child content)', async () => {
+    const secret = 'SECRET child task body that the caller is not authorized to read';
+    const raw = [{ id: 't1', status: 'pending', completedAt: null, page: { title: 'Task 1', content: `<p>${secret}</p>` } }];
+    mockFetchEnrichedTasks.mockResolvedValue(raw);
+    mockSerializeTaskItem.mockImplementation((t: { id: string; status: string }) => ({ id: t.id, status: t.status }));
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+
+    const data = await response.json();
+    expect(data.tasks[0].hasContent).toBe(true);
+    expect(data.tasks[0].description).toBeUndefined();
+    // The child body must not appear anywhere in the serialized response.
+    expect(JSON.stringify(data)).not.toContain(secret);
+  });
+});

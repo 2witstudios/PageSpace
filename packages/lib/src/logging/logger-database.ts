@@ -9,6 +9,21 @@ import type { LogEntry, LogContext } from './logger';
 import type { LogInput, HttpMethod } from './logger-types';
 import { createId } from '@paralleldrive/cuid2';
 import { isOnPrem } from '../deployment-mode';
+import { isClickHouseEnabled } from '../observability/clickhouse-client';
+import {
+  insertApiMetric,
+  insertError,
+  insertSystemLog,
+  insertUserActivity,
+} from '../observability/analytics-inserts';
+
+// #890 Phase 3: when CLICKHOUSE_ENABLED='true', the 4 analytics tables
+// (system_logs, api_metrics, user_activities, error_logs) write to ClickHouse
+// via the buffered insert adapters and the main-PG write retires. Off (the
+// default) leaves the PG path byte-identical. aiUsageLogs stays PG in both
+// modes — billing joins + cost-reconcile UPDATEs (Phase 4 replicates via CDC).
+// Readers stay on PG until leaf 3, so enabled mode has a transitional window
+// where the admin UI shows only pre-cutover rows.
 
 interface DatabaseLogEntry {
   id: string;
@@ -104,6 +119,14 @@ function convertToDbFormat(entry: LogEntry): DatabaseLogEntry {
 export async function writeLogsToDatabase(entries: LogEntry[]): Promise<void> {
   if (entries.length === 0) return;
 
+  if (isClickHouseEnabled()) {
+    // Same field extraction as the PG path, then (row) → void into the buffer.
+    for (const entry of entries) {
+      insertSystemLog(convertToDbFormat(entry));
+    }
+    return;
+  }
+
   try {
     const dbEntries = entries.map(convertToDbFormat);
     
@@ -136,6 +159,11 @@ export async function writeApiMetrics(metrics: {
   cacheKey?: string;
   timestamp?: Date;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertApiMetric(metrics);
+    return;
+  }
+
   try {
     await db.insert(apiMetrics).values({
       id: createId(),
@@ -176,8 +204,15 @@ export async function writeAiUsage(usage: {
   messageId?: string;
   pageId?: string;
   driveId?: string;
+  /** The `agent_workspaces.id` this usage attributes to — terminal runtime/storage charges only. */
+  sessionId?: string;
+  /** WAL-5: the wallet this usage is charged to, when the caller named one (recorded with the row). */
+  walletId?: string;
+  /** SPEND-10: the automation (its stored reference, automation-attribution) the call ran for with no person present. */
+  automationRef?: string;
   success?: boolean;
   error?: string;
+  source?: string;
   metadata?: LogInput;
 
   // Context tracking
@@ -189,10 +224,16 @@ export async function writeAiUsage(usage: {
   messageCount?: number;
   wasTruncated?: boolean;
   truncationStrategy?: string;
-}): Promise<void> {
+
+  // 'pending' marks an OpenRouter row for the async cost-reconcile cron (it reads the
+  // generation ids from metadata). Omitted/undefined leaves the column NULL (never
+  // reconciled — direct providers, or OpenRouter rows that carried no generation id).
+  reconcileStatus?: 'pending';
+}): Promise<string | null> {
+  const id = createId();
   try {
     await db.insert(aiUsageLogs).values({
-      id: createId(),
+      id,
       timestamp: new Date(),
       userId: usage.userId,
       provider: usage.provider,
@@ -206,8 +247,12 @@ export async function writeAiUsage(usage: {
       messageId: usage.messageId,
       pageId: usage.pageId,
       driveId: usage.driveId,
+      sessionId: usage.sessionId,
+      walletId: usage.walletId,
+      automationRef: usage.automationRef,
       success: usage.success,
       error: usage.error,
+      source: usage.source,
       metadata: usage.metadata,
 
       // Context tracking
@@ -220,6 +265,9 @@ export async function writeAiUsage(usage: {
       wasTruncated: usage.wasTruncated,
       truncationStrategy: usage.truncationStrategy,
 
+      // Async cost-reconcile marker (OpenRouter rows with generation ids only).
+      reconcileStatus: usage.reconcileStatus,
+
       // On-prem: set retention expiry for HIPAA compliance (default 90 days)
       ...(isOnPrem() ? {
         expiresAt: (() => {
@@ -228,8 +276,10 @@ export async function writeAiUsage(usage: {
         })(),
       } : {}),
     });
+    return id;
   } catch (error) {
     console.error('[Logger] Failed to write AI usage:', error);
+    return null;
   }
 }
 
@@ -248,6 +298,11 @@ export async function writeUserActivity(activity: {
   userAgent?: string;
   metadata?: LogInput;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertUserActivity(activity);
+    return;
+  }
+
   try {
     await db.insert(userActivities).values({
       id: createId(),
@@ -287,6 +342,11 @@ export async function writeError(error: {
   userAgent?: string;
   metadata?: LogInput;
 }): Promise<void> {
+  if (isClickHouseEnabled()) {
+    insertError(error);
+    return;
+  }
+
   try {
     await db.insert(errorLogs).values({
       id: createId(),

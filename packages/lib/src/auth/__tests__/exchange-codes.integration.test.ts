@@ -18,6 +18,7 @@ import {
   type ExchangeCodeData,
 } from '../exchange-codes';
 import { hashToken } from '../token-utils';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 const originalNodeEnv = process.env.NODE_ENV;
 let dbAvailable = false;
@@ -45,7 +46,8 @@ describe('exchange-codes (Postgres-backed auth_handoff_tokens, kind=exchange-cod
     try {
       await db.select().from(authHandoffTokens).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('exchange-codes.integration.test.ts', error);
       dbAvailable = false;
     }
   });

@@ -133,13 +133,13 @@ The following features require **Playwright** or browser-based integration tests
 
 ```bash
 # Unit tests (current)
-pnpm exec vitest run src/components/print/__tests__/
+bun x vitest run src/components/print/__tests__/
 
 # Integration tests (future - Phase 12)
-pnpm test:e2e -- print
+bun run test:e2e -- print
 
 # Visual regression (future - Phase 12)
-pnpm test:visual
+bun run test:visual
 ```
 
 ---

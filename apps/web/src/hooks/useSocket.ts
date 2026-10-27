@@ -4,7 +4,14 @@ import { useSocketStore } from '@/stores/useSocketStore';
 
 export function useSocket() {
   const { isAuthenticated, user } = useAuth();
-  const getSocket = useSocketStore(state => state.getSocket);
+  // Subscribe to the socket itself, not the stable getSocket accessor: the
+  // store REPLACES the Socket object (initial async creation, and the
+  // auth-refresh `connect(true)` path disconnects the old one and mints a new
+  // one). A consumer reading through the accessor only noticed a swap on its
+  // next incidental re-render — a terminal pane keyed on the socket prop kept
+  // listening to a permanently-disconnected Socket whose 'connect' event
+  // would never fire again, i.e. a silently dead pane.
+  const socket = useSocketStore(state => state.socket);
 
   useEffect(() => {
     // Get stable methods directly without subscribing (they don't change)
@@ -26,5 +33,5 @@ export function useSocket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, user?.id]); // user intentionally omitted - only depends on ID for stability
 
-  return getSocket();
+  return socket;
 }

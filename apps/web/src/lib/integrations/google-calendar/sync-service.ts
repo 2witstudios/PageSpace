@@ -10,12 +10,15 @@ import { eq, and, isNull, inArray, sql, desc } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { googleCalendarConnections, calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { userEmailInListMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getValidAccessToken, updateConnectionStatus } from './token-refresh';
 import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type GoogleEventAttendee } from './api-client';
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
 import { createId } from '@paralleldrive/cuid2';
 import { generateWebhookToken } from './webhook-token';
+import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { syncedEventVisibility } from './sync-visibility';
 
 type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
 type WebhookChannels = Record<string, WebhookChannel>;
@@ -518,6 +521,36 @@ const upsertEvent = async (
     }
   }
 
+  // Third fallback: attendee-based lookup. After the attendee dedup below links
+  // a Google event ID onto an event created by ANOTHER user, subsequent syncs
+  // won't find it via createdById. Check if the syncing user is an attendee on
+  // an event with this googleEventId.
+  if (!existingEvent) {
+    const attendeeLinked = await db
+      .select({
+        id: calendarEvents.id,
+        lastGoogleSync: calendarEvents.lastGoogleSync,
+        title: calendarEvents.title,
+        startAt: calendarEvents.startAt,
+        endAt: calendarEvents.endAt,
+        googleCalendarId: calendarEvents.googleCalendarId,
+      })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(calendarEvents.googleEventId, googleEvent.id),
+          eq(calendarEvents.isTrashed, false)
+        )
+      )
+      .limit(1);
+
+    if (attendeeLinked.length > 0) {
+      existingEvent = attendeeLinked[0];
+    }
+  }
+
   // Handle cancelled/deleted events
   if (googleEvent.status === 'cancelled') {
     if (existingEvent) {
@@ -548,6 +581,16 @@ const upsertEvent = async (
       return { action: 'skipped' };
     }
 
+    // [D-OW-33] ruling: Google may report an event as more visible than it is here; while the event's org drive is
+    // lapsed the sync keeps the current visibility instead of widening it (every other field still syncs).
+    const [current] = await db
+      .select({ driveId: calendarEvents.driveId, visibility: calendarEvents.visibility })
+      .from(calendarEvents)
+      .where(eq(calendarEvents.id, existingEvent.id))
+      .limit(1);
+    const visibility = await syncedEventVisibility(current, pageSpaceEvent.visibility, async (driveId) =>
+      (await checkDriveMayLoosen(db, driveId, true)) !== null);
+
     // Update existing event
     await db
       .update(calendarEvents)
@@ -560,7 +603,7 @@ const upsertEvent = async (
         allDay: pageSpaceEvent.allDay,
         timezone: pageSpaceEvent.timezone,
         recurrenceRule: pageSpaceEvent.recurrenceRule,
-        visibility: pageSpaceEvent.visibility,
+        visibility,
         color: pageSpaceEvent.color,
         metadata: pageSpaceEvent.metadata,
         isTrashed: pageSpaceEvent.isTrashed,
@@ -615,6 +658,56 @@ const upsertEvent = async (
       } catch (err) {
         // Unique constraint violation: a concurrent sync already created this event.
         // Skip — the existing event is the correct one.
+        if (isUniqueConstraintError(err)) {
+          return { action: 'skipped' };
+        }
+        throw err;
+      }
+    }
+  }
+
+  // Attendee duplicate check: catch events created by OTHER PageSpace users
+  // (e.g., Noah creates a meeting and invites Jono). The event propagates through
+  // Google Calendar's attendee system back to the invitee's calendar, so the sync
+  // would otherwise create a second copy owned by the syncing user.
+  if (pageSpaceEvent.title && pageSpaceEvent.startAt) {
+    const attendeeStartWindow = new Date(pageSpaceEvent.startAt.getTime() - 60_000);
+    const attendeeEndWindow = new Date(pageSpaceEvent.startAt.getTime() + 60_000);
+
+    const attendeeEvent = await db
+      .select({ eventId: eventAttendees.eventId })
+      .from(eventAttendees)
+      .innerJoin(calendarEvents, eq(calendarEvents.id, eventAttendees.eventId))
+      .where(
+        and(
+          eq(eventAttendees.userId, userId),
+          eq(calendarEvents.title, pageSpaceEvent.title),
+          eq(calendarEvents.isTrashed, false),
+          isNull(calendarEvents.googleEventId),
+          sql`${calendarEvents.startAt} >= ${attendeeStartWindow}`,
+          sql`${calendarEvents.startAt} <= ${attendeeEndWindow}`
+        )
+      )
+      .limit(1);
+
+    if (attendeeEvent.length > 0) {
+      // Link the Google event to the existing event (created by another user).
+      // Don't set syncedFromGoogle — the original creator should still be able
+      // to push edits. We're just attaching the Google ID for two-way sync.
+      try {
+        await db
+          .update(calendarEvents)
+          .set({
+            googleEventId: googleEvent.id,
+            googleCalendarId: calendarId,
+            lastGoogleSync: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(calendarEvents.id, attendeeEvent[0].eventId));
+
+        await mapAttendeesToUsers(attendeeEvent[0].eventId, googleEvent.attendees);
+        return { action: 'updated' };
+      } catch (err) {
         if (isUniqueConstraintError(err)) {
           return { action: 'skipped' };
         }
@@ -774,7 +867,7 @@ export const unregisterWebhookChannels = async (
  * Map Google event attendees to PageSpace users by email and persist as eventAttendees.
  * Only maps attendees that have a matching PageSpace user account.
  */
-const mapAttendeesToUsers = async (
+export const mapAttendeesToUsers = async (
   eventId: string,
   googleAttendees: GoogleEventAttendee[] | undefined
 ): Promise<void> => {
@@ -784,13 +877,16 @@ const mapAttendeesToUsers = async (
   const emails = [...new Set(googleAttendees.map((a) => a.email.toLowerCase()))];
   if (emails.length === 0) return;
 
-  // Look up PageSpace users by email (case-insensitive batch query)
-  const matchedUsers = await db
+  // Look up PageSpace users by email (dual blind-index/lowercased-raw batch query)
+  const matchedRows = await db
     .select({ id: users.id, email: users.email })
     .from(users)
-    .where(inArray(sql`lower(${users.email})`, emails));
+    .where(userEmailInListMatch(emails));
 
-  if (matchedUsers.length === 0) return;
+  if (matchedRows.length === 0) return;
+
+  // Decrypt PII at the edge so the email→userId map keys on plaintext emails.
+  const matchedUsers = await decryptUserRows(matchedRows);
 
   // Build a map of email → userId for fast lookup
   const emailToUserId = new Map(matchedUsers.map((u) => [u.email.toLowerCase(), u.id]));
@@ -819,7 +915,14 @@ const mapAttendeesToUsers = async (
 
   // Upsert attendees in a single transaction to reduce connection overhead
   await db.transaction(async (tx) => {
+    // [D-OW-33] ruling: a NEW attendee on an org-drive event widens who reads org content. While the drive's org is
+    // lapsed the sync keeps updating existing attendees but adds no one.
+    const [owner] = await tx.select({ driveId: calendarEvents.driveId }).from(calendarEvents).where(eq(calendarEvents.id, eventId)).limit(1);
+    const existing = owner?.driveId && (await checkDriveMayLoosen(tx, owner.driveId, true))
+      ? new Set((await tx.select({ userId: eventAttendees.userId }).from(eventAttendees).where(eq(eventAttendees.eventId, eventId))).map((a) => a.userId))
+      : null;
     for (const attendee of attendeeValues) {
+      if (existing && !existing.has(attendee.userId)) continue;
       await tx
         .insert(eventAttendees)
         .values(attendee)
@@ -833,11 +936,4 @@ const mapAttendeesToUsers = async (
         });
     }
   });
-};
-
-/**
- * Trigger sync for a user (can be called from API or background job).
- */
-export const triggerSync = async (userId: string): Promise<SyncResult> => {
-  return syncGoogleCalendar(userId);
 };

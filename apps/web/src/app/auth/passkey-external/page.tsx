@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Loader2, ShieldAlert } from 'lucide-react';
-import { AuthShell } from '@/components/auth/AuthShell';
+import { AuthLayout } from '@/components/auth/AuthLayout';
 import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import { runPasskeyExternalCeremony } from '@/components/auth/runPasskeyExternalCeremony';
 import { parsePasskeyExternalParams } from '@/components/auth/passkeyExternal';
@@ -35,6 +35,7 @@ function PasskeyExternalContent() {
     runPasskeyExternalCeremony({
       deviceId: params.deviceId,
       deviceName: params.deviceName,
+      shell: params.shell,
     })
       .then((result) => {
         if (unmounted) return;
@@ -69,14 +70,14 @@ function PasskeyExternalContent() {
 
   if (status.kind === 'complete') {
     return (
-      <AuthShell>
+      <AuthLayout>
         <HandoffCompleteCard variant="signed-in" />
-      </AuthShell>
+      </AuthLayout>
     );
   }
 
   return (
-    <AuthShell>
+    <AuthLayout>
       <div className="flex flex-col items-center gap-4 py-6 text-center">
         {status.kind === 'error' ? (
           <>
@@ -105,7 +106,7 @@ function PasskeyExternalContent() {
           </>
         )}
       </div>
-    </AuthShell>
+    </AuthLayout>
   );
 }
 
@@ -113,12 +114,12 @@ export default function PasskeyExternalPage() {
   return (
     <Suspense
       fallback={
-        <AuthShell>
+        <AuthLayout>
           <div className="flex flex-col items-center gap-4 py-6 text-center">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             <p className="text-sm text-muted-foreground">Preparing passkey prompt…</p>
           </div>
-        </AuthShell>
+        </AuthLayout>
       }
     >
       <PasskeyExternalContent />

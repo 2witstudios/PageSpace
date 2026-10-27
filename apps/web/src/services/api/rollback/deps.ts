@@ -1,0 +1,129 @@
+/**
+ * Rollback dependency-injection seam.
+ *
+ * The imperative shell (page-mutation, activity-repo, preview, executors,
+ * execute) takes its effects through a RollbackDeps bag instead of reaching for
+ * modules directly. `db` doubles as the transaction handle: executeRollback
+ * builds a deps whose `db` is `options.tx ?? realDb`, so one transaction threads
+ * through every handler, createPageVersion, and logRollbackActivity. `clock` and
+ * `genChangeGroupId` make time and id generation injectable for tests.
+ */
+import { db } from '@pagespace/db/db';
+import {
+  canUserRollback,
+  isRollbackableOperation,
+} from '@pagespace/lib/permissions/rollback-permissions';
+import { logRollbackActivity, getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
+import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
+import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
+import type { PageContentFormat } from '@pagespace/lib/content/page-content-format';
+import type { SyncMentionsResult } from '@/services/api/page-mention-service';
+import { syncMentions } from '@/services/api/page-mention-service';
+import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { admitReentry, type ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
+import { guardDriveAccess, type DriveAccessScope } from '@pagespace/lib/permissions/org-lapse-guard';
+
+export interface RollbackDeps {
+  /** Database handle — the real db, or a transaction when one is threaded. */
+  db: typeof db;
+  /** Injected clock. */
+  clock: () => Date;
+  genChangeGroupId: typeof createChangeGroupId;
+  inferChangeGroupType: typeof inferChangeGroupType;
+  readContent: typeof readPageContent;
+  /**
+   * Projects a sheet's rows back into a document. Injected like everything
+   * else here so the rollback shell stays testable without a database.
+   */
+  readSheetDocument: typeof readSheetDocument;
+  syncMentions: typeof syncMentions;
+  createPageVersion: typeof createPageVersion;
+  getActorInfo: typeof getActorInfo;
+  logRollbackActivity: typeof logRollbackActivity;
+  canUserRollback: typeof canUserRollback;
+  isRollbackableOperation: typeof isRollbackableOperation;
+  createMentionNotification: typeof createMentionNotification;
+  /**
+   * POL-2 (independent review of #2762, P1-4): may access that a rollback or redo puts BACK go in? Asked through
+   * `db` (the rollback's transaction) before the write: `admit` writes, anything else skips the write.
+   */
+  admitReentry: (handle: typeof db, input: {
+    driveId: string;
+    userId: string;
+    member?: Record<string, unknown> | null;
+    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; expiresAt?: Date | string | null }>;
+    requestedBy: string | null;
+    memberRowIsRoleChange?: boolean;
+  }) => Promise<ReentryDecision>;
+  /**
+   * [D-OW-33] runs a rollback or redo write in a savepoint of `handle` and undoes it (OrgLapsedError) when it gave
+   * anyone more on the drive while the drive's org is lapsed: an undone revoke, a re-added member, a restored role.
+   */
+  guardDriveAccess: <T>(handle: typeof db, driveId: string, scope: DriveAccessScope, write: (tx: typeof db) => Promise<T>) => Promise<T>;
+  logger: typeof loggers.api;
+}
+
+/** Build the production deps from the real modules. */
+export function defaultRollbackDeps(): RollbackDeps {
+  return {
+    db,
+    clock: () => new Date(),
+    genChangeGroupId: createChangeGroupId,
+    inferChangeGroupType,
+    readContent: readPageContent,
+    readSheetDocument,
+    syncMentions,
+    createPageVersion,
+    getActorInfo,
+    logRollbackActivity,
+    canUserRollback,
+    isRollbackableOperation,
+    createMentionNotification,
+    admitReentry: (handle, input) => admitReentry(handle, input),
+    guardDriveAccess: (handle, driveId, scope, write) => guardDriveAccess(handle, driveId, scope, (tx) => write(tx as unknown as typeof db)),
+    logger: loggers.api,
+  };
+}
+
+/** Return a deps bag whose db is the given transaction (or the base db). */
+export function withTx(deps: RollbackDeps, tx?: typeof db): RollbackDeps {
+  return tx ? { ...deps, db: tx } : deps;
+}
+
+// ─── Shared shell types ──────────────────────────────────────────────────────
+
+export interface PageUpdateContext {
+  userId: string;
+  changeGroupId: string;
+  changeGroupType: ChangeGroupType;
+  source: PageVersionSource;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PageUpdateWithRevisionOptions {
+  userId?: string | null;
+  changeGroupId?: string;
+  changeGroupType?: ChangeGroupType;
+  source?: PageVersionSource;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PageMutationMeta {
+  pageId: string;
+  nextRevision: number;
+  stateHashBefore: string;
+  stateHashAfter: string;
+  contentRefAfter: string | null;
+  contentSizeAfter: number | null;
+  contentFormatAfter: PageContentFormat;
+  mentionsResult?: SyncMentionsResult;
+}
+
+export interface PageChangeResult {
+  restoredValues: Record<string, unknown>;
+  pageMutationMeta: PageMutationMeta | undefined;
+}

@@ -1,6 +1,9 @@
-// Simple in-memory rate limiter for process-local / single-instance use.
-// For distributed rate limiting across replicas, use `checkDistributedRateLimit`
-// from `@pagespace/lib/security/distributed-rate-limit` (Postgres-backed).
+// @deprecated In-memory rate limiter. Process-local state does NOT survive
+// restarts and does NOT span replicas, so it provides no real protection in a
+// multi-instance deployment (#977). All production auth/email/abort paths have
+// migrated to `checkDistributedRateLimit` from
+// `@pagespace/lib/security/distributed-rate-limit` (Postgres-backed, reuses the
+// `rate_limit_buckets` table). Do not import this module in new code.
 
 interface RateLimitAttempt {
   count: number;

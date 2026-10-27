@@ -11,17 +11,22 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 const API_DIR = join(__dirname, '..');
 
 /**
  * Regex matching any form of security audit call used across the codebase.
  * Covers: direct securityAudit.* calls, logAuditEvent helper, logAuthEvent
- * adapter, logSecurityEvent adapter, and withAdminAuth wrapper.
+ * adapter, logSecurityEvent adapter, withAdminAuth wrapper, and the
+ * `agent-workspaces/[workspaceId]` family's shared not-found/denied helpers
+ * (`workspace-unavailable-response.ts`, review #2261/5) — both call
+ * `auditRequest` internally, one hop removed from the route file. And the org audit outbox (AUD-1): a route that
+ * publishes the org events its change staged, drains them into the chain, or builds the event its admission stages
+ * inside its own transaction (a guest approval).
  */
 const AUDIT_CALL_PATTERN =
-  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(/;
+  /securityAudit\.|logAuditEvent\(|logAuthEvent\(|logSecurityEvent\(|withAdminAuth[<(]|audit\(|auditRequest\(|auditSessionAccessDenial\(|workspaceNotFoundOrDenied\(|publishOrgAuditEvents\(|drainOrgAuditOutbox\(|guestDecisionAuditEvent\(/;
 
 /**
  * Routes explicitly exempt from audit coverage.
@@ -33,19 +38,28 @@ const AUDIT_CALL_PATTERN =
 const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   // --- Public/unauthenticated endpoints (no user context to audit) ---
   ['health', 'Infrastructure health probe, no auth or user data'],
+  ['version', 'ADR 0001 D2 public handshake endpoint, no auth or user data, constant response'],
   ['compiled-css', 'Static CSS compilation, no user context'],
   ['contact', 'Public contact form, no authenticated user'],
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
+  ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
+  ['drives/[driveId]/avatar/[filename]', 'Drive avatar image bytes for whoever can reach the drive: the route audits every refusal as authz.access.denied; a data.read row per rendered drive tile would swamp the log, as for org and user avatars above'],
+  ['orgs/invitations/accept', 'ORG-3: audited in acceptOrgInviteForUser (lib/orgs/accept-org-invite.ts), the one shell this route and the sign-in/sign-up invite door share, so both write the same authz.role.assigned / authz.access.denied rows'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
+  ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],
 
   // --- Internal system endpoints ---
   ['internal/*', 'Internal service-to-service endpoints'],
+  ['cron/scheduled-backups', 'HMAC-signed internal cron job — no user session, authenticated by shared secret, executes pre-authorized backup schedules'],
   ['memory/cron', 'Internal memory cron job'],
+  ['app-hosting/router', 'Published-app serving edge, called by pagespace-proxy on EVERY request to a published app (no fly-replay-cache on the metered tier, by design) — there is no user session to attribute, the caller is authenticated by the APP_ROUTER_PROXY_SECRET shared secret like the HMAC cron routes above, and one audit row per served asset would swamp the audit log with routing decisions. The security-relevant outcomes are counted at the edge instead: a refused caller answers 404 and a credit-exhausted app answers 402, both distinguishable in proxy logs.'],
   ['desktop-bridge/status', 'Desktop app connection status check'],
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
 
   // --- Dev/debug endpoints ---
-  ['debug/*', 'Development-only debug endpoints'],
+  // (none: `api/debug/**` went with `GET /api/debug/chat-messages`, the last
+  // one, when Phase 4 PR 15 dropped the table it inspected. Re-add the
+  // `debug/*` wildcard here if a debug endpoint ever comes back.)
 
   // --- Monitoring (read-only system metrics) ---
   ['pulse', 'Internal engagement monitoring'],
@@ -56,30 +70,79 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['auth/apple/signin', 'OAuth initiation redirect, no user session or data access'],
   ['auth/google/signin', 'OAuth initiation redirect, no user session or data access'],
 
-  // --- Deprecated endpoints ---
-  ['admin/users/[userId]/subscription', 'Deprecated (410 Gone), replaced by gift-subscription'],
-
   // --- Stateless token endpoints (no user data accessed) ---
   ['auth/csrf', 'Stateless CSRF token generation, no user data'],
   ['auth/login-csrf', 'Stateless login CSRF token, no user data'],
 
   // --- External webhooks (no user session, verified by external party) ---
   ['stripe/webhook', 'Stripe-initiated webhook, verified by Stripe signature'],
+  ['iap/apple/notifications', 'Apple-initiated App Store Server Notification, verified by its JWS signature against Apple Root CA G3'],
   ['integrations/google-calendar/webhook', 'Google-initiated webhook, no user session'],
+  ['integrations/zoom/webhook', 'Zoom-initiated webhook, no user session, verified by HMAC signature'],
+  ['webhooks/[token]', 'Signature-verified inbound page-webhook intake — no user session, authenticated by per-webhook HMAC secret; minting/managing the webhook is audited in the /api/pages/[pageId]/webhooks routes'],
+
+  // --- Draft persistence (personal, ephemeral, own-user-only) ---
+  ['drafts', 'User draft CRUD — ephemeral own-user data, 7-day TTL, no shared resource access'],
+
+  // --- Agent-session history (read-only, own-data listing) ---
+  ['agent-workspaces/conversations', 'GET-only listing of the requester\'s OWN conversations (ownerId rides every filter) — open to every authenticated user since the sessions surface opened up (#2326, which removed the admin gate that carried this route\'s only audit call); rows the requester can no longer see are dropped/masked by design (silent, to avoid a drive-membership oracle), so there is no denial path to audit and no shared data written'],
+
+  // --- Direct-to-S3 attachment uploads (thin routes; audit lives in the shared
+  //     orchestrator) — presign/complete emit data.write via attachment-direct.ts
+  //     (auditRequest) and the resolvers emit authz.access.denied on permission /
+  //     email-verification denials via attachment-route-helpers.ts; cancel is a
+  //     low-risk slot release with no data write. ---
+  ['channels/[pageId]/upload/presign', 'Audit emitted by attachment-direct orchestrator + channel resolver denial audit'],
+  ['channels/[pageId]/upload/complete', 'Audit emitted by attachment-direct orchestrator + channel resolver denial audit'],
+  ['channels/[pageId]/upload/cancel', 'Low-risk slot release, no data write; resolver still authorizes'],
+  ['messages/[conversationId]/upload/presign', 'Audit emitted by attachment-direct orchestrator + DM resolver denial audit'],
+  ['messages/[conversationId]/upload/complete', 'Audit emitted by attachment-direct orchestrator + DM resolver denial audit'],
+  ['messages/[conversationId]/upload/cancel', 'Low-risk slot release, no data write; resolver still authorizes'],
 
   // --- Read receipts (low-risk, high-frequency) ---
   ['channels/[pageId]/read', 'Channel read receipt, low-risk fire-and-forget'],
   ['notifications/[id]/read', 'Notification read receipt, low-risk'],
   ['notifications/read-all', 'Bulk notification read receipt, low-risk'],
+  ['credits/concurrency', 'Polled every 5s by ConcurrencyCard for as long as the usage page stays open — auditing every poll would write ~720 rows/hour per open tab into the audit table for a non-sensitive advisory count (own in-flight credit-hold count + configured tier ceiling, no spend/balance detail)'],
 
-  // --- Local model discovery (no user data, no external calls) ---
+  // --- Model discovery (no user data, no external calls) ---
+  ['ai/models', 'Public model-catalog discovery, unauthenticated, no user data or resource access'],
+  ['ai/image-models', 'Public image-model discovery, unauthenticated, no user data or resource access'],
   ['ai/ollama/models', 'Local Ollama model discovery, no user data'],
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
+
+  // --- OAuth discovery (RFC 8414, public by spec) ---
+  ['well-known/oauth-authorization-server', 'RFC 8414 authorization server metadata — public by spec, unauthenticated, no user data or resource access; destination of the /.well-known/oauth-authorization-server rewrite'],
+
+  // --- Share link management routes ---
+  // TODO: Add audit coverage in follow-up PR
+  ['drives/[driveId]/share-links', 'Share link CRUD — invite link management, follow-up'],
+  ['drives/[driveId]/share-links/[linkId]', 'Share link revoke — covered by parent drive auth, follow-up'],
+  ['pages/[pageId]/share-links', 'Page share link CRUD — covered by page canShare check, follow-up'],
+  ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
+  ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
+
+  // --- App hosting (publish surface) read-only routes ---
+  ['dev-preview/capability', 'Public GET of a single boolean (DEV_PREVIEW_ENABLED + a configured apex) — no auth, no user data, constant response used only to hide the preview pane on a dark deployment; same shape as app-hosting/capability'],
+  ['app-hosting/capability', 'Public GET of a single boolean (APP_HOSTING_ENABLED) — no auth, no user data, constant response used only to hide the app pane on a dark deployment'],
+  ['drives/[driveId]/envs/[envId]/app/dunning', 'Read-only dedicated-tier subscription state (status/cancelAtPeriodEnd/purchasable) — no data written, covered by isPrincipalDriveMember check'],
+  ['drives/[driveId]/published-apps', 'Read-only listing of a drive\'s published apps for the domain-target picker — no data written, covered by isPrincipalDriveMember check'],
+
+  // --- Drive backup sub-routes ---
+  ['drives/[driveId]/backups/schedule', 'Backup schedule GET/PATCH — owner/admin-gated settings, tier enforcement audited via isDriveOwnerOrAdmin; no sensitive data written beyond schedule config'],
+  ['drives/[driveId]/backups/[backupId]', 'Read-only backup detail (pages/members/roles/files) — no data written, covered by isDriveOwnerOrAdmin check'],
+  ['drives/[driveId]/backups/[backupId]/diff', 'Read-only diff preview — no data written, covered by parent backup auth'],
+  ['drives/[driveId]/backups/[backupId]/download', 'Read-only JSON download — no data written, covered by getDriveBackupDetail authz'],
+  ['drives/[driveId]/backups/[backupId]/export', 'Read-only ZIP download — no data written, covered by streamBackupExport authz'],
+  ['drives/[driveId]/backups/[backupId]/pages', 'Read-only snapshot page tree — no data written, covered by isDriveOwnerOrAdmin check'],
+  ['backups/[backupId]/pages', 'Read-only snapshot page tree (global route, settings context) — no data written, covered by isDriveOwnerOrAdmin check on backup.driveId'],
 
   // --- Drive sub-routes (read-only data fetches, covered by parent drive audit) ---
   // TODO: Add audit coverage in follow-up PR
   ['drives/[driveId]/access', 'Read-only access check — follow-up'],
   ['drives/[driveId]/agents', 'Agent list for drive — follow-up'],
+  ['drives/[driveId]/agents/members', 'Agent member list — read-only, covered by parent drive audit, follow-up'],
+  ['drives/[driveId]/apps/members', 'MCP token (app) member list — read-only, covered by parent drive audit, follow-up'],
   ['drives/[driveId]/assignees', 'Assignee list for drive — follow-up'],
   ['drives/[driveId]/history', 'Drive history view — follow-up'],
   ['drives/[driveId]/integrations', 'Integration list for drive — follow-up'],
@@ -104,7 +167,6 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/tasks/[taskId]', 'Individual task CRUD — follow-up'],
   ['pages/[pageId]/tasks/reorder', 'Task reorder — follow-up'],
   ['pages/[pageId]/tasks/statuses', 'Task status list — follow-up'],
-  ['pages/[pageId]/versions/compare', 'Version comparison — follow-up'],
   ['pages/[pageId]/view', 'Page view endpoint — follow-up'],
   ['pages/tree', 'Page tree navigation — follow-up'],
 
@@ -115,6 +177,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
 
   // --- Monitoring with admin auth (already audited via withAdminAuth wrapper) ---
   ['monitoring/[metric]', 'Uses withAdminAuth which includes audit — verify after merge'],
+
 ]);
 
 function collectRouteFiles(dir: string): string[] {
@@ -129,6 +192,39 @@ function collectRouteFiles(dir: string): string[] {
     }
   }
   return results;
+}
+
+
+/**
+ * A route's auditable surface: its own text PLUS any sibling module in the same
+ * directory that it imports and re-exports handlers from.
+ *
+ * A `route.ts` is a URL binding, not necessarily where the behaviour lives. When
+ * a route delegates (`export { getFoo as GET } from './foo-handlers'`), the
+ * audit calls are in the sibling — and a scan of `route.ts` alone reports a
+ * coverage gap that does not exist. The two ways to silence that are adding a
+ * meaningless `auditRequest` to the binding, or an exemption entry that would
+ * then hide a REAL gap later. Following the delegation is the only reading that
+ * keeps the guard honest about thin routes.
+ *
+ * Deliberately one level and same-directory only: enough for a route split,
+ * not a general import graph that would eventually swallow the whole app and
+ * pass everything.
+ */
+function auditableSurface(routeFile: string): string {
+  const own = readFileSync(routeFile, 'utf-8');
+  const dir = dirname(routeFile);
+  let combined = own;
+  for (const match of own.matchAll(/from\s+'\.\/([\w.-]+)'/g)) {
+    const sibling = join(dir, `${match[1]}.ts`);
+    try {
+      combined += '\n' + readFileSync(sibling, 'utf-8');
+    } catch {
+      // Not a local .ts module (a directory index, a .tsx, a type-only path) —
+      // nothing to add, and a missing sibling is the compiler's problem.
+    }
+  }
+  return combined;
 }
 
 function toLogicalPath(absolutePath: string): string {
@@ -160,7 +256,7 @@ describe('Security Audit Route Coverage', () => {
     for (const route of routes) {
       if (isExempt(route.path)) continue;
 
-      const content = readFileSync(route.file, 'utf-8');
+      const content = auditableSurface(route.file);
       if (!AUDIT_CALL_PATTERN.test(content)) {
         violations.push(route.path);
       }
@@ -215,6 +311,7 @@ describe('Security Audit Route Coverage', () => {
   const AI_ROUTES_REQUIRING_DENIAL_AUDIT: string[] = [
     // Chat subset
     'ai/abort',
+    'ai/btw',
     'ai/chat',
     'ai/chat/messages',
     'ai/chat/messages/[messageId]',
@@ -249,7 +346,7 @@ describe('Security Audit Route Coverage', () => {
         violations.push(`${routePath} (route file not found)`);
         continue;
       }
-      const content = readFileSync(file, 'utf-8');
+      const content = auditableSurface(file);
       if (!/authz\.access\.denied/.test(content)) {
         violations.push(routePath);
       }

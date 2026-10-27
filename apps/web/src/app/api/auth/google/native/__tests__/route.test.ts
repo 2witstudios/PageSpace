@@ -39,7 +39,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -56,7 +56,8 @@ import {
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -75,6 +76,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -130,12 +133,14 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
+  isSafeReturnUrl: vi.fn(() => true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -153,9 +158,9 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 
 const mockNewUser = {
@@ -233,7 +238,7 @@ describe('POST /api/auth/google/native', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -251,7 +256,7 @@ describe('POST /api/auth/google/native', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
-    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
     // Default device token mock
@@ -261,7 +266,7 @@ describe('POST /api/auth/google/native', () => {
     } as never);
 
     // Default provisioning mock
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: true });
 
     // Default getClientIP mock
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
@@ -270,7 +275,8 @@ describe('POST /api/auth/google/native', () => {
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -296,7 +302,8 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given valid idToken for existing user, should return tokens without creating user', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -313,23 +320,26 @@ describe('POST /api/auth/google/native', () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockNewUser.id);
     });
 
-    it('given existing user, should not provision Getting Started drive', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+    it('given existing user, should provision Home drive (idempotent lazy provisioning)', async () => {
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(mockExistingUser.id);
     });
 
-    it('should create session with correct parameters', async () => {
+    it('SEC-2 (partial) should create session with correct parameters, including Google single-factor evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockNewUser.id,
         type: 'user',
         scopes: ['*'],
@@ -339,11 +349,12 @@ describe('POST /api/auth/google/native', () => {
       });
     });
 
-    it('should create device token with platform info', async () => {
+    it('SEC-2 (partial) should create device token with platform info, carrying the same Google evidence (D-OW-45)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -366,6 +377,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -388,6 +400,7 @@ describe('POST /api/auth/google/native', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockNewUser.id,
         deviceId: 'device-123',
@@ -581,15 +594,17 @@ describe('POST /api/auth/google/native', () => {
   });
 
   describe('session management', () => {
-    it('should revoke existing sessions before creating new one (session fixation prevention)', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
-
+    it('should revoke prior sessions scoped to the request deviceId (device-scoped, not nuclear)', async () => {
       const request = createNativeRequest(validNativePayload);
       await POST(request);
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith(
+      // deviceId is required by the schema, so the helper always receives it and
+      // revokes only THIS device's sessions — other devices stay signed in.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
         mockNewUser.id,
-        'new_login'
+        'device-123',
+        'new_login',
+        'Google native',
       );
     });
 
@@ -625,7 +640,7 @@ describe('POST /api/auth/google/native', () => {
       expect(body.error).toBe('Google sign-in not configured');
     });
 
-    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500', async () => {
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should return 500 for an iOS token', async () => {
       delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
 
       const request = createNativeRequest(validNativePayload);
@@ -635,11 +650,46 @@ describe('POST /api/auth/google/native', () => {
       expect(response.status).toBe(500);
       expect(body.error).toBe('Google sign-in not configured');
     });
+
+    // The Android SDK is configured with the WEB client id and its token carries
+    // the web client as the audience, so an Android-only deployment need never
+    // register an iOS OAuth client. Requiring one made native Google sign-in
+    // unusable there — reachable for the first time now that a client can send
+    // `platform: 'android'`.
+    it('given missing GOOGLE_OAUTH_IOS_CLIENT_ID, should still accept an Android token', async () => {
+      delete process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
+
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+    });
+
+    it('given an Android token, should not accept the iOS client as an audience', async () => {
+      const request = createNativeRequest({ ...validNativePayload, platform: 'android' });
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id'],
+      });
+    });
+
+    it('given an iOS token, should keep accepting either client as an audience', async () => {
+      const request = createNativeRequest(validNativePayload);
+      await POST(request);
+
+      expect(mockVerifyIdToken).toHaveBeenCalledWith({
+        idToken: 'valid-google-id-token',
+        audience: ['test-web-client-id', 'test-ios-client-id'],
+      });
+    });
   });
 
   describe('error handling', () => {
     it('given unexpected error, should return 500', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleId).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createNativeRequest(validNativePayload);
       const response = await POST(request);
@@ -650,7 +700,7 @@ describe('POST /api/auth/google/native', () => {
     });
 
     it('given provisioning error, should still succeed', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(
         new Error('Provisioning failed')
       );
 
@@ -677,7 +727,8 @@ describe('POST /api/auth/google/native', () => {
   describe('user update scenarios', () => {
     it('given existing user without googleId, should update with googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -690,7 +741,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('given existing user without name, should set name from Google payload', async () => {
       const userWithoutName = { ...mockExistingUser, googleId: null, name: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, name: 'Test User', googleId: 'google-id-123' } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -704,7 +756,8 @@ describe('POST /api/auth/google/native', () => {
     it('given existing user with different avatar, should update image', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -717,7 +770,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('given existing user with unverified email and email_verified token, should update emailVerified', async () => {
       const userUnverified = { ...mockExistingUser, emailVerified: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userUnverified as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userUnverified as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userUnverified, emailVerified: new Date() } as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -739,7 +793,8 @@ describe('POST /api/auth/google/native', () => {
         image: null, // resolveGoogleAvatarImage returns null by default
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createNativeRequest(validNativePayload);
       await POST(request);
@@ -767,7 +822,8 @@ describe('POST /api/auth/google/native', () => {
       vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
 
     it('masks email in "Creating new user via native Google OAuth" log', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -781,7 +837,8 @@ describe('POST /api/auth/google/native', () => {
 
     it('masks email in "Updating existing user via native Google OAuth" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createNativeRequest(validNativePayload);
@@ -800,7 +857,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_xyz' });
@@ -819,7 +876,7 @@ describe('POST /api/auth/google/native', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -845,7 +902,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'page',
         invitedDriveId: 'drv_1',
         invitedPageId: 'page_1',
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_p' });
@@ -863,7 +920,7 @@ describe('POST /api/auth/google/native', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createNativeRequest({ ...validNativePayload, inviteToken: 'ps_invite_c' });

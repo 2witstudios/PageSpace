@@ -1,23 +1,17 @@
 import type { db as DbType } from '@pagespace/db/db';
-import { eq, and, inArray } from '@pagespace/db/operators';
-import { pages } from '@pagespace/db/schema/core';
+import { eq, and, inArray, ne, gt, sql } from '@pagespace/db/operators';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
+import { expandOccurrences, type RecurrenceRule } from './recurrence-utils';
+import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
 
-const MAX_CONTEXT_PAGES = 10;
+const TRIGGER_HORIZON_DAYS = 180;
 
-// Drizzle tx exposes the same insert/select/update/delete chain shape as the
-// top-level db, so helpers that don't open their own transaction can take
-// either. Call sites that are already inside an outer tx pass the tx; call
-// sites that aren't pass `db`.
 type DbOrTx = typeof DbType | Parameters<Parameters<typeof DbType.transaction>[0]>[0];
 
-export interface CalendarAgentTriggerInput {
-  agentPageId: string;
-  prompt?: string;
-  instructionPageId?: string | null;
-  contextPageIds?: string[];
-}
+/** @deprecated Use AgentTriggerPayload from agent-trigger-shared. Kept as an alias for call sites. */
+export type CalendarAgentTriggerInput = AgentTriggerPayload;
 
 export interface CreateCalendarTriggerWorkflowParams {
   tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0];
@@ -25,20 +19,22 @@ export interface CreateCalendarTriggerWorkflowParams {
   scheduledById: string;
   calendarEventId: string;
   triggerAt: Date;
+  occurrenceDate?: Date;
   timezone: string;
   agentTrigger: CalendarAgentTriggerInput;
 }
 
 /**
- * Atomically write the workflows row (execution payload) and the
- * calendar_triggers row (the "when") inside a caller-supplied transaction.
- * Validation of the agent / instruction / context pages is the caller's
- * responsibility — by this point those checks must have passed.
+ * Atomically write the workflows row (execution payload) and a single
+ * calendar_triggers row inside a caller-supplied transaction. Used for
+ * one-shot (non-recurring) events. Pass occurrenceDate when creating an
+ * individual occurrence row for a recurring event (e.g. the refill path).
+ * Validation is the caller's responsibility.
  */
 export async function createCalendarTriggerWorkflow(
   params: CreateCalendarTriggerWorkflowParams,
 ): Promise<{ workflowId: string; triggerId: string }> {
-  const { tx, driveId, scheduledById, calendarEventId, triggerAt, timezone, agentTrigger } = params;
+  const { tx, driveId, scheduledById, calendarEventId, triggerAt, occurrenceDate, timezone, agentTrigger } = params;
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
 
   const [createdWorkflow] = await tx.insert(workflows).values({
@@ -60,9 +56,44 @@ export async function createCalendarTriggerWorkflow(
     driveId,
     scheduledById,
     triggerAt,
+    ...(occurrenceDate ? { occurrenceDate } : {}),
   }).returning({ id: calendarTriggers.id });
 
   return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id };
+}
+
+/**
+ * Batch-insert one calendar_triggers row per occurrence date. All rows share
+ * the same workflowId (the workflows row is already written by the caller).
+ * Uses ON CONFLICT DO NOTHING — safe to call repeatedly for the same event;
+ * already-fired occurrences are not re-inserted.
+ */
+export async function bulkCreateOccurrenceTriggerRows(
+  database: DbOrTx,
+  params: {
+    workflowId: string;
+    calendarEventId: string;
+    driveId: string;
+    /** Null once the scheduler's account is deleted ([D-OW-36]): the occurrence is then skipped owner-left. */
+    scheduledById: string | null;
+    occurrences: Date[];
+  },
+): Promise<void> {
+  if (params.occurrences.length === 0) return;
+
+  await database
+    .insert(calendarTriggers)
+    .values(
+      params.occurrences.map((date) => ({
+        workflowId: params.workflowId,
+        calendarEventId: params.calendarEventId,
+        driveId: params.driveId,
+        scheduledById: params.scheduledById,
+        triggerAt: date,
+        occurrenceDate: date,
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 export interface ValidateCalendarAgentTriggerParams {
@@ -71,70 +102,25 @@ export interface ValidateCalendarAgentTriggerParams {
 }
 
 /**
- * Pre-write validation for calendar agent triggers. Mirrors the checks
- * task-trigger-helpers does inline for tasks: at least a prompt or instruction
- * page, agent is an AI_CHAT in the same drive, instruction + context pages all
- * live in the same drive and aren't trashed, context list capped at 10.
- *
- * Both the REST POST and the AI create_calendar_event tool call this so the
- * two surfaces can never drift on what's accepted.
+ * Pre-write validation for calendar agent triggers. Thin wrapper over the
+ * shared validateAgentTrigger so the REST POST, the AI create_calendar_event
+ * tool, and the cron workflow tool can never drift on what's accepted.
  */
 export async function validateCalendarAgentTrigger(
   database: typeof DbType,
   params: ValidateCalendarAgentTriggerParams,
 ): Promise<{ agentPageId: string }> {
-  const { driveId, agentTrigger } = params;
-  const promptText = agentTrigger.prompt?.trim() ?? '';
-
-  if (!promptText && !agentTrigger.instructionPageId) {
-    throw new Error('Agent trigger needs either a prompt or instructionPageId');
-  }
-
-  const contextPageIds = agentTrigger.contextPageIds ?? [];
-  if (contextPageIds.length > MAX_CONTEXT_PAGES) {
-    throw new Error(`Agent trigger accepts at most ${MAX_CONTEXT_PAGES} context pages`);
-  }
-
-  const agent = await database.query.pages.findFirst({
-    where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
-    columns: { id: true, driveId: true },
+  return validateAgentTrigger(database, {
+    driveId: params.driveId,
+    agentTrigger: params.agentTrigger,
+    entityLabel: 'event',
   });
-  if (!agent) throw new Error('Agent page not found or not an AI agent');
-  if (agent.driveId !== driveId) throw new Error('Agent must be in the same drive as the event');
-
-  if (agentTrigger.instructionPageId) {
-    const instrPage = await database.query.pages.findFirst({
-      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
-      columns: { id: true },
-    });
-    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
-  }
-
-  if (contextPageIds.length > 0) {
-    const validPages = await database.query.pages.findMany({
-      where: and(
-        inArray(pages.id, contextPageIds),
-        eq(pages.driveId, driveId),
-        eq(pages.isTrashed, false),
-      ),
-      columns: { id: true },
-    });
-    if (validPages.length !== contextPageIds.length) {
-      throw new Error('Some context pages were not found or are not in the same drive');
-    }
-  }
-
-  return { agentPageId: agent.id };
 }
 
 /**
  * Remove the agent trigger from a calendar event. Deletes the linked workflows
  * row(s); FK cascade drops the calendar_triggers rows. Treats a no-op
  * (no triggers exist) as success so callers don't need a pre-check.
- *
- * Accepts either `db` or a transaction handle so callers that are already in
- * an outer tx (e.g. PATCH /events/[id]) can keep event + trigger writes
- * atomic.
  */
 export async function removeCalendarTrigger(
   database: DbOrTx,
@@ -147,7 +133,7 @@ export async function removeCalendarTrigger(
 
   if (triggerRows.length === 0) return;
 
-  const workflowIds = triggerRows.map((r) => r.workflowId);
+  const workflowIds = [...new Set(triggerRows.map((r) => r.workflowId))];
   await database.delete(workflows).where(inArray(workflows.id, workflowIds));
 }
 
@@ -158,15 +144,22 @@ export interface UpsertCalendarTriggerWorkflowParams {
   triggerAt: Date;
   timezone: string;
   agentTrigger: CalendarAgentTriggerInput;
+  recurrenceRule?: RecurrenceRule | null;
+  recurrenceExceptions?: string[];
 }
 
 /**
- * In-tx version of upsertCalendarTriggerWorkflow. Caller is responsible for
- * pre-validating via validateCalendarAgentTrigger. Used by event PATCH /
- * AI update_calendar_event so the event update and the trigger upsert commit
- * (or roll back) together — protects against partial-write states where a
- * non-trigger validation failure (e.g. db blip mid-upsert) leaves the event
- * mutated but the trigger out of sync.
+ * In-tx upsert. Caller must pre-validate via validateCalendarAgentTrigger.
+ *
+ * For recurring events (recurrenceRule non-null):
+ *   - Upserts the single workflows row (stable workflowId preserves history).
+ *   - Deletes all unfired future trigger rows (so recurrence-rule or time-of-day
+ *     changes take effect cleanly).
+ *   - Bulk-inserts occurrence rows for the next 180 days via
+ *     bulkCreateOccurrenceTriggerRows (ON CONFLICT DO NOTHING = idempotent).
+ *
+ * For one-shot events (recurrenceRule null/absent):
+ *   - Updates the existing trigger row's triggerAt, or creates one if absent.
  */
 export async function upsertCalendarTriggerWorkflowInTx(
   tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0],
@@ -180,44 +173,128 @@ export async function upsertCalendarTriggerWorkflowInTx(
     .from(calendarTriggers)
     .where(eq(calendarTriggers.calendarEventId, params.calendarEventId));
 
-  if (existing.length > 0) {
-    const { id: triggerId, workflowId } = existing[0];
+  let workflowId: string;
 
+  if (existing.length > 0) {
+    workflowId = existing[0].workflowId;
+    // [D-OW-36] Editing the trigger of an owner-left workflow saves the edit but never switches it back
+    // on: only an Owner or Admin's reassignment does.
+    const [current] = await tx.select({ ownerLeftAt: workflows.ownerLeftAt }).from(workflows).where(eq(workflows.id, workflowId));
+    const ownerLeft = Boolean(current?.ownerLeftAt);
     await tx.update(workflows).set({
       agentPageId: params.agentTrigger.agentPageId,
       prompt: triggerPrompt,
       instructionPageId: params.agentTrigger.instructionPageId ?? null,
       contextPageIds,
       timezone: params.timezone,
-      isEnabled: true,
+      ...(ownerLeft ? {} : { isEnabled: true }),
     }).where(eq(workflows.id, workflowId));
-
-    await tx.update(calendarTriggers).set({
-      triggerAt: params.triggerAt,
-    }).where(eq(calendarTriggers.id, triggerId));
-
-    return { workflowId, triggerId };
+  } else {
+    const [created] = await tx.insert(workflows).values({
+      driveId: params.driveId,
+      createdBy: params.scheduledById,
+      name: `calendar-trigger-${params.calendarEventId}`,
+      agentPageId: params.agentTrigger.agentPageId,
+      prompt: triggerPrompt,
+      instructionPageId: params.agentTrigger.instructionPageId ?? null,
+      contextPageIds,
+      triggerType: 'cron',
+      timezone: params.timezone,
+      isEnabled: true,
+    }).returning({ id: workflows.id });
+    workflowId = created.id;
   }
 
-  return createCalendarTriggerWorkflow({
-    tx,
+  if (params.recurrenceRule) {
+    // Clean up unfired future occurrence rows before recreating — ensures that
+    // recurrence-rule changes (e.g. weekly → daily) or time-of-day changes
+    // take effect immediately rather than leaving stale rows in the queue.
+    const now = new Date();
+    await tx.delete(calendarTriggers).where(
+      and(
+        eq(calendarTriggers.calendarEventId, params.calendarEventId),
+        gt(calendarTriggers.triggerAt, now),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ),
+    );
+
+    const horizon = new Date(now.getTime() + TRIGGER_HORIZON_DAYS * 86_400_000);
+    const occurrences = expandOccurrences(
+      params.recurrenceRule,
+      params.triggerAt,
+      now,
+      horizon,
+      params.recurrenceExceptions ?? [],
+    );
+
+    await bulkCreateOccurrenceTriggerRows(tx, {
+      workflowId,
+      calendarEventId: params.calendarEventId,
+      driveId: params.driveId,
+      scheduledById: params.scheduledById,
+      occurrences,
+    });
+
+    return { workflowId, triggerId: '' };
+  }
+
+  // One-shot path: clean up any leftover occurrence rows (from a previous
+  // recurring configuration), then update or create the single trigger row.
+  // Query for an *unfired* trigger row separately — `existing` may include
+  // already-fired occurrence rows and we must not retarget historical data.
+  if (existing.length > 0) {
+    const [pendingTrigger] = await tx
+      .select({ id: calendarTriggers.id })
+      .from(calendarTriggers)
+      .where(
+        and(
+          eq(calendarTriggers.calendarEventId, params.calendarEventId),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${workflowRuns}
+            WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+              AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+          )`,
+        ),
+      );
+
+    if (pendingTrigger) {
+      // Delete every unfired row except the one we'll reuse.
+      await tx.delete(calendarTriggers).where(
+        and(
+          eq(calendarTriggers.calendarEventId, params.calendarEventId),
+          ne(calendarTriggers.id, pendingTrigger.id),
+          sql`NOT EXISTS (
+            SELECT 1 FROM ${workflowRuns}
+            WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+              AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+          )`,
+        ),
+      );
+      await tx.update(calendarTriggers).set({
+        triggerAt: params.triggerAt,
+      }).where(eq(calendarTriggers.id, pendingTrigger.id));
+      return { workflowId, triggerId: pendingTrigger.id };
+    }
+    // All trigger rows were already fired — fall through to insert a fresh row.
+  }
+
+  const [created] = await tx.insert(calendarTriggers).values({
+    workflowId,
+    calendarEventId: params.calendarEventId,
     driveId: params.driveId,
     scheduledById: params.scheduledById,
-    calendarEventId: params.calendarEventId,
     triggerAt: params.triggerAt,
-    timezone: params.timezone,
-    agentTrigger: params.agentTrigger,
-  });
+  }).returning({ id: calendarTriggers.id });
+
+  return { workflowId, triggerId: created.id };
 }
 
 /**
- * Upsert an event's agent trigger.
- *
- * If a trigger row already exists for this event, updates the linked workflows
- * row in place (agent / prompt / instruction / context pages) and re-aims
- * triggerAt — the workflowId stays stable so any historical workflow_runs
- * stays cleanly linked. If no trigger exists yet, falls through to
- * createCalendarTriggerWorkflow inside the same transaction.
+ * Upsert an event's agent trigger (standalone, outside an existing transaction).
  *
  * Validation runs before the transaction so a bad agent or off-drive context
  * page doesn't briefly hold a row lock. Used by the standalone PUT /triggers
@@ -234,4 +311,80 @@ export async function upsertCalendarTriggerWorkflow(
   });
 
   return database.transaction((tx) => upsertCalendarTriggerWorkflowInTx(tx, params));
+}
+
+/**
+ * Re-synchronise trigger rows when the event's timing or recurrence rule changes
+ * but the caller did NOT explicitly supply a new agentTrigger payload.
+ *
+ * For recurring events: deletes unfired future rows and re-expands the series
+ * from newBaseAt using the caller-supplied recurrenceRule, preserving the
+ * existing workflowId so history stays linked.
+ *
+ * For one-shot events: re-aims the single pending trigger row to newBaseAt.
+ *
+ * No-op if the event has no trigger rows at all.
+ */
+export async function resyncCalendarTriggerTimings(
+  tx: Parameters<Parameters<typeof DbType.transaction>[0]>[0],
+  calendarEventId: string,
+  newBaseAt: Date,
+  effectiveRecurrenceRule: RecurrenceRule | null | undefined,
+  exceptions: string[],
+): Promise<void> {
+  if (effectiveRecurrenceRule) {
+    const existingTrigger = await tx
+      .select({
+        workflowId: calendarTriggers.workflowId,
+        driveId: calendarTriggers.driveId,
+        scheduledById: calendarTriggers.scheduledById,
+      })
+      .from(calendarTriggers)
+      .where(eq(calendarTriggers.calendarEventId, calendarEventId));
+
+    if (existingTrigger.length === 0) return;
+
+    const { workflowId, driveId, scheduledById } = existingTrigger[0];
+    const now = new Date();
+    await tx.delete(calendarTriggers).where(
+      and(
+        eq(calendarTriggers.calendarEventId, calendarEventId),
+        gt(calendarTriggers.triggerAt, now),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ),
+    );
+
+    const horizon = new Date(now.getTime() + TRIGGER_HORIZON_DAYS * 86_400_000);
+    const occurrences = expandOccurrences(
+      effectiveRecurrenceRule,
+      newBaseAt,
+      now,
+      horizon,
+      exceptions,
+    );
+
+    await bulkCreateOccurrenceTriggerRows(tx, {
+      workflowId,
+      calendarEventId,
+      driveId,
+      scheduledById,
+      occurrences,
+    });
+  } else {
+    await tx
+      .update(calendarTriggers)
+      .set({ triggerAt: newBaseAt })
+      .where(and(
+        eq(calendarTriggers.calendarEventId, calendarEventId),
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${workflowRuns}
+          WHERE ${workflowRuns.sourceTable} = 'calendarTriggers'
+            AND ${workflowRuns.sourceId} = ${calendarTriggers.id}
+        )`,
+      ));
+  }
 }

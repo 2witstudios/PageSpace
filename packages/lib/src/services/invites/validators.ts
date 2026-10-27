@@ -22,7 +22,7 @@ import type {
 // narrowed without losing the surface-specific fields.
 export interface MinimalInvite {
   email: string;
-  expiresAt: Date;
+  expiresAt: Date | null;
   consumedAt: Date | null;
 }
 
@@ -80,25 +80,22 @@ export interface RevokeAuthorizedInvite {
   driveId: string;
 }
 
-const isRevokeRole = (role: Role): boolean => role === 'OWNER' || role === 'ADMIN';
+const isRevokeRole = (role: Role | 'GUEST'): boolean => role === 'OWNER' || role === 'ADMIN';
 
 export const validateRevokeRequest = ({
   invite,
   requestedDriveId,
-  actorMembership,
+  actorRole,
 }: {
   invite: RevokeAuthorizedInvite | null;
   requestedDriveId: string;
-  actorMembership: { role: Role; acceptedAt: Date | null } | null;
+  /** The actor's effective drive role (a pending invitation is null). */
+  actorRole: Role | null;
 }): Result<RevokeAuthorizedInvite, RevokeErrorCode> => {
   if (invite === null || invite.driveId !== requestedDriveId) {
     return { ok: false, error: 'NOT_FOUND' };
   }
-  if (
-    actorMembership === null ||
-    actorMembership.acceptedAt === null ||
-    !isRevokeRole(actorMembership.role)
-  ) {
+  if (actorRole === null || !isRevokeRole(actorRole)) {
     return { ok: false, error: 'FORBIDDEN' };
   }
   return { ok: true, data: invite };

@@ -36,7 +36,6 @@ const MonacoEditor = ({ value, onChange, readOnly, language = 'html', options: o
     domReadOnly: readOnly,
     cursorWidth: readOnly ? 0 : undefined,
     contextmenu: true,
-    columnSelection: true,
     dragAndDrop: !readOnly,
     hover: readOnly ? { enabled: true } : undefined,
     readOnlyMessage: readOnly ? { value: "" } : undefined,

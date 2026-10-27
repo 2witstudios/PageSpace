@@ -10,12 +10,28 @@ import { NextResponse } from 'next/server';
 import { GET, POST } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
+// Mock websocket broadcast (boundary)
+vi.mock('@/lib/websocket/socket-utils', () => ({
+  broadcastAiConversationAdded: vi.fn(),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi.fn().mockResolvedValue({ userId: 'user_123' }),
+}));
+
 // Mock the repository seam (boundary)
+vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
+  checkSessionAccess: vi.fn(async () => ({ allowed: true })),
+  findSessionRecord: vi.fn(async () => ({ driveId: 'workspace-drive' })),
+  createConversationInSession: vi.fn(async () => undefined),
+}));
+
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     getAiAgent: vi.fn(),
     listConversations: vi.fn(),
     countConversations: vi.fn(),
+    createConversation: vi.fn().mockResolvedValue(undefined),
   },
   extractPreviewText: vi.fn((content: string | null) => {
     if (!content) return 'New conversation';
@@ -35,15 +51,21 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
   generateTitle: vi.fn((preview: string) => preview.length > 50 ? preview.substring(0, 50) + '...' : preview),
 }));
 
+vi.mock('@pagespace/lib/services/drive-wallet-service', () => ({ getDriveSpend: vi.fn() }));
 // Mock auth (boundary)
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPPageScope: vi.fn(),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -60,8 +82,11 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 
-// Mock ID generation
-vi.mock('@paralleldrive/cuid2', () => ({
+// Mock ID generation — createId is mocked to a fixed value; isCuid is left as
+// the real implementation so client-supplied-id validation tests exercise
+// genuine CUID2 shape checking, not a stubbed answer.
+vi.mock('@paralleldrive/cuid2', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@paralleldrive/cuid2')>()),
   createId: vi.fn(() => 'generated_conv_id'),
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
@@ -70,6 +95,8 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { broadcastAiConversationAdded } from '@/lib/websocket/socket-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -94,6 +121,8 @@ const mockAgent = () => ({
   title: 'Test Agent',
   type: 'AI_CHAT',
   driveId: mockDriveId,
+  defaultEnvId: null,
+  sandboxEnabled: false,
 });
 
 const createRequest = (agentId: string, method: string, body?: Record<string, unknown>) =>
@@ -183,6 +212,9 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
           firstUserMessage: JSON.stringify([{ text: 'Hello' }]),
           lastMessageRole: 'assistant',
           lastMessageContent: 'Hi there!',
+          conversationUserId: 'other_user',
+          isShared: false,
+          workspaceId: null,
         },
       ];
       vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
@@ -203,6 +235,9 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         createdAt: '2025-01-01T00:00:00.000Z',
         updatedAt: '2025-01-02T00:00:00.000Z',
         messageCount: 5,
+        isShared: false,
+        sessionId: null,
+        isOwner: false,
         lastMessage: {
           role: 'assistant',
           timestamp: '2025-01-02T00:00:00.000Z',
@@ -215,6 +250,33 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         totalPages: 1,
         hasMore: false,
       });
+    });
+
+    // The repository speaks the post-rename name; the wire field a pre-rename
+    // browser bundle reads is still `sessionId`. Pin the mapping in both
+    // directions so neither half can be renamed without the other.
+    it('should surface the repository workspaceId as the wire sessionId', async () => {
+      vi.mocked(conversationRepository.listConversations).mockResolvedValue([
+        {
+          conversationId: 'conv_in_workspace',
+          firstMessageTime: new Date('2025-01-01'),
+          lastMessageTime: new Date('2025-01-02'),
+          messageCount: 1,
+          firstUserMessage: JSON.stringify([{ text: 'In a workspace' }]),
+          lastMessageRole: 'user',
+          lastMessageContent: 'In a workspace',
+          conversationUserId: mockUserId,
+          isShared: false,
+          workspaceId: 'ws_abc',
+        },
+      ]);
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(1);
+
+      const response = await GET(createRequest(mockAgentId, 'GET'), createContext(mockAgentId));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversations[0].sessionId).toBe('ws_abc');
     });
 
     it('should return empty array when no conversations exist', async () => {
@@ -244,7 +306,8 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
       expect(conversationRepository.listConversations).toHaveBeenCalledWith(
         mockAgentId,
         20,  // pageSize
-        40   // offset (page 2 * 20)
+        40,  // offset (page 2 * 20)
+        mockUserId
       );
       expect(body.pagination).toEqual({
         page: 2,
@@ -252,6 +315,73 @@ describe('GET /api/ai/page-agents/[agentId]/conversations', () => {
         totalCount: 100,
         totalPages: 5,
         hasMore: true,
+      });
+    });
+
+    it('should pass userId to listConversations and countConversations for privacy scoping', async () => {
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      await GET(request, context);
+
+      expect(conversationRepository.listConversations).toHaveBeenCalledWith(
+        mockAgentId,
+        expect.any(Number),
+        expect.any(Number),
+        mockUserId
+      );
+      expect(conversationRepository.countConversations).toHaveBeenCalledWith(
+        mockAgentId,
+        mockUserId
+      );
+    });
+
+    it('should include isShared and isOwner in conversation response', async () => {
+      const mockConversations = [
+        {
+          conversationId: 'conv_owned',
+          firstMessageTime: new Date('2025-01-01'),
+          lastMessageTime: new Date('2025-01-02'),
+          messageCount: 3,
+          firstUserMessage: JSON.stringify([{ text: 'My private convo' }]),
+          lastMessageRole: 'user',
+          lastMessageContent: 'Hello',
+          conversationUserId: mockUserId,
+          isShared: false,
+          workspaceId: null,
+        },
+        {
+          conversationId: 'conv_shared',
+          firstMessageTime: new Date('2025-01-03'),
+          lastMessageTime: new Date('2025-01-04'),
+          messageCount: 5,
+          firstUserMessage: JSON.stringify([{ text: 'Shared convo' }]),
+          lastMessageRole: 'assistant',
+          lastMessageContent: 'Hi',
+          conversationUserId: 'other_user',
+          isShared: true,
+          workspaceId: null,
+        },
+      ];
+      vi.mocked(conversationRepository.listConversations).mockResolvedValue(mockConversations);
+      vi.mocked(conversationRepository.countConversations).mockResolvedValue(2);
+
+      const request = createRequest(mockAgentId, 'GET');
+      const context = createContext(mockAgentId);
+
+      const response = await GET(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversations[0]).toMatchObject({
+        id: 'conv_owned',
+        isShared: false,
+        isOwner: true,
+      });
+      expect(body.conversations[1]).toMatchObject({
+        id: 'conv_shared',
+        isShared: true,
+        isOwner: false,
       });
     });
   });
@@ -360,6 +490,34 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
       }
     });
 
+    it('given a valid client-supplied CUID2 conversationId, should use it instead of generating one', async () => {
+      const { createId: createIdImport } = await import('@paralleldrive/cuid2');
+      const { init } = await vi.importActual<typeof import('@paralleldrive/cuid2')>('@paralleldrive/cuid2');
+      const generateValidCuid = init({ length: 24 });
+      const validClientId = generateValidCuid();
+
+      const request = createRequest(mockAgentId, 'POST', { conversationId: validClientId });
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversationId).toBe(validClientId);
+      expect(vi.mocked(createIdImport)).not.toHaveBeenCalled();
+    });
+
+    it('given a malformed client-supplied conversationId, should ignore it and generate a server-side id instead', async () => {
+      const request = createRequest(mockAgentId, 'POST', { conversationId: 'not-a-valid-cuid!!' });
+      const context = createContext(mockAgentId);
+
+      const response = await POST(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.conversationId).toBe('generated_conv_id');
+    });
+
     it('should use custom title if provided', async () => {
       const request = createRequest(mockAgentId, 'POST', { title: 'My Custom Conversation' });
       const context = createContext(mockAgentId);
@@ -383,6 +541,28 @@ describe('POST /api/ai/page-agents/[agentId]/conversations', () => {
 
       expect(response.status).toBe(200);
       expect(body.title).toBe('New conversation');
+    });
+
+    it('should call createConversation in repository to eagerly persist ownership', async () => {
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      await POST(request, context);
+
+      expect(conversationRepository.createConversation).toHaveBeenCalledWith(
+        'generated_conv_id',
+        mockUserId,
+        mockAgentId
+      );
+    });
+
+    it('should NOT broadcast conversation_added for private conversations', async () => {
+      const request = createRequest(mockAgentId, 'POST', {});
+      const context = createContext(mockAgentId);
+
+      await POST(request, context);
+
+      expect(broadcastAiConversationAdded).not.toHaveBeenCalled();
     });
   });
 
@@ -504,3 +684,121 @@ describe('generateTitle (pure function)', () => {
     expect(generateTitle(longPreview)).toBe('a'.repeat(50) + '...');
   });
 });
+
+describe('POST session binding (sessionId in body)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: true });
+    vi.mocked(runtime.createConversationInSession).mockResolvedValue(undefined);
+  });
+
+  it('binds through the session-gated creator and answers 200', async () => {
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(200);
+    expect(runtime.createConversationInSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentPageId: mockAgentId, workspaceId: 'ses-1', actor: expect.objectContaining({ userId: mockUserId }) }),
+    );
+  });
+
+  it('409s an id that cannot be claimed WITH this binding — never adopts or rebinds', async () => {
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    const { ConversationUnavailableError } = await import('@/lib/agent-workspaces/create-conversation-in-workspace');
+    vi.mocked(runtime.createConversationInSession).mockRejectedValue(new ConversationUnavailableError());
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1', conversationId: 'tz4a98xxat96iws9zmbrgj3a' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'That conversation id is not available' });
+  });
+
+  it('404s an unknown session id — a conversation joins a workspace, never mints one', async () => {
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'session_not_found' });
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(404);
+    expect(runtime.createConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('404s a session the requester cannot reach — SAME as not-found (review #2261/5)', async () => {
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: false, reason: 'drive_access_denied' });
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(404);
+    expect(runtime.createConversationInSession).not.toHaveBeenCalled();
+  });
+
+  it('400s an agent from a DIFFERENT drive than the session — a caller mistake, not a service failure (review #2261/6)', async () => {
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    const { AgentNotInSessionDriveError } = await import('@/lib/agent-workspaces/create-conversation-in-workspace');
+    vi.mocked(runtime.createConversationInSession).mockRejectedValue(new AgentNotInSessionDriveError());
+    const request = createRequest(mockAgentId, 'POST', { sessionId: 'ses-1' });
+    const response = await POST(request, createContext(mockAgentId));
+    expect(response.status).toBe(400);
+  });
+});
+
+
+describe('SPEND-2 (partial) SPEND-3 (partial) initial page-agent source selection', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(conversationRepository.getAiAgent).mockResolvedValue(mockAgent());
+    const runtime = await import('@/lib/agent-workspaces/agent-workspaces-runtime');
+    vi.mocked(runtime.checkSessionAccess).mockResolvedValue({ allowed: true });
+    vi.mocked(runtime.createConversationInSession).mockResolvedValue(undefined);
+    vi.mocked(conversationRepository.createConversation).mockResolvedValue('created');
+    vi.mocked(getDriveSpend).mockResolvedValue({ ok: true, driveId: mockDriveId, options: [{ walletId: 'wallet-own' }] as never, resolved: { kind: 'spend', walletId: 'wallet-own' } as never });
+  });
+  const choose = (body: Record<string, unknown>) => POST(createRequest(mockAgentId, 'POST', body), createContext(mockAgentId));
+  it('Given an authorized source choice, should validate the actual agent drive and carry the wallet into the creation insert', async () => {
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(200);
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId, via: 'credential' }), mockDriveId);
+    expect(conversationRepository.createConversation).toHaveBeenCalledWith(expect.any(String), mockUserId, mockAgentId, { initialChosenWalletId: 'wallet-own' });
+  });
+  it('Given an unavailable wallet or inaccessible source drive, should create nothing', async () => {
+    expect((await choose({ walletId: 'wallet-other' })).status).toBe(400);
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+    vi.mocked(getDriveSpend).mockResolvedValueOnce({ ok: false, status: 403, code: 'org_reauthentication_required', message: 'Sign in again' });
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(403);
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+  });
+  it('Given an MCP source choice, should refuse money authority before creation while a plain MCP create still works', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId, tokenType: 'mcp', tokenId: 'token', allowedDriveIds: [], role: 'user', tokenVersion: 0, adminRoleVersion: 0 });
+    const response = await choose({ walletId: 'wallet-own' });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'mcp_token_cannot_change_spend_source' });
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+    expect(getDriveSpend).not.toHaveBeenCalled();
+    expect((await choose({})).status).toBe(200);
+  });
+  it('Given a page the caller cannot view, should never validate a source or create a row', async () => {
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(403);
+    expect(getDriveSpend).not.toHaveBeenCalled();
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+  });
+  it('Given an id collision, should refuse an initial choice without pretending it was stored', async () => {
+    vi.mocked(conversationRepository.createConversation).mockResolvedValue('exists');
+    expect((await choose({ walletId: 'wallet-own' })).status).toBe(409);
+  });
+  it('Given a workspace-bound agent, should validate the workspace drive and pass the atomic choice to its transactional creator', async () => {
+    expect((await choose({ walletId: 'wallet-own', workspaceId: 'ws1' })).status).toBe(200);
+    expect(getDriveSpend).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), 'workspace-drive');
+    expect(createConversationInSession).toHaveBeenCalledWith(expect.objectContaining({ initialChosenWalletId: 'wallet-own' }));
+  });
+});
+
+import { getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';

@@ -49,16 +49,22 @@ vi.mock('@/lib/workflows/calendar-trigger-helpers', () => ({
   upsertCalendarTriggerWorkflowInTx: vi.fn().mockResolvedValue({ workflowId: 'wf-1', triggerId: 'trg-1' }),
   removeCalendarTrigger: vi.fn().mockResolvedValue(undefined),
   validateCalendarAgentTrigger: vi.fn().mockResolvedValue({ agentPageId: 'agent-1' }),
+  resyncCalendarTriggerTimings: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure and cheap; these cases all pass absolute (Z) datetimes,
+// so the real parser is used rather than a stub that would have to fake the
+// naive-datetime rule.
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn().mockResolvedValue(false),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -74,6 +80,17 @@ vi.mock('../../../../../../lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((r: unknown) => typeof r === 'object' && r !== null && 'error' in r),
   checkMCPDriveScope: vi.fn(() => null),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
+  // Session auth falls through to the user-level checks.
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
+  }),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
+  }),
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({
@@ -92,7 +109,9 @@ import {
   upsertCalendarTriggerWorkflowInTx,
   removeCalendarTrigger,
   validateCalendarAgentTrigger,
+  resyncCalendarTriggerTimings,
 } from '@/lib/workflows/calendar-trigger-helpers';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user_creator';
 const EVENT_ID = 'event_123';
@@ -249,8 +268,17 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
     expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
   });
 
-  it('rejects an agent-trigger upsert on a recurring event', async () => {
-    const recurringEvent = { ...baseEvent, recurrenceRule: { frequency: 'WEEKLY', interval: 1 } };
+  it('allows an agent-trigger upsert on a recurring event and passes recurrenceRule to the helper', async () => {
+    // Recurring events now support agent triggers — the recurrence rule is
+    // expanded into individual trigger rows by the helper. The PATCH route
+    // must pass recurrenceRule (and recurrenceExceptions) to the helper so
+    // it can do the expansion.
+    const recurringEvent = {
+      ...baseEvent,
+      recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      recurrenceExceptions: [] as string[],
+    };
+    setupSuccessfulPatch();
     (db.query.calendarEvents.findFirst as Mock).mockReset();
     (db.query.calendarEvents.findFirst as Mock)
       .mockResolvedValueOnce(recurringEvent)
@@ -260,8 +288,45 @@ describe('PATCH /api/calendar/events/[eventId] agentTrigger', () => {
       agentTrigger: { agentPageId: 'agent-1', prompt: 'p' },
     }), ctx());
 
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/recur/i);
+    expect(res.status).toBe(200);
+    expect(upsertCalendarTriggerWorkflowInTx).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+        recurrenceExceptions: [],
+      }),
+    );
+  });
+
+  it('calls resyncCalendarTriggerTimings — not upsertCalendarTriggerWorkflowInTx — when only startAt changes on a recurring event', async () => {
+    // Regression: the old code updated all unfired trigger rows to the same
+    // adjustedStartAt, collapsing all occurrences onto one timestamp. Now the
+    // route delegates timing re-sync to resyncCalendarTriggerTimings which
+    // does a proper occurrence re-expansion for recurring events.
+    const recurringEvent = {
+      ...baseEvent,
+      recurrenceRule: { frequency: 'WEEKLY', interval: 1 },
+      recurrenceExceptions: [] as string[],
+    };
+    setupSuccessfulPatch();
+    (db.query.calendarEvents.findFirst as Mock).mockReset();
+    (db.query.calendarEvents.findFirst as Mock)
+      .mockResolvedValueOnce(recurringEvent)
+      .mockResolvedValueOnce(recurringEvent);
+
+    const res = await PATCH(makeRequest({
+      startAt: '2026-06-01T10:00:00Z',
+      endAt: '2026-06-01T11:00:00Z',
+    }), ctx());
+
+    expect(res.status).toBe(200);
     expect(upsertCalendarTriggerWorkflowInTx).not.toHaveBeenCalled();
+    expect(resyncCalendarTriggerTimings).toHaveBeenCalledWith(
+      expect.anything(),
+      EVENT_ID,
+      expect.any(Date),
+      expect.objectContaining({ frequency: 'WEEKLY' }),
+      [],
+    );
   });
 });

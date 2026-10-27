@@ -21,12 +21,15 @@ vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
     id: 'id',
     email: 'email',
+    emailBidx: 'emailBidx',
     failedLoginAttempts: 'failedLoginAttempts',
     lockedUntil: 'lockedUntil',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((field, value) => ({ field, value })),
+  // The encryption-aware lookup edge composes a dual blind-index/raw-email match.
+  or: vi.fn((...args: unknown[]) => ({ op: 'or', args })),
 }));
 
 // Mock the logger
@@ -154,6 +157,30 @@ describe('account-lockout', () => {
           where: vi.fn().mockReturnValue({
             returning: vi.fn().mockResolvedValue([{
               failedLoginAttempts: 5,
+              email: 'test@example.com',
+            }]),
+          }),
+        }),
+      });
+      vi.mocked(db.update).mockImplementation(mockUpdate);
+
+      const result = await recordFailedLoginAttempt('user-123');
+
+      expect(result.success).toBe(true);
+      expect(result.lockedUntil).toBeUndefined();
+    });
+
+    it('does NOT lock one attempt below the threshold (under-threshold stays open)', async () => {
+      vi.mocked(db.query.users.findFirst).mockResolvedValue({
+        lockedUntil: null,
+        failedLoginAttempts: 8,
+      } as never);
+
+      const mockUpdate = vi.fn().mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockResolvedValue([{
+              failedLoginAttempts: 9, // 9 < 10 threshold
               email: 'test@example.com',
             }]),
           }),

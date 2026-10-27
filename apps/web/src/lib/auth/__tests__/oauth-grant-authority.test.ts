@@ -1,0 +1,158 @@
+/**
+ * resolveGrantAuthority (extracted from the authorize/route.ts consent
+ * check, ADR 0002 Decision 2, reused by the device-decision P1b check).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const getDriveAccess = vi.fn();
+const getExplicitScopeAuthority = vi.fn();
+vi.mock('@pagespace/lib/services/drive-service', () => ({
+  getDriveAccess: (...args: unknown[]) => getDriveAccess(...args),
+  getExplicitScopeAuthority: (...args: unknown[]) => getExplicitScopeAuthority(...args),
+}));
+
+const getMemberCustomRoleId = vi.fn();
+const customRoleBelongsToDrive = vi.fn();
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  getMemberCustomRoleId: (...args: unknown[]) => getMemberCustomRoleId(...args),
+  customRoleBelongsToDrive: (...args: unknown[]) => customRoleBelongsToDrive(...args),
+}));
+
+import { resolveGrantAuthority } from '../oauth-grant-authority';
+import type { ScopeSet } from '@pagespace/lib/auth/oauth/scopes';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+function scopeSet(drives: Array<[string, ScopeSet['drives'] extends ReadonlyMap<string, infer V> ? V : never]>): ScopeSet {
+  return { account: false, offlineAccess: false, drives: new Map(drives), manageKeys: false, allDrives: false, updateKeyId: null, activateKeyId: null, newKeyName: null };
+}
+
+const USER_ID = 'user-1';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+  getMemberCustomRoleId.mockResolvedValue(null);
+  customRoleBelongsToDrive.mockResolvedValue(true);
+  getExplicitScopeAuthority.mockResolvedValue({ orgDrive: false });
+});
+
+describe('resolveGrantAuthority', () => {
+  it('resolves authority for a single drive scope', async () => {
+    const scopes = scopeSet([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }]]);
+
+    const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    expect(authority.size).toBe(1);
+    expect(authority.get('drive-1')).toMatchObject({ isOwner: true, isAdmin: true, isMember: true });
+    expect(getDriveAccess).toHaveBeenCalledWith('drive-1', expect.objectContaining({ userId: USER_ID }));
+  });
+
+  it('resolves authority for every drive in a multi-drive scope set', async () => {
+    const scopes = scopeSet([
+      ['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }],
+      ['drive-2', { kind: 'drive', driveId: 'drive-2', role: { kind: 'admin' } }],
+      ['drive-3', { kind: 'drive', driveId: 'drive-3', role: { kind: 'member' } }],
+    ]);
+
+    const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    expect(authority.size).toBe(3);
+    expect(getDriveAccess).toHaveBeenCalledTimes(3);
+    expect(getDriveAccess).toHaveBeenCalledWith('drive-1', expect.objectContaining({ userId: USER_ID }));
+    expect(getDriveAccess).toHaveBeenCalledWith('drive-2', expect.objectContaining({ userId: USER_ID }));
+    expect(getDriveAccess).toHaveBeenCalledWith('drive-3', expect.objectContaining({ userId: USER_ID }));
+  });
+
+  it('only checks customRoleBelongsToDrive for a custom-role scope, not for inherit/admin/member', async () => {
+    const scopes = scopeSet([
+      ['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }],
+      ['drive-2', { kind: 'drive', driveId: 'drive-2', role: { kind: 'custom', customRoleId: 'role-x' } }],
+    ]);
+
+    await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    expect(customRoleBelongsToDrive).toHaveBeenCalledTimes(1);
+    expect(customRoleBelongsToDrive).toHaveBeenCalledWith('role-x', 'drive-2');
+  });
+
+  it("wires roleBelongsToDrive() to customRoleBelongsToDrive's resolved value for a custom-role scope", async () => {
+    customRoleBelongsToDrive.mockResolvedValue(false);
+    const scopes = scopeSet([['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'custom', customRoleId: 'role-x' } }]]);
+
+    const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    expect(authority.get('drive-1')?.roleBelongsToDrive('role-x')).toBe(false);
+  });
+
+  it('returns an empty map for a scope set with no drive scopes, without calling any lookup', async () => {
+    const scopes = scopeSet([]);
+
+    const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    expect(authority.size).toBe(0);
+    expect(getDriveAccess).not.toHaveBeenCalled();
+  });
+
+  it('resolves per-drive lookups concurrently, not serialized one drive at a time', async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    getDriveAccess.mockImplementation(async () => {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      concurrent -= 1;
+      return { isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' };
+    });
+
+    const scopes = scopeSet([
+      ['drive-1', { kind: 'drive', driveId: 'drive-1', role: { kind: 'inherit' } }],
+      ['drive-2', { kind: 'drive', driveId: 'drive-2', role: { kind: 'inherit' } }],
+      ['drive-3', { kind: 'drive', driveId: 'drive-3', role: { kind: 'inherit' } }],
+    ]);
+
+    await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+    // Serialized (for-of + await one drive at a time) would never exceed 1.
+    expect(maxConcurrent).toBeGreaterThan(1);
+  });
+
+  describe('explicit scopes on org drives', () => {
+    const orgAdminAccess = { isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' };
+
+    it('ORG-4 (partial) carries the direct-membership authority for an explicit scope, apart from the org-derived access', async () => {
+      getDriveAccess.mockResolvedValue(orgAdminAccess);
+      getExplicitScopeAuthority.mockResolvedValue({ orgDrive: true, row: null });
+      const scopes = scopeSet([['drive-finance', { kind: 'drive', driveId: 'drive-finance', role: { kind: 'admin' } }]]);
+
+      const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+      expect(getExplicitScopeAuthority).toHaveBeenCalledWith('drive-finance', USER_ID);
+      expect(authority.get('drive-finance')).toMatchObject({ isAdmin: true, explicitScope: { orgDrive: true, row: null } });
+    });
+
+    it('ORG-4 (partial) carries the direct row that caps an explicit scope on an org drive', async () => {
+      getDriveAccess.mockResolvedValue(orgAdminAccess);
+      getExplicitScopeAuthority.mockResolvedValue({ orgDrive: true, row: { role: 'MEMBER', customRoleId: null, source: 'invite' } });
+      const scopes = scopeSet([['drive-research', { kind: 'drive', driveId: 'drive-research', role: { kind: 'member' } }]]);
+
+      const authority = await resolveGrantAuthority(scopes, credentialActor(USER_ID, null));
+
+      expect(authority.get('drive-research')).toMatchObject({ explicitScope: { orgDrive: true, row: { role: 'MEMBER', customRoleId: null, source: 'invite' } } });
+    });
+
+    it('resolves no direct-membership authority for inheriting scopes or owners', async () => {
+      getDriveAccess.mockResolvedValue(orgAdminAccess);
+      const inherit = await resolveGrantAuthority(
+        scopeSet([['drive-finance', { kind: 'drive', driveId: 'drive-finance', role: { kind: 'inherit' } }]]),
+        credentialActor(USER_ID, null),
+      );
+      expect(getExplicitScopeAuthority).not.toHaveBeenCalled();
+      expect(inherit.get('drive-finance')).not.toHaveProperty('explicitScope');
+
+      getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
+      await resolveGrantAuthority(scopeSet([['drive-own', { kind: 'drive', driveId: 'drive-own', role: { kind: 'admin' } }]]), credentialActor(USER_ID, null));
+      expect(getExplicitScopeAuthority).not.toHaveBeenCalled();
+    });
+  });
+});
+

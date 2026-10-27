@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
+import { mkdtempSync } from 'fs';
 
 import {
   detectContentType,
@@ -9,7 +10,8 @@ import {
   __resetContentDetectorForTests,
 } from '../content-detector';
 
-const FIXTURE_DIR = path.join(os.tmpdir(), `pagespace-magika-${process.pid}`);
+// mkdtempSync creates a uniquely-named temp dir (avoids predictable, attacker-guessable paths).
+const FIXTURE_DIR = mkdtempSync(path.join(os.tmpdir(), 'pagespace-magika-'));
 
 const PNG_BYTES = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,

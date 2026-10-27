@@ -1,14 +1,18 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { pageSpaceTools } from '@/lib/ai/core';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -23,6 +27,9 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
+    // Fixed by the credential alone, before any request-controlled branch reads it.
+    const mcpScoped = isScopedMCPAuth(auth);
     const userId = auth.userId;
 
     const { pageId } = await context.params;
@@ -32,12 +39,12 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has permission to view this page
-    const canView = await canUserEditPage(userId, pageId);
+    const canView = await canPrincipalEditPage(auth, pageId);
     if (!canView) {
-      return NextResponse.json(
+      return deniedResponse(actor, pageId, NextResponse.json(
         { error: 'You do not have permission to view this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get page configuration
@@ -49,8 +56,11 @@ export async function GET(
       );
     }
 
-    // Get available tools for the UI
-    const availableTools = Object.entries(pageSpaceTools).map(([toolName, tool]) => ({
+    // Get available tools for the UI — hide account-level-only tools (e.g.
+    // create_drive) from a drive-scoped MCP token, mirroring the runtime
+    // chat/consult tool-list filtering.
+    const scopedPageSpaceTools = filterToolsForMcpScope(pageSpaceTools, mcpScoped);
+    const availableTools = Object.entries(scopedPageSpaceTools).map(([toolName, tool]) => ({
       name: toolName,
       description: tool.description || `${toolName} tool`,
     }));
@@ -84,6 +94,9 @@ export async function GET(
       visibleToGlobalAssistant: page.visibleToGlobalAssistant ?? true,
       includePageTree: page.includePageTree ?? false,
       pageTreeScope: page.pageTreeScope ?? 'children',
+      toolExposureMode: page.toolExposureMode ?? 'upfront',
+      sandboxEnabled: page.sandboxEnabled ?? false,
+      defaultEnvId: page.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -104,6 +117,9 @@ export async function PATCH(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
+    // Fixed by the credential alone, before any request-controlled branch reads it.
+    const mcpScoped = isScopedMCPAuth(auth);
     const userId = auth.userId;
 
     const { pageId } = await context.params;
@@ -118,6 +134,9 @@ export async function PATCH(
       visibleToGlobalAssistant,
       includePageTree,
       pageTreeScope,
+      toolExposureMode,
+      sandboxEnabled,
+      defaultEnvId,
       expectedRevision,
     } = body;
 
@@ -126,12 +145,12 @@ export async function PATCH(
     if (scopeError) return scopeError;
 
     // Check if user has permission to edit this page
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actor, pageId, NextResponse.json(
         { error: 'You do not have permission to edit this page configuration' },
         { status: 403 }
-      );
+      ));
     }
 
     // Validate the page exists
@@ -143,9 +162,13 @@ export async function PATCH(
       );
     }
 
-    // Validate enabled tools (ensure they exist in available tools)
+    // Validate enabled tools (ensure they exist in available tools). A
+    // drive-scoped MCP token cannot newly enable an account-level-only tool
+    // (e.g. create_drive) — mirrors the runtime chat/consult tool-list
+    // filtering, so a scoped caller can't configure a tool it will never be
+    // permitted to invoke.
     if (enabledTools && Array.isArray(enabledTools)) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = enabledTools.filter(tool => !availableToolNames.includes(tool));
       if (invalidTools.length > 0) {
         return NextResponse.json(
@@ -155,22 +178,34 @@ export async function PATCH(
       }
     }
 
+    // Validate the model selection against the real catalog (anti-hallucination).
+    // Fall back to the stored provider/model so a bad aiModel is caught even when
+    // only one of the two fields is sent.
+    if (aiProvider !== undefined || aiModel !== undefined) {
+      const nextProvider = aiProvider !== undefined ? String(aiProvider).trim() : page.aiProvider;
+      const nextModel = aiModel !== undefined ? String(aiModel).trim() : page.aiModel;
+      const reason = validateAgentModelSelection(nextProvider, nextModel);
+      if (reason) {
+        return NextResponse.json({ error: reason }, { status: 400 });
+      }
+    }
+
     // Update page configuration
     const updateData: Partial<typeof page> = {};
-    
+
     if (systemPrompt !== undefined) {
       updateData.systemPrompt = systemPrompt.trim() || null;
     }
-    
+
     if (enabledTools !== undefined) {
       // Preserve empty arrays - don't convert to null
       updateData.enabledTools = Array.isArray(enabledTools) ? enabledTools : null;
     }
-    
+
     if (aiProvider !== undefined) {
       updateData.aiProvider = aiProvider.trim() || null;
     }
-    
+
     if (aiModel !== undefined) {
       updateData.aiModel = aiModel.trim() || null;
     }
@@ -198,6 +233,65 @@ export async function PATCH(
       }
     }
 
+    if (toolExposureMode !== undefined) {
+      // Validate mode value
+      if (toolExposureMode === 'upfront' || toolExposureMode === 'search') {
+        updateData.toolExposureMode = toolExposureMode;
+      }
+    }
+
+    if (sandboxEnabled !== undefined) {
+      // REJECTED, not coerced, on both doors that write this field: `Boolean("false")`
+      // is `true`, and this switch decides whether a stored sandbox allowlist is
+      // granted at all. Hardening only the sibling route would leave the trap
+      // reachable through this one.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
+      updateData.sandboxEnabled = sandboxEnabled;
+    }
+
+    if (defaultEnvId !== undefined) {
+      // Reject, not coerce — mirrors sandboxEnabled's rule above. `""` is
+      // invalid input, not "None": the settings picker's "None" option sends
+      // `null` explicitly.
+      if (defaultEnvId !== null && typeof defaultEnvId !== 'string') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === '') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a non-empty string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === null) {
+        updateData.defaultEnvId = null;
+      } else {
+        // `resolveEnvInDrive` collapses "no such env" and "exists but belongs
+        // to a different drive" into a single null — deliberately, per its
+        // own doc comment, so this route cannot become the oracle a caller
+        // uses to enumerate env ids across drives it can't see (review —
+        // general-purpose self-review, PR #2513: the earlier hand-rolled
+        // version split these into 404 vs 400, reopening exactly the leak
+        // `resolveEnvInDrive` and the spawn route's collapsed `env_not_found`
+        // both exist to close).
+        const env = await resolveEnvInDrive(defaultEnvId, page.driveId);
+        if (!env) {
+          return NextResponse.json(
+            { error: 'Environment not found' },
+            { status: 404 }
+          );
+        }
+        updateData.defaultEnvId = defaultEnvId;
+      }
+    }
+
     // Only update if there are changes
     let responsePage = page;
     if (Object.keys(updateData).length > 0) {
@@ -217,6 +311,9 @@ export async function PATCH(
           },
         });
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        const refused = orgModelPolicyErrorResponse(error);
+        if (refused) return NextResponse.json(refused.body, { status: refused.status });
         if (error instanceof PageRevisionMismatchError) {
           return NextResponse.json(
             {
@@ -244,6 +341,14 @@ export async function PATCH(
         userId,
         updatedFields: Object.keys(updateData),
       });
+
+      try {
+        await broadcastPageEvent(
+          createPageEventPayload(responsePage.driveId, pageId, 'updated'),
+        );
+      } catch (broadcastError) {
+        loggers.api.error('Failed to broadcast agent config update', broadcastError as Error);
+      }
     }
 
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'agent_config', resourceId: pageId, details: { action: 'update_agent_config', updatedFields: Object.keys(updateData) } });
@@ -260,6 +365,9 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      toolExposureMode: responsePage.toolExposureMode ?? 'upfront',
+      sandboxEnabled: responsePage.sandboxEnabled ?? false,
+      defaultEnvId: responsePage.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

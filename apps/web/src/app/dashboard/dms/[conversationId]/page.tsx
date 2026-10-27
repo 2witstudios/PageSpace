@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useEffect, useState, useRef, useCallback, Fragment } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Conversation,
@@ -13,17 +15,23 @@ import { type ChannelInputRef } from '@/components/layout/middle-content/page-vi
 import { MessageInput } from '@/components/shared/MessageInput';
 import { MessageDropZone } from '@/components/layout/middle-content/page-views/channel/MessageDropZone';
 import type { FileAttachment } from '@/hooks/useAttachmentUpload';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
-import { renderMessageParts, convertToMessageParts } from '@/components/messages/MessagePartRenderer';
+import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import type { AttachmentMeta } from '@/lib/attachment-utils';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { Check, X } from 'lucide-react';
+import { refetchNotificationsIfMarkedRead } from '@/stores/useNotificationStore';
+import { Check, MessageSquareText, X } from 'lucide-react';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
@@ -31,7 +39,34 @@ import { ThreadPanel } from '@/components/layout/middle-content/page-views/threa
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { useMobile } from '@/hooks/useMobile';
 import { formatDistanceToNow } from 'date-fns';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
+import { cn } from '@/lib/utils';
+import { UserSafetyMenu } from '@/components/moderation/UserSafetyMenu';
+
+interface MessageAttachmentBearing {
+  conversationId?: string;
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
+const senderOf = (m: { senderId?: string | null }) => m.senderId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — which is
+ * what a pod that predates the nonce broadcasts, so it is reachable during a
+ * rolling deploy. Same conversation, same text, same first file: the matcher
+ * this surface used before the nonce existed.
+ */
+const looksLikeSameSend = (
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
+) =>
+  pending.conversationId === confirmed.conversationId &&
+  pending.content === confirmed.content &&
+  sameAttachmentBatch(pending, confirmed);
+
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -53,12 +88,20 @@ interface Message {
   createdAt: string;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
+  /**
+   * Correlation id for an in-flight send — set on the optimistic row, echoed
+   * by the server on the response and broadcast, never persisted.
+   */
+  clientNonce?: string;
   reactions?: Reaction[];
   parentId?: string | null;
   replyCount?: number;
   lastReplyAt?: string | null;
   quotedMessageId?: string | null;
   quotedMessage?: QuotedMessageSnapshot | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
 }
 
 interface DmConversation {
@@ -76,34 +119,15 @@ interface DmConversation {
   };
 }
 
-const isMatchingOptimisticMessage = (optimistic: Message, message: Message) =>
-  optimistic.id.startsWith('temp-') &&
-  optimistic.conversationId === message.conversationId &&
-  optimistic.senderId === message.senderId &&
-  optimistic.content === message.content &&
-  (optimistic.fileId ?? null) === (message.fileId ?? null);
-
-const reconcileMessage = (prev: Message[], message: Message) => {
-  const optimisticIndex = prev.findIndex((m) => isMatchingOptimisticMessage(m, message));
-
-  if (optimisticIndex !== -1) {
-    return prev.reduce<Message[]>((next, current, index) => {
-      if (current.id === message.id) return next;
-      next.push(index === optimisticIndex ? message : current);
-      return next;
-    }, []);
-  }
-
-  if (prev.find((m) => m.id === message.id)) return prev;
-  return [...prev, message];
-};
-
 export default function InboxDMPage() {
   const params = useParams();
+  const router = useRouter();
   const conversationId = params.conversationId as string;
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputValue, setInputValue] = useState('');
+  const { draft: inputValue, setDraft: setInputValue, clearDraft: clearInputDraft } = useDraft(
+    conversationId ? buildDraftKey('dm', conversationId) : '',
+  );
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   // Active inline quote-reply target. The snapshot is captured at quote-start time
@@ -150,7 +174,7 @@ export default function InboxDMPage() {
   const conversation = conversationData?.conversation;
 
   // Fetch messages
-  const { data: messagesData } = useSWR<{ messages: Message[] }>(
+  const { data: messagesData } = useSWR<{ messages: Message[]; notificationsMarkedRead?: number }>(
     conversationId ? `/api/messages/${conversationId}` : null,
     fetcher,
     {
@@ -163,6 +187,13 @@ export default function InboxDMPage() {
       setMessages(messagesData.messages);
     }
   }, [messagesData]);
+
+  // The GET above marks the conversation read server-side; when it actually
+  // cleared unread notifications, refetch so the bell/nav badge correct
+  // without a page reload (useSidebarBadges watches unreadCount for this).
+  useEffect(() => {
+    refetchNotificationsIfMarkedRead(messagesData?.notificationsMarkedRead);
+  }, [messagesData?.notificationsMarkedRead]);
 
   // Socket room join and updates
   useEffect(() => {
@@ -177,10 +208,16 @@ export default function InboxDMPage() {
       // pollute the live DM view of older clients.
       if (message.parentId) return;
       if (message.conversationId === conversationId) {
-        setMessages((prev) => reconcileMessage(prev, message));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, message, senderOf, looksLikeSameSend),
+        );
 
         if (message.senderId !== user.id) {
-          patch(`/api/messages/${conversationId}`);
+          patch<{ success: boolean; notificationsMarkedRead: number }>(`/api/messages/${conversationId}`)
+            .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+            .catch(() => {
+              // Silently ignore errors - marking as read is not critical
+            });
         }
       }
     };
@@ -233,16 +270,32 @@ export default function InboxDMPage() {
       );
     };
 
+    const handleMessageEdited = (data: { messageId: string; content: string; editedAt: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId ? { ...m, content: data.content, isEdited: true, editedAt: data.editedAt } : m
+        )
+      );
+    };
+
+    const handleMessageDeleted = (data: { messageId: string }) => {
+      setMessages((prev) => prev.filter((m) => m.id !== data.messageId));
+    };
+
     socket.on('new_dm_message', handleNewMessage);
     socket.on('reaction_added', handleReactionAdded);
     socket.on('reaction_removed', handleReactionRemoved);
     socket.on('thread_reply_count_updated', handleThreadCountUpdated);
+    socket.on('message_edited', handleMessageEdited);
+    socket.on('message_deleted', handleMessageDeleted);
 
     return () => {
       socket.off('new_dm_message', handleNewMessage);
       socket.off('reaction_added', handleReactionAdded);
       socket.off('reaction_removed', handleReactionRemoved);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
+      socket.off('message_edited', handleMessageEdited);
+      socket.off('message_deleted', handleMessageDeleted);
       socket.emit('leave_dm_conversation', conversationId);
     };
   }, [conversationId, user, socket]);
@@ -252,7 +305,7 @@ export default function InboxDMPage() {
 
     // Track this request's temp id so a rollback after a 409 race can't remove
     // a confirmed reaction that already arrived via reaction_added.
-    const tempReactionId = `temp-${Date.now()}`;
+    const tempReactionId = `temp-${createId()}`;
     const optimisticReaction: Reaction = {
       id: tempReactionId,
       emoji,
@@ -349,7 +402,7 @@ export default function InboxDMPage() {
     const authorName = isOwn
       ? user?.name ?? 'You'
       : conversation?.otherUser?.displayName ?? conversation?.otherUser?.name ?? 'Member';
-    const authorImage = isOwn ? null : conversation?.otherUser?.image ?? conversation?.otherUser?.avatarUrl ?? null;
+    const authorImage = isOwn ? user?.image ?? null : conversation?.otherUser?.image ?? conversation?.otherUser?.avatarUrl ?? null;
     setQuotedMessageId(m.id);
     setActiveQuotedSnapshot({
       id: m.id,
@@ -370,28 +423,32 @@ export default function InboxDMPage() {
 
   const handleTopLevelSubmit = async ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
     if (!user || !conversationId) return;
 
     const activeQuoteId = quotedMessageId;
     const activeQuoteSnapshot = activeQuotedSnapshot;
-    setInputValue('');
+    clearInputDraft();
     clearQuote();
 
-    const attachmentMeta: AttachmentMeta | null = attachment
-      ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        }
-      : null;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
 
-    const tempId = `temp-${Date.now()}`;
+    // createId(), not Date.now(): two sends can start in the same millisecond,
+    // and a duplicate id here is a duplicate React key.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimistic: Message = {
       id: tempId,
       conversationId,
@@ -402,8 +459,17 @@ export default function InboxDMPage() {
       isEdited: false,
       editedAt: null,
       createdAt: new Date().toISOString(),
-      fileId: attachment?.id ?? null,
-      attachmentMeta,
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      // Carry position on the optimistic rows too, so the gallery's ordering
+      // never has to lean on sort stability to look right before the server
+      // echo replaces them.
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }, position) => ({
+        fileId,
+        attachmentMeta,
+        position,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -412,26 +478,34 @@ export default function InboxDMPage() {
     setMessages((prev) => [...prev, optimistic]);
 
     try {
-      const body: { content: string; fileId?: string; attachmentMeta?: AttachmentMeta; quotedMessageId?: string } = {
+      const body: {
+        content: string;
+        attachments: Array<{ fileId: string; attachmentMeta: AttachmentMeta }>;
+        quotedMessageId?: string;
+        clientNonce: string;
+      } = {
         content,
+        attachments: attachmentPayload,
+        clientNonce,
       };
-      if (attachment) {
-        body.fileId = attachment.id;
-        body.attachmentMeta = attachmentMeta!;
-      }
       if (activeQuoteId) {
         body.quotedMessageId = activeQuoteId;
       }
       const response = await post<{ message?: Message }>(`/api/messages/${conversationId}`, body);
       const persistedMessage = response.message;
       if (persistedMessage) {
-        setMessages((prev) => reconcileMessage(prev, persistedMessage));
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, senderOf, looksLikeSameSend),
+        );
       }
     } catch (error) {
       toast.error('Failed to send message');
       console.error('Error sending message:', error);
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setInputValue(content);
+      // Put the files back too — the composer cleared them on send, and they
+      // would otherwise have to be picked and re-uploaded.
+      chatInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.
@@ -471,11 +545,12 @@ export default function InboxDMPage() {
     const m = threadParent;
     const isOwn = m.senderId === user?.id;
     const name = isOwn ? user?.name ?? 'You' : displayName;
+    const image = isOwn ? user?.image ?? null : otherUser.image || otherUser.avatarUrl;
     const initial = (name?.charAt(0) ?? '?').toUpperCase();
     return (
       <div className="flex items-start gap-3">
         <Avatar className="h-8 w-8 shrink-0">
-          {!isOwn && <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />}
+          {image && <AvatarImage src={image} />}
           <AvatarFallback>{initial}</AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
@@ -486,11 +561,13 @@ export default function InboxDMPage() {
             </span>
           </div>
           {m.content && (
-            <div className="text-sm break-words [overflow-wrap:anywhere]">
-              {renderMessageParts(convertToMessageParts(m.content))}
+            <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere]">
+              {/* DMs have no AI participant, so command chips are always inert (UX spec §6). */}
+              {<RichText content={addHardLineBreaks(m.content)} commandChipInert />}
             </div>
           )}
-          <MessageAttachment message={m} />
+          {m.content && <MessageLinkPreviews content={m.content} />}
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -498,7 +575,7 @@ export default function InboxDMPage() {
 
   const resolveThreadAuthor = (authorId: string | null | undefined, fallbackName?: string | null) => {
     if (authorId === user?.id) {
-      return { name: user?.name ?? 'You', image: null };
+      return { name: user?.name ?? 'You', image: user?.image ?? null };
     }
     if (authorId === otherUser.id) {
       return { name: displayName, image: otherUser.image || otherUser.avatarUrl };
@@ -538,12 +615,18 @@ export default function InboxDMPage() {
             <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
             <AvatarFallback>{displayName.charAt(0).toUpperCase()}</AvatarFallback>
           </Avatar>
-          <div>
+          <div className="min-w-0 flex-1">
             <h2 className="font-semibold">{displayName}</h2>
             {otherUser.username && (
               <p className="text-sm text-muted-foreground">@{otherUser.username}</p>
             )}
           </div>
+          <UserSafetyMenu
+            userId={otherUser.id}
+            displayName={displayName}
+            conversationId={conversationId}
+            onBlocked={() => router.push('/dashboard/dms')}
+          />
         </div>
       </div>
 
@@ -566,15 +649,23 @@ export default function InboxDMPage() {
               const replyCount = message.replyCount ?? 0;
               const showReplyInThread = !message.id.startsWith('temp-');
               const isLastRead = i === lastReadOwnIndex;
+              const currentDateStr = new Date(message.createdAt).toDateString();
+              const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+              const showDateSeparator = currentDateStr !== previousDateStr;
 
               return (
-                <div key={message.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                <Fragment key={message.id}>
+                {showDateSeparator && <MessageDateSeparator label={formatMessageDate(message.createdAt)} />}
+                <div className={`group/msg flex items-start gap-4 ${rowSpacing} relative`}>
                   {isFirst ? (
                     <Avatar className="h-10 w-10 flex-shrink-0">
                       {isOwnMessage ? (
-                        <AvatarFallback className="bg-primary text-primary-foreground">
-                          {senderAvatar?.charAt(0).toUpperCase()}
-                        </AvatarFallback>
+                        <>
+                          {user?.image && <AvatarImage src={user.image} />}
+                          <AvatarFallback className="bg-primary text-primary-foreground">
+                            {senderAvatar?.charAt(0).toUpperCase()}
+                          </AvatarFallback>
+                        </>
                       ) : (
                         <>
                           <AvatarImage src={otherUser.image || otherUser.avatarUrl || ''} />
@@ -584,13 +675,13 @@ export default function InboxDMPage() {
                     </Avatar>
                   ) : (
                     <div className="h-10 w-10 flex-shrink-0 relative" aria-hidden>
-                      <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                      <span data-hover-only="" className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
                         {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0 relative">
+                  <div className={cn("flex-1 min-w-0", !isFirst && "[@media(hover:none)]:pr-28 touch:pr-28")}>
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
@@ -645,15 +736,24 @@ export default function InboxDMPage() {
                       </div>
                     ) : (
                       <>
+                        {message.mirroredFromId && (
+                          <ThreadOriginBadge
+                            onOpenThread={message.mirroredFrom?.parentId
+                              ? () => openThread({ source: 'dm', contextId: conversationId, parentId: message.mirroredFrom!.parentId! })
+                              : undefined}
+                          />
+                        )}
                         {(message.quotedMessage || message.quotedMessageId) && (
                           <MessageQuoteBlock quoted={message.quotedMessage ?? null} />
                         )}
                         {message.content && (
                           <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                            {renderMessageParts(convertToMessageParts(message.content))}
+                            {/* DMs have no AI participant, so command chips are always inert (UX spec §6). */}
+                            {<RichText content={addHardLineBreaks(message.content)} commandChipInert />}
                           </div>
                         )}
-                        <MessageAttachment message={message} />
+                        {message.content && <MessageLinkPreviews content={message.content} />}
+                        <MessageAttachments message={message} />
                         {!isFirst && (message.isEdited || (isLastRead && isOwnMessage)) && (
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             {message.isEdited && (
@@ -673,11 +773,12 @@ export default function InboxDMPage() {
                           openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
                         }
                         data-testid={`thread-footer-${message.id}`}
-                        className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                        className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                       >
+                        <MessageSquareText size={12} aria-hidden />
                         {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                         {message.lastReplyAt
-                          ? ` · last reply ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
+                          ? ` · ${formatDistanceToNow(new Date(message.lastReplyAt), { addSuffix: true })}`
                           : ''}
                       </button>
                     )}
@@ -689,28 +790,28 @@ export default function InboxDMPage() {
                         onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
                       />
                     )}
-                    {isRealMessage && (
-                      <MessageHoverToolbar
-                        canReact={true}
-                        canEdit={showOwnerActions}
-                        canDelete={showOwnerActions}
-                        canReplyInThread={showReplyInThread}
-                        canQuoteReply={true}
-                        reactions={message.reactions}
-                        currentUserId={user?.id}
-                        className={!isFirst ? 'top-0' : undefined}
-                        onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
-                        onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
-                        onQuoteReply={() => handleStartQuote(message)}
-                        onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
-                        onDelete={() => handleDeleteMessage(message.id)}
-                        onReplyInThread={() =>
-                          openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
-                        }
-                      />
-                    )}
                   </div>
+                  {isRealMessage && (
+                    <MessageHoverToolbar
+                      canReact={true}
+                      canEdit={showOwnerActions}
+                      canDelete={showOwnerActions}
+                      canReplyInThread={showReplyInThread}
+                      canQuoteReply={true}
+                      reactions={message.reactions}
+                      currentUserId={user?.id}
+                      onAddReaction={(emoji) => handleAddReaction(message.id, emoji)}
+                      onRemoveReaction={(emoji) => handleRemoveReaction(message.id, emoji)}
+                      onQuoteReply={() => handleStartQuote(message)}
+                      onEdit={() => { setEditingMessageId(message.id); setEditContent(message.content); }}
+                      onDelete={() => handleDeleteMessage(message.id)}
+                      onReplyInThread={() =>
+                        openThread({ source: 'dm', contextId: conversationId, parentId: message.id })
+                      }
+                    />
+                  )}
                 </div>
+                </Fragment>
               );
             })}
           </ConversationContent>
@@ -742,7 +843,10 @@ export default function InboxDMPage() {
     )}
     {threadPanel && isMobile && (
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
-        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-full p-0"
+        >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
         </SheetContent>

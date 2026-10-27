@@ -1,0 +1,112 @@
+/**
+ * Impure shell for the usage breakdown: reads the user's billing period and their
+ * usage-ledger rows joined to the AI usage logs, then hands them to the pure
+ * `aggregateUsageBreakdown`. All decision/aggregation logic lives in the pure module
+ * (`usage-breakdown.ts`); this file is just I/O.
+ */
+
+import { db } from '@pagespace/db/db';
+import { and, eq, gte, lte } from '@pagespace/db/operators';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { pages } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from './usage-breakdown';
+import { allowanceRefills } from '@pagespace/lib/billing/credit-pricing';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+
+/**
+ * Spend-by-feature, spend-by-model, spend-by-agent-session and spend-by-environment
+ * (the last two both from source:'terminal' rows, split by the storage meter's model
+ * label) for the user's current billing period. Spend is the ledger's precise charged amount
+ * (`chargeMillicents`, post-markup) — never the raw provider `cost`. The join drops
+ * usage rows whose AI log has been purged by retention, which is acceptable for a
+ * "recent usage" view.
+ *
+ * The breakdown is of the person's OWN credits: only usage rows that landed on their
+ * personal root wallet. An ORG drive's compute is charged to the org pool and recorded
+ * under a person (the actor, or the cost owner for an env/app accrual), and spend from a
+ * drive wallet or a seat is recorded under its consumer — none of it is the person's
+ * money, so none of it is listed here (WAL-9: an org drive bills the org). Those rows
+ * belong to the wallet views that show what a person spends from a drive or an org.
+ */
+export async function getUserUsageBreakdown(
+  userId: string,
+  tier: SubscriptionTier = 'free',
+): Promise<UsageBreakdown> {
+  const [balance] = await db
+    .select({
+      walletId: wallets.id,
+      periodStart: wallets.monthlyPeriodStart,
+      periodEnd: wallets.monthlyPeriodEnd,
+    })
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
+    .limit(1);
+
+  // A stale window (periodEnd in the past — renewal never landed) falls back to
+  // the trailing lookback so current spend is never hidden; see resolveUsageWindow.
+  // A NON-refilling tier (free: one-time starter grant) has no renewal at all, so
+  // its stamped period end is informational only: report null so the card never
+  // says "renews <date>", mirroring getCreditBalance. Spend is still counted from
+  // the grant onward (periodStart).
+  const { periodStart, periodEnd } = resolveUsageWindow({
+    periodStart: balance?.periodStart ?? null,
+    periodEnd: allowanceRefills(tier) ? (balance?.periodEnd ?? null) : null,
+    now: new Date(),
+  });
+
+  // No personal root wallet yet: nothing has been spent from the person's own credits.
+  if (!balance) {
+    return aggregateUsageBreakdown([], { periodStart: periodStart.toISOString(), periodEnd: periodEnd ? periodEnd.toISOString() : null });
+  }
+
+  const rows = await db
+    .select({
+      source: aiUsageLogs.source,
+      model: aiUsageLogs.model,
+      provider: aiUsageLogs.provider,
+      totalTokens: aiUsageLogs.totalTokens,
+      chargeMillicents: creditLedger.chargeMillicents,
+      // Per-agent-session attribution (Terminal Epic 3): pageId + its active-window
+      // duration are only ever set on source:'terminal' rows; the pure
+      // aggregator ignores them for every other source. `pages` is left-joined
+      // (not inner) so a deleted/unresolvable page still surfaces its spend,
+      // under a "Untitled agent" label, rather than disappearing.
+      pageId: aiUsageLogs.pageId,
+      pageTitle: pages.title,
+      durationMs: aiUsageLogs.duration,
+      // ENVIRONMENT attribution. `aiUsageLogs.sessionId` is a shared analytics
+      // column many sources write, so this join is only MEANINGFUL for the env
+      // storage rows the aggregator selects by model — every other row simply
+      // fails to match a `drive_envs` id and comes back with a null name, which
+      // the aggregator never reads. Left-joined (not inner) so a DELETED
+      // environment still surfaces its spend, under "Deleted environment",
+      // rather than disappearing — the same rule `pages` follows above.
+      sessionId: aiUsageLogs.sessionId,
+      envName: driveEnvs.name,
+    })
+    .from(creditLedger)
+    .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .leftJoin(pages, eq(aiUsageLogs.pageId, pages.id))
+    .leftJoin(driveEnvs, eq(aiUsageLogs.sessionId, driveEnvs.id))
+    .where(
+      and(
+        eq(creditLedger.userId, userId),
+        // The person's own credits only (WAL-9): never an org pool's, a drive wallet's or a seat's.
+        eq(creditLedger.walletId, balance.walletId),
+        eq(creditLedger.entryType, 'usage'),
+        gte(creditLedger.createdAt, periodStart),
+        // Upper bound only for a CURRENT period (resolveUsageWindow nulls periodEnd
+        // for stale/missing windows), where it excludes nothing today but keeps the
+        // window honest if the clock/period ever race.
+        ...(periodEnd ? [lte(creditLedger.createdAt, periodEnd)] : []),
+      ),
+    );
+
+  return aggregateUsageBreakdown(rows, {
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd ? periodEnd.toISOString() : null,
+  });
+}

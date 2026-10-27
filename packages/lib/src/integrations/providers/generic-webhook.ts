@@ -76,6 +76,7 @@ export const genericWebhookProvider: IntegrationProviderConfig = {
         config: {
           method: 'POST',
           pathTemplate: '/{path}',
+          rawPathParams: ['path'],
           bodyTemplate: { $param: 'body' },
           bodyEncoding: 'json',
         },
@@ -102,6 +103,7 @@ export const genericWebhookProvider: IntegrationProviderConfig = {
         config: {
           method: 'GET',
           pathTemplate: '/{path}',
+          rawPathParams: ['path'],
         },
       },
     },
@@ -129,6 +131,7 @@ export const genericWebhookProvider: IntegrationProviderConfig = {
         config: {
           method: 'POST',
           pathTemplate: '/{path}',
+          rawPathParams: ['path'],
           bodyTemplate: { $param: 'body' },
           bodyEncoding: 'form',
         },

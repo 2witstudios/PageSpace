@@ -1,0 +1,127 @@
+import { filterResourcesForActor } from '@pagespace/lib/permissions/actor-authentication';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { NextResponse } from 'next/server';
+import { createId } from '@paralleldrive/cuid2';
+import { db } from '@pagespace/db/db';
+import { eq, and, desc, inArray } from '@pagespace/db/operators';
+import { conversations } from '@pagespace/db/schema/conversations';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  getAllowedDriveIds,
+  isPrincipalDriveMember,
+} from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import {
+  buildCreateConversationPayload,
+  buildConversationListQuery,
+} from '@/lib/ai/openai-api/v1-conversations';
+
+const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+
+export async function POST(request: Request): Promise<Response> {
+  const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(authResult)) return authResult.error;
+
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+  const id = createId();
+  const result = buildCreateConversationPayload(rawBody, authResult.userId, allowedDriveIds, id);
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  // A thread's drive is the session its calls spend in and are attributed to (SPEND-7), so the
+  // caller must be a member of it — never just any id an unscoped token names (D-OW-64).
+  if (result.data.contextId !== null && !(await isPrincipalDriveMember(authResult, result.data.contextId))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: result.data.contextId, details: { reason: 'thread_drive_denied', action: 'create_conversation' }, riskScore: 0.5 });
+    // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+    return deniedResponse(actorFromAuth(authResult), result.data.contextId, NextResponse.json({ error: 'drive_id names a drive you cannot use' }, { status: 403 }));
+  }
+
+  // Through the repository, so this creator emits its lifecycle event like the
+  // other two. It was the one path that wrote a conversation and told nobody.
+  await conversationRepository.createApiConversation({
+    id: result.data.id,
+    userId: result.data.userId,
+    title: result.data.title,
+    type: result.data.type,
+    contextId: result.data.contextId,
+    updatedAt: result.data.updatedAt,
+  });
+
+  auditRequest(request, { eventType: 'data.write', userId: authResult.userId, resourceType: 'conversation', resourceId: result.data.id, details: { action: 'create' }, riskScore: 0 });
+
+  return NextResponse.json(
+    {
+      id: result.data.id,
+      object: 'conversation',
+      created_at: Math.floor(Date.now() / 1000),
+      user_id: result.data.userId,
+      title: result.data.title,
+      drive_id: result.data.contextId,
+    },
+    { status: 201 },
+  );
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(authResult)) return authResult.error;
+
+  const url = new URL(request.url);
+  const queryResult = buildConversationListQuery(authResult.userId, url.searchParams);
+  if (!queryResult.ok) {
+    return NextResponse.json({ error: queryResult.error }, { status: queryResult.status });
+  }
+
+  const { userId, limit, offset, driveId } = queryResult.data;
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+
+  // Enforce MCP drive scope on listing
+  if (allowedDriveIds.length > 0 && driveId !== undefined && !allowedDriveIds.includes(driveId)) {
+    return NextResponse.json({ error: 'Drive not accessible with this token' }, { status: 403 });
+  }
+
+  const conditions = [eq(conversations.userId, userId), eq(conversations.isActive, true)];
+  if (driveId !== undefined) {
+    conditions.push(eq(conversations.contextId, driveId));
+  } else if (allowedDriveIds.length > 0) {
+    conditions.push(inArray(conversations.contextId, allowedDriveIds));
+  }
+
+  const rows = await db
+    .select()
+    .from(conversations)
+    .where(and(...conditions))
+    .orderBy(desc(conversations.updatedAt))
+    .limit(limit)
+    .offset(offset);
+
+  // SEC-2/3 (D-OW-45): a page or drive conversation is that org's content, so one whose org's sign-in policy refuses
+  // this credential is not listed (its title and drive are org content too).
+  const actor = actorFromAuth(authResult);
+  const contextIds = rows.flatMap((row) => (row.type !== 'global' && row.contextId ? [row.contextId] : []));
+  const reachable = await filterResourcesForActor(actor, contextIds);
+  const listed = rows.filter((row) => row.type === 'global' || !row.contextId || reachable.has(row.contextId));
+
+  auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: 'list', details: { driveId: queryResult.data.driveId }, riskScore: 0 });
+
+  return NextResponse.json({
+    object: 'list',
+    data: listed.map((row) => ({
+      id: row.id,
+      object: 'conversation',
+      created_at: Math.floor(row.createdAt.getTime() / 1000),
+      user_id: row.userId,
+      title: row.title,
+      drive_id: row.contextId,
+    })),
+  });
+}

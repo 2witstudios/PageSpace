@@ -4,6 +4,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { broadcastGlobalConversationAdded } from '@/lib/websocket/socket-utils';
+import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -16,18 +19,25 @@ const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
  *
  * Query Parameters:
  *   - limit (optional): Max conversations to return (default 20, max 100)
- *   - cursor (optional): Conversation ID for cursor-based pagination
- *   - direction (optional): 'before' (older) or 'after' (newer), default 'before'
+ *   - cursor (optional): Opaque token taken from a previous response's
+ *     `pagination.nextCursor`. NOT a conversation id — it encodes the sort key
+ *     that page ended on, so the boundary cannot shift when the underlying
+ *     messages change. Always means "older than this". An unrecognised or
+ *     malformed value is ignored and page one is returned.
  *   - paginated (optional): If 'true', returns paginated response format
  *
  * Without pagination (legacy): Returns array of conversations
- * With pagination: Returns { conversations: [], pagination: { hasMore, nextCursor, prevCursor, limit } }
+ * With pagination: Returns { conversations: [], pagination: { hasMore, nextCursor, limit } }
+ *
+ * Scoped to the GLOBAL ASSISTANT's own threads. It used to return every
+ * conversation of every type — see `isGlobalAssistantThread` for why that was
+ * invisible until the message-table merge.
  */
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat', resourceId: 'list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -40,11 +50,6 @@ export async function GET(request: Request) {
       max: 100,
     });
     const cursor = searchParams.get('cursor') || undefined;
-    const directionParam = searchParams.get('direction');
-    const direction = (directionParam === 'before' || directionParam === 'after')
-      ? directionParam
-      : 'before';
-
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'global_chat', resourceId: 'list', details: {
       action: 'list_conversations',
     } });
@@ -54,7 +59,6 @@ export async function GET(request: Request) {
       const result = await globalConversationRepository.listConversationsPaginated(userId, {
         limit,
         cursor,
-        direction,
       });
 
       return NextResponse.json(result);
@@ -80,7 +84,7 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat', resourceId: 'create', details: { reason: 'auth_failed', method: 'POST', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -97,6 +101,18 @@ export async function POST(request: Request) {
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'global_chat', resourceId: newConversation.id, details: {
       action: 'create_conversation',
     } });
+
+    void resolveTriggeredBy(userId, request).then((triggeredBy) =>
+      broadcastGlobalConversationAdded(globalChannelId(userId), {
+        conversation: {
+          id: newConversation.id,
+          title: newConversation.title ?? '',
+          type: newConversation.type,
+          createdAt: new Date(newConversation.createdAt).toISOString(),
+        },
+        triggeredBy,
+      })
+    ).catch(() => {});
 
     return NextResponse.json(newConversation);
   } catch (error) {

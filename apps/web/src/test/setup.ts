@@ -19,7 +19,69 @@ vi.mock('next/navigation', () => ({
   })),
   usePathname: vi.fn(() => '/'),
   useSearchParams: vi.fn(() => new URLSearchParams()),
+  // Route params default to empty rather than being absent: a component that
+  // reads them is a plain consumer of this module, and leaving the hook
+  // undefined here turns "this test doesn't care about the route" into a
+  // TypeError thrown from any ancestor that happens to render one.
+  useParams: vi.fn(() => ({})),
 }))
+
+// jsdom does not implement ResizeObserver or IntersectionObserver.
+// Stub both so components that rely on them (e.g. radix ScrollArea) can mount.
+if (typeof window !== 'undefined') {
+  if (!window.ResizeObserver) {
+    window.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+  }
+  if (!window.IntersectionObserver) {
+    window.IntersectionObserver = class IntersectionObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      readonly root = null;
+      readonly rootMargin = '';
+      readonly thresholds: ReadonlyArray<number> = [];
+      takeRecords() { return []; }
+    } as unknown as typeof IntersectionObserver;
+  }
+}
+
+// jsdom does not implement scrollIntoView. cmdk (the Command/CommandDialog
+// primitives) calls it on the selected item whenever the list's selection
+// moves, including on mount — without this stub every cmdk-based component
+// throws in its mount effect the instant it renders.
+if (typeof window !== 'undefined' && !window.HTMLElement.prototype.scrollIntoView) {
+  window.HTMLElement.prototype.scrollIntoView = () => {};
+}
+
+// jsdom does not implement Element.scrollTo (only the window-level no-op that
+// warns). Any component that scrolls a container imperatively -- the mobile
+// calendar agenda scrolls to the selected day -- throws on the bare call.
+// Move scrollTop so the element still reports a plausible position afterwards.
+if (typeof window !== 'undefined' && !window.Element.prototype.scrollTo) {
+  const scrollToStub = function (
+    this: Element,
+    optionsOrX?: ScrollToOptions | number,
+    y?: number
+  ) {
+    const top =
+      typeof optionsOrX === 'object' && optionsOrX !== null ? optionsOrX.top : y;
+    if (typeof top === 'number') this.scrollTop = top;
+  };
+  window.Element.prototype.scrollTo =
+    scrollToStub as unknown as typeof window.Element.prototype.scrollTo;
+}
+
+// jsdom does not implement the Pointer Events capture methods. Radix Select's
+// pointer-interaction internals call hasPointerCapture/releasePointerCapture
+// on open/close — without these, clicking a SelectTrigger throws.
+if (typeof window !== 'undefined' && !window.Element.prototype.hasPointerCapture) {
+  window.Element.prototype.hasPointerCapture = () => false;
+  window.Element.prototype.releasePointerCapture = () => {};
+}
 
 // jsdom does not implement matchMedia. Provide a permissive default that
 // returns false (i.e. desktop, non-touch) so hooks like useMobile / useTouchDevice

@@ -69,4 +69,54 @@ router.post('/by-page/:pageId', async (req, res) => {
   }
 });
 
+// Verified ingest for direct-to-S3 uploads. Unlike /by-page (which trusts the
+// page's declared mimeType), this enqueues the pull-verify pipeline that
+// re-hashes the stored bytes and runs Magika before any processing/serving.
+router.post('/pull/:pageId', async (req, res) => {
+  try {
+    const auth = req.auth;
+    if (!auth) {
+      return res.status(401).json({ error: 'Service authentication required' });
+    }
+
+    const { pageId } = req.params;
+
+    const binding = auth.resourceBinding;
+    if (binding?.type === 'page' && binding.id !== pageId) {
+      loggers.security.warn('pull-verify denied: page binding mismatch', {
+        userId: auth.userId,
+        requestedPageId: pageId,
+        boundPageId: binding.id,
+      });
+      return res.status(403).json({ error: 'Access denied: token is bound to a different page' });
+    }
+
+    const page = await getPageForIngestion(pageId);
+    if (!page) {
+      return res.status(404).json({ error: 'Page not found' });
+    }
+
+    const { contentHash } = page;
+    if (!contentHash || !isValidContentHash(contentHash)) {
+      return res.status(400).json({ error: 'Page content hash is invalid' });
+    }
+
+    try {
+      await assertFileAccess(auth, contentHash, 'edit');
+    } catch {
+      return res.status(403).json({ error: 'Access denied for requested file' });
+    }
+
+    const jobId = await queueManager.addJob('pull-verify', { pageId, contentHash });
+    return res.json({ success: true, jobId });
+
+  } catch (error) {
+    if (error instanceof InvalidContentHashError) {
+      return res.status(400).json({ error: 'Invalid content hash' });
+    }
+    console.error('Failed to enqueue pull-verify:', error);
+    return res.status(500).json({ error: 'Failed to enqueue pull-verify' });
+  }
+});
+
 export const ingestRouter: ExpressRouter = router;

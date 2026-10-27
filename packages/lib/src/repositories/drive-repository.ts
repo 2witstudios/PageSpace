@@ -7,7 +7,9 @@
 
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
-import { drives } from '@pagespace/db/schema/core';
+import { drives, type OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { loadDriveLeadAuthority, type DriveLeadAction } from '../permissions/drive-relationship-loader';
+import type { AccessActor } from '../permissions/access-actor';
 
 // Types for repository operations
 export interface DriveRecord {
@@ -15,8 +17,11 @@ export interface DriveRecord {
   name: string;
   slug: string;
   ownerId: string;
+  kind: 'STANDARD' | 'HOME';
   isTrashed: boolean;
   trashedAt: Date | null;
+  orgId: string | null;
+  orgVisibility: OrgDriveVisibility;
 }
 
 export interface DriveBasic {
@@ -49,17 +54,21 @@ export const driveRepository = {
   },
 
   /**
-   * Find a drive by ID owned by a specific user
+   * Find a drive a user may take a lead-only action on (loadDriveLeadAuthority): its lead, or, on an
+   * org-owned drive, an org Owner or Admin (audited). Null otherwise.
    */
-  findByIdAndOwner: async (
+  findByIdForLeadAction: async (
     driveId: string,
-    ownerId: string
+    actor: AccessActor,
+    action: DriveLeadAction
   ): Promise<DriveRecord | null> => {
     const drive = await db.query.drives.findFirst({
-      where: and(eq(drives.id, driveId), eq(drives.ownerId, ownerId)),
+      where: eq(drives.id, driveId),
     });
+    if (!drive) return null;
 
-    return drive as DriveRecord | null;
+    const authority = await loadDriveLeadAuthority(actor, drive, action);
+    return authority.allowed ? (drive as DriveRecord) : null;
   },
 
   /**

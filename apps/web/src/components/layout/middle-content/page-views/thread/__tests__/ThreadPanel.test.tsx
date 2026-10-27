@@ -80,12 +80,31 @@ vi.mock('@/components/ai/chat/input/ChatTextarea', () => {
 
 vi.mock('@/hooks/useAttachmentUpload', () => ({
   useAttachmentUpload: () => ({
+    attachments: [],
     attachment: null,
     isUploading: false,
     uploadFile: vi.fn(),
+    uploadFiles: vi.fn(),
     clearAttachment: vi.fn(),
+    removeAttachment: vi.fn(),
+    restoreAttachments: vi.fn(),
   }),
 }));
+
+vi.mock('@/hooks/useDraft', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { useState } = require('react');
+  return {
+    useDraft: () => {
+      const [draft, setDraftState] = useState('');
+      return {
+        draft,
+        setDraft: (v: string) => setDraftState(v),
+        clearDraft: () => setDraftState(''),
+      };
+    },
+  };
+});
 
 const postSpy = vi.fn<(url: string, body: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 vi.mock('@/lib/auth/auth-fetch', () => ({
@@ -180,6 +199,60 @@ describe('ThreadPanel', () => {
       actual: true,
       expected: true,
     });
+  });
+
+  it('given a reply with a LEGACY single-object aiMeta.commandExecution (persisted before multi-command support), should render its pill without throwing', async () => {
+    renderPanel({
+      fetcher: vi.fn(async () => ({
+        messages: [
+          {
+            id: 'r1',
+            content: 'the checklist is done',
+            createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
+            userId: 'u-other',
+            parentId: 'p1',
+            aiMeta: {
+              senderName: 'Helper',
+              // Legacy shape: a single object, not an array — how this field
+              // was persisted before multi-command support shipped.
+              commandExecution: { label: 'release-checklist', status: 'used' },
+            },
+          },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      })),
+    });
+
+    await waitFor(() => expect(screen.getByText('Using /release-checklist')).toBeInTheDocument());
+  });
+
+  it('given a reply with the NEW array-shaped aiMeta.commandExecution (two commands), should render one pill per command', async () => {
+    renderPanel({
+      fetcher: vi.fn(async () => ({
+        messages: [
+          {
+            id: 'r1',
+            content: 'done and done',
+            createdAt: new Date('2026-05-05T12:00:00Z').toISOString(),
+            userId: 'u-other',
+            parentId: 'p1',
+            aiMeta: {
+              senderName: 'Helper',
+              commandExecution: [
+                { label: 'release-checklist', status: 'used' },
+                { label: 'standup', status: 'skipped', reason: 'disabled' },
+              ],
+            },
+          },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      })),
+    });
+
+    await waitFor(() => expect(screen.getByText('Using /release-checklist')).toBeInTheDocument());
+    expect(screen.getByText('Skipped /standup — the command is disabled')).toBeInTheDocument();
   });
 
   it('given a draft typed into the composer, should register an editing session keyed by thread:source:contextId:parentId', async () => {

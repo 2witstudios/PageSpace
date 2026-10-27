@@ -1,4 +1,5 @@
 import { blogPosts } from "@/app/blog/[slug]/data";
+import { FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
 
 export interface SearchEntry {
   title: string;
@@ -116,19 +117,26 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "Is there a free plan?",
-    description:
-      "Yes. Free plan includes 500 MB storage and 50 AI calls per day. No credit card required.",
+    description: `Yes. Free plan includes 500 MB storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
-    keywords: "free plan pricing cost no credit card",
+    keywords: "free plan pricing cost no credit card credits",
   },
   {
-    title: "What happens when I run out of AI calls?",
+    title: "How do credits work?",
     description:
-      "Documents, tasks, channels, and collaboration keep working. AI pauses until your limit resets the next day.",
+      "Free accounts start with a one-time grant of credits; paid plans include a monthly allowance. Each AI action draws down credits based on the model's real cost. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.",
+    href: "/faq#how-ai-credits-work",
+    category: "FAQ",
+    keywords: "credits metered usage allowance starter grant rollover monthly billing",
+  },
+  {
+    title: "What happens when I run out of credits?",
+    description:
+      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits, upgrade, or — on paid plans — your next monthly allowance is added at your billing renewal.",
     href: "/faq#hit-daily-ai-limit",
     category: "FAQ",
-    keywords: "daily limit ai calls reset quota",
+    keywords: "out of credits ai limit reset buy more top up quota",
   },
   {
     title: "How do I sign up?",
@@ -215,7 +223,7 @@ const faqEntries: SearchEntry[] = [
 const pageEntries: SearchEntry[] = [
   {
     title: "Pricing",
-    description: "Compare Free, Pro, Founder, and Business plans.",
+    description: "Compare Free, Pro, and Business plans.",
     href: "/pricing",
     category: "Pages",
     keywords: "plans cost billing subscription",

@@ -11,14 +11,27 @@ import {
   Undo2,
   ArrowRight,
   FolderInput,
-  ExternalLink
+  ExternalLink,
+  CalendarCheck,
+  UserPlus,
+  UserMinus
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { PageTypeIcon } from '@/components/common/PageTypeIcon';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { markdownToHtml, sanitizeHtmlAllowlist } from './content-utils';
 
-type ActionType = 'create' | 'rename' | 'trash' | 'restore' | 'move' | 'update';
+type ActionType =
+  | 'create'
+  | 'rename'
+  | 'trash'
+  | 'restore'
+  | 'move'
+  | 'update'
+  | 'delete'
+  | 'rsvp'
+  | 'invite'
+  | 'remove';
 
 interface ActionResultRendererProps {
   /** Type of action performed */
@@ -54,6 +67,10 @@ const ACTION_CONFIG: Record<ActionType, { icon: React.ElementType; label: string
   restore: { icon: Undo2, label: 'Restored', color: 'text-green-600' },
   move: { icon: FolderInput, label: 'Moved', color: 'text-purple-600' },
   update: { icon: Pencil, label: 'Updated', color: 'text-blue-600' },
+  delete: { icon: Trash2, label: 'Deleted', color: 'text-orange-600' },
+  rsvp: { icon: CalendarCheck, label: 'RSVP Updated', color: 'text-blue-600' },
+  invite: { icon: UserPlus, label: 'Invited', color: 'text-green-600' },
+  remove: { icon: UserMinus, label: 'Removed', color: 'text-orange-600' },
 };
 
 /**
@@ -89,7 +106,7 @@ export const ActionResultRenderer: React.FC<ActionResultRendererProps> = memo(fu
     }
   };
 
-  const canNavigate = success && pageId && actionType !== 'trash';
+  const canNavigate = success && pageId && actionType !== 'trash' && actionType !== 'delete' && actionType !== 'remove';
 
   return (
     <div className={cn("rounded-lg border bg-card overflow-hidden my-2 shadow-sm", className)}>

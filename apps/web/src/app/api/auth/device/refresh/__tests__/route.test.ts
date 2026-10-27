@@ -91,6 +91,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       type: 'user',
       scopes: ['*'],
     }),
+    revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
+    expireSessionByHashSoon: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -101,11 +103,11 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn(() => '127.0.0.1'),
   appendSessionCookie: vi.fn(),
+  getSessionFromCookies: vi.fn(() => null),
 }));
 
 import { POST } from '../route';
 import { authRepository } from '@/lib/repositories/auth-repository';
-import { sessionRepository } from '@/lib/repositories/session-repository';
 import { atomicDeviceTokenRotation } from '@pagespace/db/transactions/auth-transactions';
 import { validateDeviceToken, updateDeviceTokenActivity } from '@pagespace/lib/auth/device-auth-utils';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
@@ -113,7 +115,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { getClientIP, appendSessionCookie } from '@/lib/auth';
+import { getClientIP, appendSessionCookie, getSessionFromCookies } from '@/lib/auth';
+// The real implementation, imported from where `@/lib/auth` re-exports it so the
+// module-level mock above does not intercept it. Used by the one test that needs
+// the response's actual Set-Cookie rather than the call to the helper.
+import { appendSessionCookie as realAppendSessionCookie, COOKIE_CONFIG } from '@/lib/auth/cookie-config';
+import { hashToken } from '@pagespace/lib/auth/token-utils';
 
 const mockUser = {
   id: 'user-123',
@@ -173,7 +180,25 @@ describe('POST /api/auth/device/refresh', () => {
       type: 'user',
       scopes: ['*'],
     } as never);
+    vi.mocked(sessionService.revokeSessionByHash).mockResolvedValue(undefined);
+    vi.mocked(sessionService.expireSessionByHashSoon).mockResolvedValue(undefined);
 
+    // No replaced session cookie by default (existing tests exercise the
+    // no-cookie path); retirement tests override this per-case.
+    vi.mocked(getSessionFromCookies).mockReturnValue(null);
+    vi.mocked(hashToken).mockReturnValue('hashed-old-session');
+  });
+
+  it.each(['web', 'desktop', 'ios'])('SEC-3 (partial) %s refresh preserves the device ceremony instead of refreshing its age', async (platform) => {
+    const authenticatedAtMs = Date.now() - 3600000;
+    vi.mocked(validateDeviceToken).mockResolvedValue({ ...mockDeviceRecord, platform,
+      authenticatedAt: new Date(authenticatedAtMs), authenticationAssurance: 'user_verified_passkey',
+    } as never);
+    const response = await POST(createRefreshRequest(validRefreshPayload));
+    expect(response.status).toBe(200);
+    expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      authentication: { authenticatedAtMs, assurance: 'user_verified_passkey' },
+    }));
   });
 
   describe('input validation', () => {
@@ -277,77 +302,44 @@ describe('POST /api/auth/device/refresh', () => {
       );
     });
 
-    it('corrects legacy unknown deviceId', async () => {
+    // SECURITY (L4): a legacy 'unknown' / missing stored deviceId is a HARD
+    // failure (force full re-auth), NOT an auto-rebind to the supplied id.
+    it('returns 401 and forces re-auth for legacy "unknown" deviceId (no rebind)', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         deviceId: 'unknown',
       } as never);
 
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
-
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
+      const body = await response.json();
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(401);
+      expect(body.error).toContain('re-register');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Correcting device token deviceId from OAuth migration',
-        {
-          deviceTokenId: 'device-token-record-id',
-          oldDeviceId: 'unknown',
-          newDeviceId: 'device-123',
+        'Device token has no bound deviceId - forcing re-auth',
+        expect.objectContaining({
+          storedDeviceId: 'unknown',
+          providedDeviceId: 'device-123',
           userId: 'user-123',
-        }
+        })
       );
     });
 
-    it('corrects legacy null/empty deviceId', async () => {
+    it('returns 401 and forces re-auth for legacy null/empty stored deviceId (no rebind)', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         deviceId: null,
       } as never);
 
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue({ id: 'device-token-record-id', deviceId: 'device-123' } as never);
-
-      const request = createRefreshRequest(validRefreshPayload);
-      const response = await POST(request);
-
-      expect(response.status).toBe(200);
-    });
-
-    it('returns 500 when legacy device update returns no result', async () => {
-      vi.mocked(validateDeviceToken).mockResolvedValue({
-        ...mockDeviceRecord,
-        deviceId: 'unknown',
-      } as never);
-
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockResolvedValue(null);
-
       const request = createRefreshRequest(validRefreshPayload);
       const response = await POST(request);
       const body = await response.json();
 
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to update device');
-    });
-
-    it('returns 500 when legacy device update throws', async () => {
-      vi.mocked(validateDeviceToken).mockResolvedValue({
-        ...mockDeviceRecord,
-        deviceId: 'unknown',
-      } as never);
-
-      vi.mocked(sessionRepository.updateDeviceTokenDeviceId).mockRejectedValueOnce(new Error('DB error'));
-
-      const request = createRefreshRequest(validRefreshPayload);
-      const response = await POST(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(500);
-      expect(body.error).toContain('Failed to update device');
-      expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Error correcting device token deviceId',
-        expect.objectContaining({ error: expect.objectContaining({ message: 'DB error' }) })
-      );
+      expect(response.status).toBe(401);
+      expect(body.error).toContain('re-register');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
     });
   });
 
@@ -604,8 +596,16 @@ describe('POST /api/auth/device/refresh', () => {
     });
   });
 
-  describe('mobile platform (no cookie)', () => {
-    it('does not set session cookie for mobile platform', async () => {
+  describe('android platform', () => {
+    // Reversed in Phase B of the Android parity epic. A device row is only
+    // stamped 'android' by the NATIVE sign-in routes, which append a session
+    // cookie themselves; withholding one here left the Capacitor WebView holding
+    // the cookie of the session this refresh just replaced, so Next.js
+    // middleware would start refusing page routes on the first rotation while
+    // Bearer API calls kept working. (Devices registered by the in-WebView web
+    // flow are stamped 'web' and return from the web branch, which sets its own
+    // cookie.)
+    it('sets a session cookie as well as returning the bearer token', async () => {
       vi.mocked(validateDeviceToken).mockResolvedValue({
         ...mockDeviceRecord,
         platform: 'android',
@@ -617,7 +617,26 @@ describe('POST /api/auth/device/refresh', () => {
 
       expect(response.status).toBe(200);
       expect(body.sessionToken).toBe('ps_sess_mock_session_token');
-      expect(appendSessionCookie).not.toHaveBeenCalled();
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock_session_token');
+    });
+
+    // The assertion above proves the route CALLS the helper; it cannot prove the
+    // Headers it mutates are the ones the response is built from. So run the real
+    // implementation for this one case and read the cookie off the response.
+    it('emits the refreshed session cookie on the response itself', async () => {
+      vi.mocked(validateDeviceToken).mockResolvedValue({
+        ...mockDeviceRecord,
+        platform: 'android',
+      } as never);
+      vi.mocked(appendSessionCookie).mockImplementation(realAppendSessionCookie);
+
+      const request = createRefreshRequest(validRefreshPayload);
+      const response = await POST(request);
+
+      const setCookies = response.headers.getSetCookie();
+      expect(setCookies.some((c) => c.startsWith(`${COOKIE_CONFIG.session.name}=ps_sess_mock_session_token`))).toBe(true);
+      expect(setCookies.some((c) => c.startsWith(`${COOKIE_CONFIG.loggedIn.name}=`))).toBe(true);
     });
   });
 
@@ -653,6 +672,106 @@ describe('POST /api/auth/device/refresh', () => {
           platform: 'desktop',
           appVersion: '2.0.0',
         })
+      );
+    });
+  });
+
+  describe('replaced-session retirement', () => {
+    it('grace-expires the session the refresh replaces (same user) — web', async () => {
+      vi.mocked(validateDeviceToken).mockResolvedValue({
+        ...mockDeviceRecord,
+        platform: 'web',
+      } as never);
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-web-session-token');
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-web-session-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      // Ownership resolved via the old cookie's session (same user-123), then
+      // grace-expired by its hash (NOT hard-revoked — in-flight requests must
+      // stay valid for the grace window).
+      expect(hashToken).toHaveBeenCalledWith('old-web-session-token');
+      expect(sessionService.revokeSessionByHash).not.toHaveBeenCalled();
+      expect(sessionService.expireSessionByHashSoon).toHaveBeenCalledWith(
+        'hashed-old-session',
+        expect.any(Number),
+      );
+    });
+
+    it('grace-expires the replaced session on the desktop branch too', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-desktop-session-token');
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-desktop-session-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.expireSessionByHashSoon).toHaveBeenCalledWith(
+        'hashed-old-session',
+        expect.any(Number),
+      );
+    });
+
+    it('does NOT touch anything when no session cookie accompanies the refresh', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue(null);
+
+      const request = createRefreshRequest(validRefreshPayload);
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.expireSessionByHashSoon).not.toHaveBeenCalled();
+    });
+
+    it('does NOT grace-expire when the old cookie session belongs to a different user', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('someone-elses-token');
+      // First validateSession call is for the new session (user-123); the second
+      // (owner lookup for the old token) resolves to a different user.
+      vi.mocked(sessionService.validateSession)
+        .mockResolvedValueOnce({
+          sessionId: 'mock-session-id',
+          userId: 'user-123',
+          userRole: 'user',
+          tokenVersion: 0,
+          type: 'user',
+          scopes: ['*'],
+        } as never)
+        .mockResolvedValueOnce({
+          sessionId: 'other-session-id',
+          userId: 'other-user',
+          userRole: 'user',
+          tokenVersion: 0,
+          type: 'user',
+          scopes: ['*'],
+        } as never);
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=someone-elses-token',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(sessionService.expireSessionByHashSoon).not.toHaveBeenCalled();
+    });
+
+    it('never fails the refresh when the retirement grace-expiry throws', async () => {
+      vi.mocked(getSessionFromCookies).mockReturnValue('old-web-session-token');
+      vi.mocked(sessionService.expireSessionByHashSoon).mockRejectedValue(new Error('db down'));
+
+      const request = createRefreshRequest(validRefreshPayload, {
+        Cookie: 'session=old-web-session-token',
+      });
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.deviceToken).toBe('ps_dev_valid_token');
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to retire replaced session on device refresh',
+        expect.objectContaining({ error: 'db down' }),
       );
     });
   });

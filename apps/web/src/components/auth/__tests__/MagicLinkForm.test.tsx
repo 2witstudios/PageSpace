@@ -7,7 +7,7 @@
  * collect (email, tosAccepted) and forward `next` from the signin page.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -25,8 +25,17 @@ vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock('@/lib/desktop-auth', () => ({
-  getDevicePlatformFields: vi.fn().mockResolvedValue({}),
+const { mockGetMagicLinkPlatformFields } = vi.hoisted(() => ({
+  mockGetMagicLinkPlatformFields: vi.fn(),
+}));
+
+vi.mock('@/lib/auth/magic-link-platform-fields', () => ({
+  getMagicLinkPlatformFields: () => mockGetMagicLinkPlatformFields(),
+}));
+
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
+  isCapacitorApp: () => false,
 }));
 
 import { MagicLinkForm } from '../MagicLinkForm';
@@ -56,6 +65,7 @@ const setupFetchMock = () => {
 describe('MagicLinkForm', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetMagicLinkPlatformFields.mockResolvedValue({});
   });
 
   describe('ToS gate', () => {
@@ -148,6 +158,139 @@ describe('MagicLinkForm', () => {
       const init = sendCall![1] as RequestInit;
       const body = JSON.parse(init.body as string) as Record<string, unknown>;
       expect(body).not.toHaveProperty('next');
+    });
+
+    it('given the native shell reports a device, sends platform + device fields so the link binds to this app', async () => {
+      mockGetMagicLinkPlatformFields.mockResolvedValue({
+        platform: 'ios',
+        deviceId: 'dev_ios_1',
+        deviceName: 'iOS App',
+      });
+      const fetchSpy = setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+
+      const sendCall = fetchSpy.mock.calls.find(([url]) =>
+        typeof url === 'string' && url.includes('/api/auth/magic-link/send'),
+      );
+      expect(sendCall).toBeDefined();
+      const init = sendCall![1] as RequestInit;
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body).toEqual(
+        expect.objectContaining({ platform: 'ios', deviceId: 'dev_ios_1', deviceName: 'iOS App' }),
+      );
+    });
+  });
+
+  describe('desktop exchange flow', () => {
+    type ElectronBridge = {
+      isDesktop: boolean;
+      auth: {
+        beginExchange: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    let beginExchangeMock: ReturnType<typeof vi.fn>;
+
+    const submitForm = async () => {
+      await userEvent.type(screen.getByLabelText(/email/i), 'user@example.com');
+      await userEvent.click(screen.getByLabelText(/i agree/i));
+      await userEvent.click(screen.getByRole('button', { name: /sign-in link/i }));
+    };
+
+    beforeEach(() => {
+      beginExchangeMock = vi.fn().mockResolvedValue('flow-state');
+    });
+
+    afterEach(() => {
+      delete (window as unknown as { electron?: ElectronBridge }).electron;
+    });
+
+    it('shows success only after the desktop flow has begun, so the browser-fired deep link is accepted (L9)', async () => {
+      setupFetchMock();
+      // Deferred: the flow is "recording" until we resolve the promise.
+      let resolveBegin: (state: string) => void = () => {};
+      beginExchangeMock.mockReturnValue(
+        new Promise<string>((resolve) => {
+          resolveBegin = resolve;
+        }),
+      );
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      await waitFor(() => expect(beginExchangeMock).toHaveBeenCalledTimes(1));
+      // The bridge call is still pending — no confirmation may be promised yet.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveBegin('flow-state');
+      });
+
+      // Only once the flow is recorded does the confirmation appear.
+      expect(screen.getByText(/check your email/i)).toBeInTheDocument();
+    });
+
+    it.each([
+      ['rejects', () => Promise.reject(new Error('ipc failure'))],
+      ['resolves null (untrusted sender — no flow recorded)', () => Promise.resolve(null)],
+    ])('treats a bridge call that %s as a retryable desktop error instead of success', async (_name, begin) => {
+      setupFetchMock();
+      beginExchangeMock.mockImplementation(begin);
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      // Back on the input form with a retryable error — not a confirmation
+      // that would send the user to an email link the desktop will reject.
+      expect(screen.queryByText(/check your email/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/failed to prepare for sign-in/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /sign-in link/i })).toBeEnabled();
+    });
+
+    it('does not mark a flow when the send fails', async () => {
+      global.fetch = vi.fn(async (url: string | URL | Request) => {
+        const u = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
+        if (u.includes('/api/auth/login-csrf')) {
+          return new Response(JSON.stringify({ csrfToken: 'csrf-token' }), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 500 });
+      }) as unknown as typeof fetch;
+      (window as unknown as { electron: ElectronBridge }).electron = {
+        isDesktop: true,
+        auth: { beginExchange: beginExchangeMock },
+      };
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      expect(screen.getByText(/failed to send magic link/i)).toBeInTheDocument();
+      // A small delay would surface a stray call if the form began the flow
+      // unconditionally instead of after a successful send.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(beginExchangeMock).not.toHaveBeenCalled();
+    });
+
+    it('does nothing special on web — no electron bridge, no flow, normal success', async () => {
+      setupFetchMock();
+      render(<MagicLinkForm />);
+
+      await submitForm();
+
+      expect(screen.getByText(/check your email/i)).toBeInTheDocument();
     });
   });
 });

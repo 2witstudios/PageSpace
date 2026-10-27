@@ -7,6 +7,8 @@ export interface PageTypeCapabilities {
   supportsRealtime: boolean;
   supportsVersioning: boolean;
   supportsAI: boolean;
+  /** Content lives in pages.content and can be rendered standalone at a public URL. */
+  publishable: boolean;
 }
 
 export interface PageTypeApiValidation {
@@ -19,13 +21,13 @@ export interface PageTypeConfig {
   type: PageType;
   displayName: string;
   description: string;
-  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareTerminal' | 'SquareCheckBig';
+  iconName: 'Folder' | 'FileText' | 'MessagesSquare' | 'BotMessageSquare' | 'FileImage' | 'File' | 'FileSpreadsheet' | 'FileCheck2' | 'FileCode' | 'SquareCheckBig';
   emoji: string;
   capabilities: PageTypeCapabilities;
   defaultContent: () => string | Record<string, unknown>;
   apiValidation?: PageTypeApiValidation;
   uiComponent: string;
-  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code' | 'terminal';
+  layoutViewType: 'document' | 'folder' | 'channel' | 'ai' | 'canvas' | 'code';
   experimental?: boolean;
 }
 
@@ -42,6 +44,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ children: [] }),
     uiComponent: 'FolderView',
@@ -59,6 +62,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'DocumentView',
@@ -76,6 +80,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     uiComponent: 'ChannelView',
@@ -93,12 +98,13 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
     defaultContent: () => ({ messages: [] }),
     apiValidation: {
       optionalFields: ['systemPrompt', 'enabledTools', 'aiProvider', 'aiModel'],
     },
-    uiComponent: 'AiChatView',
+    uiComponent: 'AgentPageView',
     layoutViewType: 'ai',
   },
   [PageType.CANVAS]: {
@@ -113,6 +119,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: true,
       supportsAI: false,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CanvasPageView',
@@ -130,6 +137,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: false,
       supportsVersioning: false,
       supportsAI: false,
+      publishable: false,
     },
     defaultContent: () => '',
     uiComponent: 'FileViewer',
@@ -147,6 +155,7 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => serializeSheetContent(createEmptySheet()),
     uiComponent: 'SheetView',
@@ -164,8 +173,9 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: false,
       supportsAI: true,
+      publishable: false,
     },
-    defaultContent: () => JSON.stringify({}),
+    defaultContent: () => '',
     uiComponent: 'TaskListView',
     layoutViewType: 'document',
   },
@@ -181,28 +191,11 @@ export const PAGE_TYPE_CONFIGS: Record<PageType, PageTypeConfig> = {
       supportsRealtime: true,
       supportsVersioning: true,
       supportsAI: true,
+      publishable: true,
     },
     defaultContent: () => '',
     uiComponent: 'CodePageView',
     layoutViewType: 'code',
-  },
-  [PageType.TERMINAL]: {
-    type: PageType.TERMINAL,
-    displayName: 'Terminal',
-    description: 'Interactive terminal with shell access',
-    iconName: 'SquareTerminal',
-    emoji: '🖥️',
-    capabilities: {
-      canAcceptUploads: false,
-      canBeConverted: false,
-      supportsRealtime: true,
-      supportsVersioning: false,
-      supportsAI: false,
-    },
-    defaultContent: () => JSON.stringify({ history: [] }),
-    uiComponent: 'TerminalView',
-    layoutViewType: 'terminal',
-    experimental: true,
   },
 };
 
@@ -299,10 +292,25 @@ export function isCodePage(type: PageType): boolean {
   return type === PageType.CODE;
 }
 
-export function isTerminalPage(type: PageType): boolean {
-  return type === PageType.TERMINAL;
+/**
+ * Can this page type be opened as an agent-session PANE (as opposed to only
+ * the main content area)? Excludes `FOLDER` (a tree browser, not content to
+ * edit) and `AI_CHAT` (would nest a chat conversation inside a chat pane) —
+ * every other type has a real standalone editor/viewer that makes sense
+ * beside a conversation.
+ */
+export function isPaneablePageType(type: PageType): boolean {
+  return type !== PageType.FOLDER && type !== PageType.AI_CHAT;
 }
 
 export function getCreatablePageTypes(): PageType[] {
   return Object.values(PAGE_TYPE_CONFIGS).filter(c => !c.experimental).map(c => c.type);
+}
+
+export function isPublishablePageType(type: PageType): boolean {
+  return PAGE_TYPE_CONFIGS[type]?.capabilities.publishable || false;
+}
+
+export function getPublishablePageTypes(): PageType[] {
+  return Object.values(PAGE_TYPE_CONFIGS).filter(c => c.capabilities.publishable).map(c => c.type);
 }

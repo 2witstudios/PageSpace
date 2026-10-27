@@ -2,16 +2,22 @@
  * Tests for security headers middleware
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextResponse } from 'next/server';
+import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import {
   generateNonce,
   buildCSPPolicy,
   buildAPICSPPolicy,
   applySecurityHeaders,
+  applyApiCorsHeaders,
+  API_CORS_HEADERS,
   createSecureResponse,
   createSecureErrorResponse,
+  isHandoffBridgeRoute,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
+  isPublishedSiteHost,
   shouldDisableCOEP,
   NONCE_HEADER,
 } from '../security-headers';
@@ -112,6 +118,25 @@ describe('Security Headers', () => {
       expect(csp).toContain("frame-ancestors 'none'");
     });
 
+    it('widens frame-src to exactly the preview wildcard ONLY when the flag is on AND an apex is configured', () => {
+      const env = { ...process.env };
+      try {
+        delete process.env.DEV_PREVIEW_ENABLED;
+        delete process.env.DEV_PREVIEW_APEX;
+        const dark = buildCSPPolicy('n');
+        process.env.DEV_PREVIEW_APEX = 'pagespace-preview.app';
+        // Apex set, flag off: byte-identical to dark.
+        expect(buildCSPPolicy('n')).toBe(dark);
+        process.env.DEV_PREVIEW_ENABLED = 'true';
+        const on = buildCSPPolicy('n');
+        expect(on).toContain('https://*.preview.pagespace-preview.app');
+        expect(on).not.toContain('sprites.app');
+        expect(on.replace(' https://*.preview.pagespace-preview.app', '')).toBe(dark);
+      } finally {
+        process.env = { ...env };
+      }
+    });
+
     it('includes base-uri self for base tag protection', () => {
       const csp = buildCSPPolicy('test-nonce');
 
@@ -151,6 +176,13 @@ describe('Security Headers', () => {
       expect(csp).toContain('https://accounts.google.com');
     });
 
+    it('allows Google Fonts for canvas author stylesheets', () => {
+      const csp = buildCSPPolicy('test-nonce');
+
+      expect(csp).toContain('https://fonts.googleapis.com');
+      expect(csp).toContain('https://fonts.gstatic.com');
+    });
+
     it('does not allow jsDelivr CDN sources', () => {
       const csp = buildCSPPolicy('test-nonce');
 
@@ -179,13 +211,134 @@ describe('Security Headers', () => {
     it('allows Google accounts and Stripe iframes via frame-src', () => {
       const csp = buildCSPPolicy('test-nonce');
 
-      expect(csp).toContain('frame-src https://accounts.google.com https://js.stripe.com');
+      expect(csp).toContain('https://accounts.google.com https://js.stripe.com');
+    });
+
+    /**
+     * The in-app canvas view frames a real same-origin URL
+     * (`/api/canvas/[pageId]/preview`), and `frame-src` does not fall back to
+     * `default-src` once it is present. An allowlist carrying only the external
+     * cloud origins therefore blocks every canvas page from rendering at all —
+     * which is what shipped, because the directive only appeared in cloud mode.
+     */
+    it('keeps same-origin framing allowed alongside the external origins', () => {
+      const frameSrc = buildCSPPolicy('test-nonce')
+        .split(';')
+        .map((directive: string) => directive.trim())
+        .find((directive: string) => directive.startsWith('frame-src'));
+
+      expect(frameSrc).toBeDefined();
+      expect(frameSrc).toContain("'self'");
     });
 
     it('blocks plugins via object-src none', () => {
       const csp = buildCSPPolicy('test-nonce');
 
       expect(csp).toContain("object-src 'none'");
+    });
+  });
+
+  describe('buildCSPPolicy — object-storage connect-src (direct-to-storage uploads/downloads)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('allowlists the literal endpoint origin plus the app bucket subdomain (default bucket name)', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).toContain('https://fly.storage.tigris.dev');
+      expect(connectSrc).toContain('https://pagespace-files.fly.storage.tigris.dev');
+    });
+
+    it('uses the configured BUCKET_NAME (not the default) for the bucket subdomain entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+      vi.stubEnv('BUCKET_NAME', 'acme-prod-bucket');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).toContain('https://acme-prod-bucket.fly.storage.tigris.dev');
+      expect(connectSrc).not.toContain('pagespace-files');
+    });
+
+    // Security regression guard: a bare `*.<host>` wildcard would allow
+    // connect-src to ANY other tenant's bucket on a shared multi-tenant
+    // storage host (Tigris, AWS S3) — self-serve-provisionable by an
+    // attacker — turning a future XSS into a CSP-permitted exfiltration path.
+    it('never emits a bare wildcard subdomain over the whole storage provider', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).not.toContain('*.fly.storage.tigris.dev');
+    });
+
+    it('given no AWS_ENDPOINT_URL_S3 configured, adds no extra or malformed connect-src entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+
+      expect(connectSrc).not.toContain('undefined');
+      expect(connectSrc).not.toContain('tigris');
+      expect(() => buildCSPPolicy('test-nonce')).not.toThrow();
+    });
+
+    it('given a malformed AWS_ENDPOINT_URL_S3 value, does not throw and omits the entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'not-a-valid-url');
+
+      expect(() => buildCSPPolicy('test-nonce')).not.toThrow();
+      const csp = buildCSPPolicy('test-nonce');
+      const connectSrc = csp.split(';').find((d: string) => d.trim().startsWith('connect-src'));
+      expect(connectSrc).not.toContain('not-a-valid-url');
+    });
+  });
+
+  describe('buildCSPPolicy — media-src (video/audio playback redirected to storage)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('includes a media-src directive (absent previously fell back to default-src)', () => {
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).toBeDefined();
+      expect(mediaSrc).toContain("'self'");
+    });
+
+    it('allowlists the literal endpoint origin plus the app bucket subdomain in media-src, same as connect-src', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).toContain('https://fly.storage.tigris.dev');
+      expect(mediaSrc).toContain('https://pagespace-files.fly.storage.tigris.dev');
+    });
+
+    it('never emits a bare wildcard subdomain in media-src either', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://fly.storage.tigris.dev');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).not.toContain('*.fly.storage.tigris.dev');
+      expect(mediaSrc).not.toMatch(/https:\/\/\*\./);
+    });
+
+    it('given no AWS_ENDPOINT_URL_S3 configured, media-src has no extra or malformed entry', () => {
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+
+      const csp = buildCSPPolicy('test-nonce');
+      const mediaSrc = csp.split(';').find((d: string) => d.trim().startsWith('media-src'));
+
+      expect(mediaSrc).not.toContain('undefined');
+      expect(mediaSrc).not.toContain('tigris');
     });
   });
 
@@ -225,6 +378,24 @@ describe('Security Headers', () => {
       const response = NextResponse.next();
 
       applySecurityHeaders(response, { nonce: 'test', isProduction: false });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    });
+
+    it('given sameOriginFrameable, should relax X-Frame-Options to SAMEORIGIN (never wider)', () => {
+      // The canvas preview is framed by the dashboard itself, and DENY blocks
+      // framing even same-origin — without this the preview renders blank.
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, sameOriginFrameable: true });
+
+      expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
+    });
+
+    it('given sameOriginFrameable is absent, should keep DENY so no other route is framable', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
 
       expect(response.headers.get('X-Frame-Options')).toBe('DENY');
     });
@@ -312,6 +483,14 @@ describe('Security Headers', () => {
 
       expect(response.headers.has('Cross-Origin-Embedder-Policy')).toBe(false);
     });
+
+    it('stamps X-PageSpace-API-Version on the 2xx pass-through path (ADR 0001 D2/D7#10)', () => {
+      const response = NextResponse.next();
+
+      applySecurityHeaders(response, { nonce: 'test', isProduction: false, isAPIRoute: true });
+
+      expect(response.headers.get('X-PageSpace-API-Version')).toBe(API_CONTRACT_VERSION);
+    });
   });
 
   describe('createSecureResponse', () => {
@@ -369,6 +548,57 @@ describe('Security Headers', () => {
       const requestHeaders = getLastRequestHeaders();
       expect(requestHeaders?.get('Content-Security-Policy')).toBeNull();
     });
+
+    it('omits the CSP header entirely when skipCSP is true (route owns its own CSP)', () => {
+      const { response } = createSecureResponse(false, undefined, {
+        isAPIRoute: true,
+        skipCSP: true,
+      });
+
+      // No middleware CSP — so it can't intersect with the route's own policy.
+      expect(response.headers.has('Content-Security-Policy')).toBe(false);
+      // Every other security header is still applied.
+      expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+      expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    });
+
+    it('does not set CSP in request headers when skipCSP is true', () => {
+      createSecureResponse(false, undefined, { skipCSP: true });
+
+      const requestHeaders = getLastRequestHeaders();
+      expect(requestHeaders?.get('Content-Security-Policy')).toBeNull();
+    });
+  });
+
+  describe('isHandoffBridgeRoute', () => {
+    it('is true for the google and apple OAuth callback paths', () => {
+      expect(isHandoffBridgeRoute('/api/auth/google/callback')).toBe(true);
+      expect(isHandoffBridgeRoute('/api/auth/apple/callback')).toBe(true);
+    });
+
+    it('is false for other auth/API paths', () => {
+      expect(isHandoffBridgeRoute('/api/auth/google/signin')).toBe(false);
+      expect(isHandoffBridgeRoute('/api/auth/apple/native')).toBe(false);
+      expect(isHandoffBridgeRoute('/api/auth/csrf')).toBe(false);
+      expect(isHandoffBridgeRoute('/api/foo')).toBe(false);
+    });
+  });
+
+  describe('routeOwnsItsOwnCsp', () => {
+    it('covers the handoff bridges and the published-app router', () => {
+      expect(routeOwnsItsOwnCsp('/api/auth/google/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/auth/apple/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router')).toBe(true);
+    });
+
+    it('is false for everything else, including app-hosting siblings', () => {
+      // The API CSP is the safe default; only a route that actually delivers its
+      // own policy may opt out, and only by exact path.
+      expect(routeOwnsItsOwnCsp('/api/app-hosting')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router/x')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/auth/csrf')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/foo')).toBe(false);
+    });
   });
 
   describe('createSecureErrorResponse', () => {
@@ -419,6 +649,12 @@ describe('Security Headers', () => {
 
       expect(response.headers.get('Strict-Transport-Security')).toBeNull();
     });
+
+    it('stamps X-PageSpace-API-Version on the 401/403 early-rejection path (ADR 0001 D2/D7#10)', () => {
+      const response = createSecureErrorResponse({ error: 'Authentication required' }, 401);
+
+      expect(response.headers.get('X-PageSpace-API-Version')).toBe(API_CONTRACT_VERSION);
+    });
   });
 
   describe('route classification', () => {
@@ -431,6 +667,15 @@ describe('Security Headers', () => {
       expect(isPublicPageRoute('/authorize')).toBe(false);
     });
 
+    it('isPublicPageRoute keeps the unsubscribe pages reachable without a session', () => {
+      // These are reached from a link in an email, where the reader is normally
+      // logged out. Auth-gating them would bounce recipients to a sign-in page —
+      // and since /unsubscribe is not an allowed `next=` target, the token would
+      // be dropped and the opt-out would become impossible to complete.
+      expect(isPublicPageRoute('/unsubscribe')).toBe(true);
+      expect(isPublicPageRoute('/unsubscribe-success')).toBe(true);
+    });
+
     it('shouldDisableCOEP returns true for auth and Stripe routes', () => {
       expect(shouldDisableCOEP('/auth/signin')).toBe(true);
       expect(shouldDisableCOEP('/auth')).toBe(true);
@@ -439,6 +684,32 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/dashboard')).toBe(false);
       expect(shouldDisableCOEP('/authentication')).toBe(false);
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
+    });
+
+    it('UI-6 (partial): only the routes that mount the Stripe Payment Element skip COEP, path-exact', () => {
+      // /settings mounts the create-organization dialog's payment step; an org's Plan & seats page mounts Reactivate.
+      expect(shouldDisableCOEP('/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
+      for (const path of ['/settings/account', '/settings/', '/orgs/org_1/settings', '/orgs/org_1/settings/members', '/orgs/org_1/settings/billing/x', '/organizations']) {
+        expect(shouldDisableCOEP(path), path).toBe(false);
+      }
+    });
+
+    it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
+      // Published-page hosts: must be treated as public (caller returns 404, never auth)
+      expect(isPublishedSiteHost('getting-started.pagespace.site')).toBe(true);
+      expect(isPublishedSiteHost('pagespace.site')).toBe(true);
+      expect(isPublishedSiteHost('getting-started.pagespace.site:443')).toBe(true);
+      expect(isPublishedSiteHost('GETTING-STARTED.PAGESPACE.SITE')).toBe(true);
+      // App / unrelated hosts: not published
+      expect(isPublishedSiteHost('pagespace.ai')).toBe(false);
+      expect(isPublishedSiteHost('admin.pagespace.ai')).toBe(false);
+      // Suffix-spoofing must not match
+      expect(isPublishedSiteHost('evil-pagespace.site.attacker.com')).toBe(false);
+      expect(isPublishedSiteHost('notpagespace.site')).toBe(false);
+      expect(isPublishedSiteHost(null)).toBe(false);
+      expect(isPublishedSiteHost(undefined)).toBe(false);
+      expect(isPublishedSiteHost('')).toBe(false);
     });
 
     it('auth routes receive CSP headers with valid nonce', () => {
@@ -482,6 +753,50 @@ describe('Security Headers', () => {
       const csp = r3.headers.get('Content-Security-Policy');
       expect(csp).toContain("default-src 'none'");
       expect(csp).not.toContain('nonce-');
+    });
+  });
+
+  describe('applyApiCorsHeaders', () => {
+    it('sets a wildcard origin, matching the existing Bearer-token CORS precedent (forms/submit route)', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+    });
+
+    it('exposes X-PageSpace-API-Version and Retry-After — required for the SDK to read them cross-origin', () => {
+      // Neither header is in the CORS default-safelisted response-header set, so
+      // without this a cross-origin call succeeds at the network/CORS layer but
+      // the SDK still throws IncompatibleServerError reading a null version header.
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      const exposed = response.headers.get('Access-Control-Expose-Headers');
+      expect(exposed).toContain('X-PageSpace-API-Version');
+      expect(exposed).toContain('Retry-After');
+    });
+
+    it('SPEND-4 (partial) exposes the spend-fallback headers, so a browser caller of v1 can read a fallback', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+      const exposed = response.headers.get('Access-Control-Expose-Headers') ?? '';
+      for (const header of ['X-Spend-Fallback-From', 'X-Spend-Fallback-To', 'X-Spend-Fallback-Wallet']) expect(exposed).toContain(header);
+    });
+
+    it('allows Authorization in preflight — the one header a Bearer-token caller must send', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+    });
+
+    it('every declared header in API_CORS_HEADERS is actually applied to the response', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+
+      for (const [key, value] of Object.entries(API_CORS_HEADERS)) {
+        expect(response.headers.get(key)).toBe(value);
+      }
     });
   });
 });

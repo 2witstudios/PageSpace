@@ -35,7 +35,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -127,8 +128,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn(),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/google-avatar', () => ({
@@ -147,7 +148,7 @@ vi.mock('@/lib/auth', async () => {
 
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 describe('/api/auth/google/callback redirect', () => {
   beforeEach(() => {
@@ -155,12 +156,13 @@ describe('/api/auth/google/callback redirect', () => {
     process.env.OAUTH_STATE_SECRET = 'test-oauth-state-secret';
 
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 5 });
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
       driveId: 'drive-123',
       created: true,
     });
 
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue({
       id: 'user-123',
@@ -181,19 +183,27 @@ describe('/api/auth/google/callback redirect', () => {
 
     const response = await GET(request);
 
-    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-123');
-    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledTimes(1);
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-123');
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledTimes(1);
     expect(response.status).toBe(307);
     expect(response.headers.get('Location')).toContain('/dashboard/drive-123');
     expect(response.headers.get('Location')).toContain('auth=success');
   });
 
   test('given existing user with drives, should redirect to default dashboard', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
       driveId: 'existing-drive',
       created: false,
     });
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue({
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue({
+      id: 'user-123',
+      name: 'Existing User',
+      email: 'test@example.com',
+      googleId: 'google-id',
+      tokenVersion: 0,
+      role: 'user',
+    } as never);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
       id: 'user-123',
       name: 'Existing User',
       email: 'test@example.com',
@@ -214,7 +224,7 @@ describe('/api/auth/google/callback redirect', () => {
   });
 
   test('given provisioning throws error, should still redirect successfully', async () => {
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+    vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
     const request = new Request(
       `http://localhost/api/auth/google/callback?code=valid-code&state=${encodeURIComponent(defaultState)}`,

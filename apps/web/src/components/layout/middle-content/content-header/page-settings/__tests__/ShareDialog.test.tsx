@@ -86,8 +86,15 @@ vi.mock(
   }),
 );
 
+// [D-OW-33] the drive's org, lapsed or not, per test (default: paid).
+const orgLapsed = vi.hoisted(() => ({ current: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => ({ orgById: (id: string | null) => (id ? { id, name: 'Northwind Labs', lapsed: orgLapsed.current } : null) }),
+}));
+
 import { fetchWithAuth, post } from '@/lib/auth/auth-fetch';
 import { ShareDialog } from '../ShareDialog';
+import { useDriveStore } from '@/hooks/useDrive';
 
 const make404Response = () =>
   new Response(JSON.stringify({ error: 'User not found' }), {
@@ -103,6 +110,12 @@ const make200UserResponse = () =>
 
 const makeInviteSuccess = () =>
   new Response(JSON.stringify({ kind: 'invited', email: 'new@example.com' }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+const makeEmptyRolesResponse = () =>
+  new Response(JSON.stringify({ roles: [] }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   });
@@ -237,7 +250,17 @@ describe('ShareDialog — off-platform invite branch', () => {
   });
 
   it('given /api/users/find returns 200, uses the direct grant path (not share-invite)', async () => {
-    vi.mocked(fetchWithAuth).mockResolvedValueOnce(make200UserResponse());
+    // Dispatch on URL, not on call order. This used to be a positional queue
+    // that had to know dialog-open fires two calls ahead of /api/users/find;
+    // any component that later added a request shifted every entry by one and
+    // this test failed for a reason having nothing to do with what it asserts.
+    // (That is exactly what happened when the share-link section's GET moved
+    // from plain `fetch` onto `fetchWithAuth`.)
+    vi.mocked(fetchWithAuth).mockImplementation((input: unknown) => {
+      const url = String(input);
+      if (url.includes('/api/users/find')) return Promise.resolve(make200UserResponse());
+      return Promise.resolve(makeEmptyRolesResponse());
+    });
     vi.mocked(post).mockResolvedValueOnce({ id: 'perm_1' });
 
     const user = userEvent.setup();
@@ -262,5 +285,30 @@ describe('ShareDialog — off-platform invite branch', () => {
         expect.objectContaining({ userId: 'user_existing' }),
       );
     });
+  });
+});
+
+describe('ShareDialog — [D-OW-33] a lapsed org only restricts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    orgLapsed.current = false;
+    useDriveStore.setState({ drives: [{ id: 'drive_xyz', name: 'Product', slug: 'p', ownerId: 'u1', isTrashed: false, trashedAt: null, createdAt: '', updatedAt: '', isOwned: true, orgId: 'o-northwind' }], currentDriveId: null, isLoading: false, lastFetched: Date.now() });
+    vi.mocked(fetchWithAuth).mockResolvedValue(makeEmptyRolesResponse());
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] while the drive\'s org is lapsed Grant Access is disabled and the restrict-only note is shown; paid, it is enabled', async () => {
+    orgLapsed.current = true;
+    const user = userEvent.setup();
+    const { unmount } = render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Sharing more is paused');
+    unmount();
+
+    orgLapsed.current = false;
+    render(<ShareDialog />);
+    await user.click(screen.getByRole('button', { name: /share/i }));
+    expect((screen.getByRole('button', { name: /grant access/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByTestId('lapsed-loosen-note')).toBeNull();
   });
 });

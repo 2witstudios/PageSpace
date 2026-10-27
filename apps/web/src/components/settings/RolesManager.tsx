@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, Trash2, GripVertical, Star, Shield } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { Plus, Pencil, Trash2, GripVertical, Star, Shield, Users, Eye } from 'lucide-react';
+import { toast } from 'sonner';
+import { useSocket } from '@/hooks/useSocket';
+import type { DriveEventPayload } from '@/lib/websocket';
 import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
 import { RoleEditor } from './RoleEditor';
@@ -27,6 +29,7 @@ interface Role {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
   position: number;
 }
 
@@ -40,7 +43,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
-  const { toast } = useToast();
+  const socket = useSocket();
 
   const fetchRoles = async () => {
     try {
@@ -50,11 +53,7 @@ export function RolesManager({ driveId }: RolesManagerProps) {
       setRoles(data.roles || []);
     } catch (error) {
       console.error('Error fetching roles:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load roles',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load roles');
     } finally {
       setLoading(false);
     }
@@ -65,21 +64,29 @@ export function RolesManager({ driveId }: RolesManagerProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driveId]);
 
+  const handleDriveUpdated = useCallback((event: DriveEventPayload) => {
+    if (event.driveId === driveId) {
+      fetchRoles();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveId]);
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('drive:updated', handleDriveUpdated);
+    return () => {
+      socket.off('drive:updated', handleDriveUpdated);
+    };
+  }, [socket, handleDriveUpdated]);
+
   const handleDeleteRole = async (roleId: string) => {
     try {
       await del(`/api/drives/${driveId}/roles/${roleId}`);
-      toast({
-        title: 'Success',
-        description: 'Role deleted successfully',
-      });
+      toast.success('Role deleted successfully');
       fetchRoles();
     } catch (error) {
       console.error('Error deleting role:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to delete role',
-        variant: 'destructive',
-      });
+      toast.error('Failed to delete role');
     } finally {
       setDeletingRoleId(null);
     }
@@ -164,6 +171,33 @@ export function RolesManager({ driveId }: RolesManagerProps) {
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Full access to all pages and settings. Cannot be modified.
+                </p>
+              </div>
+
+              <div className="w-[72px]" /> {/* Spacer for action buttons alignment */}
+            </div>
+
+            {/* Built-in Member role - default for all drive members */}
+            <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/20">
+              <div className="w-4 h-4 flex items-center justify-center">
+                <Users className="w-4 h-4 text-muted-foreground" />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge variant="secondary">
+                    Member
+                  </Badge>
+                  <Badge variant="outline" className="text-xs">
+                    Built-in
+                  </Badge>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Eye className="w-3 h-3" />
+                    View only
+                  </span>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  Default role for all members. Read-only access to non-private pages. Cannot be modified.
                 </p>
               </div>
 

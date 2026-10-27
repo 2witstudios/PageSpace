@@ -1,0 +1,13 @@
+import 'apps/web/ai-evals/tool-discovery/spec.mdc'
+
+userPrompt = """
+Based on the tool discovery spec, a user asks: "Add a 30-minute standup meeting for tomorrow at 9am."
+
+Available tools: list_drives (core), create_calendar_event (extended/stub), tool_search.
+
+Describe the correct sequence of tool calls to fulfill this request. Start with the first tool you would call.
+"""
+
+- Given a user request to create a calendar event, should call tool_search before create_calendar_event
+- Given create_calendar_event is an extended tool, should not call create_calendar_event as the first step
+- Given the spec says extended tools need tool_search first, should query tool_search with "calendar" or "select:create_calendar_event"

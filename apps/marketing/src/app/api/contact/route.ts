@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { getClientIP } from '@pagespace/lib/security/client-ip';
 
 // Bounded-quantifier RFC 5322 regex — O(N), no ReDoS risk
 const EMAIL_PATTERN = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -21,10 +22,7 @@ function getResend() {
 }
 
 export async function POST(request: Request) {
-  const clientIP =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "unknown";
+  const clientIP = getClientIP(request);
 
   try {
     const rateLimitResult = await checkDistributedRateLimit(

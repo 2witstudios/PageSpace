@@ -14,7 +14,7 @@ This directory contains utility scripts for code quality, security, and maintena
 
 **Usage:**
 ```bash
-pnpm check:fetch
+bun run check:fetch
 ```
 
 **Exit codes:**
@@ -87,7 +87,7 @@ Found 113 uses of fetchWithAuth/post/patch/del
 Add to your CI pipeline:
 ```yaml
 - name: Check for unauthenticated fetch calls
-  run: pnpm check:fetch
+  run: bun run check:fetch
 ```
 
 This will fail the build if any violations are detected.

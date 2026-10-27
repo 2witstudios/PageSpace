@@ -3,6 +3,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
 import { systemLogs } from '@pagespace/db/schema/monitoring';
 import { writeApiMetrics, writeError } from '@pagespace/lib/logging/logger-database';
+import { isClickHouseEnabled } from '@pagespace/lib/observability/clickhouse-client';
+import { insertSystemLog } from '@pagespace/lib/observability/analytics-inserts';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
 import { sanitizeIngestPayload, type IngestPayload } from '@/lib/monitoring/ingest-sanitizer';
@@ -55,6 +57,33 @@ export async function POST(request: Request) {
   const level = (statusCode >= 500 ? 'error' : statusCode >= 400 ? 'warn' : 'info') as SystemLogLevel;
 
   try {
+    // Shared shape for the request's system-log line; writeApiMetrics /
+    // writeError self-gate on CLICKHOUSE_ENABLED inside logger-database.
+    const systemLogEntry = {
+      id: createId(),
+      timestamp,
+      level,
+      message:
+        payload.message || `${method} ${payload.endpoint} ${statusCode} ${payload.duration}ms`,
+      category: 'api',
+      userId: payload.userId,
+      sessionId: payload.sessionId,
+      requestId: payload.requestId,
+      driveId: payload.driveId,
+      pageId: payload.pageId,
+      endpoint: payload.endpoint,
+      method,
+      ip: payload.ip,
+      userAgent: payload.userAgent,
+      duration: payload.duration,
+      metadata: {
+        ...payload.metadata,
+        statusCode,
+        requestSize: payload.requestSize,
+        responseSize: payload.responseSize,
+      },
+    };
+
     const operations: Promise<unknown>[] = [
       writeApiMetrics({
         endpoint: payload.endpoint,
@@ -73,31 +102,13 @@ export async function POST(request: Request) {
         cacheKey: payload.cacheKey,
         timestamp,
       }),
-      db.insert(systemLogs).values({
-        id: createId(),
-        timestamp,
-        level,
-        message:
-          payload.message || `${method} ${payload.endpoint} ${statusCode} ${payload.duration}ms`,
-        category: 'api',
-        userId: payload.userId,
-        sessionId: payload.sessionId,
-        requestId: payload.requestId,
-        driveId: payload.driveId,
-        pageId: payload.pageId,
-        endpoint: payload.endpoint,
-        method,
-        ip: payload.ip,
-        userAgent: payload.userAgent,
-        duration: payload.duration,
-        metadata: {
-          ...payload.metadata,
-          statusCode,
-          requestSize: payload.requestSize,
-          responseSize: payload.responseSize,
-        },
-      }),
     ];
+
+    if (isClickHouseEnabled()) {
+      insertSystemLog(systemLogEntry);
+    } else {
+      operations.push(db.insert(systemLogs).values(systemLogEntry));
+    }
 
     if (payload.error) {
       operations.push(writeError({

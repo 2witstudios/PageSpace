@@ -23,7 +23,8 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock dependencies BEFORE imports
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByAppleIdOrEmail: vi.fn(),
+    findUserByAppleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -43,6 +44,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -94,12 +97,14 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: true }),
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  isSafeReturnUrl: vi.fn(() => true),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -123,7 +128,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -132,18 +137,23 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
   }),
 }));
 
+vi.mock('@pagespace/lib/auth/apple/capture-apple-refresh-token', () => ({
+  captureAppleRefreshToken: vi.fn().mockResolvedValue('stored'),
+}));
+
 import { POST } from '../route';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { getClientIP } from '@/lib/auth';
+import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const createNativeRequest = (body: Record<string, unknown> = {}) =>
@@ -182,7 +192,8 @@ describe('POST /api/auth/apple/native', () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv, APPLE_CLIENT_ID: 'com.example.app' };
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
-    vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -200,7 +211,7 @@ describe('POST /api/auth/apple/native', () => {
         emailVerified: true,
       },
     });
-    vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
+    vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(0);
     // @ts-expect-error - partial mock data
     vi.mocked(sessionService.validateSession).mockResolvedValue({
       sessionId: 'mock-session-id',
@@ -393,17 +404,17 @@ describe('POST /api/auth/apple/native', () => {
     it('provisions getting started drive for new users', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-id');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('new-user-id');
     });
 
     it('continues if drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const response = await POST(createNativeRequest(validPayload));
 
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: 'new-user-id', provider: 'apple-native' }
       );
@@ -422,7 +433,8 @@ describe('POST /api/auth/apple/native', () => {
     };
 
     it('updates existing user when appleId is missing', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, appleId: 'apple-sub-123' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -437,7 +449,8 @@ describe('POST /api/auth/apple/native', () => {
 
     it('updates existing user when name is missing', async () => {
       const userWithoutName = { ...existingUser, appleId: null, name: null };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(userWithoutName as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutName as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithoutName, appleId: 'apple-sub-123', name: 'John Doe' } as never);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -451,7 +464,8 @@ describe('POST /api/auth/apple/native', () => {
 
     it('does not update user when no update is needed', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(completeUser as never);
 
       const response = await POST(createNativeRequest(validPayload));
 
@@ -459,17 +473,20 @@ describe('POST /api/auth/apple/native', () => {
       expect(authRepository.updateUser).not.toHaveBeenCalled();
     });
 
-    it('does not provision drive for existing users', async () => {
+    it('provisions Home drive for existing users (idempotent lazy provisioning)', async () => {
       const completeUser = { ...existingUser, appleId: 'apple-sub-123' };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(completeUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(completeUser as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'new-drive-id', created: false });
 
       await POST(createNativeRequest(validPayload));
 
-      expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith(completeUser.id);
     });
 
     it('handles re-fetch returning null after update', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(null);
 
       const response = await POST(createNativeRequest(validPayload));
@@ -480,28 +497,17 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('session management', () => {
-    it('revokes existing sessions before creating new one', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
-
+    it('revokes prior sessions scoped to the request deviceId (device-scoped, not nuclear)', async () => {
       await POST(createNativeRequest(validPayload));
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('new-user-id', 'new_login');
-      expect(loggers.auth.info).toHaveBeenCalledWith(
-        'Revoked existing sessions on native Apple OAuth login',
-        { userId: 'new-user-id', count: 2, platform: 'ios' }
+      // deviceId is required by the schema, so the helper always receives it and
+      // revokes only THIS device's sessions — other devices stay signed in.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith(
+        'new-user-id',
+        'device-123',
+        'new_login',
+        'Apple native',
       );
-    });
-
-    it('does not log when no sessions were revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
-
-      await POST(createNativeRequest(validPayload));
-
-      const logCalls = vi.mocked(loggers.auth.info).mock.calls;
-      const revokedLogCall = logCalls.find(
-        (call) => call[0] === 'Revoked existing sessions on native Apple OAuth login'
-      );
-      expect(revokedLogCall).toBeUndefined();
     });
 
     it('returns 500 when session validation fails', async () => {
@@ -514,12 +520,13 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Session creation failed');
     });
 
-    it('creates session with correct params', async () => {
+    it('SEC-2 (partial) creates session with correct params, including Apple single-factor evidence (D-OW-45)', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -535,6 +542,7 @@ describe('POST /api/auth/apple/native', () => {
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -546,10 +554,11 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('device token creation', () => {
-    it('creates device token with correct parameters', async () => {
+    it('SEC-2 (partial) creates device token with correct parameters, carrying the same Apple evidence (D-OW-45)', async () => {
       await POST(createNativeRequest(validPayload));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -569,6 +578,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -587,6 +597,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -700,7 +711,8 @@ describe('POST /api/auth/apple/native', () => {
       vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
 
     it('masks email in "Creating new user via native Apple OAuth" log', async () => {
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue({
         id: 'new-user-id',
         name: 'Test',
@@ -731,7 +743,8 @@ describe('POST /api/auth/apple/native', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByAppleIdOrEmail).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByAppleId).mockResolvedValueOnce(existingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(existingUser as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...existingUser, name: 'Joe', appleId: 'apple-sub-123' } as never);
 
       await POST(createNativeRequest({ ...validPayload, givenName: 'Joe' }));
@@ -749,7 +762,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -766,7 +779,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -790,7 +803,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'page',
         invitedDriveId: 'drv_1',
         invitedPageId: 'page_1',
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_p' }));
@@ -806,7 +819,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_c' }));
@@ -817,4 +830,92 @@ describe('POST /api/auth/apple/native', () => {
     });
   });
 
+
+  describe('Apple refresh token capture (TN3194)', () => {
+    const verifiedWithAudience = () =>
+      vi.mocked(verifyAppleIdToken).mockResolvedValue({
+        success: true,
+        // @ts-expect-error - partial mock data
+        userInfo: { providerId: 'apple-sub-123', email: 'test@example.com', emailVerified: true },
+        audience: 'ai.pagespace.ios',
+      });
+
+    it('given an authorization code, should capture the refresh token for the verified user and client', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).toHaveBeenCalledWith({
+        userId: 'new-user-id',
+        code: 'apple-code-1',
+        clientId: 'ai.pagespace.ios',
+        expectedSub: 'apple-sub-123',
+      });
+    });
+
+    it('given a slow Apple exchange, should return the session without waiting for it', async () => {
+      verifiedWithAudience();
+      let finishExchange: (outcome: 'stored') => void = () => {};
+      vi.mocked(captureAppleRefreshToken).mockReturnValue(
+        new Promise((resolve) => {
+          finishExchange = resolve;
+        }),
+      );
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+      const body = await response.json();
+
+      // The capture is still pending: the response did not wait on Apple.
+      expect(captureAppleRefreshToken).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(200);
+      expect(body.sessionToken).toBe('ps_sess_mock_token');
+      finishExchange('stored');
+    });
+
+    it('given the capture rejects, should still sign the user in and log the failure', async () => {
+      verifiedWithAudience();
+      vi.mocked(captureAppleRefreshToken).mockRejectedValue(new Error('boom'));
+
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(response.status).toBe(200);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Apple refresh token capture threw',
+        expect.objectContaining({ userId: 'new-user-id' }),
+      );
+    });
+
+    it('given Android, whose Apple sign-in is Apple\'s web flow, should not exchange a code without its redirect_uri', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest({ ...validPayload, platform: 'android', authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given no authorization code (an older client), should sign in without attempting a capture', async () => {
+      verifiedWithAudience();
+
+      const response = await POST(createNativeRequest(validPayload));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given a verified token without an audience, should not attempt a capture', async () => {
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'apple-code-1' }));
+
+      expect(response.status).toBe(200);
+      expect(captureAppleRefreshToken).not.toHaveBeenCalled();
+    });
+
+    it('given an oversized authorization code, should reject the request', async () => {
+      const response = await POST(createNativeRequest({ ...validPayload, authorizationCode: 'x'.repeat(5000) }));
+
+      expect(response.status).toBe(400);
+    });
+  });
 });

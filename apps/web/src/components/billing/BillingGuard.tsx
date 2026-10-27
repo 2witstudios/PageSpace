@@ -3,42 +3,46 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
-import { getBillingRedirect } from '@/lib/billing';
+import { getBillingRedirect, shouldRedirectFromBillingSurface, type BillingSurface } from '@/lib/billing';
 
 interface BillingGuardProps {
   children: React.ReactNode;
+  /**
+   * What the guarded page sells through. `'stripe'` (default) pages — the
+   * Stripe portal, invoices, payment methods — are reachable only on the Stripe
+   * channel. `'purchases'` pages (the plan page) also open on the Apple
+   * channel, where they sell through In-App Purchase.
+   */
+  surface?: BillingSurface;
 }
 
 /**
- * Guard component that redirects iOS Capacitor users away from billing pages.
+ * Guard component that redirects users away from billing pages their platform
+ * may not sell on.
  *
- * Apple App Store guidelines require in-app purchases for digital goods,
- * so we hide external payment methods (Stripe) from the iOS app.
+ * Apple App Store guidelines require In-App Purchase for digital goods, so the
+ * iOS app never reaches a Stripe surface; on an iOS binary with the StoreKit
+ * plugin it may still reach the plan page, which then sells through Apple.
  *
  * @example
  * ```tsx
- * // In a billing page
- * export default function BillingPage() {
- *   return (
- *     <BillingGuard>
- *       <BillingPageContent />
- *     </BillingGuard>
- *   );
- * }
+ * <BillingGuard>{Stripe-only page}</BillingGuard>
+ * <BillingGuard surface="purchases">{plan page}</BillingGuard>
  * ```
  */
-export function BillingGuard({ children }: BillingGuardProps) {
+export function BillingGuard({ children, surface = 'stripe' }: BillingGuardProps) {
   const router = useRouter();
-  const { hideBilling, isReady } = useBillingVisibility();
+  const { hideBilling, isReady, channel } = useBillingVisibility();
+  const redirect = shouldRedirectFromBillingSurface({ surface, isReady, hideBilling, channel });
 
   useEffect(() => {
-    if (isReady && hideBilling) {
+    if (redirect) {
       router.replace(getBillingRedirect());
     }
-  }, [isReady, hideBilling, router]);
+  }, [redirect, router]);
 
-  // Don't render anything while redirecting to prevent flash of content
-  if (!isReady || hideBilling) {
+  // Don't render anything while detecting or redirecting to prevent flash of content
+  if (!isReady || redirect) {
     return null;
   }
 

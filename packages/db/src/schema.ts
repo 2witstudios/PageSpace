@@ -1,32 +1,37 @@
 export * from './schema/auth';
 export * from './schema/sessions';
 export * from './schema/core';
-export * from './schema/permissions';
 export * from './schema/members';
 export * from './schema/chat';
 export * from './schema/dashboard';
 export * from './schema/conversations';
 export * from './schema/notifications';
 export * from './schema/email-notifications';
+export * from './schema/toast-notification-preferences';
 export * from './schema/display-preferences';
 export * from './schema/monitoring';
 export * from './schema/versioning';
 export * from './schema/social';
 export * from './schema/subscriptions';
+export * from './schema/app-store';
 export * from './schema/contact';
 export * from './schema/feedback';
 export * from './schema/storage';
 export * from './schema/tasks';
+export * from './schema/sheets';
+export * from './schema/sheets-types';
 export * from './schema/security-audit';
 export * from './schema/page-views';
 export * from './schema/hotkeys';
 export * from './schema/push-notifications';
 export * from './schema/integrations';
 export * from './schema/personalization';
+export * from './schema/automation-preferences';
 export * from './schema/calendar';
 export * from './schema/calendar-triggers';
 export * from './schema/workflows';
 export * from './schema/workflow-runs';
+export * from './schema/workflow-run-steps';
 export * from './schema/task-triggers';
 export * from './schema/rate-limit-buckets';
 export * from './schema/revoked-service-tokens';
@@ -34,37 +39,75 @@ export * from './schema/auth-handoff-tokens';
 export * from './schema/pending-invites';
 export * from './schema/pending-page-invites';
 export * from './schema/pending-connection-invites';
+export * from './schema/drive-join-requests';
 export * from './schema/ai-streams';
+export * from './schema/share-links';
+export * from './schema/zoom';
+export * from './schema/webhook-triggers';
+export * from './schema/drafts';
+export * from './schema/published-pages';
+export * from './schema/credits';
+export * from './schema/wallets';
+export * from './schema/commands';
+export * from './schema/content-tags';
+export * from './schema/ai-compaction';
+export * from './schema/custom-domains';
+export * from './schema/incidents';
+export * from './schema/data-subject-requests';
+export * from './schema/oauth';
+export * from './schema/form-targets';
+export * from './schema/machine-sprite-reclaims';
+export * from './schema/published-apps';
+export * from './schema/published-app-subscriptions';
+export * from './schema/app-hosting-stripe-reclaims';
+export * from './schema/email-broadcasts';
+export * from './schema/page-webhooks';
+export * from './schema/agent-workspaces';
+export * from './schema/agent-workspace-nodes';
+export * from './schema/drive-envs';
+export * from './schema/drive-env-local';
+export * from './schema/dev-preview-services';
+export * from './schema/dev-preview-grants';
+export * from './schema/agent-account-grant-nonces';
+export * from './schema/organizations';
+export * from './schema/org-guest-holds';
+export * from './schema/agent-accounts';
+export * from './schema/user-builtin-agents';
+export * from './schema/imago-drive-access';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
 import * as core from './schema/core';
-import * as permissions from './schema/permissions';
 import * as members from './schema/members';
 import * as chat from './schema/chat';
 import * as dashboard from './schema/dashboard';
 import * as conversations from './schema/conversations';
 import * as notifications from './schema/notifications';
 import * as emailNotifications from './schema/email-notifications';
+import * as toastNotificationPreferences from './schema/toast-notification-preferences';
 import * as displayPreferences from './schema/display-preferences';
 import * as monitoring from './schema/monitoring';
 import * as versioning from './schema/versioning';
 import * as social from './schema/social';
 import * as subscriptions from './schema/subscriptions';
+import * as appStore from './schema/app-store';
 import * as contact from './schema/contact';
 import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
+import * as sheets from './schema/sheets';
 import * as securityAudit from './schema/security-audit';
 import * as pageViews from './schema/page-views';
 import * as hotkeys from './schema/hotkeys';
 import * as pushNotifications from './schema/push-notifications';
 import * as integrations from './schema/integrations';
 import * as personalization from './schema/personalization';
+import * as automationPreferences from './schema/automation-preferences';
 import * as calendar from './schema/calendar';
 import * as calendarTriggers from './schema/calendar-triggers';
 import * as workflows from './schema/workflows';
 import * as workflowRuns from './schema/workflow-runs';
+import * as workflowRunSteps from './schema/workflow-run-steps';
 import * as taskTriggers from './schema/task-triggers';
 import * as rateLimitBuckets from './schema/rate-limit-buckets';
 import * as revokedServiceTokens from './schema/revoked-service-tokens';
@@ -72,38 +115,76 @@ import * as authHandoffTokens from './schema/auth-handoff-tokens';
 import * as pendingInvites from './schema/pending-invites';
 import * as pendingPageInvites from './schema/pending-page-invites';
 import * as pendingConnectionInvites from './schema/pending-connection-invites';
+import * as driveJoinRequestsSchema from './schema/drive-join-requests';
 import * as aiStreams from './schema/ai-streams';
+import * as shareLinks from './schema/share-links';
+import * as zoom from './schema/zoom';
+import * as webhookTriggers from './schema/webhook-triggers';
+import * as drafts from './schema/drafts';
+import * as publishedPages from './schema/published-pages';
+import * as credits from './schema/credits';
+import * as walletsSchema from './schema/wallets';
+import * as commands from './schema/commands';
+import * as contentTags from './schema/content-tags';
+import * as aiCompaction from './schema/ai-compaction';
+import * as customDomains from './schema/custom-domains';
+import * as incidents from './schema/incidents';
+import * as dataSubjectRequests from './schema/data-subject-requests';
+import * as oauth from './schema/oauth';
+import * as formTargets from './schema/form-targets';
+import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
+import * as publishedApps from './schema/published-apps';
+import * as publishedAppSubscriptions from './schema/published-app-subscriptions';
+import * as appHostingStripeReclaims from './schema/app-hosting-stripe-reclaims';
+import * as emailBroadcasts from './schema/email-broadcasts';
+import * as pageWebhooks from './schema/page-webhooks';
+import * as agentWorkspaces from './schema/agent-workspaces';
+import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
+import * as driveEnvs from './schema/drive-envs';
+import * as driveEnvLocal from './schema/drive-env-local';
+import * as devPreviewServices from './schema/dev-preview-services';
+import * as devPreviewGrants from './schema/dev-preview-grants';
+import * as agentAccountGrantNonces from './schema/agent-account-grant-nonces';
+import * as orgs from './schema/organizations';
+import * as orgGuestHolds from './schema/org-guest-holds';
+import * as agentAccounts from './schema/agent-accounts';
+import * as userBuiltinAgents from './schema/user-builtin-agents';
+import * as imagoDriveAccess from './schema/imago-drive-access';
 
 export const schema = {
   ...auth,
   ...sessions,
   ...core,
-  ...permissions,
   ...members,
   ...chat,
   ...dashboard,
   ...conversations,
   ...notifications,
   ...emailNotifications,
+  ...toastNotificationPreferences,
   ...displayPreferences,
   ...monitoring,
   ...versioning,
   ...social,
   ...subscriptions,
+  ...appStore,
   ...contact,
   ...feedback,
   ...storage,
   ...tasks,
+  ...sheets,
   ...securityAudit,
   ...pageViews,
   ...hotkeys,
   ...pushNotifications,
   ...integrations,
   ...personalization,
+  ...automationPreferences,
   ...calendar,
   ...calendarTriggers,
   ...workflows,
   ...workflowRuns,
+  ...workflowRunSteps,
   ...taskTriggers,
   ...rateLimitBuckets,
   ...revokedServiceTokens,
@@ -111,5 +192,39 @@ export const schema = {
   ...pendingInvites,
   ...pendingPageInvites,
   ...pendingConnectionInvites,
+  ...driveJoinRequestsSchema,
   ...aiStreams,
+  ...shareLinks,
+  ...zoom,
+  ...webhookTriggers,
+  ...drafts,
+  ...publishedPages,
+  ...credits,
+  ...walletsSchema,
+  ...commands,
+  ...contentTags,
+  ...aiCompaction,
+  ...customDomains,
+  ...incidents,
+  ...dataSubjectRequests,
+  ...oauth,
+  ...formTargets,
+  ...machineSpriteReclaims,
+  ...publishedApps,
+  ...publishedAppSubscriptions,
+  ...appHostingStripeReclaims,
+  ...emailBroadcasts,
+  ...pageWebhooks,
+  ...agentWorkspaces,
+  ...agentWorkspaceNodes,
+  ...driveEnvs,
+  ...driveEnvLocal,
+  ...devPreviewServices,
+  ...devPreviewGrants,
+  ...agentAccountGrantNonces,
+  ...orgs,
+  ...orgGuestHolds,
+  ...agentAccounts,
+  ...userBuiltinAgents,
+  ...imagoDriveAccess,
 };

@@ -1,17 +1,15 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, isNull } from '@pagespace/db/operators'
-import { pages } from '@pagespace/db/schema/core'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
+import { creditAdmission } from './workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
-export interface AgentTriggerInput {
-  agentPageId: string;
-  prompt?: string;
-  instructionPageId?: string;
-  contextPageIds?: string[];
+export interface AgentTriggerInput extends AgentTriggerPayload {
   triggerType: 'due_date' | 'completion';
 }
 
@@ -24,6 +22,14 @@ export interface CreateTaskTriggerWorkflowParams {
   agentTrigger: AgentTriggerInput;
   dueDate: Date | null;
   timezone: string;
+}
+
+export interface TaskTriggerWorkflowResult {
+  workflowId: string;
+  triggerId: string;
+  triggerType: 'due_date' | 'completion';
+  nextRunAt: Date | null;
+  isEnabled: boolean;
 }
 
 const logger = loggers.api.child({ module: 'task-trigger-helpers' });
@@ -69,53 +75,27 @@ export async function recomputeTaskTriggerMetadata(
  * and reusing the same workflowId across upserts means the workflow update
  * targets a known id rather than a returned excluded.workflowId.
  */
-export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<void> {
+export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflowParams): Promise<TaskTriggerWorkflowResult> {
   const { database, driveId, userId, taskId, taskMetadata, agentTrigger, dueDate, timezone } = params;
   const triggerType = agentTrigger.triggerType;
 
   if (triggerType === 'due_date' && !dueDate) {
     throw new Error('Due date is required for due_date triggers');
   }
-  if (!agentTrigger.prompt && !agentTrigger.instructionPageId) {
-    throw new Error('Agent trigger needs either a prompt or instructionPageId');
-  }
 
-  const triggerAgent = await database.query.pages.findFirst({
-    where: and(eq(pages.id, agentTrigger.agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
-    columns: { id: true, driveId: true },
+  await validateAgentTrigger(database, {
+    driveId,
+    agentTrigger,
+    entityLabel: 'task list',
   });
-  if (!triggerAgent) throw new Error('Agent trigger target not found or not an AI agent');
-  if (triggerAgent.driveId !== driveId) throw new Error('Agent must be in the same drive as the task list');
-
-  if (agentTrigger.instructionPageId) {
-    const instrPage = await database.query.pages.findFirst({
-      where: and(eq(pages.id, agentTrigger.instructionPageId), eq(pages.driveId, driveId), eq(pages.isTrashed, false)),
-      columns: { id: true },
-    });
-    if (!instrPage) throw new Error('Instruction page not found or not in the same drive');
-  }
 
   const contextPageIds = agentTrigger.contextPageIds ?? [];
-  if (contextPageIds.length > 0) {
-    const validPages = await database.query.pages.findMany({
-      where: and(
-        inArray(pages.id, contextPageIds),
-        eq(pages.driveId, driveId),
-        eq(pages.isTrashed, false),
-      ),
-      columns: { id: true },
-    });
-    if (validPages.length !== contextPageIds.length) {
-      throw new Error('Some context pages were not found or are not in the same drive');
-    }
-  }
-
   const triggerPrompt = agentTrigger.prompt || 'Execute instructions from linked page.';
   const nextRunAt = triggerType === 'due_date' && dueDate ? dueDate : null;
 
-  await database.transaction(async (tx) => {
+  const result = await database.transaction(async (tx) => {
     const existing = await tx
-      .select({ workflowId: taskTriggers.workflowId })
+      .select({ workflowId: taskTriggers.workflowId, id: taskTriggers.id })
       .from(taskTriggers)
       .where(and(
         eq(taskTriggers.taskItemId, taskId),
@@ -124,13 +104,17 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
 
     if (existing.length > 0) {
       const workflowId = existing[0].workflowId;
+      // [D-OW-36] Editing the trigger of an owner-left workflow saves the edit but never switches it back
+      // on: only an Owner or Admin's reassignment does.
+      const [current] = await tx.select({ ownerLeftAt: workflows.ownerLeftAt }).from(workflows).where(eq(workflows.id, workflowId));
+      const ownerLeft = Boolean(current?.ownerLeftAt);
       await tx.update(workflows).set({
         agentPageId: agentTrigger.agentPageId,
         prompt: triggerPrompt,
         instructionPageId: agentTrigger.instructionPageId ?? null,
         contextPageIds,
         timezone,
-        isEnabled: true,
+        ...(ownerLeft ? {} : { isEnabled: true }),
       }).where(eq(workflows.id, workflowId));
 
       await tx.update(taskTriggers).set({
@@ -142,6 +126,8 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         eq(taskTriggers.taskItemId, taskId),
         eq(taskTriggers.triggerType, triggerType),
       ));
+
+      return { workflowId, triggerId: existing[0].id, ownerLeft };
     } else {
       const [createdWorkflow] = await tx.insert(workflows).values({
         driveId,
@@ -156,17 +142,22 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         isEnabled: true,
       }).returning({ id: workflows.id });
 
-      await tx.insert(taskTriggers).values({
+      const [createdTrigger] = await tx.insert(taskTriggers).values({
         workflowId: createdWorkflow.id,
         taskItemId: taskId,
         triggerType,
         nextRunAt,
         isEnabled: true,
-      });
+      }).returning({ id: taskTriggers.id });
+
+      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id, ownerLeft: false };
     }
   });
 
   await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
+
+  const { ownerLeft, ...ids } = result;
+  return { ...ids, triggerType, nextRunAt, isEnabled: !ownerLeft };
 }
 
 /**
@@ -275,11 +266,22 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       return;
     }
 
+    // [D-OW-36] Nothing runs under a missing person: an owner-left workflow retires the one-shot
+    // trigger with the reason, before any gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      await db.update(taskTriggers).set({
+        isEnabled: false,
+        lastFireError: owner.error,
+      }).where(eq(taskTriggers.id, completionTrigger.id));
+      return;
+    }
+
     const input: WorkflowExecutionInput = {
       workflowId: workflow.id,
       workflowName: workflow.name,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: owner.ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
@@ -289,7 +291,11 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
     };
 
-    void executeWorkflow(input).then(async (result) => {
+    // The credit gate runs inside the executor's run claim, on the owner the run
+    // bills — the same gate the task-triggers cron takes for due-date fires. A
+    // refused fire comes back `skipped` (recorded as a cancelled run with the
+    // reason) and retires the one-shot trigger with that reason below.
+    void executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') }).then(async (result) => {
       try {
         await db.update(taskTriggers).set({
           lastFireError: result.error || null,

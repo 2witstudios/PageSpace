@@ -10,13 +10,16 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@fly/sprites": "0.0.1-rc37",
     "@pagespace/db": "workspace:*",
     "@pagespace/lib": "workspace:*",
-    "cookie": "1.0.2",
+    "@sentry/node": "^10.56.0",
     "dotenv": "^17.2.0",
+    "nats": "^2.29.3",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {

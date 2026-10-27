@@ -144,7 +144,7 @@ export async function getUserIdFromRequest(request: Request): Promise<string | u
     const token = cookies.session;
     if (!token) return undefined;
 
-    const sessionClaims = await sessionService.validateSession(token);
+    const sessionClaims = await sessionService.validateSession(token, { expectedType: 'user' });
     return sessionClaims?.userId;
   } catch {
     return undefined;

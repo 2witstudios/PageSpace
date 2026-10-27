@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "ai_stream_sessions_user_status_idx" ON "ai_stream_sessions" USING btree ("user_id","status");

@@ -1,0 +1,403 @@
+import { describe, it, expect, vi } from 'vitest';
+import { canRunCode, type CanRunCodeDeps } from '../can-run-code';
+import type { DrivePermissionLevel } from '../../../permissions/permissions';
+import type { PermissionLevel } from '../../../permissions/permissions';
+
+const ownerPerms: DrivePermissionLevel = {
+  hasAccess: true,
+  isOwner: true,
+  isAdmin: false,
+  isMember: false,
+  canEdit: true,
+};
+
+const adminPerms: DrivePermissionLevel = {
+  hasAccess: true,
+  isOwner: false,
+  isAdmin: true,
+  isMember: true,
+  canEdit: true,
+};
+
+const memberPerms: DrivePermissionLevel = {
+  hasAccess: true,
+  isOwner: false,
+  isAdmin: false,
+  isMember: true,
+  canEdit: true,
+};
+
+// A VIEWER-role member: real drive access, no edit rights — the one
+// membership shape the edit-access gate must still refuse (they can't spend
+// the payer's compute any more than they can edit its pages).
+const viewerPerms: DrivePermissionLevel = {
+  hasAccess: true,
+  isOwner: false,
+  isAdmin: false,
+  isMember: true,
+  canEdit: false,
+};
+
+const agentEditPerms: PermissionLevel = {
+  canView: true,
+  canEdit: true,
+  canShare: false,
+  canDelete: false,
+};
+
+const agentViewOnlyPerms: PermissionLevel = {
+  canView: true,
+  canEdit: false,
+  canShare: false,
+  canDelete: false,
+};
+
+// Fully-permissive deps; individual tests override the single field under test
+// so each test exercises exactly one denial path. Tier defaults to 'pro' (so
+// the tier gate stays out of the way of tests exercising other gates), and
+// `lookupDriveBillingFacts` defaults to a personal drive (its owner pays, on
+// the stubbed tier), matching what most tests actually want to exercise.
+function makeDeps(overrides: Partial<CanRunCodeDeps> = {}): CanRunCodeDeps {
+  return {
+    getUserDrivePermissions: async () => adminPerms,
+    lookupDriveBillingFacts: async () => ({ ownerId: 'owner', orgId: null }),
+    getUserSubscriptionTier: async () => 'pro',
+    getAgentAccessLevel: async () => agentEditPerms,
+    isCodeExecutionEnabled: () => true,
+    getDriveOrgPolicies: async () => null,
+    ...overrides,
+  };
+}
+
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
+import { credentialActor } from '../../../permissions/access-actor';
+
+describe('the org cloud-sandbox switch', () => {
+  const policies = (cloudSandbox: boolean) => async () => ({ ...DEFAULT_ORG_POLICIES, cloudSandbox });
+
+  it('POL-10 refuses a drive member when the org has cloud sandboxes off', async () => {
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(false) }) });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+  });
+
+  it('POL-10 refuses an agent-origin run the same way', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null), driveId: 'd1', requestOrigin: 'agent', agentPageId: 'a1',
+      deps: makeDeps({ getDriveOrgPolicies: policies(false) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+  });
+
+  it('POL-10 allows when the org leaves it on', async () => {
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: policies(true) }) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('POL-10 a drive with no org is unrestricted', async () => {
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps({ getDriveOrgPolicies: async () => null }) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('POL-10 a caller with no access to the drive is told about access, never about the policy', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null), driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => null, getDriveOrgPolicies: policies(false) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+  });
+
+  it('POL-10 a policy read that throws fails closed', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null), driveId: 'd1',
+      deps: makeDeps({ getDriveOrgPolicies: async () => { throw new Error('db down'); } }),
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('canRunCode', () => {
+  it('given an admin drive member in cloud with the kill-switch on, should allow', async () => {
+    const result = await canRunCode({ actor: credentialActor('u1', null), driveId: 'd1', deps: makeDeps() });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a drive owner, should allow', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => ownerPerms }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the kill-switch off, should deny regardless of authorization', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ isCodeExecutionEnabled: () => false }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
+  });
+
+  it('given a user with no drive membership, should deny', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => null }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+  });
+
+  it('given a plain MEMBER-role collaborator, should allow — the advertised entitlement is every member of a paid drive (review #2326)', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => memberPerms }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a VIEWER-role member (no edit access), should deny', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given a TENANT deployment and the seeded free-tier payer, should allow — the deployment is the entitlement', async () => {
+    // The tenant seeder leaves `subscriptionTier` at the column default, so the
+    // payer really is 'free' there; before deployment-mode-aware eligibility
+    // this chokepoint denied every tenant sandbox outright.
+    vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+    try {
+      const result = await canRunCode({
+        actor: credentialActor('u1', null),
+        driveId: 'd1',
+        deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+      });
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('given onprem personal Free, should preserve capability and every authorization guard', async () => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+    try {
+      const run = (overrides: Partial<CanRunCodeDeps> = {}) => canRunCode({
+        actor: credentialActor('u1', null), driveId: 'd1',
+        deps: makeDeps({ getUserSubscriptionTier: async () => 'free', ...overrides }),
+      });
+      expect(await run()).toEqual({ ok: true });
+      expect(await run({ isCodeExecutionEnabled: () => false })).toEqual({ ok: false, reason: 'kill_switch_off' });
+      expect(await run({ getUserDrivePermissions: async () => null })).toEqual({ ok: false, reason: 'no_drive_access' });
+      expect(await run({ getUserDrivePermissions: async () => viewerPerms })).toEqual({ ok: false, reason: 'insufficient_role' });
+      expect(await run({ getDriveOrgPolicies: async () => ({ ...DEFAULT_ORG_POLICIES, cloudSandbox: false }) })).toEqual({ ok: false, reason: 'org_policy' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('given a free-tier payer, should deny with tier_ineligible', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it('given a pro-tier payer, should allow', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a free-tier ACTOR inside a drive owned by a pro-tier user, should allow — the PAYER (drive owner), not the actor, is checked', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('free-actor', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'pro-owner', orgId: null }),
+        getUserSubscriptionTier: async (userId) => (userId === 'pro-owner' ? 'pro' : 'free'),
+      }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given a pro-tier ACTOR inside a drive owned by a free-tier user, should deny — the payer, not the actor, is checked', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('pro-actor', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'free-owner', orgId: null }),
+        getUserSubscriptionTier: async (userId) => (userId === 'free-owner' ? 'free' : 'pro'),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it("WAL-9 (partial) given a drive that belongs to an ORG, should allow on the ORG's tier — even with a free-tier lead and actor, and without reading either's plan", async () => {
+    const tierLookups: string[] = [];
+    const result = await canRunCode({
+      actor: credentialActor('free-actor', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'free-lead', orgId: 'org-northwind' }),
+        getUserSubscriptionTier: async (userId) => {
+          tierLookups.push(userId);
+          return 'free';
+        },
+      }),
+    });
+    expect(result).toEqual({ ok: true });
+    expect(tierLookups).toEqual([]);
+  });
+
+  it("SEAT-9 (partial) WAL-8 (partial) a LAPSED org's drive confers no tier: the sandbox is refused org_lapsed (not as a plan without sandboxes), whatever the lead's or actor's plan; paid again, it is allowed", async () => {
+    const lapsed = { value: true };
+    const deps = makeDeps({
+      lookupDriveBillingFacts: async () => ({ ownerId: 'pro-lead', orgId: 'org-northwind' }),
+      getUserSubscriptionTier: async () => 'pro',
+      isOrgLapsed: async (orgId) => (orgId === 'org-northwind' ? lapsed.value : false),
+    });
+    expect(await canRunCode({ actor: credentialActor('pro-actor', null), driveId: 'd1', deps })).toEqual({ ok: false, reason: 'org_lapsed' });
+    lapsed.value = false;
+    expect(await canRunCode({ actor: credentialActor('pro-actor', null), driveId: 'd1', deps })).toEqual({ ok: true });
+  });
+
+  it('WAL-9 (partial) an ORG drive still enforces drive edit access — the org tier grants the machine, not the membership', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('viewer', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        lookupDriveBillingFacts: async () => ({ ownerId: 'lead', orgId: 'org-northwind' }),
+        getUserDrivePermissions: async () => ({ ...adminPerms, isAdmin: false, canEdit: false }),
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given no driveId (global assistant) and a free-tier session owner, should deny with tier_ineligible', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      ownerId: 'u1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+  });
+
+  it('given no driveId (global assistant) and a pro-tier session owner, should allow', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      ownerId: 'u1',
+      deps: makeDeps({ getUserSubscriptionTier: async () => 'pro' }),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given an agent actor with edit access, should allow', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps(),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given an agent actor whose triggering user is a VIEWER-role member, should deny on the user gate', async () => {
+    // The rung that stops a view-only member escalating through an agent
+    // that holds drive edit access.
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given an agent actor whose triggering user has no drive membership, should deny on the user gate', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps({ getUserDrivePermissions: async () => null }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_drive_access' });
+  });
+
+  it('given an agent actor without a page id, should deny', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      deps: makeDeps(),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_agent_access' });
+  });
+
+  it('given an agent actor with view-only access, should deny', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps({ getAgentAccessLevel: async () => agentViewOnlyPerms }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_agent_access' });
+  });
+
+  it('given no driveId and kill switch off, should deny with kill_switch_off', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      deps: makeDeps({ isCodeExecutionEnabled: () => false }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'kill_switch_off' });
+  });
+
+  it('given no driveId and agent requestOrigin, should deny — agent-origin always requires a drive context', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      requestOrigin: 'agent',
+      agentPageId: 'agent1',
+      deps: makeDeps(),
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_agent_access' });
+  });
+
+  it('given a permission lookup that throws, should fail closed without throwing', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserDrivePermissions: async () => {
+          throw new Error('db down');
+        },
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+  });
+
+  it('given a tier lookup that throws, should fail closed without throwing', async () => {
+    const result = await canRunCode({
+      actor: credentialActor('u1', null),
+      driveId: 'd1',
+      deps: makeDeps({
+        getUserSubscriptionTier: async () => {
+          throw new Error('db down');
+        },
+      }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'error' });
+  });
+});

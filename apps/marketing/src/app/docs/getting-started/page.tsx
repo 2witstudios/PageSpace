@@ -1,5 +1,9 @@
 import { DocsMarkdown } from "@/components/DocsContent";
 import { createMetadata } from "@/lib/metadata";
+import { FREE_STARTER_CREDITS_DISPLAY } from "@/lib/credits";
+import { TIER_PLAN_LIMITS, formatTierBytes } from "@pagespace/lib/billing/subscription-tiers";
+
+const FREE_LIMITS = TIER_PLAN_LIMITS.free;
 
 export const metadata = createMetadata({
   title: "Getting Started",
@@ -21,7 +25,7 @@ Sign up at **pagespace.ai** — there are no passwords. Pick one:
 - **Magic link**: enter your email and click the link we send.
 - **Google** or **Apple** OAuth.
 
-No credit card required. The free tier includes 500 MB storage, 50 AI calls per day, and a 20 MB max file size.
+No credit card required. The free tier includes ${formatTierBytes(FREE_LIMITS.quotaBytes, " ")} storage, ${FREE_STARTER_CREDITS_DISPLAY} credits to get started (a one-time grant), and a ${formatTierBytes(FREE_LIMITS.maxFileSize, " ")} max file size.
 
 After signup, PageSpace sets you up with a starter **drive** (workspace) so you can jump straight in.
 
@@ -59,23 +63,17 @@ Documents use a TipTap rich-text editor with:
 
 ## 4. Set Up AI
 
-PageSpace routes every model through the Vercel AI SDK across 12 providers. Provider credentials are managed by the deployment operator (on pagespace.ai cloud, that's PageSpace; on self-hosted, that's whoever runs the server) — you don't need to supply API keys.
+PageSpace gives you one catalogue of models from many vendors, organised by vendor, so you reach them all without supplying any API keys — PageSpace manages the credentials. The default model is \`z-ai/glm-5.3-flash\`.
 
-| Provider | What it is |
-|----------|-----------|
-| PageSpace | Hosted GLM models (default — \`glm-4.7\` on the standard tier, \`glm-5\` on the pro tier) |
-| OpenRouter | Paid and free-tier models from OpenRouter's catalog |
-| Google AI | Gemini 3 and 2.5 families |
-| OpenAI | GPT-5.4 / 5.3 / 5.2 families |
-| Anthropic | Claude 4.6 / 4.5 / 4.1 families |
+| Vendor | What it is |
+|--------|-----------|
+| OpenAI | GPT-5.6 / 5.5 / 5.4 families |
+| Anthropic | Claude 5 and 4 families |
+| Google | Gemini 3.6, 3.5, and 3.1 families |
 | xAI | Grok 4 family |
-| Azure OpenAI | Models from a configured Azure deployment |
-| GLM | GLM-5, 4.7, 4.6, 4.5 Air |
-| MiniMax | MiniMax M2.x models |
-| Ollama | Models discovered from a configured Ollama server |
-| LM Studio | Models discovered from a configured LM Studio server |
+| DeepSeek, Qwen, Mistral, Moonshot, MiniMax, Meta, and more | Additional open and frontier models in the catalogue |
 
-Open **Settings > AI** to pick a provider and model. The picker only shows providers your deployment has enabled — anything unconfigured is hidden. The provider and model you pick become your account-level default; any individual AI Chat page can override both. Calls count against your plan's standard or pro daily AI quota depending on the model.
+Open **Settings > AI** to pick a model. The model you pick becomes your account-level default; any individual AI Chat page can override it. Each call draws from your credits based on the model's real cost (free accounts start with a one-time grant; paid plans get a monthly allowance). Free accounts use a curated allowlist — \`z-ai/glm-5.3-flash\` (default), the GPT-5.4 nano and mini models, Claude Haiku 4.5, and the Gemini Flash family — while paid plans unlock the full catalogue.
 
 ## 5. Create an AI Agent
 
@@ -84,7 +82,7 @@ AI Chat pages are specialized AI conversations with custom configuration:
 1. Right-click in the file tree and select **New AI Chat**
 2. Open the agent's settings to configure:
    - **System prompt**: custom instructions for the agent's behavior
-   - **Enabled tools**: which of the 37 workspace tools the agent can call
+   - **Enabled tools**: which of the 85 workspace tools the agent can call
    - **Read-only toggle**: when on, the agent can only read and search — no writes, no trash, no task updates
    - **Web search toggle**: enables the \`web_search\` tool
    - **Provider / Model**: which AI model powers this agent
@@ -104,17 +102,16 @@ If you use Claude Desktop, Claude Code, Cursor, or other MCP-compatible tools, y
   "mcpServers": {
     "pagespace": {
       "command": "npx",
-      "args": ["-y", "pagespace-mcp@latest"],
+      "args": ["-y", "-p", "@pagespace/cli", "pagespace-mcp"],
       "env": {
-        "PAGESPACE_API_URL": "https://pagespace.ai",
-        "PAGESPACE_AUTH_TOKEN": "mcp_your_token_here"
+        "PAGESPACE_TOKEN": "mcp_your_token_here"
       }
     }
   }
 }
 \`\`\`
 
-See the [MCP Integration guide](/docs/integrations/mcp) for full details.
+Prefer the \`pagespace\` CLI end to end? \`npm install -g @pagespace/cli\`, then \`pagespace login\` and the \`pagespace keys\` wizard mint a drive-scoped key without ever copying a token. See the [PageSpace CLI reference](/docs/features/cli) for every command, or the [MCP Integration guide](/docs/integrations/mcp) for full setup details. Building against PageSpace from your own code instead? Reach for the [PageSpace SDK](/docs/features/sdk).
 
 ## 7. Invite Your Team
 

@@ -9,8 +9,8 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
-import { getClientIP } from '@/lib/auth';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { getClientIP, isSafeReturnUrl, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import {
@@ -19,11 +19,14 @@ import {
   DISTRIBUTED_RATE_LIMITS,
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const client = new OAuth2Client();
 
@@ -33,7 +36,39 @@ const nativeAuthSchema = z.object({
   deviceId: z.string().min(1, 'Device ID is required'),
   deviceName: z.string().optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
+  returnUrl: z.string().max(2048).optional(),
 });
+
+/**
+ * The Google OAuth clients a token from `platform` may name as its audience.
+ *
+ * `null` means this deployment has not configured what that platform needs, and
+ * the caller answers 500.
+ *
+ * The Android SDK has no client id of its own: `native-google-auth.ts`
+ * initializes it with the **web** client id (`webClientId`, the plugin's
+ * required Android field) and the ID token it returns carries the web client as
+ * its audience. So the iOS client id is not merely unnecessary for Android — it
+ * is meaningless there. Requiring it unconditionally, as this route used to,
+ * made native Google sign-in return 500 on any deployment that configured
+ * Android but never registered an iOS OAuth client. Nothing reached that state
+ * before, because no client could send `platform: 'android'` at all.
+ *
+ * iOS is deliberately unchanged: it has always accepted a token minted for
+ * either client, and narrowing that here would be an unrelated behaviour change
+ * to a shipping platform.
+ */
+function acceptedAudiences(platform: 'ios' | 'android'): string[] | null {
+  const webClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  if (!webClientId) return null;
+
+  if (platform === 'ios') {
+    const iosClientId = process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
+    return iosClientId ? [webClientId, iosClientId] : null;
+  }
+
+  return [webClientId];
+}
 
 /**
  * Native Google Sign-In endpoint for iOS/Android apps.
@@ -73,11 +108,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const { idToken, platform, deviceId, deviceName, inviteToken } = validation.data;
+    const { idToken, platform, deviceId, deviceName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
+    const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
-    // Validate required environment variables
-    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_IOS_CLIENT_ID) {
+    // Which OAuth clients a token from this platform may be issued to, or null
+    // when this deployment has not configured what the platform needs.
+    const audience = acceptedAudiences(platform);
+    if (!audience) {
       loggers.auth.error('Missing Google OAuth client IDs', {
+        platform,
         hasWebClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
         hasIosClientId: !!process.env.GOOGLE_OAUTH_IOS_CLIENT_ID,
       });
@@ -85,14 +124,7 @@ export async function POST(req: Request) {
     }
 
     // Verify the ID token with Google
-    // Accept both iOS client ID and web client ID for backend verification
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: [
-        process.env.GOOGLE_OAUTH_CLIENT_ID, // Web client ID
-        process.env.GOOGLE_OAUTH_IOS_CLIENT_ID, // iOS client ID
-      ],
-    });
+    const ticket = await client.verifyIdToken({ idToken, audience });
 
     const payload = ticket.getPayload();
     if (!payload?.email) {
@@ -107,8 +139,36 @@ export async function POST(req: Request) {
 
     const { sub: googleId, email, name, picture, email_verified } = payload;
 
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Google
+    // asserts `email_verified === true`; the subject id may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'google',
+      providerId: googleId!,
+      email,
+      emailVerified: email_verified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'google-native',
+        platform,
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'google_native_unverified_email_link_blocked' },
+      });
+      return Response.json(
+        { error: 'Unable to sign in with this account. Please use your original sign-in method.' },
+        { status: 403 }
+      );
+    }
+
     // Find or create user
-    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    let user = matchedUser;
 
     let isNewUser = false;
     if (user) {
@@ -167,28 +227,27 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via native Google OAuth', { userId: user.id, platform });
     }
 
-    // Provision getting started drive for new users
-    if (isNewUser) {
-      await provisionGettingStartedDriveIfNeeded(user.id).catch((error) => {
-        loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
-          userId: user.id,
-          provider: 'google-native',
-        });
-      });
-    }
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
 
-    // SESSION FIXATION PREVENTION: Revoke all existing sessions before creating new one
-    const revokedCount = await sessionService.revokeAllUserSessions(user.id, 'new_login');
-    if (revokedCount > 0) {
-      loggers.auth.info('Revoked existing sessions on native Google OAuth login', {
+    await provisionHomeDriveIfNeeded(user.id).catch((error) => {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
-        count: revokedCount,
-        platform,
+        provider: 'google-native',
       });
-    }
+    });
+
+    // SESSION FIXATION PREVENTION: Revoke prior sessions before creating a new
+    // one, scoped to THIS device (deviceId is required by the schema) so a native
+    // login no longer nukes the user's other devices. Admin-console sessions are
+    // scoped separately and left intact.
+    await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google native');
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -208,6 +267,7 @@ export async function POST(req: Request) {
 
     // Create device token
     const { deviceToken } = await validateOrCreateDeviceToken({
+      authentication,
       providedDeviceToken: undefined,
       userId: user.id,
       deviceId,
@@ -278,6 +338,8 @@ export async function POST(req: Request) {
       invitedPageId: inviteResult.invitedPageId,
       invitedConnectionId: inviteResult.connectionId,
       ...(inviteResult.inviteError && { inviteError: inviteResult.inviteError }),
+      // ORG-3: an org invitation lands on the org hub once joined, or back on its invite page when refused.
+      ...((inviteResult.orgLandingPath ?? returnUrl) && { returnUrl: inviteResult.orgLandingPath ?? returnUrl }),
       user: {
         id: user.id,
         name: user.name,

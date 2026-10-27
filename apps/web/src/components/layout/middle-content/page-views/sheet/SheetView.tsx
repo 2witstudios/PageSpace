@@ -1,164 +1,123 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { TreePage, usePageTree } from '@/hooks/usePageTree';
-import { useDocument } from '@/hooks/useDocument';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
-import { PageEventPayload } from '@/lib/websocket';
 import { toast } from 'sonner';
+import { motion } from 'motion/react';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
-import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
 import {
   SheetData,
   SheetExternalReferenceToken,
-  adjustFormulaReferences,
   collectExternalReferences,
+  decodeCellAddress,
   encodeCellAddress,
-  evaluateSheet,
+  evaluateSheetSparse,
+  sparseDisplayAt,
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
+  setColumnWidth,
+  setFrozen,
+  setRowHeight,
 } from '@pagespace/lib/sheets/sheet';
-import { PageType } from '@pagespace/lib/utils/enums';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import { FloatingCellEditor } from './FloatingCellEditor';
 import { useSheetHistory } from './useSheetHistory';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { SuggestionProvider, useSuggestionContext } from '@/components/providers/SuggestionProvider';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { useSheetFind } from './hooks/useSheetFind';
+import {
+  clampSelection,
+  clampRange,
+  getPrimaryCell,
+  isCellInSelection,
+  getSelectionAddress,
+  nextSelectionForKey,
+  type GridSelection,
+  type SelectionState,
+} from './core/selection';
+import {
+  parseClipboardData,
+  buildCopyPayload,
+  resolvePasteMode,
+  computePasteCells,
+  pasteResultSelection,
+  type CopyMode,
+  type PasteMode,
+} from './core/clipboard';
+import {
+  applyCellWrite,
+  applyCellDelete,
+  applyCellsDelete,
+  initialEditValueForKey,
+  isPrintableKey,
+  addRow,
+  addColumn,
+} from './core/cell-ops';
+import {
+  flattenTree,
+  buildParentMap,
+  resolveReferenceTarget,
+  resolveExternalReference,
+} from './core/references';
+import { computeSelectionStats } from './core/stats';
+import { useSheetTouch } from './hooks/useSheetTouch';
+import { useAnnouncements } from './hooks/useAnnouncements';
+import { useSheetPermissions } from './hooks/useSheetPermissions';
+import { useExternalSheets } from './hooks/useExternalSheets';
+import { useSheetPersistence } from './hooks/useSheetPersistence';
+import { useSheetKeyboardShortcuts } from './hooks/useSheetKeyboardShortcuts';
+import { useEditingSession } from '@/stores/useEditingSession';
+import { shouldRegisterSheetEditing } from './core/editing';
+import { sheetTriggerPattern } from './core/constants';
+import { SheetStatusBar } from './components/SheetStatusBar';
+import { SheetContextMenu } from './components/SheetContextMenu';
+import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
+import { SheetMobileActionSheet } from './components/SheetMobileActionSheet';
+import { SheetFormulaBar } from './components/SheetFormulaBar';
+import { SheetGrid } from './components/SheetGrid';
+import { SheetToolbar } from './components/SheetToolbar';
+import { SheetTabBar } from './components/SheetTabBar';
+import { SheetConditionalPanel } from './components/SheetConditionalPanel';
+import {
+  addRule,
+  defaultRuleRange,
+  moveRule,
+  removeRule,
+  updateRule,
+} from './core/conditional-ops';
+import { newRule, type RuleKind } from './core/rule-presets';
+import type { SheetCellHandlers } from './components/SheetCell';
+import {
+  DENSITY_ROW_HEIGHTS,
+  buildColumnAxis,
+  buildRowAxis,
+  cellViewportRect,
+  isCellVisible,
+  scrollOffsetToReveal,
+  type GridDensity,
+  type SizeOverride,
+} from './core/grid-metrics';
+import { useGridViewport } from './hooks/useGridViewport';
+import {
+  activeFormat,
+  applyFormatCommand,
+  selectionAddresses,
+  type FormatCommand,
+} from './core/format-commands';
 
 interface SheetViewProps {
   page: TreePage;
 }
 
-type GridSelection = {
-  row: number;
-  column: number;
-};
-
-type GridRange = {
-  start: GridSelection;
-  end: GridSelection;
-};
-
-type SelectionState = {
-  type: 'single';
-  cell: GridSelection;
-} | {
-  type: 'range';
-  range: GridRange;
-};
-
-type ExternalSheetState =
-  | {
-      status: 'loading';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId: string;
-      title: string;
-    }
-  | {
-      status: 'ready';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId: string;
-      title: string;
-      sheet: SheetData;
-    }
-  | {
-      status: 'error';
-      label: string;
-      identifier?: string;
-      mentionType?: string;
-      pageId?: string;
-      title?: string;
-      error: string;
-    };
-
-const clampSelection = (selection: GridSelection, sheet: SheetData): GridSelection => ({
-  row: Math.min(Math.max(selection.row, 0), Math.max(0, sheet.rowCount - 1)),
-  column: Math.min(Math.max(selection.column, 0), Math.max(0, sheet.columnCount - 1)),
-});
-
-const clampRange = (range: GridRange, sheet: SheetData): GridRange => ({
-  start: clampSelection(range.start, sheet),
-  end: clampSelection(range.end, sheet),
-});
-
-// Get the primary cell for a selection (for formula display and editing)
-const getPrimaryCell = (selection: SelectionState): GridSelection => {
-  return selection.type === 'single' ? selection.cell : selection.range.start;
-};
-
-// Check if a cell is within the current selection
-const isCellInSelection = (row: number, column: number, selection: SelectionState): boolean => {
-  if (selection.type === 'single') {
-    return selection.cell.row === row && selection.cell.column === column;
-  }
-
-  const { start, end } = selection.range;
-  const minRow = Math.min(start.row, end.row);
-  const maxRow = Math.max(start.row, end.row);
-  const minCol = Math.min(start.column, end.column);
-  const maxCol = Math.max(start.column, end.column);
-
-  return row >= minRow && row <= maxRow && column >= minCol && column <= maxCol;
-};
-
-// Get selection address string for display
-const getSelectionAddress = (selection: SelectionState): string => {
-  if (selection.type === 'single') {
-    return encodeCellAddress(selection.cell.row, selection.cell.column);
-  }
-
-  const { start, end } = selection.range;
-  if (start.row === end.row && start.column === end.column) {
-    return encodeCellAddress(start.row, start.column);
-  }
-
-  const startAddr = encodeCellAddress(start.row, start.column);
-  const endAddr = encodeCellAddress(end.row, end.column);
-  return `${startAddr}:${endAddr}`;
-};
-
-const getColumnLabel = (columnIndex: number) => encodeCellAddress(0, columnIndex).replace(/\d+/g, '');
-
-// Utility function to check if a key should trigger direct cell editing
-const isPrintableKey = (key: string): boolean => {
-  // Single printable characters (letters, numbers, symbols)
-  if (key.length === 1 && key.match(/[\x20-\x7E]/)) {
-    return true;
-  }
-  // Special cases that should start editing
-  return key === 'F2';
-};
-
-// Get the DOM rectangle for a specific cell
-const getCellRect = (row: number, column: number, gridElement: HTMLElement | null): DOMRect | null => {
-  if (!gridElement) return null;
-
-  const cellElement = gridElement.querySelector(`[data-cell="${encodeCellAddress(row, column)}"]`);
-  if (!cellElement) return null;
-
-  return cellElement.getBoundingClientRect();
-};
-
-const clampContextMenuPosition = (x: number, y: number, bounds?: DOMRect) => {
-  const menuW = 180; // min-w-[160px] + padding buffer
-  const menuH = 200; // approximate rendered height
-  const minLeft = bounds?.left ?? 0;
-  const minTop = bounds?.top ?? 0;
-  const maxLeft = (bounds?.right ?? window.innerWidth) - menuW;
-  const maxTop = (bounds?.bottom ?? window.innerHeight) - menuH;
-  return {
-    left: `${Math.max(minLeft, Math.min(x, Math.max(minLeft, maxLeft)))}px`,
-    top: `${Math.max(minTop, Math.min(y, Math.max(minTop, maxTop)))}px`,
-  };
+/** Ctrl/Cmd chords that apply a format to the selection. */
+const FORMAT_SHORTCUTS: Record<string, FormatCommand> = {
+  b: { kind: 'toggle', field: 'bold' },
+  i: { kind: 'toggle', field: 'italic' },
+  u: { kind: 'toggle', field: 'underline' },
 };
 
 const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
@@ -178,41 +137,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   });
   const [formulaValue, setFormulaValue] = useState('');
   const [isFormulaFocused, setIsFormulaFocused] = useState(false);
-  const [isReadOnly, setIsReadOnly] = useState(false);
 
   // Mouse/touch drag selection state
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<GridSelection | null>(null);
 
-  // Touch interaction state
-  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Context menu state (desktop right-click menu)
-  const [contextMenu, setContextMenu] = useState<{
-    show: boolean;
-    x: number;
-    y: number;
-    cell: GridSelection | null;
-  }>({
-    show: false,
-    x: 0,
-    y: 0,
-    cell: null
-  });
-
-  // Mobile action sheet state (long-press menu)
-  const [mobileActionSheet, setMobileActionSheet] = useState<{
-    show: boolean;
-    cell: GridSelection | null;
-  }>({
-    show: false,
-    cell: null
-  });
+  // Measured grid width (undefined until first measurement) and clipboard
+  // availability — both read once outside render, never per-render from the DOM.
+  const [containerWidth, setContainerWidth] = useState<number | undefined>(undefined);
+  const [canUseClipboard, setCanUseClipboard] = useState(false);
 
   // Copy mode state
   const [copiedData, setCopiedData] = useState<{
-    mode: 'formulas' | 'values';
+    mode: CopyMode;
     data: string;
     source: SelectionState;
   } | null>(null);
@@ -220,156 +157,68 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // Floating editor state
   const [editingCell, setEditingCell] = useState<GridSelection | null>(null);
   const [editingValue, setEditingValue] = useState('');
-  const [editingCellRect, setEditingCellRect] = useState<DOMRect | null>(null);
   const [initialKey, setInitialKey] = useState<string | undefined>(undefined);
 
-  // Accessibility announcements
-  const [announcement, setAnnouncement] = useState('');
+  // Row density, and the size currently being dragged but not yet committed.
+  const [density, setDensity] = useState<GridDensity>('normal');
+  // Conditional-formatting panel: open state, and the reason the last attempt
+  // was refused (a ceiling, an unusable range) so the panel can say so.
+  const [conditionalOpen, setConditionalOpen] = useState(false);
+  const [conditionalRefusal, setConditionalRefusal] = useState<string | null>(null);
+  // Bumped on each refusal so the panel's uncontrolled fields resynchronise to
+  // the rule rather than keeping text that was just rejected.
+  const [conditionalResetToken, setConditionalResetToken] = useState(0);
+  const [columnResize, setColumnResize] = useState<SizeOverride | undefined>(undefined);
+  const [rowResize, setRowResize] = useState<SizeOverride | undefined>(undefined);
 
-  // Clear announcements after a delay
-  useEffect(() => {
-    if (announcement) {
-      const timer = setTimeout(() => setAnnouncement(''), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [announcement]);
+  // Accessibility announcements (transient live-region message)
+  const { announcement, announce } = useAnnouncements();
 
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
+  const lacksEditPermission = useSheetPermissions(page.id, user?.id);
   const { tree } = usePageTree(page.driveId);
-  const [externalSheets, setExternalSheets] = useState<Record<string, ExternalSheetState>>({});
-  const externalFetchesRef = useRef<Set<string>>(new Set());
   const externalReferences = useMemo(() => collectExternalReferences(sheet), [sheet]);
-  const flattenedPages = useMemo(() => {
-    const items: TreePage[] = [];
-    const walk = (nodes: TreePage[]) => {
-      for (const node of nodes) {
-        items.push(node);
-        if (node.children && node.children.length > 0) {
-          walk(node.children);
-        }
-      }
-    };
-    if (tree && tree.length > 0) {
-      walk(tree);
-    }
-    return items;
-  }, [tree]);
+  const flattenedPages = useMemo(() => (tree && tree.length > 0 ? flattenTree(tree) : []), [tree]);
 
-  const parentMap = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const node of flattenedPages) {
-      map.set(node.id, node.parentId ?? null);
-    }
-    return map;
-  }, [flattenedPages]);
+  const parentMap = useMemo(() => buildParentMap(flattenedPages), [flattenedPages]);
 
-  const resolveReferenceTarget = useCallback(
-    (reference: SheetExternalReferenceToken) => {
-      if (reference.identifier) {
-        const byId = flattenedPages.find(
-          (node) => node.id === reference.identifier && node.type === PageType.SHEET
-        );
-        if (byId) {
-          return { pageId: byId.id, title: byId.title };
-        }
-      }
-
-      const normalizedLabel = reference.label.trim().toLowerCase();
-      const labelMatches = flattenedPages.filter(
-        (node) =>
-          node.type === PageType.SHEET && node.title.trim().toLowerCase() === normalizedLabel
-      );
-
-      if (labelMatches.length === 1) {
-        return { pageId: labelMatches[0].id, title: labelMatches[0].title };
-      }
-
-      if (labelMatches.length > 1) {
-        const getAncestorChain = (id?: string | null) => {
-          const chain: string[] = [];
-          const visited = new Set<string>();
-          let current: string | null | undefined = id ?? null;
-          while (current) {
-            if (visited.has(current)) {
-              break;
-            }
-            chain.push(current);
-            visited.add(current);
-            current = parentMap.get(current) ?? null;
-          }
-          return chain;
-        };
-
-        const currentAncestors = new Set(getAncestorChain(page.id));
-
-        const ranked = labelMatches
-          .map((node) => {
-            const chain = getAncestorChain(node.id);
-            const sharedDepth = chain.reduce(
-              (depth, ancestor) => (currentAncestors.has(ancestor) ? depth + 1 : depth),
-              0
-            );
-            return {
-              node,
-              isSibling: node.parentId === page.parentId,
-              sharedDepth,
-              depth: chain.length,
-              position: typeof node.position === 'number' ? node.position : Number.MAX_SAFE_INTEGER,
-            };
-          })
-          .sort((a, b) => {
-            if (a.isSibling !== b.isSibling) {
-              return a.isSibling ? -1 : 1;
-            }
-            if (b.sharedDepth !== a.sharedDepth) {
-              return b.sharedDepth - a.sharedDepth;
-            }
-            if (a.depth !== b.depth) {
-              return a.depth - b.depth;
-            }
-            if (a.position !== b.position) {
-              return a.position - b.position;
-            }
-            return a.node.title.localeCompare(b.node.title);
-          });
-
-        if (ranked.length > 0) {
-          const { node } = ranked[0];
-          return { pageId: node.id, title: node.title };
-        }
-      }
-
-      return null;
-    },
-    [flattenedPages, page.id, page.parentId, parentMap]
+  const resolveReference = useCallback(
+    (reference: SheetExternalReferenceToken) =>
+      resolveReferenceTarget(reference, {
+        flattenedPages,
+        parentMap,
+        currentPageId: page.id,
+        currentParentId: page.parentId,
+      }),
+    [flattenedPages, parentMap, page.id, page.parentId]
   );
 
   const {
-    document: documentState,
-    initializeAndActivate,
+    documentState,
+    loadError,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
-    forceSave,
-  } = useDocument(page.id); // ✅ PageId-only pattern
+    forceSaveNow,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
+  } = useSheetPersistence({ pageId: page.id, socket, resetHistory });
 
-  // Store forceSave in ref to prevent cleanup effects from re-running
-  const forceSaveRef = useRef(forceSave);
-  useEffect(() => {
-    forceSaveRef.current = forceSave;
-  }, [forceSave]);
+  // Editing is blocked either by permissions or by a load failure. When the
+  // stored content could not be parsed we must not let edits through: saving
+  // would overwrite content we were unable to read.
+  const isReadOnly = lacksEditPermission || loadError !== null;
 
-  // Track isDirty and content in refs for socket handler and window blur
-  const isDirtyRef = useRef(false);
-  const contentRef = useRef(documentState?.content ?? '');
-  useEffect(() => {
-    isDirtyRef.current = documentState?.isDirty || false;
-    contentRef.current = documentState?.content ?? '';
-  }, [documentState?.isDirty, documentState?.content]);
+  // Two different reasons to refuse an edit deserve two different messages;
+  // blaming permissions for a load failure sends the user to the wrong place.
+  const readOnlyReason = loadError
+    ? 'This sheet could not be loaded, so editing is disabled'
+    : "You don't have permission to edit this sheet";
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {
@@ -387,184 +236,118 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // Disable pull-to-refresh when editing
   const isPullToRefreshDisabled = !!editingCell || documentState?.isDirty || isFormulaFocused;
 
-  useEffect(() => {
-    setExternalSheets((prev) => {
-      const next: Record<string, ExternalSheetState> = {};
-      let changed = false;
-
-      for (const reference of externalReferences) {
-        if (prev[reference.raw]) {
-          next[reference.raw] = prev[reference.raw];
-        } else {
-          changed = true;
-        }
-      }
-
-      if (!changed && Object.keys(next).length === Object.keys(prev).length) {
-        return prev;
-      }
-
-      return next;
-    });
-  }, [externalReferences]);
-
-  useEffect(() => {
-    externalReferences.forEach((reference) => {
-      const existing = externalSheets[reference.raw];
-      if (existing && (existing.status === 'loading' || existing.status === 'ready')) {
-        return;
-      }
-
-      const target = resolveReferenceTarget(reference);
-      if (!target) {
-        setExternalSheets((prev) => ({
-          ...prev,
-          [reference.raw]: {
-            status: 'error',
-            label: reference.label,
-            identifier: reference.identifier,
-            mentionType: reference.mentionType,
-            error: `Referenced page "${reference.label}" could not be found`,
-          },
-        }));
-        return;
-      }
-
-      if (externalFetchesRef.current.has(reference.raw)) {
-        return;
-      }
-
-      externalFetchesRef.current.add(reference.raw);
-
-      setExternalSheets((prev) => ({
-        ...prev,
-        [reference.raw]: {
-          status: 'loading',
-          label: reference.label,
-          identifier: reference.identifier,
-          mentionType: reference.mentionType,
-          pageId: target.pageId,
-          title: target.title,
-        },
-      }));
-
-      fetchWithAuth(`/api/pages/${target.pageId}`)
-        .then(async (response) => {
-          if (!response.ok) {
-            if (response.status === 403) {
-              throw new Error(`You do not have access to "${target.title}"`);
-            }
-            throw new Error('Failed to load referenced page');
-          }
-
-          const contentType = response.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const fallbackMessage = await response
-              .text()
-              .then((text) => text.trim())
-              .catch(() => '');
-            throw new Error(
-              fallbackMessage || 'Received unexpected response when loading referenced page'
-            );
-          }
-
-          let parsedResponse: unknown;
-          try {
-            parsedResponse = await response.json();
-          } catch {
-            throw new Error('Failed to parse referenced page response');
-          }
-
-          if (!parsedResponse || typeof parsedResponse !== 'object') {
-            throw new Error('Referenced page response was not valid JSON');
-          }
-
-          const data = parsedResponse as { type?: PageType; content?: unknown };
-
-          if (data.type && data.type !== PageType.SHEET) {
-            throw new Error(`Referenced page "${target.title}" is not a sheet`);
-          }
-
-          if (!('content' in data)) {
-            throw new Error('Referenced page response did not include any content');
-          }
-
-          const parsed = sanitizeSheetData(parseSheetContent(data.content));
-          setExternalSheets((prev) => ({
-            ...prev,
-            [reference.raw]: {
-              status: 'ready',
-              label: reference.label,
-              identifier: reference.identifier,
-              mentionType: reference.mentionType,
-              pageId: target.pageId,
-              title: target.title,
-              sheet: parsed,
-            },
-          }));
-        })
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : 'Failed to load referenced page';
-          setExternalSheets((prev) => ({
-            ...prev,
-            [reference.raw]: {
-              status: 'error',
-              label: reference.label,
-              identifier: reference.identifier,
-              mentionType: reference.mentionType,
-              pageId: target.pageId,
-              title: target.title,
-              error: message,
-            },
-          }));
-        })
-        .finally(() => {
-          externalFetchesRef.current.delete(reference.raw);
-        });
-    });
-  }, [externalReferences, externalSheets, resolveReferenceTarget]);
+  const externalSheets = useExternalSheets(externalReferences, resolveReference);
 
   const evaluationOptions = useMemo(
     () => ({
       pageId: page.id,
       pageTitle: page.title,
-      resolveExternalReference: (reference: SheetExternalReferenceToken) => {
-        const entry = externalSheets[reference.raw];
-        if (!entry) {
-          return {
-            pageId: reference.identifier ?? reference.raw,
-            pageTitle: reference.label,
-            error: `Referenced page "${reference.label}" is loading`,
-          };
-        }
-
-        if (entry.status === 'ready') {
-          return {
-            pageId: entry.pageId,
-            pageTitle: entry.title,
-            sheet: entry.sheet,
-          };
-        }
-
-        if (entry.status === 'loading') {
-          return {
-            pageId: entry.pageId,
-            pageTitle: entry.title,
-            error: `Referenced page "${entry.title}" is loading`,
-          };
-        }
-
-        return {
-          pageId: entry.pageId ?? reference.identifier ?? reference.raw,
-          pageTitle: entry.title ?? reference.label,
-          error: entry.error,
-        };
-      },
+      resolveExternalReference: (reference: SheetExternalReferenceToken) =>
+        resolveExternalReference(reference, externalSheets),
     }),
     [externalSheets, page.id, page.title]
   );
 
-  const evaluation = useMemo(() => evaluateSheet(sheet, evaluationOptions), [sheet, evaluationOptions]);
+  /**
+   * Sparse: one entry per cell that exists, not per grid position.
+   *
+   * The dense `evaluateSheet` allocates `rowCount × columnCount` objects and
+   * runs on every keystroke — 600,000 of them for a 10,000-row sheet — so
+   * virtualizing the grid alone would not have made a large sheet usable. The
+   * dense form is still what the exports, the published page, and the
+   * serializer use; `sheet-sparse-equivalence.test.ts` holds the two together.
+   */
+  const evaluation = useMemo(
+    () => evaluateSheetSparse(sheet, evaluationOptions),
+    [sheet, evaluationOptions]
+  );
+
+  /** Evaluated text at a position, for copy and find. */
+  const displayAt = useCallback(
+    (row: number, column: number) => sparseDisplayAt(evaluation, row, column),
+    [evaluation]
+  );
+
+  // Grid geometry. The axes are prefix sums over the stored column widths and
+  // row heights, with any in-flight resize drag previewed on top; the viewport
+  // is the scroll container measured into state. Every position in the surface
+  // — which cells exist, where the header strips sit, where the cell editor is
+  // anchored — derives from exactly these two, so they cannot disagree.
+  const columnAxis = useMemo(
+    () => buildColumnAxis(sheet, columnResize),
+    [sheet, columnResize]
+  );
+  const rowAxis = useMemo(
+    () => buildRowAxis(sheet, DENSITY_ROW_HEIGHTS[density], rowResize),
+    [sheet, density, rowResize]
+  );
+  const { viewport, scrollTo } = useGridViewport(scrollContainerRef);
+
+  /**
+   * The latest viewport, read through a ref rather than a dependency.
+   *
+   * `revealCell` needs the current scroll offsets, but depending on `viewport`
+   * would give it a new identity on every scroll frame — and that identity
+   * propagates through `startCellEdit` into the per-cell handlers object,
+   * changing every cell's props on every frame and defeating the memo that
+   * makes virtualization worth having.
+   */
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
+  /** Scroll the minimum distance that brings a cell into view, if it is not already. */
+  const revealCell = useCallback(
+    (row: number, column: number) => {
+      const view = viewportRef.current;
+      const left = scrollOffsetToReveal(
+        columnAxis,
+        column,
+        view.scrollLeft,
+        view.bodyWidth,
+        sheet.frozenColumns ?? 0
+      );
+      const top = scrollOffsetToReveal(
+        rowAxis,
+        row,
+        view.scrollTop,
+        view.bodyHeight,
+        sheet.frozenRows ?? 0
+      );
+      if (left !== view.scrollLeft || top !== view.scrollTop) {
+        scrollTo(left, top);
+      }
+    },
+    [columnAxis, rowAxis, scrollTo, sheet.frozenColumns, sheet.frozenRows]
+  );
+
+  // Register an editing session while a cell is being edited, the formula bar is
+  // focused, or the document is dirty — protecting sheet edits from auth-refresh
+  // interruption and SWR clobbering (SheetView was the only unregistered editor).
+  const isEditingActive = shouldRegisterSheetEditing({
+    isEditingCell: !!editingCell,
+    isFormulaFocused,
+    isDirty: !!documentState?.isDirty,
+  });
+  // instanceId distinguishes this mount from any other simultaneous mount of
+  // the SAME page (main center panel vs. an agent-session pane) — without it,
+  // both compute the identical `sheet-${page.id}` key and collide in
+  // useEditingStore's Map (see DocumentView's identical fix).
+  const instanceId = useId();
+  useEditingSession(`sheet-${page.id}-${instanceId}`, isEditingActive, 'document', {
+    pageId: page.id,
+    componentName: 'SheetView',
+  });
+
+  // Find-in-sheet: highlight set + current match (scrolls into view).
+  const revealAddress = useCallback(
+    (address: string) => {
+      const { row, column } = decodeCellAddress(address);
+      revealCell(row, column);
+    },
+    [revealCell]
+  );
+  const { findAddressSet, currentFindAddress } = useSheetFind(sheet, displayAt, revealAddress);
+
   const currentSelection = selection.type === 'single'
     ? clampSelection(selection.cell, sheet)
     : clampSelection(selection.range.start, sheet);
@@ -576,54 +359,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const selectionAddress = getSelectionAddress(selection);
 
   // Calculate selection statistics for the status bar
-  const selectionStats = useMemo(() => {
-    const cells: { value: number; hasValue: boolean }[] = [];
-
-    if (selection.type === 'single') {
-      const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
-      const cellData = evaluation.byAddress[cellAddress];
-      if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
-        cells.push({ value: cellData.value, hasValue: true });
-      } else if (cellData && cellData.value !== '') {
-        cells.push({ value: NaN, hasValue: true });
-      }
-    } else {
-      const { start, end } = selection.range;
-      const minRow = Math.min(start.row, end.row);
-      const maxRow = Math.max(start.row, end.row);
-      const minCol = Math.min(start.column, end.column);
-      const maxCol = Math.max(start.column, end.column);
-
-      for (let row = minRow; row <= maxRow; row++) {
-        for (let col = minCol; col <= maxCol; col++) {
-          const cellAddress = encodeCellAddress(row, col);
-          const cellData = evaluation.byAddress[cellAddress];
-          if (cellData && cellData.type === 'number' && typeof cellData.value === 'number') {
-            cells.push({ value: cellData.value, hasValue: true });
-          } else if (cellData && cellData.value !== '') {
-            cells.push({ value: NaN, hasValue: true });
-          }
-        }
-      }
-    }
-
-    const numericCells = cells.filter(c => c.hasValue && Number.isFinite(c.value));
-    const nonEmptyCells = cells.filter(c => c.hasValue);
-
-    if (numericCells.length === 0) {
-      return { sum: null, average: null, count: nonEmptyCells.length, numericCount: 0 };
-    }
-
-    const sum = numericCells.reduce((acc, c) => acc + c.value, 0);
-    const average = sum / numericCells.length;
-
-    return {
-      sum,
-      average,
-      count: nonEmptyCells.length,
-      numericCount: numericCells.length,
-    };
-  }, [selection, evaluation.byAddress]);
+  const selectionStats = useMemo(
+    () => computeSelectionStats(selection, evaluation.byAddress),
+    [selection, evaluation.byAddress]
+  );
 
   const suggestionContext = useSuggestionContext();
   const handleFormulaValueChange = useCallback(
@@ -635,10 +374,6 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     },
     [editingCell]
   );
-
-  // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
-  // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
-  const sheetTriggerPattern = /^$|^[\s(=+\-*/,<>!]$/;
 
   const suggestion = useSuggestion({
     inputRef: formulaInputRef as React.RefObject<HTMLTextAreaElement | HTMLInputElement>,
@@ -653,59 +388,79 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     triggerPattern: sheetTriggerPattern,
   });
 
+  /**
+   * Serialize and hand off to the store, returning false if serialization
+   * refused.
+   *
+   * `serializeSheetContent` re-parses its own output and throws rather than
+   * emit something that would read back as an empty sheet. Every caller runs
+   * inside a React event or state update, where an uncaught throw escapes to
+   * the nearest error boundary and blanks the view — so the failure is turned
+   * into a declined change here instead.
+   */
+  const persistSheet = useCallback(
+    (sheet: SheetData): boolean => {
+      try {
+        const serialized = serializeSheetContent(sheet);
+        updateContent(serialized);
+        saveWithDebounce(serialized);
+        return true;
+      } catch (error) {
+        console.error('Failed to serialize sheet; change not applied:', error);
+        toast.error('That change could not be saved and was undone.');
+        return false;
+      }
+    },
+    [saveWithDebounce, updateContent]
+  );
+
   const applySheetUpdate = useCallback(
     (updater: (previous: SheetData) => SheetData, shouldPersist = true) => {
       setSheet((previous) => {
         const updated = updater(previous);
+        // A command that changed nothing (nudging decimals already at zero)
+        // must not push an entry onto the undo stack or trigger a save.
+        if (updated === previous) return previous;
         const sanitized = sanitizeSheetData({ ...updated });
-        if (shouldPersist) {
-          const serialized = serializeSheetContent(sanitized);
-          updateContent(serialized);
-          saveWithDebounce(serialized);
+        if (shouldPersist && !persistSheet(sanitized)) {
+          // Serialization refused; keep the last good state.
+          return previous;
         }
         return sanitized;
       });
     },
-    [saveWithDebounce, updateContent, setSheet]
+    [persistSheet, setSheet]
   );
 
   // Start editing a cell with optional initial key
   const startCellEdit = useCallback(
     (row: number, column: number, key?: string) => {
       if (isReadOnly) {
-        toast.error("You don't have permission to edit this sheet");
+        toast.error(readOnlyReason);
         return;
       }
 
       const cellAddress = encodeCellAddress(row, column);
-      const cellRect = getCellRect(row, column, gridRef.current);
-
-      if (!cellRect) return;
-
       const currentValue = sheet.cells[cellAddress] ?? '';
-      let initialValue = currentValue;
+      const initialValue = initialEditValueForKey(currentValue, key);
 
-      // Handle special keys
-      if (key === 'F2') {
-        // F2 starts editing with current value
-        initialValue = currentValue;
-      } else if (key && isPrintableKey(key) && key.length === 1) {
-        // Replace content with the typed character
-        initialValue = key;
-      }
+      // The editor's rectangle is derived, not measured, so there is no
+      // "cell element not found" case to bail out on any more. Scroll it into
+      // view first, so starting an edit off-screen (via find, or the formula
+      // bar) shows the user what they are editing.
+      revealCell(row, column);
 
       setEditingCell({ row, column });
       setEditingValue(initialValue);
-      setEditingCellRect(cellRect);
       setInitialKey(key && key.length === 1 ? key : undefined);
 
       // Update formula bar to match
       setFormulaValue(initialValue);
 
       // Announce edit mode to screen readers
-      setAnnouncement(`Editing cell ${cellAddress}`);
+      announce(`Editing cell ${cellAddress}`);
     },
-    [sheet.cells, isReadOnly]
+    [sheet.cells, isReadOnly, readOnlyReason, announce, revealCell]
   );
 
   // Commit cell edit
@@ -714,40 +469,26 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (!editingCell || isReadOnly) return;
 
       const cellAddress = encodeCellAddress(editingCell.row, editingCell.column);
-      const trimmed = value;
 
-      applySheetUpdate((previous) => {
-        const nextCells = { ...previous.cells };
-        if (trimmed.trim() === '') {
-          delete nextCells[cellAddress];
-        } else {
-          nextCells[cellAddress] = trimmed;
-        }
-        return {
-          ...previous,
-          version: previous.version + 1,
-          cells: nextCells,
-        };
-      });
+      applySheetUpdate((previous) => applyCellWrite(previous, cellAddress, value));
 
       // Exit editing mode
       setEditingCell(null);
       setEditingValue('');
-      setEditingCellRect(null);
       setInitialKey(undefined);
 
       // Update formula bar
-      setFormulaValue(trimmed);
+      setFormulaValue(value);
 
       // Announce completion to screen readers
-      setAnnouncement(`Cell ${cellAddress} updated`);
+      announce(`Cell ${cellAddress} updated`);
 
       // Return focus to grid
       requestAnimationFrame(() => {
         gridRef.current?.focus({ preventScroll: true });
       });
     },
-    [editingCell, isReadOnly, applySheetUpdate]
+    [editingCell, isReadOnly, applySheetUpdate, announce]
   );
 
   // Cancel cell edit
@@ -760,103 +501,92 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     // Restore original values
     setEditingCell(null);
     setEditingValue('');
-    setEditingCellRect(null);
     setInitialKey(undefined);
     setFormulaValue(originalValue);
 
     // Announce cancellation to screen readers
     const cancelledCellAddress = encodeCellAddress(editingCell.row, editingCell.column);
-    setAnnouncement(`Edit cancelled for cell ${cancelledCellAddress}`);
+    announce(`Edit cancelled for cell ${cancelledCellAddress}`);
 
     // Return focus to grid
     requestAnimationFrame(() => {
       gridRef.current?.focus({ preventScroll: true });
     });
-  }, [editingCell, sheet.cells]);
+  }, [editingCell, sheet.cells, announce]);
 
   const handleCommitFormula = useCallback(
     (value: string) => {
       if (isReadOnly) {
-        toast.error("You don't have permission to edit this sheet");
+        toast.error(readOnlyReason);
         return;
       }
-      const trimmed = value;
-      setFormulaValue(trimmed);
-      applySheetUpdate((previous) => {
-        const nextCells = { ...previous.cells };
-        if (trimmed.trim() === '') {
-          delete nextCells[currentAddress];
-        } else {
-          nextCells[currentAddress] = trimmed;
-        }
-        return {
-          ...previous,
-          version: previous.version + 1,
-          cells: nextCells,
-        };
-      });
+      setFormulaValue(value);
+      applySheetUpdate((previous) => applyCellWrite(previous, currentAddress, value));
     },
-    [applySheetUpdate, currentAddress, isReadOnly]
+    [applySheetUpdate, currentAddress, isReadOnly, readOnlyReason]
   );
 
   const handleAddRow = useCallback(() => {
     if (isReadOnly) {
-      toast.error("You don't have permission to edit this sheet");
+      toast.error(readOnlyReason);
       return;
     }
-    applySheetUpdate((previous) => ({
-      ...previous,
-      version: previous.version + 1,
-      rowCount: previous.rowCount + 1,
-    }));
-  }, [applySheetUpdate, isReadOnly]);
+    applySheetUpdate(addRow);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   const handleAddColumn = useCallback(() => {
     if (isReadOnly) {
-      toast.error("You don't have permission to edit this sheet");
+      toast.error(readOnlyReason);
       return;
     }
-    applySheetUpdate((previous) => ({
-      ...previous,
-      version: previous.version + 1,
-      columnCount: previous.columnCount + 1,
-    }));
-  }, [applySheetUpdate, isReadOnly]);
+    applySheetUpdate(addColumn);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   // Undo handler
   const handleUndo = useCallback(() => {
     if (isReadOnly || !canUndo) return;
 
     const previousState = undo();
-    if (previousState) {
-      const serialized = serializeSheetContent(previousState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (previousState && persistSheet(previousState)) {
       toast.success('Undo', { duration: 1500 });
-      setAnnouncement('Undo performed');
+      announce('Undo performed');
     }
-  }, [isReadOnly, canUndo, undo, updateContent, saveWithDebounce]);
+  }, [isReadOnly, canUndo, undo, persistSheet, announce]);
 
   // Redo handler
   const handleRedo = useCallback(() => {
     if (isReadOnly || !canRedo) return;
 
     const nextState = redo();
-    if (nextState) {
-      const serialized = serializeSheetContent(nextState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (nextState && persistSheet(nextState)) {
       toast.success('Redo', { duration: 1500 });
-      setAnnouncement('Redo performed');
+      announce('Redo performed');
     }
-  }, [isReadOnly, canRedo, redo, updateContent, saveWithDebounce]);
+  }, [isReadOnly, canRedo, redo, persistSheet, announce]);
 
   const handleCellMouseDown = useCallback(
     (row: number, column: number, event: React.MouseEvent) => {
-      if (isReadOnly) return;
-
+      // Selection is not a mutation: a view-only user still needs to select a
+      // range to read it, copy it, and see the sum/average footer. Editing is
+      // gated at each write site instead.
       event.preventDefault();
       const cell = clampSelection({ row, column }, sheet);
+
+      // Shift-click extends from the current anchor rather than replacing the
+      // selection. Without this the only way to select a range is to drag,
+      // which makes formatting a wide block of a large sheet impractical —
+      // and every other spreadsheet binds it.
+      if (event.shiftKey) {
+        setSelection((previous) => ({
+          type: 'range',
+          range: { start: getPrimaryCell(previous), end: cell },
+        }));
+        setIsFormulaFocused(false);
+        requestAnimationFrame(() => {
+          gridRef.current?.focus({ preventScroll: true });
+        });
+        return;
+      }
 
       setIsDragging(true);
       setDragStart(cell);
@@ -866,46 +596,28 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       });
       setIsFormulaFocused(false);
 
-      // Close context menu
-      setContextMenu(prev => ({ ...prev, show: false }));
-
       // Exit editing mode if selecting a different cell
       if (editingCell && (editingCell.row !== cell.row || editingCell.column !== cell.column)) {
         setEditingCell(null);
         setEditingValue('');
-        setEditingCellRect(null);
-        setInitialKey(undefined);
+          setInitialKey(undefined);
       }
 
       requestAnimationFrame(() => {
         gridRef.current?.focus({ preventScroll: true });
       });
     },
-    [sheet, editingCell, isReadOnly]
+    [sheet, editingCell]
   );
 
   const handleCellRightClick = useCallback(
-    (row: number, column: number, event: React.MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const cell = clampSelection({ row, column }, sheet);
-
-      // Update selection if right-clicking a different cell
+    (row: number, column: number) => {
+      // Right-clicking inside an existing range acts on that range; right-
+      // clicking outside it moves the selection first. The menu itself is
+      // positioned by the shared primitive, so nothing here touches the DOM.
       if (!isCellInSelection(row, column, selection)) {
-        setSelection({
-          type: 'single',
-          cell
-        });
+        setSelection({ type: 'single', cell: clampSelection({ row, column }, sheet) });
       }
-
-      // Show context menu at cursor position
-      setContextMenu({
-        show: true,
-        x: event.clientX,
-        y: event.clientY,
-        cell
-      });
     },
     [sheet, selection]
   );
@@ -942,64 +654,6 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [isDragging]);
 
-  // Touch event handlers for mobile
-  const handleCellTouchStart = useCallback(
-    (row: number, column: number, event: React.TouchEvent) => {
-      const touch = event.touches[0];
-      touchStartRef.current = {
-        x: touch.clientX,
-        y: touch.clientY,
-        time: Date.now(),
-      };
-
-      // Set up long press detection for context menu
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-      }
-
-      const cell = clampSelection({ row, column }, sheet);
-      longPressTimerRef.current = setTimeout(() => {
-        // Long press detected - show mobile action sheet
-        if (!isCellInSelection(row, column, selection)) {
-          setSelection({
-            type: 'single',
-            cell,
-          });
-        }
-        setMobileActionSheet({
-          show: true,
-          cell,
-        });
-        // Haptic feedback if available
-        if (navigator.vibrate) {
-          navigator.vibrate(50);
-        }
-      }, 500); // 500ms for long press
-    },
-    [sheet, selection]
-  );
-
-  const handleCellTouchMove = useCallback(
-    (event: React.TouchEvent) => {
-      // Cancel long press if moved too far
-      if (touchStartRef.current && longPressTimerRef.current) {
-        const touch = event.touches[0];
-        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
-        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
-        if (dx > 10 || dy > 10) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-        }
-      }
-    },
-    []
-  );
-
-  // Close mobile action sheet
-  const closeMobileActionSheet = useCallback(() => {
-    setMobileActionSheet({ show: false, cell: null });
-  }, []);
-
   // Add global mouse up listener to handle drag end outside grid
   useEffect(() => {
     if (isDragging) {
@@ -1010,51 +664,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [isDragging, handleMouseUp]);
 
-  // Parse clipboard data to detect table structure
-  const parseClipboardData = useCallback((text: string) => {
-    const lines = text.split(/\r?\n/).filter(line => line.length > 0);
-    if (lines.length === 0) return null;
-
-    // Try tab-separated first, then comma-separated
-    let cells: string[][] = [];
-    let maxColumns = 0;
-
-    // Check if it's tab-separated
-    const hasTabSeparation = lines.some(line => line.includes('\t'));
-
-    if (hasTabSeparation) {
-      cells = lines.map(line => line.split('\t'));
-    } else {
-      // Check for comma separation
-      const hasCommaSeparation = lines.some(line => line.includes(','));
-      if (hasCommaSeparation) {
-        cells = lines.map(line => line.split(',').map(cell => cell.trim()));
-      } else {
-        // Single column data
-        cells = lines.map(line => [line]);
-      }
-    }
-
-    maxColumns = Math.max(...cells.map(row => row.length));
-
-    // Pad rows to have consistent column count
-    cells = cells.map(row => {
-      while (row.length < maxColumns) {
-        row.push('');
-      }
-      return row;
-    });
-
-    return {
-      data: cells,
-      rows: cells.length,
-      columns: maxColumns
-    };
-  }, []);
-
   // Handle paste operation
   const handlePaste = useCallback(
-    async (mode: 'auto' | 'values' | 'formulas' = 'auto', event?: ClipboardEvent) => {
+    async (mode: PasteMode = 'auto', event?: ClipboardEvent) => {
       if (isReadOnly || editingCell) return;
 
       event?.preventDefault();
@@ -1065,135 +677,49 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
         if (!tableData) return;
 
-        const primaryCell = getPrimaryCell(selection);
-        const startRow = primaryCell.row;
-        const startCol = primaryCell.column;
+        const start = getPrimaryCell(selection);
 
-        // Check if we need to expand the sheet
-        const requiredRows = Math.max(sheet.rowCount, startRow + tableData.rows);
-        const requiredCols = Math.max(sheet.columnCount, startCol + tableData.columns);
+        // Determine paste behavior (internal pastes reuse the copied mode).
+        const isInternalPaste = !!copiedData && copiedData.data === clipboardText;
+        const pasteMode = resolvePasteMode(mode, isInternalPaste, copiedData?.mode);
+        const copyStart = isInternalPaste && copiedData ? getPrimaryCell(copiedData.source) : undefined;
 
-        // Determine paste behavior
-        const isInternalPaste = copiedData && copiedData.data === clipboardText;
-        const pasteMode = mode === 'auto' ?
-          (isInternalPaste ? copiedData.mode : 'values') :
-          mode;
+        applySheetUpdate((previous) =>
+          computePasteCells({
+            previous,
+            table: tableData,
+            start,
+            pasteMode,
+            isInternalPaste,
+            copyStart,
+          })
+        );
 
-        applySheetUpdate((previous) => {
-          const nextCells = { ...previous.cells };
-
-          // Apply paste data with proper handling for formulas
-          for (let row = 0; row < tableData.rows; row++) {
-            for (let col = 0; col < tableData.columns; col++) {
-              const cellAddress = encodeCellAddress(startRow + row, startCol + col);
-              let value = tableData.data[row][col].trim();
-
-              if (value === '') {
-                delete nextCells[cellAddress];
-                continue;
-              }
-
-              // Handle formula adjustment if pasting formulas and it's an internal paste
-              if (pasteMode === 'formulas' && isInternalPaste && copiedData && value.startsWith('=')) {
-                // Calculate offset from original copy position
-                const copyStart = copiedData.source.type === 'single'
-                  ? copiedData.source.cell
-                  : copiedData.source.range.start;
-
-                const rowOffset = (startRow + row) - (copyStart.row + row);
-                const colOffset = (startCol + col) - (copyStart.column + col);
-
-                // Only adjust if there's an offset
-                if (rowOffset !== 0 || colOffset !== 0) {
-                  value = adjustFormulaReferences(value, rowOffset, colOffset);
-                }
-              } else if (pasteMode === 'values' && value.startsWith('=')) {
-                // For values mode, don't paste formulas - this shouldn't happen with proper copy
-                // but handle it gracefully
-                continue;
-              }
-
-              nextCells[cellAddress] = value;
-            }
-          }
-
-          return {
-            ...previous,
-            version: previous.version + 1,
-            rowCount: requiredRows,
-            columnCount: requiredCols,
-            cells: nextCells,
-          };
-        });
-
-        // Update selection to show pasted range if multi-cell
-        if (tableData.rows > 1 || tableData.columns > 1) {
-          setSelection({
-            type: 'range',
-            range: {
-              start: { row: startRow, column: startCol },
-              end: {
-                row: startRow + tableData.rows - 1,
-                column: startCol + tableData.columns - 1
-              }
-            }
-          });
+        // Update selection to show the pasted range if multi-cell.
+        const nextSelection = pasteResultSelection(start, tableData);
+        if (nextSelection) {
+          setSelection(nextSelection);
         }
 
-        const modeText = pasteMode === 'formulas' ? ' (formulas)' :
-                         pasteMode === 'values' ? ' (values)' : '';
+        const modeText = pasteMode === 'formulas' ? ' (formulas)' : ' (values)';
         toast.success(`Pasted ${tableData.rows} row(s) and ${tableData.columns} column(s)${modeText}`);
       } catch (error) {
         console.error('Paste failed:', error);
         toast.error('Failed to paste clipboard data');
       }
     },
-    [isReadOnly, editingCell, selection, sheet, parseClipboardData, applySheetUpdate, copiedData]
+    [isReadOnly, editingCell, selection, applySheetUpdate, copiedData]
   );
 
   // Handle copy operation
   const handleCopy = useCallback(
-    async (mode: 'formulas' | 'values' = 'formulas', event?: KeyboardEvent) => {
+    async (mode: CopyMode = 'formulas', event?: KeyboardEvent) => {
       if (editingCell) return; // Don't copy while editing
 
       event?.preventDefault();
 
       try {
-        let copyData = '';
-
-        if (selection.type === 'single') {
-          // Copy single cell
-          const cellAddress = encodeCellAddress(selection.cell.row, selection.cell.column);
-          if (mode === 'formulas') {
-            copyData = sheet.cells[cellAddress] ?? '';
-          } else {
-            copyData = evaluation.display[selection.cell.row]?.[selection.cell.column] ?? '';
-          }
-        } else {
-          // Copy range of cells
-          const { start, end } = selection.range;
-          const minRow = Math.min(start.row, end.row);
-          const maxRow = Math.max(start.row, end.row);
-          const minCol = Math.min(start.column, end.column);
-          const maxCol = Math.max(start.column, end.column);
-
-          const rows: string[] = [];
-          for (let row = minRow; row <= maxRow; row++) {
-            const cols: string[] = [];
-            for (let col = minCol; col <= maxCol; col++) {
-              if (mode === 'formulas') {
-                const cellAddress = encodeCellAddress(row, col);
-                const cellValue = sheet.cells[cellAddress] ?? '';
-                cols.push(cellValue);
-              } else {
-                const displayValue = evaluation.display[row]?.[col] ?? '';
-                cols.push(displayValue);
-              }
-            }
-            rows.push(cols.join('\t')); // Tab-separated values
-          }
-          copyData = rows.join('\n'); // Newline-separated rows
-        }
+        const { data: copyData, cellCount } = buildCopyPayload(selection, sheet, displayAt, mode);
 
         await navigator.clipboard.writeText(copyData);
 
@@ -1201,12 +727,8 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         setCopiedData({
           mode,
           data: copyData,
-          source: selection
+          source: selection,
         });
-
-        const cellCount = selection.type === 'single' ? 1 :
-          Math.abs(selection.range.end.row - selection.range.start.row + 1) *
-          Math.abs(selection.range.end.column - selection.range.start.column + 1);
 
         const modeText = mode === 'formulas' ? 'formulas' : 'values';
         toast.success(`Copied ${cellCount} cell${cellCount > 1 ? 's' : ''} (${modeText}) to clipboard`);
@@ -1215,7 +737,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         toast.error('Failed to copy to clipboard');
       }
     },
-    [editingCell, selection, sheet.cells, evaluation.display]
+    [editingCell, selection, sheet, displayAt]
   );
 
   // Add paste event listener
@@ -1230,20 +752,23 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     }
   }, [handlePaste]);
 
-  // Close context menu on clicks outside
+  // Clipboard availability is a one-time capability check, not a per-render
+  // `navigator` read.
   useEffect(() => {
-    if (contextMenu.show) {
-      const handleClickOutside = () => {
-        setContextMenu(prev => ({ ...prev, show: false }));
-      };
-      document.addEventListener('click', handleClickOutside);
-      document.addEventListener('contextmenu', handleClickOutside);
-      return () => {
-        document.removeEventListener('click', handleClickOutside);
-        document.removeEventListener('contextmenu', handleClickOutside);
-      };
-    }
-  }, [contextMenu.show]);
+    setCanUseClipboard(typeof navigator !== 'undefined' && !!navigator.clipboard);
+  }, []);
+
+  // Measure the grid width into state so the floating editor's responsive sizing
+  // never reads getBoundingClientRect() during render.
+  useEffect(() => {
+    const gridElement = gridRef.current;
+    if (!gridElement) return;
+    const measure = () => setContainerWidth(gridElement.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(gridElement);
+    return () => observer.disconnect();
+  }, []);
 
   const handleCellSelect = useCallback(
     (row: number, column: number) => {
@@ -1258,8 +783,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       if (editingCell && (editingCell.row !== next.row || editingCell.column !== next.column)) {
         setEditingCell(null);
         setEditingValue('');
-        setEditingCellRect(null);
-        setInitialKey(undefined);
+          setInitialKey(undefined);
       }
 
       requestAnimationFrame(() => {
@@ -1269,60 +793,56 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     [sheet, editingCell]
   );
 
-  // Double tap detection ref for mobile editing
-  const lastTapRef = useRef<{ row: number; column: number; time: number } | null>(null);
+  // Mobile touch gestures (long-press action sheet, tap-to-select, double-tap-to-edit).
+  const onLongPressSelect = useCallback((cell: GridSelection) => {
+    setSelection({ type: 'single', cell });
+  }, []);
+  const {
+    mobileActionSheet,
+    closeMobileActionSheet,
+    handleCellTouchStart,
+    handleCellTouchMove,
+    handleCellTouchEnd,
+  } = useSheetTouch({
+    sheet,
+    selection,
+    isReadOnly,
+    onTap: handleCellSelect,
+    onDoubleTap: startCellEdit,
+    onLongPressSelect,
+  });
 
-  // Touch end handler - defined after handleCellSelect to avoid forward reference
-  const handleCellTouchEnd = useCallback(
-    (row: number, column: number, event: React.TouchEvent) => {
-      // Clear long press timer
-      if (longPressTimerRef.current) {
-        clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
+  // ---- Formatting -------------------------------------------------------
+
+  const currentFormat = useMemo(() => activeFormat(sheet, selection), [sheet, selection]);
+
+  /**
+   * Hand focus back to the grid.
+   *
+   * Radix returns focus to the trigger when a menu or popover closes, so after
+   * choosing a colour or a number format the caret sits on a toolbar button and
+   * arrow keys stop moving the selection — the key handler is on the grid.
+   */
+  const focusGrid = useCallback(() => {
+    gridRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const runFormatCommand = useCallback(
+    (command: FormatCommand) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
       }
-
-      // Check if this was a tap (quick touch without much movement)
-      if (touchStartRef.current) {
-        const touchDuration = Date.now() - touchStartRef.current.time;
-        const touch = event.changedTouches[0];
-        const dx = Math.abs(touch.clientX - touchStartRef.current.x);
-        const dy = Math.abs(touch.clientY - touchStartRef.current.y);
-
-        // If it was a quick tap without much movement
-        if (touchDuration < 300 && dx < 10 && dy < 10) {
-          event.preventDefault();
-
-          // Check for double tap (must be on same cell within 300ms)
-          const now = Date.now();
-          if (
-            lastTapRef.current &&
-            lastTapRef.current.row === row &&
-            lastTapRef.current.column === column &&
-            now - lastTapRef.current.time < 300
-          ) {
-            // Double tap detected - start editing
-            if (!isReadOnly) {
-              startCellEdit(row, column);
-            }
-            lastTapRef.current = null;
-          } else {
-            // Single tap - select cell and record for potential double tap
-            handleCellSelect(row, column);
-            lastTapRef.current = { row, column, time: now };
-          }
-        }
-      }
-
-      touchStartRef.current = null;
+      applySheetUpdate((previous) => applyFormatCommand(previous, selection, command));
     },
-    [handleCellSelect, isReadOnly, startCellEdit]
+    [applySheetUpdate, isReadOnly, readOnlyReason, selection]
   );
 
   const handleGridKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
       const { key, shiftKey, ctrlKey, metaKey } = event;
       const primaryCell = getPrimaryCell(selection);
-      let { row, column } = clampSelection(primaryCell, sheet);
+      const { row, column } = clampSelection(primaryCell, sheet);
 
       // Don't interfere if we're already editing
       if (editingCell) return;
@@ -1334,36 +854,41 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return;
       }
 
-      // Don't trigger editing for modifier key combinations (except F2)
-      if ((ctrlKey || metaKey) && key !== 'F2') {
-        return;
+      // Modifier combinations dispatch explicitly. The old surface returned
+      // early on every Ctrl/Cmd chord except F2, which meant no formatting
+      // shortcut could ever be added without this branch swallowing it first.
+      if (ctrlKey || metaKey) {
+        if (key === 'F2') {
+          // fall through to the editing/navigation handling below
+        } else {
+          const command = FORMAT_SHORTCUTS[key.toLowerCase()];
+          if (command) {
+            event.preventDefault();
+            runFormatCommand(command);
+          }
+          // Everything else (Ctrl+S/Z/Y, browser chords) is handled elsewhere
+          // or belongs to the browser.
+          return;
+        }
       }
 
       // Handle Delete and Backspace as instant delete actions
       if (key === 'Delete' || key === 'Backspace') {
         if (isReadOnly) {
-          toast.error("You don't have permission to edit this sheet");
+          toast.error(readOnlyReason);
           return;
         }
 
         event.preventDefault();
         const cellAddress = encodeCellAddress(row, column);
 
-        applySheetUpdate((previous) => {
-          const nextCells = { ...previous.cells };
-          delete nextCells[cellAddress];
-          return {
-            ...previous,
-            version: previous.version + 1,
-            cells: nextCells,
-          };
-        });
+        applySheetUpdate((previous) => applyCellDelete(previous, cellAddress));
 
         // Update formula bar to show empty value
         setFormulaValue('');
 
         // Announce deletion to screen readers
-        setAnnouncement(`Cell ${cellAddress} cleared`);
+        announce(`Cell ${cellAddress} cleared`);
         return;
       }
 
@@ -1374,61 +899,21 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return;
       }
 
-      switch (key) {
-        case 'ArrowUp':
-          event.preventDefault();
-          row = Math.max(0, row - 1);
-          break;
-        case 'ArrowDown':
-          event.preventDefault();
-          row = Math.min(sheet.rowCount - 1, row + 1);
-          break;
-        case 'ArrowLeft':
-          event.preventDefault();
-          column = Math.max(0, column - 1);
-          break;
-        case 'ArrowRight':
-          event.preventDefault();
-          column = Math.min(sheet.columnCount - 1, column + 1);
-          break;
-        case 'Tab':
-          event.preventDefault();
-          if (shiftKey) {
-            if (column === 0) {
-              column = sheet.columnCount - 1;
-              row = Math.max(0, row - 1);
-            } else {
-              column = Math.max(0, column - 1);
-            }
-          } else {
-            column += 1;
-            if (column >= sheet.columnCount) {
-              column = 0;
-              row = Math.min(sheet.rowCount - 1, row + 1);
-            }
-          }
-          break;
-        case 'Enter':
-          event.preventDefault();
-          if (!isReadOnly) {
-            // Enter can either start editing or move to next row
-            if (shiftKey) {
-              row = Math.max(0, row - 1);
-            } else {
-              row = Math.min(sheet.rowCount - 1, row + 1);
-            }
-          }
-          break;
-        default:
-          return;
+      const next = nextSelectionForKey({ key, shiftKey, isReadOnly }, { row, column }, sheet);
+      if (!next) {
+        return;
       }
+      event.preventDefault();
 
       setSelection({
         type: 'single',
-        cell: { row, column }
+        cell: next
       });
+      // Native focus-scrolling no longer applies: the target cell may not be
+      // rendered yet, so the grid has to scroll to it deliberately.
+      revealCell(next.row, next.column);
     },
-    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, setAnnouncement]
+    [isReadOnly, readOnlyReason, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, announce, runFormatCommand, revealCell]
   );
 
   const handleFormulaKeyDown = useCallback(
@@ -1470,11 +955,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     ]
   );
 
-  // Initialize sheet when page changes
-  useEffect(() => {
-    initializeAndActivate();
-  }, [initializeAndActivate, page.id]);
-
+  // Reset the selection to the origin when navigating to a different page.
   useEffect(() => {
     setSelection({
       type: 'single',
@@ -1482,56 +963,61 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     });
   }, [page.id]);
 
-  // Update sheet when document content updates from server
+
+  /**
+   * Where the floating editor sits, computed from the axes and the measured
+   * viewport rather than read off a DOM node.
+   *
+   * The old surface measured the cell element and cancelled the edit whenever
+   * the lookup failed — which is exactly what happens once the cell scrolls out
+   * of a virtualized window. Deriving the rect means scrolling away from a cell
+   * you are editing no longer throws the edit away.
+   */
+  const editingCellRect = useMemo(() => {
+    if (!editingCell) return null;
+    return cellViewportRect({
+      rowAxis,
+      columnAxis,
+      row: editingCell.row,
+      column: editingCell.column,
+      frozenRows: sheet.frozenRows,
+      frozenColumns: sheet.frozenColumns,
+      view: viewport,
+    });
+  }, [editingCell, rowAxis, columnAxis, sheet.frozenRows, sheet.frozenColumns, viewport]);
+
+  /**
+   * Whether the edited cell is still within the scrolled body.
+   *
+   * The overlay is hidden when it is not — otherwise the editor floats over the
+   * toolbar and the rest of the page. Crucially this hides the overlay only:
+   * `editingCell` and `editingValue` are untouched, so scrolling back brings
+   * the editor and the typed text straight back. That is the distinction the
+   * old surface got wrong, where "not visible" meant "discard the edit".
+   */
+  const isEditingCellVisible = useMemo(() => {
+    if (!editingCell) return false;
+    return isCellVisible({
+      rowAxis,
+      columnAxis,
+      row: editingCell.row,
+      column: editingCell.column,
+      frozenRows: sheet.frozenRows,
+      frozenColumns: sheet.frozenColumns,
+      view: viewport,
+    });
+  }, [editingCell, rowAxis, columnAxis, sheet.frozenRows, sheet.frozenColumns, viewport]);
+
+  // Keep the active cell in view when the selection moves. Guarded on the
+  // address so this reacts to navigation only: re-running it on every scroll
+  // would drag the viewport back and make the sheet impossible to scroll away
+  // from the selection.
+  const lastRevealedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (documentState) {
-      const newSheet = sanitizeSheetData(parseSheetContent(documentState.content));
-      // Reset history when content is loaded/reloaded from server
-      // This prevents undo from going back to a stale state
-      resetHistory(newSheet);
-    }
-  }, [documentState, resetHistory]);
-
-  // Update cell rectangle when editing cell changes or on scroll/resize
-  useEffect(() => {
-    if (!editingCell) return;
-
-    const updateCellRect = () => {
-      const rect = getCellRect(editingCell.row, editingCell.column, gridRef.current);
-      if (rect) {
-        setEditingCellRect(rect);
-      } else {
-        // Cell is no longer visible, cancel editing
-        cancelCellEdit();
-      }
-    };
-
-    // Update immediately
-    updateCellRect();
-
-    // Add scroll and resize listeners
-    // Use scrollContainerRef for scroll events since CustomScrollArea handles scrolling
-    const scrollElement = scrollContainerRef.current;
-    const handleScroll = () => updateCellRect();
-    const handleResize = () => updateCellRect();
-
-    if (scrollElement) {
-      scrollElement.addEventListener('scroll', handleScroll, { passive: true });
-    }
-    window.addEventListener('resize', handleResize, { passive: true });
-
-    // Also recompute when the panel container resizes (sidebar drag)
-    const resizeObserver = new ResizeObserver(updateCellRect);
-    if (gridRef.current) resizeObserver.observe(gridRef.current);
-
-    return () => {
-      if (scrollElement) {
-        scrollElement.removeEventListener('scroll', handleScroll);
-      }
-      window.removeEventListener('resize', handleResize);
-      resizeObserver.disconnect();
-    };
-  }, [editingCell, cancelCellEdit]);
+    if (lastRevealedRef.current === currentAddress) return;
+    lastRevealedRef.current = currentAddress;
+    revealCell(currentSelection.row, currentSelection.column);
+  }, [currentAddress, currentSelection.row, currentSelection.column, revealCell]);
 
   // Update formula bar when selection or sheet changes
   useEffect(() => {
@@ -1558,400 +1044,391 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     });
   }, [sheet.columnCount, sheet.rowCount, sheet]);
 
-  // Permission check
-  useEffect(() => {
-    const abortController = new AbortController();
+  // Global keyboard shortcuts (Ctrl/Cmd + S / Z / Y) — attached once, ref-driven.
+  // Ctrl+S must not write when the document failed to load: there is nothing
+  // legitimate to save, and the write would only bump the revision.
+  const handleSaveShortcut = useCallback(() => {
+    if (isReadOnly) return;
+    forceSaveNow();
+  }, [isReadOnly, forceSaveNow]);
 
-    const checkPermissions = async () => {
-      if (!user?.id) return;
-      try {
-        const response = await fetchWithAuth(
-          `/api/pages/${page.id}/permissions/check?userId=${encodeURIComponent(user.id)}`,
-          { signal: abortController.signal }
-        );
-        if (response.ok) {
-          const permissions = await response.json();
-          setIsReadOnly(!permissions.canEdit);
-          if (!permissions.canEdit) {
-            toast.info("You don't have permission to edit this sheet", {
-              duration: 4000,
-              position: 'bottom-right',
-            });
-          }
-        }
-      } catch (error) {
-        if ((error as Error).name === 'AbortError') return;
-        console.error('Failed to check permissions:', error);
+  useSheetKeyboardShortcuts({ onSave: handleSaveShortcut, onUndo: handleUndo, onRedo: handleRedo });
+
+  // ---- Freeze panes ------------------------------------------------------
+
+  const handleFreezeRows = useCallback(
+    (rows: number) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
       }
-    };
+      applySheetUpdate((previous) => setFrozen(previous, rows, previous.frozenColumns));
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
 
-    checkPermissions();
-    return () => { abortController.abort(); };
-  }, [page.id, user?.id]);
-
-  // Socket updates - uses refs to avoid re-subscribing on every content change
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleContentUpdate = async (eventData: PageEventPayload) => {
-      if (eventData.pageId !== page.id) return;
-      try {
-        const response = await fetchWithAuth(`/api/pages/${page.id}`);
-        if (!response.ok) return;
-        const updatedPage = await response.json();
-        if (updatedPage.content !== contentRef.current && !isDirtyRef.current) {
-          updateContentFromServer(updatedPage.content, updatedPage.revision);
-        }
-      } catch (error) {
-        console.error('Failed to fetch updated sheet content:', error);
+  const handleFreezeColumns = useCallback(
+    (columns: number) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
       }
-    };
+      applySheetUpdate((previous) => setFrozen(previous, previous.frozenRows, columns));
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
 
-    socket.on('page:content-updated', handleContentUpdate);
-    return () => {
-      socket.off('page:content-updated', handleContentUpdate);
-    };
-  }, [page.id, socket, updateContentFromServer]);
+  // ---- Header interaction ------------------------------------------------
 
-  // Cleanup on unmount - auto-save any unsaved changes
-  // Empty deps array ensures cleanup only runs on TRUE component unmount
-  useEffect(() => {
-    return () => {
-      if (isDirtyRef.current) {
-        forceSaveRef.current().catch(console.error);
+  const handleSelectColumn = useCallback(
+    (column: number, event: React.MouseEvent) => {
+      event.preventDefault();
+      const lastRow = Math.max(0, sheet.rowCount - 1);
+      setSelection((previous) => {
+        // Shift-click extends from the existing anchor, matching the grid's own
+        // range behaviour rather than inventing a second convention.
+        const anchorColumn = event.shiftKey ? getPrimaryCell(previous).column : column;
+        return {
+          type: 'range',
+          range: {
+            start: { row: 0, column: anchorColumn },
+            end: { row: lastRow, column },
+          },
+        };
+      });
+      gridRef.current?.focus({ preventScroll: true });
+    },
+    [sheet.rowCount]
+  );
+
+  const handleSelectRow = useCallback(
+    (row: number, event: React.MouseEvent) => {
+      event.preventDefault();
+      const lastColumn = Math.max(0, sheet.columnCount - 1);
+      setSelection((previous) => {
+        const anchorRow = event.shiftKey ? getPrimaryCell(previous).row : row;
+        return {
+          type: 'range',
+          range: {
+            start: { row: anchorRow, column: 0 },
+            end: { row, column: lastColumn },
+          },
+        };
+      });
+      gridRef.current?.focus({ preventScroll: true });
+    },
+    [sheet.columnCount]
+  );
+
+  const handleResizeColumn = useCallback(
+    (column: number, width: number) => {
+      if (isReadOnly) return;
+      applySheetUpdate((previous) => setColumnWidth(previous, column, width));
+    },
+    [applySheetUpdate, isReadOnly]
+  );
+
+  const handleResizeRow = useCallback(
+    (row: number, height: number) => {
+      if (isReadOnly) return;
+      applySheetUpdate((previous) => setRowHeight(previous, row, height));
+    },
+    [applySheetUpdate, isReadOnly]
+  );
+
+  const handlePreviewColumnWidth = useCallback((column: number, width: number | null) => {
+    setColumnResize(width === null ? undefined : { index: column, size: width });
+  }, []);
+
+  const handlePreviewRowHeight = useCallback((row: number, height: number | null) => {
+    setRowResize(height === null ? undefined : { index: row, size: height });
+  }, []);
+
+  /**
+   * Double-clicking a column edge sizes it to its widest value.
+   *
+   * Width is estimated from character count rather than measured: measuring
+   * would mean laying out every cell in the column, including the ones
+   * virtualization deliberately never rendered.
+   */
+  const handleAutoFitColumn = useCallback(
+    (column: number) => {
+      if (isReadOnly) return;
+
+      let widest = 0;
+      for (let row = 0; row < sheet.rowCount; row++) {
+        const cell = evaluation.byAddress[encodeCellAddress(row, column)];
+        const text = cell?.error ? '#ERROR' : cell?.display ?? '';
+        if (text.length > widest) widest = text.length;
       }
-    };
-  }, []); // ✅ Empty deps - only runs on mount/unmount
 
-  // Auto-save on window blur
-  useEffect(() => {
-    // Only run on client side with proper window API
-    if (typeof window === 'undefined' || !window.addEventListener) return;
+      // ~7px per character at 14px, plus the cell's horizontal padding.
+      applySheetUpdate((previous) => setColumnWidth(previous, column, widest * 7 + 20));
+    },
+    [applySheetUpdate, evaluation.byAddress, isReadOnly, sheet.rowCount]
+  );
 
-    const handleBlur = () => {
-      // Check if dirty using ref (always current)
-      if (isDirtyRef.current) {
-        forceSaveRef.current().catch(console.error);
-      }
-    };
+  const handleClearContents = useCallback(() => {
+    if (isReadOnly) {
+      toast.error(readOnlyReason);
+      return;
+    }
+    const addresses = selectionAddresses(selection);
+    applySheetUpdate((previous) => applyCellsDelete(previous, addresses));
+    setFormulaValue('');
+  }, [applySheetUpdate, isReadOnly, readOnlyReason, selection]);
 
-    window.addEventListener('blur', handleBlur);
-    return () => {
-      if (typeof window !== 'undefined' && window.removeEventListener) {
-        window.removeEventListener('blur', handleBlur);
-      }
-    };
-  }, []); // ✅ Empty deps - uses refs for latest state
+  // ---- Conditional formatting -------------------------------------------
 
-  // Store undo/redo handlers in refs to avoid re-adding event listeners
-  const handleUndoRef = useRef(handleUndo);
-  const handleRedoRef = useRef(handleRedo);
-  useEffect(() => {
-    handleUndoRef.current = handleUndo;
-    handleRedoRef.current = handleRedo;
-  }, [handleUndo, handleRedo]);
+  const conditionalRules = sheet.conditionalFormats ?? [];
 
-  // Handle keyboard shortcuts
-  useEffect(() => {
-    // Only run on client side with proper document API
-    if (typeof document === 'undefined' || !document.addEventListener) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+S / Cmd+S to save
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        forceSaveRef.current();
+  const handleAddRule = useCallback(
+    (kind: RuleKind, ranges: string[]) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
         return;
       }
 
-      // Ctrl+Z / Cmd+Z to undo
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        handleUndoRef.current();
+      // Decided BEFORE scheduling the state update, not inside the updater:
+      // `setSheet` defers the updater to React, so reading a variable it
+      // assigns would race the alert and usually show nothing.
+      const result = addRule(sheet, newRule(kind, ranges));
+      if (!result.ok) {
+        setConditionalRefusal(result.reason);
+        setConditionalResetToken((token) => token + 1);
         return;
       }
+      setConditionalRefusal(null);
+      applySheetUpdate(() => result.sheet);
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason, sheet]
+  );
 
-      // Ctrl+Shift+Z / Cmd+Shift+Z or Ctrl+Y / Cmd+Y to redo
-      if ((e.ctrlKey || e.metaKey) && ((e.key === 'z' && e.shiftKey) || e.key === 'y')) {
-        e.preventDefault();
-        handleRedoRef.current();
+  const handleUpdateRule = useCallback(
+    (id: string, patch: Partial<(typeof conditionalRules)[number]>) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
         return;
       }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      if (typeof document !== 'undefined' && document.removeEventListener) {
-        document.removeEventListener('keydown', handleKeyDown);
+      // Same as adding: a refused edit has to say why, or the panel silently
+      // restores the old value and looks broken.
+      const result = updateRule(sheet, id, patch);
+      if (!result.ok) {
+        setConditionalRefusal(result.reason);
+        setConditionalResetToken((token) => token + 1);
+        return;
       }
-    };
-  }, []); // ✅ Empty deps - uses refs for latest handlers
+      setConditionalRefusal(null);
+      applySheetUpdate(() => result.sheet);
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason, sheet]
+  );
+
+  const handleRemoveRule = useCallback(
+    (id: string) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
+      }
+      setConditionalRefusal(null);
+      applySheetUpdate((previous) => removeRule(previous, id));
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
+
+  const handleMoveRule = useCallback(
+    (id: string, direction: -1 | 1) => {
+      if (isReadOnly) return;
+      setConditionalRefusal(null);
+      applySheetUpdate((previous) => moveRule(previous, id, direction));
+    },
+    [applySheetUpdate, isReadOnly]
+  );
+
+  /**
+   * One stable object for every per-cell handler. Passing these individually
+   * would change a cell's props on every render of the view and defeat the
+   * memo, which is the usual reason a virtualized grid is still slow.
+   */
+  const cellHandlers = useMemo<SheetCellHandlers>(
+    () => ({
+      onMouseDown: handleCellMouseDown,
+      onMouseEnter: handleCellMouseEnter,
+      onDoubleClick: (row: number, column: number) => {
+        if (!isReadOnly) startCellEdit(row, column);
+      },
+      onContextMenu: handleCellRightClick,
+      onTouchStart: handleCellTouchStart,
+      onTouchMove: handleCellTouchMove,
+      onTouchEnd: handleCellTouchEnd,
+    }),
+    [
+      handleCellMouseDown,
+      handleCellMouseEnter,
+      handleCellRightClick,
+      handleCellTouchEnd,
+      handleCellTouchMove,
+      handleCellTouchStart,
+      isReadOnly,
+      startCellEdit,
+    ]
+  );
 
   return (
     <div className="flex h-full flex-col">
-      {/* Mobile-responsive formula bar */}
-      <div className="border-b bg-muted/40">
-        {/* Cell info row - responsive layout */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-2 pb-1 sm:px-4 sm:pt-3">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-medium uppercase text-muted-foreground sm:text-xs">
-              {selection.type === 'range' ? 'Range' : 'Cell'}
-            </span>
-            <span className="font-semibold text-sm sm:text-base">{selectionAddress}</span>
-          </div>
-          <div className="hidden text-xs text-muted-foreground sm:block">
-            Value: {currentDisplay || '—'}
-          </div>
-          {/* Mobile action buttons - visible only on small screens */}
-          <div className="ml-auto flex items-center gap-1 sm:hidden">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleUndo}
-              disabled={isReadOnly || !canUndo}
-              className="h-7 w-7 p-0"
-              aria-label="Undo"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7v6h6" />
-                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-              </svg>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRedo}
-              disabled={isReadOnly || !canRedo}
-              className="h-7 w-7 p-0"
-              aria-label="Redo"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 7v6h-6" />
-                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
-              </svg>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleAddColumn}
-              disabled={isReadOnly}
-              className="h-7 px-2 text-xs"
-              aria-label="Add column"
-            >
-              +Col
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleAddRow}
-              disabled={isReadOnly}
-              className="h-7 px-2 text-xs"
-              aria-label="Add row"
-            >
-              +Row
-            </Button>
-          </div>
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
+      {loadError && (
+        <div
+          role="alert"
+          className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+        >
+          This sheet could not be loaded, so editing is disabled to protect your data. Reload the
+          page to try again; if it keeps failing, the stored content needs repair.
         </div>
-        {/* Formula input row */}
-        <div className="flex items-center gap-2 px-3 pb-2 sm:gap-3 sm:px-4 sm:pb-3">
-          <span className="hidden text-xs font-medium uppercase text-muted-foreground sm:block">Formula</span>
-          <div className="relative flex-1">
-            <input
-              ref={formulaInputRef}
-              value={formulaValue}
-              onFocus={() => {
-                setIsFormulaFocused(true);
-                // If we're not already editing, start editing the current cell
-                if (!editingCell) {
-                  const { row, column } = currentSelection;
-                  startCellEdit(row, column);
-                }
-              }}
-              onBlur={(event) => {
-                setIsFormulaFocused(false);
-                if (editingCell && event.target.value !== currentRaw) {
-                  commitCellEdit(event.target.value);
-                } else if (!editingCell && event.target.value !== currentRaw) {
-                  handleCommitFormula(event.target.value);
-                }
-              }}
-              onChange={(event) => {
-                suggestion.handleValueChange(event.target.value);
-              }}
-              onKeyDown={handleFormulaKeyDown}
-              disabled={isReadOnly}
-              className={cn(
-                'w-full rounded border border-input bg-background px-2 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
-                'sm:py-1',
-                isReadOnly && 'cursor-not-allowed opacity-75'
-              )}
-              placeholder="Enter value or formula"
-            />
-            <SuggestionPopup
-              isOpen={suggestionContext.isOpen}
-              items={suggestionContext.items}
-              selectedIndex={suggestionContext.selectedIndex}
-              position={suggestionContext.position}
-              loading={suggestionContext.loading}
-              error={suggestionContext.error}
-              onSelect={suggestion.actions.selectSuggestion}
-              onSelectionChange={suggestion.actions.selectItem}
-              variant="inline"
-              popupPlacement="bottom"
-            />
-          </div>
-          {/* Desktop action buttons */}
-          <div className="hidden items-center gap-2 sm:flex">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleUndo}
-              disabled={isReadOnly || !canUndo}
-              title="Undo (Ctrl+Z)"
-              className="h-8 w-8 p-0"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7v6h6" />
-                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-              </svg>
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRedo}
-              disabled={isReadOnly || !canRedo}
-              title="Redo (Ctrl+Shift+Z)"
-              className="h-8 w-8 p-0"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 7v6h-6" />
-                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
-              </svg>
-            </Button>
-            <div className="mx-1 h-4 w-px bg-border" />
-            <Button variant="outline" size="sm" onClick={handleAddColumn} disabled={isReadOnly}>
-              + Column
-            </Button>
-            <Button variant="outline" size="sm" onClick={handleAddRow} disabled={isReadOnly}>
-              + Row
-            </Button>
-          </div>
-        </div>
-        {currentError && (
-          <div className="px-3 pb-2 text-xs text-destructive sm:px-4 sm:pb-3">Error: {currentError}</div>
-        )}
-      </div>
+      )}
+      <motion.div
+        initial={{ y: -10, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.2 }}
+        className="sticky top-0 z-10 mx-4 mt-4 overflow-hidden rounded-lg liquid-glass-thin border border-[var(--separator)] shadow-[var(--shadow-ambient)]"
+      >
+        <SheetToolbar
+          format={currentFormat}
+          disabled={isReadOnly}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          frozenRows={sheet.frozenRows ?? 0}
+          frozenColumns={sheet.frozenColumns ?? 0}
+          onCommand={runFormatCommand}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onFreezeRows={handleFreezeRows}
+          onFreezeColumns={handleFreezeColumns}
+          onOpenConditional={() => setConditionalOpen((open) => !open)}
+          conditionalOpen={conditionalOpen}
+          conditionalCount={conditionalRules.length}
+          onRefocusGrid={focusGrid}
+        />
+      </motion.div>
+      <SheetFormulaBar
+        isRange={selection.type === 'range'}
+        selectionAddress={selectionAddress}
+        currentDisplay={currentDisplay}
+        currentError={currentError}
+        isReadOnly={isReadOnly}
+        onAddRow={handleAddRow}
+        onAddColumn={handleAddColumn}
+        formulaInputRef={formulaInputRef}
+        formulaValue={formulaValue}
+        onFormulaFocus={() => {
+          setIsFormulaFocused(true);
+          // If we're not already editing, start editing the current cell.
+          if (!editingCell) {
+            const { row, column } = currentSelection;
+            startCellEdit(row, column);
+          }
+        }}
+        onFormulaBlur={(event) => {
+          setIsFormulaFocused(false);
+          if (editingCell && event.target.value !== currentRaw) {
+            commitCellEdit(event.target.value);
+          } else if (!editingCell && event.target.value !== currentRaw) {
+            handleCommitFormula(event.target.value);
+          }
+        }}
+        onFormulaChange={(value) => suggestion.handleValueChange(value)}
+        onFormulaKeyDown={handleFormulaKeyDown}
+        driveId={page.driveId}
+        mention={{
+          isOpen: suggestionContext.isOpen,
+          position: suggestionContext.position,
+          query: suggestion.query,
+          onSelect: suggestion.actions.selectSuggestion,
+          onClose: suggestion.actions.close,
+        }}
+      />
       <PullToRefresh
         direction="top"
         onRefresh={handleRefresh}
         disabled={isPullToRefreshDisabled}
-        className="flex-1"
+        className="min-h-0 flex-1"
       >
-        <CustomScrollArea ref={scrollContainerRef} className="h-full">
-          <div
-            ref={gridRef}
-            role="grid"
-            aria-label="Spreadsheet"
-            aria-rowcount={sheet.rowCount}
-            aria-colcount={sheet.columnCount}
-            aria-activedescendant={`cell-${currentAddress}`}
-            tabIndex={0}
-            onKeyDown={handleGridKeyDown}
-            className="focus:outline-none touch-pan-x touch-pan-y"
-          >
-        <table className="min-w-max border-collapse text-sm" role="presentation">
-          <thead>
-            <tr role="row">
-              <th
-                role="columnheader"
-                className="sticky left-0 top-0 z-20 h-8 w-10 border border-border bg-muted text-left text-xs font-semibold text-muted-foreground sm:w-14"
-                aria-label="Row headers"
-              ></th>
-              {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => (
-                <th
-                  key={`column-${columnIndex}`}
-                  role="columnheader"
-                  aria-colindex={columnIndex + 1}
-                  className="sticky top-0 z-10 h-8 min-w-[80px] border border-border bg-muted px-2 text-left text-xs font-semibold text-muted-foreground sm:min-w-[120px] sm:px-3"
-                >
-                  {getColumnLabel(columnIndex)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: sheet.rowCount }).map((_, rowIndex) => (
-              <tr key={`row-${rowIndex}`} role="row">
-                <th
-                  role="rowheader"
-                  aria-rowindex={rowIndex + 1}
-                  className="sticky left-0 z-10 h-9 border border-border bg-muted px-1.5 text-left text-xs font-semibold text-muted-foreground sm:h-10 sm:px-2"
-                >
-                  {rowIndex + 1}
-                </th>
-                {Array.from({ length: sheet.columnCount }).map((_, columnIndex) => {
-                  const cellAddress = encodeCellAddress(rowIndex, columnIndex);
-                  const isSelected = isCellInSelection(rowIndex, columnIndex, selection);
-                  const isPrimaryCell = currentSelection.row === rowIndex && currentSelection.column === columnIndex;
-                  const cellError = evaluation.errors[rowIndex]?.[columnIndex];
-                  const displayValue = evaluation.display[rowIndex]?.[columnIndex] ?? '';
-                  return (
-                    <td
-                      key={cellAddress}
-                      id={`cell-${cellAddress}`}
-                      role="gridcell"
-                      aria-rowindex={rowIndex + 1}
-                      aria-colindex={columnIndex + 1}
-                      aria-selected={isSelected}
-                      aria-readonly={isReadOnly}
-                      aria-label={`${cellAddress}: ${displayValue || 'empty'}`}
-                      data-cell={cellAddress}
-                      tabIndex={isPrimaryCell ? 0 : -1}
-                      className={cn(
-                        'h-9 min-w-[80px] cursor-pointer border border-border bg-background px-2 align-middle text-sm',
-                        'sm:h-10 sm:min-w-[120px] sm:px-3',
-                        'transition-colors hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-inset',
-                        // Mobile: larger tap targets with active states
-                        'active:bg-muted/60 touch-manipulation',
-                        isSelected && 'bg-primary/10',
-                        isPrimaryCell && 'outline outline-2 outline-offset-[-2px] outline-primary',
-                        cellError && 'bg-destructive/10 text-destructive',
-                        editingCell && editingCell.row === rowIndex && editingCell.column === columnIndex && 'opacity-50',
-                        isDragging && 'select-none'
-                      )}
-                      onMouseDown={(e) => handleCellMouseDown(rowIndex, columnIndex, e)}
-                      onMouseEnter={() => handleCellMouseEnter(rowIndex, columnIndex)}
-                      onClick={() => handleCellSelect(rowIndex, columnIndex)}
-                      onContextMenu={(e) => handleCellRightClick(rowIndex, columnIndex, e)}
-                      onDoubleClick={() => {
-                        if (!isReadOnly) {
-                          startCellEdit(rowIndex, columnIndex);
-                        }
-                      }}
-                      // Touch events for mobile
-                      onTouchStart={(e) => handleCellTouchStart(rowIndex, columnIndex, e)}
-                      onTouchMove={handleCellTouchMove}
-                      onTouchEnd={(e) => handleCellTouchEnd(rowIndex, columnIndex, e)}
-                    >
-                      <span className="block w-full truncate">
-                        {displayValue}
-                      </span>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-        </CustomScrollArea>
+        {/* The grid sits in a rounded, hairline-bordered shell so the surface
+            reads as a panel in the product rather than a full-bleed mesh of
+            borders. `overflow-hidden` keeps the cells square inside the radius. */}
+        {/* The panel is a sibling of the grid rather than an overlay: it has to
+            coexist with the sheet so a rule's effect is visible while it is
+            being edited. */}
+        <div className="flex h-full gap-0 px-4 pb-2">
+          <div className="min-w-0 flex-1">
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div className="h-full overflow-hidden rounded-lg border border-[var(--separator)] bg-background">
+                <SheetGrid
+              gridRef={gridRef}
+              scrollRef={scrollContainerRef}
+              sheet={sheet}
+              rowAxis={rowAxis}
+              columnAxis={columnAxis}
+              viewport={viewport}
+              selection={selection}
+              currentSelection={currentSelection}
+              currentAddress={currentAddress}
+              evaluation={evaluation}
+              editingCell={editingCell}
+              isReadOnly={isReadOnly}
+              findAddressSet={findAddressSet}
+              currentFindAddress={currentFindAddress}
+              onKeyDown={handleGridKeyDown}
+              onSelectColumn={handleSelectColumn}
+              onSelectRow={handleSelectRow}
+              onResizeColumn={handleResizeColumn}
+              onResizeRow={handleResizeRow}
+              onPreviewColumnWidth={handlePreviewColumnWidth}
+              onPreviewRowHeight={handlePreviewRowHeight}
+              onAutoFitColumn={handleAutoFitColumn}
+                  handlers={cellHandlers}
+                />
+              </div>
+            </ContextMenuTrigger>
+            <SheetContextMenu
+              canPaste={!!copiedData || canUseClipboard}
+              isReadOnly={isReadOnly}
+              onCopy={handleCopy}
+              onPaste={handlePaste}
+              onClearContents={handleClearContents}
+              onClearFormatting={() => runFormatCommand({ kind: 'clear' })}
+            />
+          </ContextMenu>
+          </div>
+
+          {conditionalOpen && (
+            <SheetConditionalPanel
+              rules={conditionalRules}
+              defaultRange={defaultRuleRange(selection)}
+              disabled={isReadOnly}
+              refusal={conditionalRefusal}
+              resetToken={conditionalResetToken}
+              onAdd={handleAddRule}
+              onUpdate={handleUpdateRule}
+              onRemove={handleRemoveRule}
+              onMove={handleMoveRule}
+              onClose={() => setConditionalOpen(false)}
+            />
+          )}
+        </div>
       </PullToRefresh>
 
       {/* Floating Cell Editor */}
       <FloatingCellEditor
         value={editingValue}
         cellRect={editingCellRect}
-        isVisible={!!editingCell}
+        isVisible={!!editingCell && isEditingCellVisible}
         onCommit={commitCellEdit}
         onCancel={cancelCellEdit}
         onValueChange={(value) => {
@@ -1961,176 +1438,23 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         isReadOnly={isReadOnly}
         initialKey={initialKey}
         driveId={page.driveId}
-        containerWidth={gridRef.current?.getBoundingClientRect().width}
+        containerWidth={containerWidth}
       />
 
-      {/* Context Menu */}
-      {contextMenu.show && (
-        <div
-          className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
-          style={clampContextMenuPosition(contextMenu.x, contextMenu.y, gridRef.current?.getBoundingClientRect())}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div
-            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
-            onClick={() => {
-              handleCopy('formulas');
-              setContextMenu(prev => ({ ...prev, show: false }));
-            }}
-          >
-            Copy
-          </div>
-          <div
-            className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
-            onClick={() => {
-              handleCopy('values');
-              setContextMenu(prev => ({ ...prev, show: false }));
-            }}
-          >
-            Copy Values
-          </div>
-          <div className="h-px bg-border my-1" />
-          <div
-            className={cn(
-              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
-              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
-            )}
-            onClick={() => {
-              if (copiedData || navigator.clipboard) {
-                handlePaste('auto');
-                setContextMenu(prev => ({ ...prev, show: false }));
-              }
-            }}
-          >
-            Paste
-          </div>
-          <div
-            className={cn(
-              "flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors",
-              (!copiedData && !navigator.clipboard) && "opacity-50 cursor-not-allowed"
-            )}
-            onClick={() => {
-              if (copiedData || navigator.clipboard) {
-                handlePaste('values');
-                setContextMenu(prev => ({ ...prev, show: false }));
-              }
-            }}
-          >
-            Paste Values
-          </div>
-        </div>
-      )}
-
       {/* Mobile Action Sheet (long-press menu) */}
-      {mobileActionSheet.show && (
-        <>
-          {/* Backdrop */}
-          <div
-            className="fixed inset-0 z-40 bg-black/50 sm:hidden"
-            onClick={closeMobileActionSheet}
-            aria-hidden="true"
-          />
-          {/* Action Sheet */}
-          <div
-            className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-background p-4 pb-[calc(2rem+env(safe-area-inset-bottom))] shadow-lg sm:hidden"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Cell actions"
-          >
-            {/* Handle bar */}
-            <div className="mx-auto mb-4 h-1 w-12 rounded-full bg-muted-foreground/30" />
-
-            {/* Cell info */}
-            <div className="mb-4 text-center">
-              <span className="text-sm font-medium text-muted-foreground">
-                Cell {mobileActionSheet.cell ? encodeCellAddress(mobileActionSheet.cell.row, mobileActionSheet.cell.column) : ''}
-              </span>
-            </div>
-
-            {/* Action buttons */}
-            <div className="space-y-2">
-              <button
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
-                onClick={() => {
-                  if (mobileActionSheet.cell && !isReadOnly) {
-                    startCellEdit(mobileActionSheet.cell.row, mobileActionSheet.cell.column);
-                  }
-                  closeMobileActionSheet();
-                }}
-                disabled={isReadOnly}
-              >
-                Edit Cell
-              </button>
-              <button
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
-                onClick={() => {
-                  handleCopy('formulas');
-                  closeMobileActionSheet();
-                }}
-              >
-                Copy
-              </button>
-              <button
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted"
-                onClick={() => {
-                  handleCopy('values');
-                  closeMobileActionSheet();
-                }}
-              >
-                Copy Value
-              </button>
-              <button
-                className={cn(
-                  "flex w-full items-center justify-center gap-2 rounded-lg bg-muted/50 px-4 py-3 text-base font-medium transition-colors active:bg-muted",
-                  (!copiedData && !navigator.clipboard) && "opacity-50"
-                )}
-                onClick={() => {
-                  if (copiedData || navigator.clipboard) {
-                    handlePaste('auto');
-                  }
-                  closeMobileActionSheet();
-                }}
-                disabled={!copiedData && !navigator.clipboard}
-              >
-                Paste
-              </button>
-              <button
-                className={cn(
-                  "flex w-full items-center justify-center gap-2 rounded-lg bg-destructive/10 px-4 py-3 text-base font-medium text-destructive transition-colors active:bg-destructive/20",
-                  isReadOnly && "opacity-50"
-                )}
-                onClick={() => {
-                  if (!isReadOnly && mobileActionSheet.cell) {
-                    const cellAddress = encodeCellAddress(mobileActionSheet.cell.row, mobileActionSheet.cell.column);
-                    applySheetUpdate((previous) => {
-                      const nextCells = { ...previous.cells };
-                      delete nextCells[cellAddress];
-                      return {
-                        ...previous,
-                        version: previous.version + 1,
-                        cells: nextCells,
-                      };
-                    });
-                    setFormulaValue('');
-                  }
-                  closeMobileActionSheet();
-                }}
-                disabled={isReadOnly}
-              >
-                Clear Cell
-              </button>
-            </div>
-
-            {/* Cancel button */}
-            <button
-              className="mt-4 flex w-full items-center justify-center rounded-lg border border-border px-4 py-3 text-base font-medium transition-colors active:bg-muted"
-              onClick={closeMobileActionSheet}
-            >
-              Cancel
-            </button>
-          </div>
-        </>
-      )}
+      <SheetMobileActionSheet
+        state={mobileActionSheet}
+        isReadOnly={isReadOnly}
+        canPaste={!!copiedData || canUseClipboard}
+        onEdit={(cell) => startCellEdit(cell.row, cell.column)}
+        onCopy={handleCopy}
+        onPaste={() => handlePaste('auto')}
+        onClear={(cell) => {
+          applySheetUpdate((previous) => applyCellDelete(previous, encodeCellAddress(cell.row, cell.column)));
+          setFormulaValue('');
+        }}
+        onClose={closeMobileActionSheet}
+      />
 
       {/* Screen reader announcements */}
       <div
@@ -2142,35 +1466,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         {announcement}
       </div>
 
+      <SheetTabBar
+        activeName={sheet.sheetName ?? 'Sheet1'}
+        otherNames={(sheet.extraSheets ?? []).map((tab) => tab.name)}
+      />
+
       {/* Quick Stats Footer */}
-      <div className="flex items-center justify-between border-t bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground sm:px-4">
-        <div className="flex items-center gap-4">
-          <span className="font-medium">{selectionAddress}</span>
-          {selection.type === 'range' && (
-            <span className="text-muted-foreground/70">
-              {Math.abs(selection.range.end.row - selection.range.start.row) + 1} × {Math.abs(selection.range.end.column - selection.range.start.column) + 1} cells
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3 sm:gap-4">
-          {selectionStats.numericCount > 0 && (
-            <>
-              <span className="hidden sm:inline">
-                <span className="text-muted-foreground/70">Sum: </span>
-                <span className="font-medium tabular-nums">{selectionStats.sum?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-              </span>
-              <span>
-                <span className="text-muted-foreground/70">Avg: </span>
-                <span className="font-medium tabular-nums">{selectionStats.average?.toLocaleString(undefined, { maximumFractionDigits: 4 })}</span>
-              </span>
-            </>
-          )}
-          <span>
-            <span className="text-muted-foreground/70">Count: </span>
-            <span className="font-medium tabular-nums">{selectionStats.count}</span>
-          </span>
-        </div>
-      </div>
+      <SheetStatusBar
+        selectionAddress={selectionAddress}
+        selection={selection}
+        stats={selectionStats}
+        density={density}
+        onDensityChange={setDensity}
+      />
     </div>
   );
 };

@@ -5,20 +5,39 @@ import { useState } from 'react';
 import { ArrowLeft, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { useHotkeyPreferences, updateHotkeyPreference } from '@/hooks/useHotkeyPreferences';
+import {
+  useHotkeyPreferences,
+  updateHotkeyPreference,
+  deleteHotkeyPreference,
+  fetchHotkeyPreferences,
+  unusablePreferences,
+} from '@/hooks/useHotkeyPreferences';
 import { HOTKEY_REGISTRY, HOTKEY_CATEGORIES, getHotkeysByCategory, type HotkeyCategory } from '@/lib/hotkeys/registry';
-import { getEffectiveBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
+import { getEffectiveBinding, resolvePlatformBinding, useHotkeyStore } from '@/stores/useHotkeyStore';
 import { HotkeyInput } from '@/components/settings/hotkeys/HotkeyInput';
+import { RESERVED_BINDINGS, formatBindingForDisplay } from '@/lib/hotkeys/binding';
+import { useIsMac } from '@/hooks/useIsMac';
 import { toast } from 'sonner';
 
 export default function HotkeysSettingsPage() {
   const router = useRouter();
-  const { isLoading, mutate } = useHotkeyPreferences();
+  const { preferences, isLoading, mutate } = useHotkeyPreferences();
   const userBindings = useHotkeyStore((s) => s.userBindings);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const isMac = useIsMac();
 
   const hotkeysByCategory = getHotkeysByCategory();
   const categories = Object.keys(hotkeysByCategory) as HotkeyCategory[];
+
+  // The notice is a view of what the server holds, not a thing to keep in step
+  // with it: any preference still stored in a shape that cannot fire.
+  const resetHotkeyIds = unusablePreferences(preferences).map((p) => p.hotkeyId);
+
+  // Name the shortcuts in the notice — "one shortcut" leaves the user hunting.
+  const resetLabels = resetHotkeyIds
+    .map((id) => HOTKEY_REGISTRY.find((h) => h.id === id)?.label ?? id)
+    .map((label) => `"${label}"`)
+    .join(', ');
 
   function detectConflict(hotkeyId: string, newBinding: string): string | null {
     if (!newBinding) return null;
@@ -43,19 +62,89 @@ export default function HotkeysSettingsPage() {
     try {
       await updateHotkeyPreference(hotkeyId, binding);
       setEditingId(null);
-      toast.success('Hotkey updated');
-      mutate();
+      if (RESERVED_BINDINGS.has(binding)) {
+        toast.warning(
+          `${formatBindingForDisplay(binding, isMac)} is usually claimed by your browser, so this shortcut may never reach PageSpace`
+        );
+      } else {
+        toast.success('Hotkey updated');
+      }
+      // Fold the saved binding into the cached payload rather than waiting for
+      // the revalidation: the notice is derived from that payload, so until it
+      // updates the banner keeps telling the user to set a shortcut they have
+      // just set. Revalidation still follows and remains the source of truth.
+      void mutate(
+        (current) => ({
+          preferences: [
+            ...(current?.preferences ?? []).filter((p) => p.hotkeyId !== hotkeyId),
+            { hotkeyId, binding },
+          ],
+        }),
+        { revalidate: true }
+      ).catch(() => {});
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to update hotkey');
     }
   };
 
-  const handleReset = async (hotkeyId: string) => {
-    const definition = HOTKEY_REGISTRY.find((h) => h.id === hotkeyId);
-    if (!definition) return;
-
+  // The rows are what make the notice survive a reload, so acknowledging it is
+  // what deletes them — and with the notice derived, deleting them is the only
+  // thing dismissing has to do.
+  //
+  // Which rows to delete comes from a fresh read rather than what this tab is
+  // rendering: SWR does not revalidate on focus, so a tab left open on this
+  // page never learns that another tab re-bound the shortcut, and deleting
+  // from a stale list would throw away the binding the user had just set.
+  const handleDismissResetNotice = async () => {
     try {
-      await handleSave(hotkeyId, definition.defaultBinding);
+      // Each delete is conditional on the binding this read saw. Between the
+      // read and the delete another tab can save a real shortcut, and deleting
+      // unconditionally would throw it away — the read narrows that window but
+      // cannot close it.
+      const unusable = unusablePreferences(await fetchHotkeyPreferences());
+      const outcomes = await Promise.all(
+        unusable.map(async ({ hotkeyId, binding }) => ({
+          hotkeyId,
+          removed: await deleteHotkeyPreference(hotkeyId, binding),
+        }))
+      );
+
+      // Past this point the dismiss has succeeded. Fold the rows that actually
+      // went out of the cached payload so the banner goes now — only those,
+      // because a conditional delete that matched nothing means the row holds
+      // something newer than this read saw, and hiding it would blank a
+      // shortcut that is alive and well.
+      //
+      // The revalidation is deliberately not awaited: a refetch failing
+      // afterwards must not report a completed dismiss as a failure. It is the
+      // `void` and the `.catch` that guarantee that, not where the call sits —
+      // awaiting it would put the rejection back into the catch below.
+      const deleted = new Set(outcomes.filter((o) => o.removed).map((o) => o.hotkeyId));
+      void mutate(
+        (current) => ({
+          preferences: (current?.preferences ?? []).filter((p) => !deleted.has(p.hotkeyId)),
+        }),
+        { revalidate: true }
+      ).catch(() => {});
+    } catch {
+      // Say why, rather than leaving it looking like the button did nothing.
+      toast.error('Could not dismiss the notice — please try again');
+
+      // `Promise.all` fails fast, so some rows may already be gone while
+      // others are not, and the fold above never ran. Refetch rather than
+      // leave the banner naming shortcuts that no longer exist.
+      void mutate().catch(() => {});
+    }
+  };
+
+  const handleReset = async (hotkeyId: string) => {
+    // Drop the override entirely rather than storing the default as a custom
+    // binding — the default is resolved per platform at read time.
+    try {
+      await deleteHotkeyPreference(hotkeyId);
+      setEditingId(null);
+      toast.success('Hotkey reset to default');
+      void mutate().catch(() => {});
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to reset hotkey');
     }
@@ -77,6 +166,18 @@ export default function HotkeysSettingsPage() {
         <p className="text-muted-foreground">
           Customize keyboard shortcuts for common actions. Click a shortcut to edit it.
         </p>
+        {resetHotkeyIds.length > 0 && (
+          <div className="mt-3 flex items-start gap-3 rounded-md border bg-muted/50 px-3 py-2">
+            <p className="flex-1 text-sm text-muted-foreground">
+              {resetLabels} {resetHotkeyIds.length === 1 ? 'was' : 'were'} saved in a format that could
+              never be triggered, so {resetHotkeyIds.length === 1 ? 'it has' : 'they have'} been restored
+              to the default. Set {resetHotkeyIds.length === 1 ? 'it' : 'them'} again below.
+            </p>
+            <Button variant="ghost" size="sm" onClick={handleDismissResetNotice}>
+              Dismiss
+            </Button>
+          </div>
+        )}
       </div>
 
       {isLoading ? (
@@ -98,9 +199,11 @@ export default function HotkeysSettingsPage() {
                 <CardContent>
                   <div className="space-y-4">
                     {hotkeys.map((hotkey) => {
-                      const effectiveBinding = userBindings.get(hotkey.id) ?? hotkey.defaultBinding;
                       const isEditing = editingId === hotkey.id;
-                      const isCustomized = effectiveBinding !== hotkey.defaultBinding;
+                      const isCustomized = userBindings.has(hotkey.id);
+                      const effectiveBinding = isCustomized
+                        ? userBindings.get(hotkey.id)!
+                        : resolvePlatformBinding(hotkey.defaultBinding, isMac);
 
                       return (
                         <div
@@ -128,7 +231,7 @@ export default function HotkeysSettingsPage() {
                                   onClick={() => setEditingId(hotkey.id)}
                                   className="font-mono min-w-[120px]"
                                 >
-                                  {effectiveBinding || 'Disabled'}
+                                  {formatBindingForDisplay(effectiveBinding, isMac) || 'Disabled'}
                                 </Button>
                                 {isCustomized && (
                                   <Button

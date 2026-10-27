@@ -1,12 +1,30 @@
+import { isValidElement, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase, formatDollars, planFacts } from "@/lib/credits";
+import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
 
+/** Flatten a ReactNode answer to plain text for the FAQPage schema. */
+function faqText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(faqText).join("");
+  if (isValidElement(node)) return faqText((node.props as { children?: ReactNode }).children);
+  return "";
+}
+
 export const metadata = pageMetadata.faq;
+
+// Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
+const PRO = planFacts("pro");
+const BUSINESS = planFacts("business");
+const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
 
 interface FAQItem {
   id: string;
@@ -51,13 +69,19 @@ const faqs: FAQItem[] = [
       "Both. Individuals use it as a personal AI-powered notebook and task system. Teams use it for real-time collaboration. You can start solo and add people whenever.",
     category: "What is PageSpace?",
   },
+  {
+    id: "when-not-the-fit",
+    question: "When is PageSpace not the right fit?",
+    answer:
+      "If you want a purely offline notebook with no AI, or a single-purpose tool for one narrow job, PageSpace is more than you need. It's built for people and teams who want an AI coworker acting across their whole workspace — if you don't want AI touching your work, it isn't the right pick.",
+    category: "What is PageSpace?",
+  },
 
   // Pricing and plans
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer:
-      "Yes. The Free plan includes 500 MB of storage and 50 AI calls per day. No credit card required.",
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -65,22 +89,30 @@ const faqs: FAQItem[] = [
     question: "What do the paid plans include?",
     answer: (
       <>
-        More AI calls and storage. Pro is $15/month, Founder is $50/month,
-        Business is $100/month. All plans include real-time collaboration, AI
-        agents, and the ability to bring your own API key. Full comparison on
-        the {docsLink("/pricing", "Pricing page")}.
+        More credits, access to Pro models, and more storage. Each plan
+        includes a monthly credit allowance — {MONTHLY_CREDITS.pro} credits a
+        month on Pro ({PRO.price}/month) and {MONTHLY_CREDITS.business} credits a month
+        on Business ({BUSINESS.price}/month, the plan for an organization with {BUSINESS_SEATS} seats
+        included and {EXTRA_SEAT_PRICE} per extra seat) — and you can buy more credits
+        anytime. All plans include real-time collaboration
+        and AI agents. Full comparison on the{" "}
+        {docsLink("/pricing", "Pricing page")}.
       </>
     ),
     category: "Pricing and plans",
   },
   {
-    id: "hit-daily-ai-limit",
-    question: "What happens when I run out of AI calls for the day?",
-    answer:
-      "Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until your limit resets the next day. Upgrade your plan for higher daily quotas.",
+    id: "how-ai-credits-work",
+    question: "How do credits work?",
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS_DISPLAY} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
     category: "Pricing and plans",
   },
-
+  {
+    id: "hit-daily-ai-limit",
+    question: "What happens when I run out of credits?",
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}), upgrade to a paid plan, or — on paid plans — your next monthly allowance is added at your billing renewal.`,
+    category: "Pricing and plans",
+  },
   // Getting started
   {
     id: "how-do-i-sign-up",
@@ -93,7 +125,7 @@ const faqs: FAQItem[] = [
     id: "how-do-i-get-my-team-in",
     question: "How do I get my team in?",
     answer:
-      "Invite teammates by email from your drive settings. They get a link, set up their account (passkey or magic link), and land directly in your workspace. Admins get access to everything in the drive; regular members only see pages you specifically share with them.",
+      "Invite teammates by email from your drive settings — even before they have an account — or share a join link. They set up their account (passkey or magic link) and land directly in your workspace. Members see everything in the drive except pages you've marked private; mark a page private to keep it to yourself or a chosen few.",
     category: "Getting started",
   },
   {
@@ -129,14 +161,14 @@ const faqs: FAQItem[] = [
     id: "which-models-available",
     question: "Which AI models are available?",
     answer:
-      "You can pick from models across OpenAI, Anthropic, Google, xAI, OpenRouter, and others, or run a local model via Ollama. Each agent in your workspace can use a different model.",
+      "PageSpace gives you one catalogue of models from many vendors — OpenAI, Anthropic, Google, xAI, and more. Free accounts use a curated set of efficient models; paid plans unlock the full catalogue. Each agent in your workspace can use a different model.",
     category: "Working with AI",
   },
   {
     id: "ai-access-to-content",
     question: "Will the AI touch content I haven't given it access to?",
     answer:
-      "No. Agents act as the user who asked them — they can only see and edit what you can see and edit.",
+      "No. Each agent is a permission-scoped principal with its own drive membership and access level — bound the same way a person is. Agents only see and edit content they've been granted access to through their own role in the drive. If you want an agent to inherit your access instead, you can enable user-scoped access per agent, but that's opt-in; the default is stricter and more secure.",
     category: "Working with AI",
   },
   {
@@ -156,10 +188,24 @@ const faqs: FAQItem[] = [
     category: "Collaboration and sharing",
   },
   {
-    id: "no-permission-inheritance",
-    question: "If I share a folder with someone, do they get access to everything inside it?",
+    id: "keep-a-page-private",
+    question: "Can I keep a page private from the rest of the drive?",
     answer:
-      "No. Sharing a folder only gives access to that folder — pages inside each need their own share. Admins and owners are the exception; they get access to everything in the drive automatically.",
+      "Yes. Drive members see the drive's pages by default, so collaboration is the starting point — but you can mark any page (or folder) private, and then only the owner, admins, and the people or roles you explicitly grant access can see it. Marking a page private takes effect immediately.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "share-with-a-link",
+    question: "Can I share a page or drive with a link?",
+    answer:
+      "Yes. Generate a share link for a single page or a whole drive. Opening either link adds the person to the drive — a drive link with the role you choose, a page link as a member with that page's permissions — so they'll also see the drive's other non-private pages; mark anything sensitive private first. Links are revocable and can carry an expiry. You can also invite someone by email before they even have an account — the invite waits for them and becomes access when they sign up.",
+    category: "Collaboration and sharing",
+  },
+  {
+    id: "publish-to-web",
+    question: "Can I publish a page to the public web?",
+    answer:
+      "Yes — Canvas pages can be published as standalone web pages at their own address on a separate public domain, away from your workspace. Hit Publish, share the link, and unpublish whenever you like.",
     category: "Collaboration and sharing",
   },
   {
@@ -182,7 +228,7 @@ const faqs: FAQItem[] = [
     answer: (
       <>
         Yes. Content is encrypted at rest and in transit. Stored credentials
-        like API keys get an additional layer of encryption. More on the{" "}
+        like integration tokens get an additional layer of encryption. More on the{" "}
         {docsLink("/security", "Security page")}.
       </>
     ),
@@ -236,7 +282,9 @@ const faqs: FAQItem[] = [
       <>
         Yes — via the PageSpace MCP server. Create a token in your settings,
         point your client at the PageSpace MCP endpoint, and it can read and
-        write your workspace using the same tools the built-in agents use.{" "}
+        write your workspace using the same tools the built-in agents use. The
+        same token doubles as an OpenAI-compatible API key, so you can call any
+        of your agents as a model from your own code.{" "}
         {docsLink("/docs/integrations/mcp", "Setup guide")}.
       </>
     ),
@@ -246,9 +294,14 @@ const faqs: FAQItem[] = [
 
 const categories = [...new Set(faqs.map((faq) => faq.category))];
 
+const faqSchema = createFaqSchema(
+  faqs.map((faq) => ({ q: faq.question, a: faqText(faq.answer).replace(/\s+/g, " ").trim() })),
+);
+
 export default function FAQPage() {
   return (
     <div className="min-h-screen bg-background">
+      <JsonLd data={faqSchema} />
       <SiteNavbar />
       <FAQHashOpener />
 

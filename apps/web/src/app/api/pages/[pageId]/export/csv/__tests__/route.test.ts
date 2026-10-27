@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -58,6 +59,10 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 import { db } from '@pagespace/db/db';
@@ -66,6 +71,7 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({

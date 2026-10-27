@@ -515,6 +515,62 @@ describe('POST /api/auth/magic-link/send', () => {
     });
   });
 
+  describe('device-bound platforms', () => {
+    it.each(['ios', 'android', 'desktop'] as const)(
+      'given platform %s with a device, forwards platform + device fields to the pipe',
+      async (platform) => {
+        const request = createMagicLinkRequest({
+          email: 'test@example.com',
+          platform,
+          deviceId: 'dev_1',
+          deviceName: 'Some device',
+        });
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+        expect(pipeInner).toHaveBeenCalledWith(
+          expect.objectContaining({ platform, deviceId: 'dev_1', deviceName: 'Some device' }),
+        );
+      },
+    );
+
+    it.each(['ios', 'android', 'desktop'] as const)(
+      'given platform %s without a deviceId, returns 400 — a device-bound link needs its device',
+      async (platform) => {
+        const request = createMagicLinkRequest({
+          email: 'test@example.com',
+          platform,
+          deviceName: 'Some device',
+        });
+        const response = await POST(request);
+
+        expect(response.status).toBe(400);
+        expect(pipeInner).not.toHaveBeenCalled();
+      },
+    );
+
+    it('given platform web, needs no device fields', async () => {
+      const request = createMagicLinkRequest({ email: 'test@example.com', platform: 'web' });
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(pipeInner).toHaveBeenCalledWith(expect.objectContaining({ platform: 'web' }));
+    });
+
+    it('given an unknown platform, returns 400', async () => {
+      const request = createMagicLinkRequest({
+        email: 'test@example.com',
+        platform: 'watchos',
+        deviceId: 'dev_1',
+        deviceName: 'Watch',
+      });
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
+      expect(pipeInner).not.toHaveBeenCalled();
+    });
+  });
+
   describe('inviteToken binding', () => {
     it('given a valid inviteToken whose email matches, forwards inviteToken to the pipe', async () => {
       resolveInviteContextMock.mockResolvedValueOnce({

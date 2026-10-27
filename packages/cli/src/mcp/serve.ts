@@ -1,0 +1,382 @@
+/**
+ * `pagespace mcp`'s stdio server (Phase 6 task 1) — a thin shell over the
+ * operation registry. All decision logic (tool conversion, input
+ * validation, error mapping) lives in `tool-convert.ts`; this file only:
+ * (1) assembles every SDK-exported operation into one full registry, and
+ * (2) wires the low-level MCP `Server`'s `tools/list` and `tools/call`
+ * handlers to that registry.
+ */
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import {
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerDriveJoinRequest,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getAlwaysOwnCredits,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  inviteToOrganization,
+  leaveOrganization,
+  listDriveJoinRequests,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  requestToJoinDrive,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  updateOrgPolicies,
+  updateOrganization,
+  verifyOrgDomain,
+  withdrawDriveJoinRequest,
+  appendRows,
+  applySheetFormat,
+  askAgent,
+  createCalendarEvent,
+  createCommand,
+  createDrive,
+  createDriveRole,
+  createPage,
+  createTask,
+  createTaskStatus,
+  createWorkflow,
+  deleteCalendarEvent,
+  deleteCalendarTrigger,
+  deleteChannelMessage,
+  deleteCommand,
+  deleteDriveRole,
+  deleteLines,
+  deleteRows,
+  deleteTask,
+  deleteTaskTrigger,
+  deleteWorkflow,
+  describeSelfKey,
+  describeSheet,
+  editSheetCells,
+  exportPageMarkdown,
+  exportSheetCsv,
+  getActivity,
+  getAssignedTasks,
+  getCalendarEvent,
+  getDriveRole,
+  getPageDetails,
+  getRows,
+  globSearch,
+  insertLines,
+  inviteCalendarAttendees,
+  listAgents,
+  listCalendarEvents,
+  listCollaborators,
+  listCommands,
+  listConversations,
+  listDriveMembers,
+  listDriveRoles,
+  listDrives,
+  listModels,
+  listMyOrganizations,
+  listOrgDriveDirectory,
+  listOrgMembers,
+  listPages,
+  listTrash,
+  listWorkflows,
+  movePage,
+  multiDriveListAgents,
+  multiDriveSearch,
+  queryRows,
+  readConversation,
+  readDocument,
+  readSheetFormatting,
+  regexSearch,
+  removeCalendarAttendee,
+  removeRolePagePermissions,
+  renameDrive,
+  renamePage,
+  reorderTask,
+  replaceLines,
+  restoreDrive,
+  restorePage,
+  rsvpCalendarEvent,
+  sendChannelMessage,
+  setCalendarTrigger,
+  setHomePage,
+  setRoleDriveWidePermissions,
+  setRolePagePermissions,
+  setTaskTrigger,
+  trashDrive,
+  trashPage,
+  updateAgentConfig,
+  updateCalendarEvent,
+  updateCells,
+  updateCommand,
+  updateDriveContext,
+  updateDriveRole,
+  updateTask,
+  updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
+  getOrganization,
+  getOrgPolicies,
+  getConversationSpendSource,
+  getDriveSpendSource,
+  getDriveWallet,
+  listMyWallets,
+  createRegistry,
+  getOperation,
+  listOperations,
+  type Operation,
+  type OperationRegistry,
+} from '@pagespace/sdk';
+import {
+  formatInvalidInputResult,
+  formatSdkErrorResult,
+  formatSuccessResult,
+  formatUnknownToolResult,
+  operationToMcpTool,
+  validateToolInput,
+} from './tool-convert.js';
+import { CLI_VERSION } from '../commands/version.js';
+import type { CredentialKind } from '../auth/credential-kind.js';
+
+/**
+ * Every operation the SDK exports, across every domain (drives, pages,
+ * documents, roles, tasks, agents, conversations, channels, activity,
+ * calendar, search, commands, workflows, members, collaborators, export,
+ * organizations, the org side of drives, wallet reads).
+ * `buildOperationRegistry` is the ONLY place this list is assembled — the
+ * MCP tool surface is derived from it mechanically (`listOperations` +
+ * `operationToMcpTool`), so drift between "operations the SDK has" and
+ * "tools MCP serves" is structurally impossible.
+ *
+ * `tokens.list`/`tokens.revoke` are the two deliberate omissions: key
+ * management is not something an agent's own key should be able to do to the
+ * other keys its owner holds, and the routes behind them refuse `mcp_`
+ * credentials anyway. `describeSelfKey` is here for the opposite reason — an
+ * agent asking what its own credential may do is exactly the question this
+ * surface should be able to answer, and it answers only about itself.
+ */
+const ALL_OPERATIONS: readonly Operation[] = [
+  appendRows,
+  applySheetFormat,
+  askAgent,
+  createCalendarEvent,
+  createCommand,
+  createDrive,
+  createDriveRole,
+  createPage,
+  createTask,
+  createTaskStatus,
+  createWorkflow,
+  deleteCalendarEvent,
+  deleteCalendarTrigger,
+  deleteChannelMessage,
+  deleteCommand,
+  deleteDriveRole,
+  deleteLines,
+  deleteRows,
+  deleteTask,
+  deleteTaskTrigger,
+  deleteWorkflow,
+  describeSelfKey,
+  describeSheet,
+  editSheetCells,
+  exportPageMarkdown,
+  exportSheetCsv,
+  getActivity,
+  getAssignedTasks,
+  getCalendarEvent,
+  getDriveRole,
+  getPageDetails,
+  getRows,
+  globSearch,
+  insertLines,
+  inviteCalendarAttendees,
+  listAgents,
+  listCalendarEvents,
+  listCollaborators,
+  listCommands,
+  listConversations,
+  listDriveMembers,
+  listDriveRoles,
+  listDrives,
+  listModels,
+  listPages,
+  listTrash,
+  listWorkflows,
+  movePage,
+  multiDriveListAgents,
+  multiDriveSearch,
+  queryRows,
+  readConversation,
+  readDocument,
+  readSheetFormatting,
+  regexSearch,
+  removeCalendarAttendee,
+  removeRolePagePermissions,
+  renameDrive,
+  renamePage,
+  reorderTask,
+  replaceLines,
+  restoreDrive,
+  restorePage,
+  rsvpCalendarEvent,
+  sendChannelMessage,
+  setCalendarTrigger,
+  setHomePage,
+  setRoleDriveWidePermissions,
+  setRolePagePermissions,
+  setTaskTrigger,
+  trashDrive,
+  trashPage,
+  updateAgentConfig,
+  updateCalendarEvent,
+  updateCells,
+  updateCommand,
+  updateDriveContext,
+  updateDriveRole,
+  updateTask,
+  updateWorkflow,
+  execInWorkspace,
+  listWorkspaces,
+  // Organizations (Spec X-1, ORG-5): every org read and write the web exposes to a key, each
+  // authorized by the web's requireOrgRole. Card-checkout create, org delete (Stripe), ownership
+  // transfer, seat caps, the pool and billing need a signed-in session ([D-OW-26]): none is an
+  // SDK operation, so none can be a tool.
+  acceptOrgInvitation,
+  addOrgDomain,
+  answerOrgGuestApproval,
+  changeOrgMemberRole,
+  clearOrgSuppression,
+  confirmOrgDomainEmail,
+  deleteOrgAutomation,
+  exportOrgAuditLog,
+  getOrgAuditLog,
+  getOrgDriveUsage,
+  getOrganization,
+  getOrgPolicies,
+  inviteToOrganization,
+  leaveOrganization,
+  listMyOrganizations,
+  listOrgAutomations,
+  listOrgDomains,
+  listOrgDriveDirectory,
+  listOrgGuestApprovals,
+  listOrgGuests,
+  listOrgInvitations,
+  listOrgMemberActivity,
+  listOrgMembers,
+  listOrgPolicySuspensions,
+  previewOrgSignInPolicy,
+  listOrgTrashedDrives,
+  reassignOrgAutomation,
+  removeOrgDomain,
+  removeOrgMember,
+  resendOrgInvitation,
+  revokeOrgInvitation,
+  updateOrganization,
+  updateOrgPolicies,
+  verifyOrgDomain,
+  // Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6).
+  answerDriveJoinRequest,
+  listDriveJoinRequests,
+  moveDriveOutOfOrg,
+  moveDriveToOrg,
+  requestToJoinDrive,
+  setDriveOrgLead,
+  setDriveOrgVisibility,
+  withdrawDriveJoinRequest,
+  // Wallet READS only ([D-OW-26]): no wallet write is an SDK operation, so none can be a tool.
+  getAlwaysOwnCredits,
+  getConversationSpendSource,
+  getDriveSpendSource,
+  getDriveWallet,
+  listMyWallets,
+];
+
+/** Pure: assembles the full operation registry. Rejects duplicate names at construction (`createRegistry`). */
+export function buildOperationRegistry(): OperationRegistry {
+  return createRegistry(ALL_OPERATIONS);
+}
+
+/**
+ * The only slice of `PageSpaceClient` this server needs. Deliberately not
+ * `Pick<PageSpaceClient, 'invoke'>`: `PageSpaceClient.invoke` is generic per
+ * call (`Operation<string, TInputSchema, TOutputSchema>` narrows its own
+ * input/output types), and every operation flowing through here is the
+ * type-erased `Operation` `listOperations` returns — a plain, non-generic
+ * shape is what a fake `invoke` in tests needs to satisfy too.
+ */
+export interface McpSdkClient {
+  invoke(op: Operation, input: unknown): Promise<unknown>;
+}
+
+export interface CreateMcpServerOptions {
+  readonly registry: OperationRegistry;
+  readonly sdk: McpSdkClient;
+  /** Which class of credential the server calls with, so a sign-in denial names the right fix (a key needs a new key). */
+  readonly credentialKind?: CredentialKind;
+  readonly serverInfo?: { readonly name: string; readonly version: string };
+}
+
+// CLI_VERSION (drift-guarded against package.json by commands/__tests__/
+// version.test.ts) so the MCP initialize handshake reports the real release
+// — a hand-maintained copy here is exactly the drift the 1.5.0 guards kill.
+const DEFAULT_SERVER_INFO = { name: 'pagespace', version: CLI_VERSION } as const;
+
+/**
+ * Wires `tools/list` and `tools/call` to `registry`. The only I/O this
+ * function's handlers perform is `sdk.invoke` — everything else (listing,
+ * validation, error formatting) delegates to the pure functions in
+ * `tool-convert.ts`.
+ */
+export function createMcpServer(options: CreateMcpServerOptions): Server {
+  const { registry, sdk } = options;
+  const server = new Server(
+    { name: options.serverInfo?.name ?? DEFAULT_SERVER_INFO.name, version: options.serverInfo?.version ?? DEFAULT_SERVER_INFO.version },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: listOperations(registry).map(operationToMcpTool),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    const { name, arguments: rawArgs } = request.params;
+    const op = getOperation(registry, name);
+    if (!op) {
+      return formatUnknownToolResult(name) as CallToolResult;
+    }
+
+    const validated = validateToolInput(op, rawArgs ?? {});
+    if (!validated.ok) {
+      return formatInvalidInputResult(op, validated.issues) as CallToolResult;
+    }
+
+    try {
+      const output = await sdk.invoke(op, validated.data);
+      return formatSuccessResult(output) as CallToolResult;
+    } catch (error) {
+      return formatSdkErrorResult(op, error, options.credentialKind) as CallToolResult;
+    }
+  });
+
+  return server;
+}

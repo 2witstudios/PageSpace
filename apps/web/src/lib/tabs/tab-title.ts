@@ -18,6 +18,9 @@ export type PathType =
   | 'drive-trash'
   | 'drive-calendar'
   | 'drive-channels'
+  | 'drive-files'
+  | 'drive-workflows'
+  | 'drive-agents'
   // Global dashboard routes
   | 'dashboard-tasks'
   | 'dashboard-activity'
@@ -26,6 +29,7 @@ export type PathType =
   | 'dashboard-connections'
   | 'dashboard-calendar'
   | 'dashboard-drives'
+  | 'dashboard-agents'
   // Direct Messages + Channels routes
   | 'dms'
   | 'dm'
@@ -65,10 +69,24 @@ export interface TabMeta {
 }
 
 // Global dashboard routes (not drive-specific)
-const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives'] as const;
+const GLOBAL_DASHBOARD_ROUTES = ['tasks', 'activity', 'storage', 'trash', 'connections', 'calendar', 'dms', 'channels', 'drives', 'agents'] as const;
 
 // Drive-specific special routes
-const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels'] as const;
+const DRIVE_SPECIAL_ROUTES = ['tasks', 'activity', 'members', 'settings', 'trash', 'calendar', 'channels', 'files', 'workflows', 'agents'] as const;
+
+/**
+ * Whether a parsed route is scoped to ONE drive at the drive level — the bare
+ * `/dashboard/[driveId]` AND every `/dashboard/[driveId]/<section>` sub-route
+ * (tasks, members, settings, files, channels, workflows, calendar, trash,
+ * activity). All of them already carry `driveId`; consumers asking "which
+ * workspace is the user standing in" must not special-case only `'drive'`.
+ *
+ * Prefix-matched so a `drive-*` PathType added later is covered the day it
+ * lands. `'dashboard-drives'` (the global drive LIST) and `'page'` (a page
+ * INSIDE a drive, which callers handle separately) deliberately don't match.
+ */
+export const isDriveScopedPath = (parsed: ParsedPath): boolean =>
+  !!parsed.driveId && (parsed.type === 'drive' || parsed.type.startsWith('drive-'));
 
 export const parseTabPath = (path: string): ParsedPath => {
   const segments = path.split('/').filter(Boolean);
@@ -174,6 +192,7 @@ export const parseTabPath = (path: string): ParsedPath => {
       connections: 'dashboard-connections',
       calendar: 'dashboard-calendar',
       drives: 'dashboard-drives',
+      agents: 'dashboard-agents',
     };
     return { type: globalTypeMap[secondSegment] };
   }
@@ -221,6 +240,9 @@ export const parseTabPath = (path: string): ParsedPath => {
       trash: 'drive-trash',
       calendar: 'drive-calendar',
       channels: 'drive-channels',
+      files: 'drive-files',
+      workflows: 'drive-workflows',
+      agents: 'drive-agents',
     };
     return {
       type: typeMap[thirdSegment],
@@ -281,7 +303,12 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
       return { title: 'Calendar', iconName: 'Calendar' };
 
     case 'dashboard-drives':
-      return { title: 'Drives', iconName: 'Folder' };
+      // The drives browser is what Files shows in the All drives focus, and
+      // the page is titled as such, so the tab is too.
+      return { title: 'Files', iconName: 'Folder' };
+
+    case 'dashboard-agents':
+      return { title: 'Agents', iconName: 'Bot' };
 
     // Drive-specific routes
     case 'drive-tasks':
@@ -311,6 +338,15 @@ export const getStaticTabMeta = (parsed: ParsedPath): TabMeta | null => {
 
     case 'drive-channels':
       return { title: 'Channels', iconName: 'Hash' };
+
+    case 'drive-files':
+      return { title: 'Files', iconName: 'Folder' };
+
+    case 'drive-workflows':
+      return { title: 'Workflows', iconName: 'Workflow' };
+
+    case 'drive-agents':
+      return { title: 'Agents', iconName: 'Bot' };
 
     // Direct Messages + Channels routes
     case 'dms':

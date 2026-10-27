@@ -3,8 +3,13 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import MessageQuoteBlock from '../MessageQuoteBlock';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 
-vi.mock('@/hooks/usePageNavigation', () => ({
-  usePageNavigation: () => ({ navigateToPage: vi.fn() }),
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+vi.mock('streamdown', () => ({
+  defaultRemarkPlugins: { gfm: () => undefined },
+  Streamdown: ({ children }: { children: string }) => <span>{children}</span>,
 }));
 
 interface AssertParams {

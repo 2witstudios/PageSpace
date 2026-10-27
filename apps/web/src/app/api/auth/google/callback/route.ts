@@ -16,18 +16,22 @@ import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { OAuth2Client } from 'google-auth-library';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { desktopDeepLink } from '@/lib/auth/desktop-shell';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { consumePKCEVerifier } from '@pagespace/lib/auth/pkce';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const client = new OAuth2Client(
   process.env.GOOGLE_OAUTH_CLIENT_ID,
@@ -69,7 +73,9 @@ export async function GET(req: Request) {
       });
 
       if (verifiedState?.platform === 'desktop') {
-        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState?.shell, 'auth-error')}?error=${errorType}`,
+        );
       }
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
@@ -133,7 +139,36 @@ export async function GET(req: Request) {
 
     const userName = name || email.split('@')[0] || 'User';
 
-    let user = await authRepository.findUserByGoogleIdOrEmail(googleId!, email);
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Google
+    // asserts `email_verified === true`; the subject id may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'google',
+      providerId: googleId!,
+      email,
+      emailVerified: email_verified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'google',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'google_oauth_unverified_email_link_blocked' },
+      });
+      if (verifiedState.platform === 'desktop') {
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState.shell, 'auth-error')}?error=oauth_error`,
+        );
+      }
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
+    let user = matchedUser;
     const wasNewUser = !user;
 
     if (user) {
@@ -191,15 +226,20 @@ export async function GET(req: Request) {
       loggers.auth.info('New user created via Google OAuth', { userId: user.id });
     }
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
     let isNewlyProvisioned = false;
     try {
-      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
-        returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        if (!returnUrl.startsWith('/s/')) {
+          returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        }
       }
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId: user.id,
         provider: 'google',
       });
@@ -208,7 +248,10 @@ export async function GET(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -284,6 +327,7 @@ export async function GET(req: Request) {
 
       // Generate device token (now opaque ps_dev_* token)
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -323,7 +367,7 @@ export async function GET(req: Request) {
 
       // Build deep link URL with only the opaque exchange code
       // Desktop app intercepts this and exchanges code for tokens via POST
-      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      const deepLinkUrl = new URL(desktopDeepLink(verifiedState.shell, 'auth-exchange'));
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');
       if (isNewlyProvisioned) {
@@ -344,12 +388,41 @@ export async function GET(req: Request) {
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    // Deliberately iOS only, though the state schema now accepts 'android'.
+    //
+    // Android's web OAuth does NOT stay in the Capacitor WebView:
+    // `apps/android/capacitor.config.ts` allowlists only `pagespace.ai`, so a
+    // provider host is handed to `Bridge.launchIntent()` and opens externally —
+    // where a successful sign-in drops the session cookie in the wrong jar and
+    // the app stays logged out. This deep link is exactly the fix for that, and
+    // Phase C shipped the Android intent filter in anticipation of it.
+    //
+    // Two things must land before it may be emitted for Android, and the first is
+    // a security precondition, not a plumbing one:
+    //
+    //  1. The handoff must be bound to the app that started the flow. Custom
+    //     schemes are NOT exclusive on Android — any installed app may also
+    //     register `pagespace://` and be offered in the chooser or set as the
+    //     default handler — so an unbound one-time exchange code sent over this
+    //     scheme is a code another app can claim. `apps/android/README.md`
+    //     ("Deep links: what ships, and what is deliberately deferred") states
+    //     this as a precondition in as many words.
+    //  2. Something has to consume it. Nothing listens for the `@capacitor/app`
+    //     `appUrlOpen` event on EITHER platform, so a captured code is silently
+    //     dropped today (same file, "Prerequisite 2 — link routing in the web
+    //     app").
+    //
+    // Widening the state enum removes the blocker Phase C named. Emitting the
+    // link before (1) would trade a wrong-cookie-jar failure for a credential
+    // that can be intercepted — strictly worse — and before (2) it would not
+    // work at all.
     if (platform === 'ios') {
       // Generate deviceId if not provided
       const iosDeviceId = deviceId || createId();
 
       // Generate device token
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -387,6 +460,8 @@ export async function GET(req: Request) {
       });
 
       // Build deep link URL with only the opaque exchange code
+      // iOS is a separate Capacitor app that registers `pagespace://`
+      // itself; the desktop shell variant does not apply here.
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'google');
@@ -411,6 +486,7 @@ export async function GET(req: Request) {
     if (deviceId) {
       try {
         webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
           userAgent: req.headers.get('user-agent') || undefined,
@@ -423,7 +499,10 @@ export async function GET(req: Request) {
       }
     }
 
-    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
       returnUrl = `/dashboard/connections?connection_requested=1`;

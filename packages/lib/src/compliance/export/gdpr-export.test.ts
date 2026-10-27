@@ -10,7 +10,7 @@
  * be tested without reproducing the ORM chain shape. Once that seam
  * exists, remove the chain mocks and promote these to contract tests.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockTable } = vi.hoisted(() => {
   const fn = (name: string) => ({
@@ -31,6 +31,7 @@ const { mockTable } = vi.hoisted(() => {
     content: `${name}.content`,
     pageId: `${name}.pageId`,
     conversationId: `${name}.conversationId`,
+    contextId: `${name}.contextId`,
     sizeBytes: `${name}.sizeBytes`,
     mimeType: `${name}.mimeType`,
     storagePath: `${name}.storagePath`,
@@ -69,32 +70,76 @@ const { mockTable } = vi.hoisted(() => {
     expiresAt: `${name}.expiresAt`,
     revokedAt: `${name}.revokedAt`,
     revokedReason: `${name}.revokedReason`,
+    level: `${name}.level`,
+    category: `${name}.category`,
+    duration: `${name}.duration`,
+    statusCode: `${name}.statusCode`,
+    requestSize: `${name}.requestSize`,
+    responseSize: `${name}.responseSize`,
+    stack: `${name}.stack`,
+    file: `${name}.file`,
+    line: `${name}.line`,
+    column: `${name}.column`,
+    resolved: `${name}.resolved`,
+    method: `${name}.method`,
+    endpoint: `${name}.endpoint`,
+    tagId: `${name}.tagId`,
+    targetKind: `${name}.targetKind`,
+    anchor: `${name}.anchor`,
+    anchorStatus: `${name}.anchorStatus`,
+    channelMessageId: `${name}.channelMessageId`,
+    aiMessageId: `${name}.aiMessageId`,
+    source: `${name}.source`,
+    confidence: `${name}.confidence`,
   });
   return { mockTable: fn };
 });
 
 vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+// Local environments: the collector joins these two; mocked by path like every
+// other schema module so the real declarations never load under the mocked drizzle-orm.
+vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
+vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
-  chatMessages: mockTable('chatMessages'),
+  tags: mockTable('tags'),
+}));
+vi.mock('@pagespace/db/schema/content-tags', () => ({
+  contentTags: mockTable('contentTags'),
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: mockTable('activityLogs'),
   aiUsageLogs: mockTable('aiUsageLogs'),
+  systemLogs: mockTable('systemLogs'),
+  apiMetrics: mockTable('apiMetrics'),
+  errorLogs: mockTable('errorLogs'),
+  errorResolutions: mockTable('errorResolutions'),
+}));
+vi.mock('../../observability/clickhouse-client', () => ({
+  getClickHouseGdprClient: vi.fn(() => null),
+}));
+vi.mock('../../observability/analytics-gdpr', () => ({
+  collectChUserSystemLogs: vi.fn(),
+  collectChUserApiMetrics: vi.fn(),
+  collectChUserErrorLogs: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/storage', () => ({
   files: mockTable('files'),
   filePages: mockTable('filePages'),
 }));
 vi.mock('@pagespace/db/schema/members', () => ({ driveMembers: mockTable('driveMembers') }));
-vi.mock('@pagespace/db/schema/chat', () => ({ channelMessages: mockTable('channelMessages') }));
+vi.mock('@pagespace/db/schema/chat', () => ({
+  channelMessages: mockTable('channelMessages'),
+  channelMessageAttachments: mockTable('channelMessageAttachments'),
+}));
 vi.mock('@pagespace/db/schema/conversations', () => ({
   conversations: mockTable('conversations'),
   messages: mockTable('messages'),
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   directMessages: mockTable('directMessages'),
+  directMessageAttachments: mockTable('directMessageAttachments'),
   dmConversations: mockTable('dmConversations'),
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
@@ -104,7 +149,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
 vi.mock('@pagespace/db/schema/sessions', () => ({ sessions: mockTable('sessions') }));
 vi.mock('@pagespace/db/schema/notifications', () => ({ notifications: mockTable('notifications') }));
 vi.mock('@pagespace/db/schema/display-preferences', () => ({ displayPreferences: mockTable('displayPreferences') }));
-vi.mock('@pagespace/db/schema/personalization', () => ({ userPersonalization: mockTable('userPersonalization') }));
+vi.mock('@pagespace/db/schema/personalization', () => ({
+  userPersonalization: mockTable('userPersonalization'),
+  personalizationCandidates: mockTable('personalizationCandidates'),
+}));
 
 vi.mock('drizzle-orm', () => ({
   eq: (col: unknown, val: unknown) => ({ _op: 'eq', col, val }),
@@ -112,6 +160,9 @@ vi.mock('drizzle-orm', () => ({
   or: (...conditions: unknown[]) => ({ _op: 'or', conditions }),
   and: (...conditions: unknown[]) => ({ _op: 'and', conditions }),
   ne: (col: unknown, val: unknown) => ({ _op: 'ne', col, val }),
+  isNull: (col: unknown) => ({ _op: 'isNull', col }),
+  gt: (col: unknown, val: unknown) => ({ _op: 'gt', col, val }),
+  asc: (col: unknown) => ({ _op: 'asc', col }),
 }));
 
 import {
@@ -121,6 +172,9 @@ import {
   collectUserMessages,
   collectUserFiles,
   collectUserActivity,
+  collectUserSystemLogs,
+  collectUserApiMetrics,
+  collectUserErrorLogs,
   collectUserAiUsage,
   collectUserTasks,
   collectUserSessions,
@@ -129,6 +183,20 @@ import {
   collectUserPersonalization,
   collectAllUserData,
 } from './gdpr-export';
+import type { ExportSignInGate } from './export-sign-in-gate';
+import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
+import {
+  collectChUserSystemLogs,
+  collectChUserApiMetrics,
+  collectChUserErrorLogs,
+} from '../../observability/analytics-gdpr';
+
+/** A gate that withholds nothing (the sign-in gate itself is proven in export-sign-in-gate.integration.test.ts). */
+const ADMIT_ALL: ExportSignInGate = {
+  derivedContent: async () => ({ allowed: true }),
+  refusedDrives: async () => new Map(),
+  refusedDerivedPages: async () => new Map(),
+};
 
 /** Creates a chain-mock db that resolves .where() calls with queued results */
 function createChainDb(whereResults: unknown[][]) {
@@ -244,25 +312,103 @@ describe('collectUserPages', () => {
 });
 
 describe('collectUserMessages', () => {
+  /**
+   * The ladder is channel, unified conversation messages, sent DMs,
+   * dm-conversation ids (+ one more for received DMs when that lookup is
+   * non-empty), with a batched attachment lookup inserted after the channel
+   * and sent-DM queries — each skipped entirely when its message list is
+   * empty, so a queue position only exists when the branch has rows. The legacy `chat_messages` query is GONE —
+   * Phase 4 PR 13 cut the export over to the unified `messages` table alone,
+   * because the dual-write + backfill made it a superset under the same
+   * primary keys and reading both duplicated every page-chat row.
+   */
   it('given_messagesInAllSources_aggregatesWithCorrectSourceLabels', async () => {
-    const aiMsg = { id: 'm1', content: 'AI msg', role: 'user', pageId: 'p1', conversationId: 'c1', createdAt: new Date() };
     const channelMsg = { id: 'm2', content: 'Channel msg', pageId: 'p2', createdAt: new Date() };
-    const convMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date() };
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'p1' };
+    const globalMsg = { id: 'm3', content: 'Conv msg', role: 'user', conversationId: 'c2', createdAt: new Date(), conversationType: 'global', conversationContextId: null };
     const dmMsg = { id: 'm4', content: 'DM msg', conversationId: 'c3', createdAt: new Date() };
-    // 5th call: dmConversations lookup returns [] so no 6th call for received DMs
-    const db = createChainDb([[aiMsg], [channelMsg], [convMsg], [dmMsg], []]);
+    // Ladder: channel, channel attachments, conv, sent DMs, sent-DM
+    // attachments, dmConversations. The two attachment lookups only run when
+    // their message list is non-empty, which it is on both branches here. The
+    // dmConversations lookup returns [] so there is no received-DM query.
+    const db = createChainDb([[channelMsg], [], [pageChatMsg, globalMsg], [dmMsg], [], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
     expect(result).toHaveLength(4);
     expect(result.map(r => r.source)).toEqual([
-      'ai_chat', 'channel', 'conversation', 'direct_message',
+      'channel', 'ai_chat', 'conversation', 'direct_message',
     ]);
   });
 
+  it('labels a page thread ai_chat and takes its pageId from conversations.contextId, not the transitional messages.pageId', async () => {
+    const pageChatMsg = { id: 'm1', content: 'Page chat msg', role: 'assistant', conversationId: 'c1', createdAt: new Date(), conversationType: 'page', conversationContextId: 'agent-page-1' };
+    const db = createChainDb([[], [pageChatMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ source: 'ai_chat', pageId: 'agent-page-1' }));
+  });
+
+  it('reports no pageId for a type=client thread — its contextId is a DRIVE id, and a wrong page is worse than none', async () => {
+    const clientMsg = { id: 'm1', content: 'API thread msg', role: 'user', conversationId: 'c1', createdAt: new Date(), conversationType: 'client', conversationContextId: 'drive-1' };
+    const db = createChainDb([[], [clientMsg], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].source).toBe('ai_chat');
+    expect(result[0].pageId).toBeUndefined();
+  });
+
+  it('exports every attachment on a channel message, in display order', async () => {
+    const channelMsg = { id: 'm1', content: '', pageId: 'p1', createdAt: new Date() };
+    // The rows come back in whatever order the index hands them over; the
+    // subject's copy must be in the order they sent them.
+    const attachmentRows = [
+      { messageId: 'm1', fileId: 'f-2', attachmentMeta: { originalName: 'second.png', mimeType: 'image/png', size: 20 }, position: 1 },
+      { messageId: 'm1', fileId: 'f-1', attachmentMeta: { originalName: 'first.png', mimeType: 'image/png', size: 10 }, position: 0 },
+    ];
+    // channel msgs, channel attachments, conv, sentDms, dmConvIds
+    const db = createChainDb([[channelMsg], attachmentRows, [], [], []]);
+
+    const result = await collectUserMessages(db as never, 'user-1');
+
+    expect(result[0].attachments).toEqual([
+      { fileId: 'f-1', originalName: 'first.png', mimeType: 'image/png', size: 10 },
+      { fileId: 'f-2', originalName: 'second.png', mimeType: 'image/png', size: 20 },
+    ]);
+  });
+
+  it('never binds more message ids in one attachment lookup than Postgres allows', async () => {
+    // Drizzle expands each inArray value into its own bind parameter and
+    // Postgres caps a statement at 65535 of them. A subject prolific enough to
+    // cross that would get an opaque 08P01 protocol error instead of their
+    // Art 15 export, so the lookup is chunked — and this observes the binds
+    // themselves, not just the result, because the ceiling is invisible in the
+    // returned rows.
+    const channelMsgs = Array.from({ length: 1200 }, (_, i) => ({
+      id: `m-${i}`, content: '', pageId: 'p1', createdAt: new Date(),
+    }));
+    const db = createChainDb([channelMsgs, [], [], [], []]);
+
+    await collectUserMessages(db as never, 'user-1');
+
+    // `where` is a bare vi.fn(), so its recorded args are an empty tuple type.
+    const calls = db.where.mock.calls as unknown as unknown[][];
+    const boundIdCounts = calls
+      .map((call) => call[0] as { _op?: string; vals?: unknown[] } | undefined)
+      .filter((predicate) => predicate?._op === 'inArray')
+      .map((predicate) => predicate?.vals?.length ?? 0);
+
+    expect(boundIdCounts.length).toBeGreaterThan(1);
+    expect(Math.max(...boundIdCounts)).toBeLessThanOrEqual(500);
+    expect(boundIdCounts.reduce((sum, n) => sum + n, 0)).toBe(1200);
+  });
+
   it('given_noMessages_returnsEmptyArray', async () => {
-    // 5 calls: ai, channel, conv, sentDms, dmConversations
-    const db = createChainDb([[], [], [], [], []]);
+    // 4 calls: channel, conv, sentDms, dmConversations
+    const db = createChainDb([[], [], [], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -271,8 +417,8 @@ describe('collectUserMessages', () => {
 
   it('given_userHasSentDMs_setsDirectionSent', async () => {
     const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
-    const db = createChainDb([[], [], [], [sentDm], []]);
+    // channel=[], conv=[], sentDms=[sentDm], dmConvIds=[] (no received)
+    const db = createChainDb([[], [], [sentDm], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -291,7 +437,7 @@ describe('collectUserMessages', () => {
       isActive: false,
       deletedAt,
     };
-    const db = createChainDb([[], [], [], [sentDm], []]);
+    const db = createChainDb([[], [], [sentDm], []]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -309,8 +455,8 @@ describe('collectUserMessages', () => {
   it('given_userHasReceivedDMs_includesThemWithDirectionReceived', async () => {
     const convId = { id: 'conv-1' };
     const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
-    const db = createChainDb([[], [], [], [], [convId], [receivedDm]]);
+    // channel=[], conv=[], sentDms=[], dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [], [convId], [receivedDm]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -324,8 +470,9 @@ describe('collectUserMessages', () => {
     const sentDm = { id: 'm4', content: 'Sent DM', conversationId: 'conv-1', createdAt: new Date() };
     const convId = { id: 'conv-1' };
     const receivedDm = { id: 'm5', content: 'Received DM', conversationId: 'conv-1', createdAt: new Date() };
-    // ai=[], channel=[], conv=[], sentDms=[sentDm], dmConvIds=[convId], receivedDms=[receivedDm]
-    const db = createChainDb([[], [], [], [sentDm], [convId], [receivedDm]]);
+    // channel=[], conv=[], sentDms=[sentDm], sent-DM attachments=[],
+    // dmConvIds=[convId], receivedDms=[receivedDm]
+    const db = createChainDb([[], [], [sentDm], [], [convId], [receivedDm]]);
 
     const result = await collectUserMessages(db as never, 'user-1');
 
@@ -366,6 +513,205 @@ describe('collectUserActivity', () => {
   });
 });
 
+describe('collectUserSystemLogs', () => {
+  it('given_systemLogsExist_returnsLogs', async () => {
+    const log = {
+      id: 'sl1', timestamp: new Date(), level: 'error', message: 'boom',
+      category: 'api', endpoint: '/api/foo', method: 'POST', duration: 12,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].message).toBe('boom');
+  });
+
+  it('given_nullableFieldsAreNull_passesThroughNull', async () => {
+    const log = {
+      id: 'sl2', timestamp: new Date(), level: 'info', message: 'no context',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const db = createChainDb([[log]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(result[0].category).toBeNull();
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].method).toBeNull();
+    expect(result[0].duration).toBeNull();
+  });
+});
+
+describe('collectUserApiMetrics', () => {
+  it('given_apiMetricsExist_returnsMetrics', async () => {
+    const metric = {
+      id: 'am1', timestamp: new Date(), endpoint: '/api/foo', method: 'GET',
+      statusCode: 200, duration: 42, requestSize: 100, responseSize: 200,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].statusCode).toBe(200);
+  });
+
+  it('given_requestAndResponseSizeAreNull_passesThroughNull', async () => {
+    const metric = {
+      id: 'am2', timestamp: new Date(), endpoint: '/api/bar', method: 'DELETE',
+      statusCode: 204, duration: 5, requestSize: null, responseSize: null,
+    };
+    const db = createChainDb([[metric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(result[0].requestSize).toBeNull();
+    expect(result[0].responseSize).toBeNull();
+  });
+});
+
+describe('collectUserErrorLogs', () => {
+  it('given_errorLogsExist_returnsLogs', async () => {
+    const errorLog = {
+      id: 'el1', timestamp: new Date(), name: 'TypeError', message: 'oops',
+      endpoint: '/api/foo', method: 'POST', file: 'foo.ts', line: 10, column: 5,
+      resolved: false,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('TypeError');
+  });
+
+  it('given_resolvedTrueAndNullableFieldsNull_passesThroughCorrectly', async () => {
+    const errorLog = {
+      id: 'el2', timestamp: new Date(), name: 'RangeError', message: 'fixed now',
+      endpoint: null, method: null, file: null, line: null, column: null,
+      resolved: true,
+    };
+    const db = createChainDb([[errorLog]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result[0].resolved).toBe(true);
+    expect(result[0].endpoint).toBeNull();
+    expect(result[0].file).toBeNull();
+  });
+});
+
+describe('analytics collectors with CH configured (union of both stores — #890 Phase 3 leaf 4 + FIX)', () => {
+  const chClient = { query: vi.fn() };
+
+  beforeEach(() => {
+    // getClickHouseGdprClient returns a client whenever CH is configured at
+    // ALL — including the flag-rollback window (CLICKHOUSE_ENABLED toggled
+    // off after rows landed in CH). The export union must not depend on the
+    // write-cutover flag; the flag→client logic is unit-tested in
+    // clickhouse-client/clickhouse-env.
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(chClient as never);
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([]);
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([]);
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.mocked(getClickHouseGdprClient).mockReturnValue(null);
+  });
+
+  it('given_aMisconfiguredCh_exportPropagates_theGdprClientAccessorThrow', async () => {
+    vi.mocked(getClickHouseGdprClient).mockImplementation(() => {
+      throw new Error('ClickHouse misconfigured: GDPR client unavailable');
+    });
+    const db = createChainDb([[]]);
+
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow(
+      'ClickHouse misconfigured',
+    );
+  });
+
+  it('given_rowsInBothStores_systemLogsExportReturnsTheUnion', async () => {
+    // Writers gate on the same flag, so pre-cutover rows live only in PG and
+    // post-cutover rows only in CH — the union is complete with no overlap.
+    const pgLog = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), level: 'info', message: 'pre-cutover',
+      category: null, endpoint: null, method: null, duration: null,
+    };
+    const chLog = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), level: 'warn', message: 'post-cutover',
+      category: 'api', endpoint: '/api/x', method: 'GET', duration: 3,
+    };
+    vi.mocked(collectChUserSystemLogs).mockResolvedValue([chLog]);
+    const db = createChainDb([[pgLog]]);
+
+    const result = await collectUserSystemLogs(db as never, 'user-1');
+
+    expect(collectChUserSystemLogs).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_rowsInBothStores_apiMetricsExportReturnsTheUnion', async () => {
+    const pgMetric = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), endpoint: '/a', method: 'GET',
+      statusCode: 200, duration: 1, requestSize: null, responseSize: null,
+    };
+    const chMetric = {
+      id: 'ch1', timestamp: new Date('2026-07-01'), endpoint: '/b', method: 'POST',
+      statusCode: 201, duration: 2, requestSize: 10, responseSize: 20,
+    };
+    vi.mocked(collectChUserApiMetrics).mockResolvedValue([chMetric]);
+    const db = createChainDb([[pgMetric]]);
+
+    const result = await collectUserApiMetrics(db as never, 'user-1');
+
+    expect(collectChUserApiMetrics).toHaveBeenCalledWith(chClient, 'user-1');
+    expect(result.map(r => r.id)).toEqual(['pg1', 'ch1']);
+  });
+
+  it('given_chErrorRows_errorLogsExportAttachesResolvedFromTheErrorResolutionsMiniTable', async () => {
+    const chError = {
+      id: 'ch-resolved', timestamp: new Date('2026-07-01'), name: 'TypeError', message: 'boom',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    const chUnresolved = {
+      id: 'ch-open', timestamp: new Date('2026-07-02'), name: 'RangeError', message: 'bad',
+      endpoint: null, method: null, file: null, line: null, column: null,
+    };
+    vi.mocked(collectChUserErrorLogs).mockResolvedValue([chError, chUnresolved]);
+    // First where(): PG errorLogs rows; second where(): errorResolutions rows.
+    const db = createChainDb([[], [{ errorId: 'ch-resolved', resolved: true }]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result).toHaveLength(2);
+    expect(result.find(r => r.id === 'ch-resolved')?.resolved).toBe(true);
+    // No workflow row = never resolved; PG legacy default is false, not null.
+    expect(result.find(r => r.id === 'ch-open')?.resolved).toBe(false);
+  });
+
+  it('given_noChErrorRows_errorLogsExportSkipsTheResolutionsQuery', async () => {
+    const pgError = {
+      id: 'pg1', timestamp: new Date('2026-01-01'), name: 'TypeError', message: 'old',
+      endpoint: null, method: null, file: null, line: null, column: null, resolved: false,
+    };
+    const db = createChainDb([[pgError]]);
+
+    const result = await collectUserErrorLogs(db as never, 'user-1');
+
+    expect(result.map(r => r.id)).toEqual(['pg1']);
+    expect(db.where).toHaveBeenCalledTimes(1);
+  });
+
+  it('given_aChReadFailure_exportPropagates_neverSilentlyOmitsSubjectData', async () => {
+    vi.mocked(collectChUserSystemLogs).mockRejectedValue(new Error('CH unreachable'));
+    const db = createChainDb([[]]);
+
+    await expect(collectUserSystemLogs(db as never, 'user-1')).rejects.toThrow('CH unreachable');
+  });
+});
+
 describe('collectUserAiUsage', () => {
   it('given_usageExists_returnsLogs', async () => {
     const usage = {
@@ -383,8 +729,8 @@ describe('collectUserAiUsage', () => {
 
 describe('collectUserTasks', () => {
   it('given_tasksExist_returnsListsWithItems', async () => {
-    const list = { id: 'tl1', title: 'My Tasks' };
-    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListId: 'tl1', createdAt: new Date() };
+    const list = { id: 'tl1', pageId: 'page_tl1', title: 'My Tasks' };
+    const item = { id: 'ti1', title: 'Task 1', status: 'pending', priority: 'high', taskListPageId: 'page_tl1', createdAt: new Date() };
     const db = createChainDb([[list], [item]]);
 
     const result = await collectUserTasks(db as never, 'user-1');
@@ -404,7 +750,7 @@ describe('collectUserTasks', () => {
   });
 
   it('given_listsWithNoItems_returnsListsWithEmptyItemsArray', async () => {
-    const db = createChainDb([[{ id: 'tl1', title: 'Empty List' }], []]);
+    const db = createChainDb([[{ id: 'tl1', pageId: 'page_tl1', title: 'Empty List' }], []]);
 
     const result = await collectUserTasks(db as never, 'user-1');
 
@@ -522,6 +868,50 @@ describe('collectUserPersonalization', () => {
     expect(result!.rules).toBe('always use TypeScript');
   });
 
+  it('given_profileMigratedToPages_readsThePagesNotTheClearedColumns', async () => {
+    // After migration the columns are cleared — they are a fallback for users
+    // the backfill has not reached, not a second copy. Reading them alone would
+    // return three nulls and understate the profile of every migrated user.
+    const personalization = {
+      bio: null,
+      writingStyle: null,
+      rules: null,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      bioPageId: 'page-bio',
+      writingStylePageId: 'page-style',
+      rulesPageId: 'page-rules',
+    };
+    const memoryPages = [
+      { id: 'page-bio', content: 'bio from the page', isTrashed: false },
+      { id: 'page-style', content: 'style from the page', isTrashed: false },
+      // Trashed: the subject deleted it, so it reports as absent rather than
+      // disclosing content they removed.
+      { id: 'page-rules', content: 'rules the user deleted', isTrashed: true },
+    ];
+
+    let call = 0;
+    const db = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      innerJoin: vi.fn().mockReturnThis(),
+      where: vi.fn(() => {
+        call += 1;
+        // First query ends in .limit(); the page lookup is awaited directly.
+        return call === 1
+          ? { limit: vi.fn().mockReturnValue([personalization]) }
+          : Promise.resolve(memoryPages);
+      }),
+    };
+
+    const result = await collectUserPersonalization(db as never, 'user-1');
+
+    expect(result!.bio).toBe('bio from the page');
+    expect(result!.writingStyle).toBe('style from the page');
+    expect(result!.rules).toBeNull();
+  });
+
   it('given_userHasNoPersonalization_returnsNull', async () => {
     const db = createLimitDb([]);
 
@@ -535,7 +925,7 @@ describe('collectAllUserData', () => {
   it('given_userDoesNotExist_returnsNull', async () => {
     const db = createLimitDb([]);
 
-    const result = await collectAllUserData(db as never, 'nonexistent');
+    const result = await collectAllUserData(db as never, 'nonexistent', ADMIT_ALL);
 
     expect(result).toBeNull();
   });
@@ -549,7 +939,11 @@ describe('collectAllUserData', () => {
     // Returns an empty array that also has a .limit() method so both
     // callers that chain .limit() (profile, personalization) and callers
     // that use the array directly (drives, messages, etc.) both work.
-    const emptyWithLimit = () => Object.assign([], { limit: vi.fn().mockReturnValue([]) });
+    // The funding-leg collector also chains .orderBy() before .limit() (HIST-02).
+    const emptyWithLimit = () => Object.assign([], {
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnValue([]),
+    });
 
     let callCount = 0;
     const db = {
@@ -563,9 +957,10 @@ describe('collectAllUserData', () => {
         return emptyWithLimit();
       }),
       innerJoin: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
     };
 
-    const result = await collectAllUserData(db as never, 'user-1');
+    const result = await collectAllUserData(db as never, 'user-1', ADMIT_ALL);
 
     expect(result).not.toBeNull();
     expect(result!.profile.id).toBe('user-1');
@@ -575,11 +970,23 @@ describe('collectAllUserData', () => {
     expect(Array.isArray(result!.messages)).toBe(true);
     expect(Array.isArray(result!.files)).toBe(true);
     expect(Array.isArray(result!.activity)).toBe(true);
+    expect(Array.isArray(result!.systemLogs)).toBe(true);
+    expect(Array.isArray(result!.apiMetrics)).toBe(true);
+    expect(Array.isArray(result!.errorLogs)).toBe(true);
     expect(Array.isArray(result!.aiUsage)).toBe(true);
     expect(Array.isArray(result!.tasks)).toBe(true);
     expect(Array.isArray(result!.sessions)).toBe(true);
     expect(Array.isArray(result!.notifications)).toBe(true);
     expect(Array.isArray(result!.displayPreferences)).toBe(true);
+    // The agent-session epic's categories. Aggregated here for the same reason
+    // as every other one: a collector nobody calls from `collectAllUserData`
+    // reaches nobody's export.
+    expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
+    expect(Array.isArray(result!.agentAccounts.accounts)).toBe(true);
+    expect(Array.isArray(result!.streamState)).toBe(true);
+    // Same rule again for the content-tags category: a collector that
+    // `collectAllUserData` never calls reaches nobody's export.
+    expect(Array.isArray(result!.contentTags)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

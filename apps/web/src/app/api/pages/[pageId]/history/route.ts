@@ -1,20 +1,22 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { getPageVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   includeAiOnly: z.coerce.boolean().optional(),
@@ -48,13 +50,13 @@ export async function GET(
   });
 
   // Check permission to view the page
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
     loggers.api.debug('[History:Route] Permission denied');
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
       { error: 'Unauthorized - you do not have access to this page' },
       { status: 403 }
-    );
+    ));
   }
 
   // Parse query params
@@ -77,8 +79,8 @@ export async function GET(
 
   const params = parseResult.data;
 
-  // Get user's retention limit
-  const retentionDays = await getUserRetentionDays(userId);
+  // Resolve history retention for the requested resource.
+  const retentionDays = await getUserRetentionDays(userId, { pageId });
 
   // Apply retention limit to startDate if not unlimited (-1)
   let effectiveStartDate = params.startDate;

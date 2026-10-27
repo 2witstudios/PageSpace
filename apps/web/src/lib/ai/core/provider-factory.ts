@@ -2,27 +2,88 @@
  * AI Provider Factory Service
  * Resolves managed provider credentials from deployment env vars and
  * instantiates the appropriate AI SDK client. No per-user keys.
+ *
+ * Every cloud vendor (OpenAI, Anthropic, Google, xAI, …) is served through
+ * OpenRouter: the model id already carries the vendor prefix and is forwarded
+ * verbatim. Local providers (Ollama, LM Studio, Azure OpenAI) keep their own
+ * clients for on-prem deployments.
  */
 
 import { NextResponse } from 'next/server';
 import { LanguageModel } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createXai } from '@ai-sdk/xai';
 import { createOllama } from 'ollama-ai-provider-v2';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
-import { getDefaultPageSpaceSettings, getManagedProviderKey } from './ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS, resolvePageSpaceModel } from './ai-providers-config';
+import { getDrivePolicies, getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { modelDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { getManagedProviderKey } from './ai-utils';
+import { AI_PROVIDERS, ONPREM_ALLOWED_PROVIDERS, resolveProviderModel } from './ai-providers-config';
+
+// The local/on-prem providers (ONPREM_ALLOWED_PROVIDERS = ollama/lmstudio/azure_openai)
+// serve runtime-discovered models that aren't in the static catalog, so catalog
+// validation is skipped for them — only their provider name is gated.
 
 export interface ProviderRequest {
   selectedProvider?: string;
   selectedModel?: string;
+}
+
+/** Minimal user fields consumed by the provider factory. */
+export interface UserProviderRow {
+  currentAiProvider: string;
+  currentAiModel: string;
+}
+
+export interface ProviderFactoryOptions {
+  /** Pre-loaded user row. When provided the factory skips its own DB select. */
+  user?: UserProviderRow | null;
+  /**
+   * The drive whose org governs this call (POL-8): the drive of the session it runs in, the same drive its spend
+   * is attributed to (SPEND-7). When it belongs to an org, that org's model and provider allowlists are enforced
+   * here, at the one place every provider is constructed: the call is REFUSED, never quietly swapped for a default.
+   * REQUIRED, so no caller can forget it: `null` is a deliberate statement that the call runs in no drive (the
+   * global assistant without one, a person's own background services), which no org policy restricts.
+   */
+  driveId: string | null;
+  /**
+   * Other drives whose content this call sends to the model (POL-8): content from drive X reaching a model is governed
+   * by X's org too. ask_agent names the consulted agent's drive here, so the agent's org decides as well as the
+   * caller's, whoever calls.
+   */
+  contentDriveIds?: readonly string[];
+  /** Retained provenance of derived input, including sources no longer represented by a current drive. */
+  contentOrgIds?: readonly string[];
+}
+
+/**
+ * POL-8: the first refusal among the orgs of these drives for any of these (provider, model) uses, read now. Every
+ * drive must allow every use (the intersection of their allowlists). Exported for model uses that do not go through
+ * an AI SDK provider (the realtime voice handshake).
+ */
+export async function orgModelRefusal(
+  driveIds: ReadonlyArray<string | null | undefined>,
+  uses: ReadonlyArray<{ modelId: string; provider: string }>,
+  contentOrgIds: readonly string[] = [],
+): Promise<ProviderError | null> {
+  for (const driveId of new Set(driveIds.filter((id): id is string => Boolean(id)))) {
+    const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  for (const orgId of new Set(contentOrgIds)) {
+    const policies = await getOrgPolicies(orgId);
+    for (const use of uses) {
+      const decision = modelDecision(policies, use);
+      if (!decision.ok) return { error: decision.message, status: decision.status, code: decision.code, policy: decision.policy };
+    }
+  }
+  return null;
 }
 
 export interface ProviderResult {
@@ -34,6 +95,9 @@ export interface ProviderResult {
 export interface ProviderError {
   error: string;
   status: number;
+  /** Set when an org policy refused the call (POL-8), with the policy's key. */
+  code?: 'org_policy';
+  policy?: string;
 }
 
 function notConfigured(provider: string): ProviderError {
@@ -45,21 +109,44 @@ function notConfigured(provider: string): ProviderError {
 
 export async function createAIProvider(
   userId: string,
-  request: ProviderRequest
+  request: ProviderRequest,
+  options: ProviderFactoryOptions,
 ): Promise<ProviderResult | ProviderError> {
   const { selectedProvider, selectedModel } = request;
 
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
-  const currentProvider = selectedProvider || user?.currentAiProvider || 'pagespace';
-  let currentModel = selectedModel || user?.currentAiModel || 'glm-4.7';
+  const user = options.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
-  if (currentProvider === 'pagespace') {
-    currentModel = resolvePageSpaceModel(currentModel);
-  }
+  // Resolve (provider, model) as one atomic pair, with catalog enforcement —
+  // shared with the routes (credit gate, admin-only checks) via resolveProviderModel
+  // so every caller keys off the SAME provider that actually runs. An unknown
+  // (provider, model) is SUBSTITUTED with the default rather than forwarded — so a
+  // selection left on a removed value, or `glm` + an invalid model, degrades to the
+  // working default instead of being sent verbatim to OpenRouter. (Explicit invalid
+  // *selections* are still rejected with a 400 at the settings PATCH boundary.)
+  const resolved = resolveProviderModel(
+    selectedProvider,
+    selectedModel,
+    user?.currentAiProvider,
+    user?.currentAiModel,
+  );
+  const currentProvider = resolved.provider;
+  const currentModel = resolved.model;
 
+  // POL-8: the org's model and provider allowlists, read now (no cache). BOTH the pair that will run and the pair
+  // that was asked for must be allowed: an allowlist that let the resolver swap a refused selection for the
+  // default would run a model the org never allowed, and call it a success.
+  // Every drive whose content the call carries is judged: the governing drive and any named content drive.
+  const asked = selectedModel || selectedProvider ? { modelId: selectedModel ?? currentModel, provider: selectedProvider ?? currentProvider } : null;
+  const refusal = await orgModelRefusal(
+    [options.driveId, ...(options.contentDriveIds ?? [])],
+    [{ modelId: currentModel, provider: currentProvider }, ...(asked ? [asked] : [])],
+    options.contentOrgIds,
+  );
+  if (refusal) return refusal;
+
+  // Deployment policy: on-prem only permits the local/BAA-eligible providers.
   if (
     isOnPrem() &&
-    currentProvider !== 'pagespace' &&
     !ONPREM_ALLOWED_PROVIDERS.has(currentProvider)
   ) {
     return {
@@ -71,59 +158,7 @@ export async function createAIProvider(
   try {
     let model;
 
-    if (currentProvider === 'pagespace') {
-      const pageSpaceSettings = getDefaultPageSpaceSettings();
-      if (!pageSpaceSettings) {
-        return notConfigured('PageSpace AI');
-      }
-
-      // The pagespace alias resolves to a real backend provider (glm/google/openrouter).
-      // In on-prem mode, none of those cloud backends are allowed — block here so the
-      // alias can't be a back door around the route-layer policy.
-      if (isOnPrem() && !ONPREM_ALLOWED_PROVIDERS.has(pageSpaceSettings.provider)) {
-        return {
-          error: `PageSpace backend "${pageSpaceSettings.provider}" is not available in on-premise mode.`,
-          status: 403,
-        };
-      }
-
-      if (pageSpaceSettings.provider === 'google') {
-        model = createGoogleGenerativeAI({ apiKey: pageSpaceSettings.apiKey })(currentModel);
-      } else if (pageSpaceSettings.provider === 'glm') {
-        const glmProvider = createOpenAICompatible({
-          name: 'glm',
-          apiKey: pageSpaceSettings.apiKey,
-          baseURL: 'https://api.z.ai/api/coding/paas/v4',
-        });
-        model = glmProvider(currentModel);
-      } else {
-        return {
-          error: `Unsupported PageSpace provider: ${pageSpaceSettings.provider}`,
-          status: 400,
-        };
-      }
-    } else if (currentProvider === 'openrouter' || currentProvider === 'openrouter_free') {
-      const managed = getManagedProviderKey(currentProvider);
-      if (!managed?.apiKey) return notConfigured('OpenRouter');
-      const openrouter = createOpenRouter({ apiKey: managed.apiKey });
-      model = openrouter.chat(currentModel);
-    } else if (currentProvider === 'google') {
-      const managed = getManagedProviderKey('google');
-      if (!managed?.apiKey) return notConfigured('Google AI');
-      model = createGoogleGenerativeAI({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'openai') {
-      const managed = getManagedProviderKey('openai');
-      if (!managed?.apiKey) return notConfigured('OpenAI');
-      model = createOpenAI({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'anthropic') {
-      const managed = getManagedProviderKey('anthropic');
-      if (!managed?.apiKey) return notConfigured('Anthropic');
-      model = createAnthropic({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'xai') {
-      const managed = getManagedProviderKey('xai');
-      if (!managed?.apiKey) return notConfigured('xAI');
-      model = createXai({ apiKey: managed.apiKey })(currentModel);
-    } else if (currentProvider === 'ollama') {
+    if (currentProvider === 'ollama') {
       const managed = getManagedProviderKey('ollama');
       if (!managed?.baseUrl) return notConfigured('Ollama');
 
@@ -201,19 +236,45 @@ export async function createAIProvider(
         baseURL: 'https://api.z.ai/api/coding/paas/v4',
       });
       model = glmProvider(currentModel);
-    } else if (currentProvider === 'minimax') {
-      const managed = getManagedProviderKey('minimax');
-      if (!managed?.apiKey) return notConfigured('MiniMax');
-      const minimax = createAnthropic({
-        apiKey: managed.apiKey,
-        baseURL: 'https://api.minimax.io/anthropic/v1',
-      });
-      model = minimax(currentModel);
     } else {
-      return {
-        error: `Unsupported AI provider: ${currentProvider}`,
-        status: 400,
-      };
+      // Every cloud vendor is served through OpenRouter. The model id already
+      // carries its vendor prefix (openai/…, anthropic/…) and is forwarded as-is.
+      const managed = getManagedProviderKey('openrouter');
+      if (!managed?.apiKey) return notConfigured('OpenRouter');
+      // X-OpenRouter-Cache enables OpenRouter's response cache (default 300s TTL):
+      // byte-identical repeat requests are served from cache at $0 with zeroed
+      // usage. See timestamp-utils.ts — the system-prompt timestamp is bucketed
+      // to the cache window so genuine repeats (regenerate/retry) can HIT.
+      const openrouter = createOpenRouter({
+        apiKey: managed.apiKey,
+        // OPENROUTER_BASE_URL lets a non-prod environment (e.g. e2e) redirect the
+        // OpenRouter API at a deterministic stub that returns known usage.cost, so
+        // billing can be asserted end-to-end. Unset in prod → real OpenRouter.
+        ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+        headers: { 'X-OpenRouter-Cache': 'true' },
+      });
+      // usage: { include: true } turns on OpenRouter usage accounting so the
+      // response carries the authoritative per-request cost under
+      // providerMetadata.openrouter.usage.cost — the basis we bill on (see
+      // extractOpenRouterCostDollars / trackAIUsage). Without it, cost is undefined.
+      //
+      // extraBody.provider is OpenRouter request-body provider routing (merged into
+      // the request body by the SDK):
+      //   require_parameters: true — only route to upstream providers that actually
+      //     honor every param we send (notably `tools`). A provider that silently
+      //     ignores tools can never call the `finish` tool, which is a root cause of
+      //     "agent runs tools then never finishes". This forces tool-capable routing.
+      //   allow_fallbacks: true — keep OpenRouter's automatic failover to the next
+      //     healthy provider when one errors, reducing mid-stream disconnects.
+      model = openrouter.chat(currentModel, {
+        usage: { include: true },
+        extraBody: {
+          provider: {
+            require_parameters: true,
+            allow_fallbacks: true,
+          },
+        },
+      });
     }
 
     return {
@@ -231,16 +292,18 @@ export async function createAIProvider(
 }
 
 /**
- * Updates user's current provider and model settings if they've changed
+ * Updates user's current provider and model settings if they've changed.
+ * When `options.user` is provided the function skips its own DB select.
  */
 export async function updateUserProviderSettings(
   userId: string,
   selectedProvider?: string,
-  selectedModel?: string
+  selectedModel?: string,
+  options?: Pick<ProviderFactoryOptions, 'user'>,
 ): Promise<void> {
   if (!selectedProvider || !selectedModel) return;
 
-  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  const user = options?.user ?? (await db.select().from(users).where(eq(users.id, userId)))[0];
 
   if (selectedProvider !== user?.currentAiProvider || selectedModel !== user?.currentAiModel) {
     await db
@@ -253,10 +316,42 @@ export async function updateUserProviderSettings(
   }
 }
 
+export type OpenRouterImageClient = ReturnType<typeof createOpenRouter>;
+
+/**
+ * The provider (the catalog key) an OpenRouter model id belongs to: the catalog provider listing it, else its vendor
+ * prefix (an image model is not in the chat catalog). What the provider allowlist names.
+ */
+function providerOfModelId(modelId: string): string {
+  const listed = Object.entries(AI_PROVIDERS).find(([, cfg]) => modelId in cfg.models)?.[0];
+  return listed ?? modelId.split('/')[0];
+}
+
+/**
+ * The image-generation client (POL-8): built here, beside every other provider, so the drive's org model and provider
+ * allowlists judge the image model exactly as they judge a chat model. Refused, never substituted.
+ */
+export async function createImageProvider(
+  request: { model: string },
+  options: Pick<ProviderFactoryOptions, 'driveId' | 'contentDriveIds' | 'contentOrgIds'>,
+): Promise<{ client: OpenRouterImageClient; provider: string; modelName: string } | ProviderError> {
+  const provider = providerOfModelId(request.model);
+  const refusal = await orgModelRefusal([options.driveId, ...(options.contentDriveIds ?? [])], [{ modelId: request.model, provider }], options.contentOrgIds);
+  if (refusal) return refusal;
+  const managed = getManagedProviderKey('openrouter');
+  if (!managed?.apiKey) return notConfigured('OpenRouter');
+  const client = createOpenRouter({
+    apiKey: managed.apiKey,
+    ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
+    headers: { 'X-OpenRouter-Cache': 'true' },
+  });
+  return { client, provider, modelName: request.model };
+}
+
 export function createProviderErrorResponse(error: ProviderError): NextResponse {
   return NextResponse.json({ error: error.error }, { status: error.status });
 }
 
-export function isProviderError(result: ProviderResult | ProviderError): result is ProviderError {
+export function isProviderError<T extends object>(result: T | ProviderError): result is ProviderError {
   return 'error' in result;
 }

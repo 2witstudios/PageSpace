@@ -12,23 +12,17 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { fetchJSON } from '@/lib/auth/auth-fetch';
 import { getHumanReadableCron } from '@/lib/workflows/cron-utils';
+import { WorkflowStepsEditor, isStepsValid, type WorkflowStep } from './WorkflowStepsEditor';
+
+export type { WorkflowStep } from './WorkflowStepsEditor';
 
 export interface WorkflowFormData {
   name: string;
-  agentPageId: string;
-  prompt: string;
+  steps: WorkflowStep[];
   contextPageIds: string[];
   cronExpression: string;
   timezone: string;
@@ -90,8 +84,7 @@ export function WorkflowForm({
   anchorPageTitle,
 }: WorkflowFormProps) {
   const [name, setName] = useState(initialData?.name ?? '');
-  const [agentPageId, setAgentPageId] = useState(initialData?.agentPageId ?? '');
-  const [prompt, setPrompt] = useState(initialData?.prompt ?? '');
+  const [steps, setSteps] = useState<WorkflowStep[]>(initialData?.steps ?? []);
   const [cronExpression, setCronExpression] = useState(initialData?.cronExpression ?? '0 9 * * 1-5');
   const [timezone, setTimezone] = useState(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   const [isEnabled, setIsEnabled] = useState(initialData?.isEnabled ?? true);
@@ -121,8 +114,7 @@ export function WorkflowForm({
   useEffect(() => {
     if (open) {
       setName(initialData?.name ?? '');
-      setAgentPageId(initialData?.agentPageId ?? '');
-      setPrompt(initialData?.prompt ?? '');
+      setSteps(initialData?.steps ?? []);
       setCronExpression(initialData?.cronExpression ?? '0 9 * * 1-5');
       setTimezone(initialData?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
       setIsEnabled(initialData?.isEnabled ?? true);
@@ -139,8 +131,7 @@ export function WorkflowForm({
     try {
       await onSubmit({
         name,
-        agentPageId,
-        prompt,
+        steps,
         contextPageIds,
         cronExpression,
         timezone,
@@ -163,7 +154,7 @@ export function WorkflowForm({
     }
   })();
 
-  const isValid = name && agentPageId && prompt && isTimezoneValid && !!cronExpression;
+  const isValid = name.trim().length > 0 && isStepsValid(steps) && isTimezoneValid && !!cronExpression;
 
   const extraContextPageIds = useMemo(
     () => (anchorPageId ? contextPageIds.filter((id) => id !== anchorPageId) : []),
@@ -172,163 +163,142 @@ export function WorkflowForm({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="flex flex-col gap-0 p-0 sm:max-w-2xl max-h-[90dvh] overflow-hidden">
+        <DialogHeader className="shrink-0 px-6 pt-6 pb-4 pr-12">
           <DialogTitle>{initialData?.id ? 'Edit Workflow' : 'Create Workflow'}</DialogTitle>
         </DialogHeader>
         {anchorPageId && anchorPageTitle && (
-          <Badge variant="secondary" className="font-normal" title={`Anchored to: ${anchorPageTitle}`}>
+          <Badge variant="secondary" className="mx-6 mb-4 w-fit max-w-[calc(100%-3rem)] font-normal" title={`Anchored to: ${anchorPageTitle}`}>
             <Pin className="h-3 w-3" />
             <span className="text-muted-foreground">Anchored to:</span>
             <span className="truncate max-w-[14rem]">{anchorPageTitle}</span>
           </Badge>
         )}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="wf-name">Name</Label>
-            <Input
-              id="wf-name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Daily report generation"
-              required
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wf-agent">AI Agent</Label>
-            {agents.length === 0 && pagesData ? (
-              <p className="text-sm text-muted-foreground py-2">
-                No AI agents in this drive. Create an AI Chat page first.
-              </p>
-            ) : (
-              <Select value={agentPageId} onValueChange={setAgentPageId} required>
-                <SelectTrigger id="wf-agent">
-                  <SelectValue placeholder="Select an agent..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {agents.map(agent => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      {agent.title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wf-prompt">Prompt</Label>
-            <Textarea
-              id="wf-prompt"
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              placeholder="Write a daily summary report referencing the meeting notes..."
-              rows={4}
-              required
-            />
-            {anchorPageId && extraContextPageIds.length > 0 && (
-              <div className="space-y-1.5 pt-1">
-                <p className="text-xs text-muted-foreground">
-                  Additional context pages ({extraContextPageIds.length})
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {extraContextPageIds.map((id) => (
-                    <ContextPageChip key={id} pageId={id} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
-            <Input
-              id="wf-cron"
-              value={cronExpression}
-              onChange={e => setCronExpression(e.target.value)}
-              placeholder="0 9 * * 1-5"
-              required
-            />
-            {cronPreview && (
-              <p className="text-xs text-muted-foreground">{cronPreview}</p>
-            )}
-            <div className="flex flex-wrap gap-1.5">
-              {CRON_PRESETS.map(preset => (
-                <Button
-                  key={preset.value}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-6 text-xs px-2"
-                  onClick={() => setCronExpression(preset.value)}
-                >
-                  {preset.label}
-                </Button>
-              ))}
+        <form onSubmit={handleSubmit} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto px-6 pb-4">
+            <div className="space-y-2">
+              <Label htmlFor="wf-name">Name</Label>
+              <Input
+                id="wf-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Daily report generation"
+                required
+              />
             </div>
-          </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="wf-tz">Timezone</Label>
-            <Input
-              id="wf-tz"
-              list="tz-options"
-              value={timezone}
-              onChange={e => setTimezone(e.target.value)}
-              placeholder="America/New_York"
-            />
-            <datalist id="tz-options">
-              <option value="UTC" />
-              <option value="America/New_York" />
-              <option value="America/Chicago" />
-              <option value="America/Denver" />
-              <option value="America/Los_Angeles" />
-              <option value="America/Anchorage" />
-              <option value="Pacific/Honolulu" />
-              <option value="America/Toronto" />
-              <option value="America/Vancouver" />
-              <option value="America/Sao_Paulo" />
-              <option value="America/Mexico_City" />
-              <option value="Europe/London" />
-              <option value="Europe/Paris" />
-              <option value="Europe/Berlin" />
-              <option value="Europe/Amsterdam" />
-              <option value="Europe/Madrid" />
-              <option value="Europe/Rome" />
-              <option value="Europe/Zurich" />
-              <option value="Europe/Stockholm" />
-              <option value="Europe/Moscow" />
-              <option value="Asia/Dubai" />
-              <option value="Asia/Kolkata" />
-              <option value="Asia/Shanghai" />
-              <option value="Asia/Tokyo" />
-              <option value="Asia/Seoul" />
-              <option value="Asia/Singapore" />
-              <option value="Asia/Hong_Kong" />
-              <option value="Australia/Sydney" />
-              <option value="Australia/Melbourne" />
-              <option value="Pacific/Auckland" />
-            </datalist>
-            {timezone && !isTimezoneValid && (
-              <p className="text-xs text-destructive">Invalid timezone. Select from the list or enter a valid IANA timezone.</p>
+            <div className="space-y-2">
+              <Label>Steps</Label>
+              {agents.length === 0 && pagesData && (
+                <p className="text-xs text-muted-foreground">
+                  No AI agents in this drive yet — create an AI Chat page first if you want AI
+                  steps. Tool steps don&apos;t need one.
+                </p>
+              )}
+              <WorkflowStepsEditor steps={steps} onChange={setSteps} agents={agents} />
+              {anchorPageId && extraContextPageIds.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    Additional context pages ({extraContextPageIds.length})
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {extraContextPageIds.map((id) => (
+                      <ContextPageChip key={id} pageId={id} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="wf-cron">Schedule (Cron Expression)</Label>
+              <Input
+                id="wf-cron"
+                value={cronExpression}
+                onChange={e => setCronExpression(e.target.value)}
+                placeholder="0 9 * * 1-5"
+                required
+              />
+              {cronPreview && (
+                <p className="text-xs text-muted-foreground">{cronPreview}</p>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {CRON_PRESETS.map(preset => (
+                  <Button
+                    key={preset.value}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 text-xs px-2"
+                    onClick={() => setCronExpression(preset.value)}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="wf-tz">Timezone</Label>
+              <Input
+                id="wf-tz"
+                list="tz-options"
+                value={timezone}
+                onChange={e => setTimezone(e.target.value)}
+                placeholder="America/New_York"
+              />
+              <datalist id="tz-options">
+                <option value="UTC" />
+                <option value="America/New_York" />
+                <option value="America/Chicago" />
+                <option value="America/Denver" />
+                <option value="America/Los_Angeles" />
+                <option value="America/Anchorage" />
+                <option value="Pacific/Honolulu" />
+                <option value="America/Toronto" />
+                <option value="America/Vancouver" />
+                <option value="America/Sao_Paulo" />
+                <option value="America/Mexico_City" />
+                <option value="Europe/London" />
+                <option value="Europe/Paris" />
+                <option value="Europe/Berlin" />
+                <option value="Europe/Amsterdam" />
+                <option value="Europe/Madrid" />
+                <option value="Europe/Rome" />
+                <option value="Europe/Zurich" />
+                <option value="Europe/Stockholm" />
+                <option value="Europe/Moscow" />
+                <option value="Asia/Dubai" />
+                <option value="Asia/Kolkata" />
+                <option value="Asia/Shanghai" />
+                <option value="Asia/Tokyo" />
+                <option value="Asia/Seoul" />
+                <option value="Asia/Singapore" />
+                <option value="Asia/Hong_Kong" />
+                <option value="Australia/Sydney" />
+                <option value="Australia/Melbourne" />
+                <option value="Pacific/Auckland" />
+              </datalist>
+              {timezone && !isTimezoneValid && (
+                <p className="text-xs text-destructive">Invalid timezone. Select from the list or enter a valid IANA timezone.</p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Switch
+                id="wf-enabled"
+                checked={isEnabled}
+                onCheckedChange={setIsEnabled}
+              />
+              <Label htmlFor="wf-enabled">Enabled</Label>
+            </div>
+
+            {error && (
+              <p className="text-sm text-destructive">{error}</p>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <Switch
-              id="wf-enabled"
-              checked={isEnabled}
-              onCheckedChange={setIsEnabled}
-            />
-            <Label htmlFor="wf-enabled">Enabled</Label>
-          </div>
-
-          {error && (
-            <p className="text-sm text-destructive">{error}</p>
-          )}
-
-          <div className="flex justify-end gap-2 pt-2">
+          <div className="flex shrink-0 justify-end gap-2 border-t px-6 py-4">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>

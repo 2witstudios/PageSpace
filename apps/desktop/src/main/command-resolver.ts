@@ -182,9 +182,3 @@ function expandVersionManagerPaths(basePath: string): string[] {
   }
 }
 
-/**
- * Clear the command cache (useful for testing or when PATH changes)
- */
-export function clearCommandCache(): void {
-  commandCache.clear();
-}

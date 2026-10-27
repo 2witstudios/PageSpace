@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { integrationDecision } from '@pagespace/lib/organizations/org-action-decisions';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listDriveConnections, createConnection, findDriveConnection } from '@pagespace/lib/integrations/repositories/connection-repository'
 import { getProviderById } from '@pagespace/lib/integrations/repositories/provider-repository'
+import { resolveProviderConfig } from '@pagespace/lib/integrations/providers/builtin-providers';
 import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encrypt-credentials'
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
-import type { IntegrationProviderConfig } from '@pagespace/lib/integrations/types';
+import { validateIntegrationTargetUrl } from '@pagespace/lib/integrations/validation/validate-base-url';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -31,15 +37,16 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ driveId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { driveId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
   try {
     // Verify drive membership
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isMember) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const connections = await listDriveConnections(db, driveId);
@@ -79,15 +86,16 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ driveId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { driveId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   try {
     // Require OWNER or ADMIN role
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const body = await request.json();
@@ -101,6 +109,18 @@ export async function POST(
 
     const { providerId, name, credentials, baseUrlOverride, returnUrl } = validation.data;
 
+    // A stored override becomes the fetch base for credentialed tool calls:
+    // refuse private / loopback / link-local / metadata targets before any write.
+    if (baseUrlOverride) {
+      const target = await validateIntegrationTargetUrl(baseUrlOverride);
+      if (!target.ok) {
+        return NextResponse.json(
+          { error: 'Validation failed', details: { baseUrlOverride: [target.reason] } },
+          { status: 400 }
+        );
+      }
+    }
+
     const provider = await getProviderById(db, providerId);
     if (!provider || !provider.enabled) {
       return NextResponse.json({ error: 'Provider not found or disabled' }, { status: 404 });
@@ -110,12 +130,23 @@ export async function POST(
       return NextResponse.json({ error: 'Provider not available for this drive' }, { status: 404 });
     }
 
+    // POL-11: an org that limits which services its drives may connect refuses the rest, before any OAuth
+    // redirect or credential is taken. (The callback and every use of the connection ask again.)
+    const serviceDecision = integrationDecision((await getDrivePolicies(driveId))?.policies ?? null, provider.slug);
+    if (!serviceDecision.ok) return orgPolicyRefusalResponse(serviceDecision);
+
     const existing = await findDriveConnection(db, driveId, providerId);
     if (existing) {
       return NextResponse.json({ error: 'Connection already exists for this provider' }, { status: 409 });
     }
 
-    const config = provider.config as IntegrationProviderConfig;
+    // Builtin providers may have changed shape (new scopes, renamed auth
+    // params) since this row was persisted — resolve to the canonical
+    // in-memory definition rather than trusting the possibly-stale DB copy.
+    const config = resolveProviderConfig(provider);
+    if (!config) {
+      return NextResponse.json({ error: 'Provider configuration is missing' }, { status: 500 });
+    }
 
     // OAuth providers: redirect
     if (config.authMethod.type === 'oauth2') {
@@ -129,6 +160,8 @@ export async function POST(
       const state = createSignedState(
         {
           userId: auth.userId,
+          // SEC-2/3: the callback re-checks drive admin as THIS credential, so its ceremony evidence rides the signed state.
+          authentication: auth.authentication ?? null,
           providerId,
           name,
           driveId,

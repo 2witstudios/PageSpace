@@ -85,12 +85,30 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  getGrantedAccessLevel: vi.fn(),
+}));
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
 
 // ---------- imports (after mocks) ----------
 
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+
+const LEAD: DriveRelationship = { isOwner: true, membership: null };
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'ADMIN' | 'MEMBER'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source: 'invite', auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
 
 // ---------- helpers ----------
 
@@ -146,6 +164,12 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     // Default: no permissions
     mockPermResults.value = [];
+
+    // Default: getGrantedAccessLevel returns null (overridden in specific tests)
+    vi.mocked(getGrantedAccessLevel).mockResolvedValue(null);
+
+    // Default: the caller leads the drive
+    vi.mocked(loadDriveRelationship).mockResolvedValue(LEAD);
   });
 
   // ---------- Authentication ----------
@@ -188,7 +212,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner and not admin', async () => {
       mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
 
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
@@ -207,11 +231,41 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
     it('should allow access when user is admin (not owner)', async () => {
       mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
-      mockAdminResults.value = [{ id: 'membership_1' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
 
       const response = await GET(createRequest(), createContext(mockDriveId));
 
       expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockDriveId, ownerId: 'other_user' }));
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row sees the permission tree of an org drive', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'PRIVATE' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('ADMIN'));
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the relationship refuses and the row is never read', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user', orgId: 'org_1', orgVisibility: 'RESTRICTED' }];
+      mockAdminResults.value = [{ id: 'membership_1', role: 'ADMIN', source: 'org' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(NONE);
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
+    });
+
+    it('a plain member cannot view the permission tree', async () => {
+      mockDriveResults.value = [{ ...mockDrive, ownerId: 'other_user' }];
+      vi.mocked(loadDriveRelationship).mockResolvedValue(asMember('MEMBER'));
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+
+      expect(response.status).toBe(403);
     });
   });
 
@@ -231,7 +285,9 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
         slug: 'test-drive',
         ownerId: mockUserId,
       });
-      expect(body.pages).toEqual([]);
+      // pages[0] is always the drive root node; no page nodes beyond that
+      expect(body.pages).toHaveLength(1);
+      expect(body.pages[0].type).toBe('DRIVE');
       expect(body.totalPages).toBe(0);
     });
 
@@ -246,13 +302,14 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
 
       expect(response.status).toBe(200);
       expect(body.totalPages).toBe(2);
-      expect(body.pages).toHaveLength(1);
-      expect(body.pages[0].id).toBe('p1');
-      expect(body.pages[0].title).toBe('Root');
-      expect(body.pages[0].children).toHaveLength(1);
-      expect(body.pages[0].children[0].id).toBe('p2');
-      expect(body.pages[0].children[0].title).toBe('Child');
-      expect(body.pages[0].children[0].children).toEqual([]);
+      // pages[0] = drive root, pages[1] = p1 (with p2 as child)
+      expect(body.pages).toHaveLength(2);
+      expect(body.pages[1].id).toBe('p1');
+      expect(body.pages[1].title).toBe('Root');
+      expect(body.pages[1].children).toHaveLength(1);
+      expect(body.pages[1].children[0].id).toBe('p2');
+      expect(body.pages[1].children[0].title).toBe('Child');
+      expect(body.pages[1].children[0].children).toEqual([]);
     });
 
     it('should sort children by position', async () => {
@@ -265,8 +322,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].children[0].title).toBe('First');
-      expect(body.pages[0].children[1].title).toBe('Second');
+      expect(body.pages[1].children[0].title).toBe('First');
+      expect(body.pages[1].children[1].title).toBe('Second');
     });
 
     it('should include type and position fields in page nodes', async () => {
@@ -277,8 +334,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].type).toBe('document');
-      expect(body.pages[0].position).toBe(5);
+      expect(body.pages[1].type).toBe('document');
+      expect(body.pages[1].position).toBe(5);
     });
   });
 
@@ -300,7 +357,7 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: true,
         canEdit: true,
         canShare: false,
@@ -319,14 +376,14 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       );
       const body = await response.json();
 
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
       });
     });
 
-    it('should return default permissions when no targetUserId is provided', async () => {
+    it('should return no currentPermissions on page nodes when no targetUserId is provided', async () => {
       mockPagesResults.value = [
         { id: 'p1', title: 'Root', type: 'page', parentId: null, position: 0, isTrashed: false },
       ];
@@ -334,7 +391,8 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       const response = await GET(createRequest(), createContext(mockDriveId));
       const body = await response.json();
 
-      expect(body.pages[0].currentPermissions).toEqual({
+      // Without userId the route still attaches default false permissions on page nodes
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
@@ -356,18 +414,71 @@ describe('GET /api/drives/[driveId]/permissions-tree', () => {
       );
       const body = await response.json();
 
+      // pages[0] = drive root, pages[1] = p1, pages[2] = p2
       // p1 has no permissions
-      expect(body.pages[0].currentPermissions).toEqual({
+      expect(body.pages[1].currentPermissions).toEqual({
         canView: false,
         canEdit: false,
         canShare: false,
       });
       // p2 has specific permissions
-      expect(body.pages[1].currentPermissions).toEqual({
+      expect(body.pages[2].currentPermissions).toEqual({
         canView: true,
         canEdit: false,
         canShare: true,
       });
+    });
+  });
+
+  // ---------- Drive root node ----------
+
+  describe('drive root node', () => {
+    it('includes drive as first node in pages array with type DRIVE', async () => {
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0]).toMatchObject({
+        id: mockDriveId,
+        title: mockDrive.name,
+        type: 'DRIVE',
+      });
+    });
+
+    it('drive root node appears before page nodes', async () => {
+      mockPagesResults.value = [
+        { id: 'p1', title: 'Page 1', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+      ];
+
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0].type).toBe('DRIVE');
+      expect(body.pages[1].id).toBe('p1');
+    });
+
+    it('drive root node has currentPermissions when userId query param provided (owner case)', async () => {
+      vi.mocked(getGrantedAccessLevel).mockResolvedValue({
+        canView: true, canEdit: true, canShare: true, canDelete: true,
+      });
+
+      const response = await GET(
+        createRequest(mockDriveId, `?userId=${mockUserId}`),
+        createContext(mockDriveId)
+      );
+      const body = await response.json();
+
+      expect(body.pages[0].currentPermissions).toEqual({
+        canView: true,
+        canEdit: true,
+        canShare: true,
+      });
+    });
+
+    it('drive root node has no currentPermissions when no userId param', async () => {
+      const response = await GET(createRequest(), createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.pages[0].currentPermissions).toBeUndefined();
     });
   });
 

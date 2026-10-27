@@ -7,16 +7,23 @@ import {
   TooltipTrigger,
   TooltipContent,
 } from '@/components/ui/tooltip';
-import { Mic, AudioLines, MicOff } from 'lucide-react';
+import { Mic, MicOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { ProviderModelSelector } from '@/components/ai/chat/input/ProviderModelSelector';
 import { ToolsPopover } from './ToolsPopover';
+
 
 export interface InputFooterProps {
   /** Whether web search is enabled */
   webSearchEnabled?: boolean;
   /** Callback when web search is toggled */
   onWebSearchToggle?: (enabled: boolean) => void;
+  /** Whether image generation is enabled */
+  imageGenEnabled?: boolean;
+  /** Callback when image generation is toggled */
+  onImageGenToggle?: (enabled: boolean) => void;
+  /** Whether the user may use image generation (app admins only during rollout) */
+  canUseImageGen?: boolean;
   /** Whether write mode is active (true = write, false = read only) */
   writeMode?: boolean;
   /** Callback when write mode is toggled */
@@ -47,10 +54,6 @@ export interface InputFooterProps {
   isListening?: boolean;
   /** Whether microphone is supported by the browser */
   isMicSupported?: boolean;
-  /** Callback when voice mode button is clicked */
-  onVoiceModeClick?: () => void;
-  /** Whether voice mode is currently active */
-  isVoiceModeActive?: boolean;
   /** Error message from microphone/speech recognition */
   micError?: string | null;
   /** Callback to clear the mic error */
@@ -63,8 +66,16 @@ export interface InputFooterProps {
   onProviderModelChange?: (provider: string, model: string) => void;
   /** Hide the provider/model selector (for compact layouts) */
   hideModelSelector?: boolean;
+  /** The drive the chat runs in, whose org's model allowlists decide what the model selector offers (POL-8). */
+  modelPolicyDriveId?: string | null;
   /** Disable the selector (e.g., during streaming) */
   disabled?: boolean;
+  /** Compact toolbar: icon-only Tools, tighter padding, shrinkable model selector */
+  compact?: boolean;
+  /** Rendered before the Tools button (e.g. attach) — compact toolbar only */
+  leading?: React.ReactNode;
+  /** Rendered at the far right (e.g. the send/stop action) — compact toolbar only */
+  trailing?: React.ReactNode;
   /** Additional class names */
   className?: string;
 }
@@ -80,6 +91,9 @@ export interface InputFooterProps {
 export function InputFooter({
   webSearchEnabled = false,
   onWebSearchToggle,
+  imageGenEnabled = false,
+  onImageGenToggle,
+  canUseImageGen = false,
   writeMode = true,
   onWriteModeToggle,
   showPageTree = false,
@@ -95,30 +109,37 @@ export function InputFooter({
   onMicClick,
   isListening = false,
   isMicSupported = true,
-  onVoiceModeClick,
-  isVoiceModeActive = false,
   micError,
   onClearMicError,
   selectedProvider,
   selectedModel,
   onProviderModelChange,
   hideModelSelector = false,
+  modelPolicyDriveId = null,
   disabled = false,
+  compact = false,
+  leading,
+  trailing,
   className,
 }: InputFooterProps) {
   return (
     <div
       className={cn(
         'flex items-center justify-between',
-        'px-3 py-2',
+        compact ? 'gap-1 px-2.5 pb-2.5 pt-1.5' : 'px-3 py-2',
         className
       )}
     >
       {/* Left group - Tools popover */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-0.5 shrink-0">
+        {leading}
         <ToolsPopover
+          iconOnly={compact}
           webSearchEnabled={webSearchEnabled}
           onWebSearchToggle={onWebSearchToggle}
+          imageGenEnabled={imageGenEnabled}
+          onImageGenToggle={onImageGenToggle}
+          canUseImageGen={canUseImageGen}
           writeMode={writeMode}
           onWriteModeToggle={onWriteModeToggle}
           showPageTree={showPageTree}
@@ -136,41 +157,17 @@ export function InputFooter({
       </div>
 
       {/* Right group - Provider/Model Selector + Mic */}
-      <div className="flex items-center gap-1 min-w-0">
+      <div className={cn('flex items-center gap-1 min-w-0', compact && 'flex-1 justify-end')}>
         {!hideModelSelector && (
           <ProviderModelSelector
+            className="min-w-0 overflow-hidden"
             provider={selectedProvider}
             model={selectedModel}
             onChange={onProviderModelChange}
             disabled={disabled}
+            driveId={modelPolicyDriveId}
           />
         )}
-
-        {/* Voice Mode button (hands-free STT/TTS) */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onVoiceModeClick}
-              disabled={disabled}
-              className={cn(
-                'h-8 w-8 p-0 transition-all duration-200 hover:bg-transparent dark:hover:bg-transparent',
-                isVoiceModeActive
-                  ? 'text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <AudioLines className="h-4 w-4" />
-              <span className="sr-only">
-                {isVoiceModeActive ? 'Exit voice mode' : 'Enter voice mode'}
-              </span>
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            {isVoiceModeActive ? 'Exit voice mode' : 'Voice mode (hands-free)'}
-          </TooltipContent>
-        </Tooltip>
 
         {/* Mic button (basic STT) */}
         <Tooltip>
@@ -214,6 +211,7 @@ export function InputFooter({
                   : 'Voice input'}
           </TooltipContent>
         </Tooltip>
+        {trailing}
       </div>
     </div>
   );

@@ -11,18 +11,29 @@ import { PATCH, DELETE } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Mock the repository seam (boundary)
+// The reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
+// D6, PR 12) folded `chat-message-repository` and the message half of
+// `global-conversation-repository` into this module, so the read seam and the
+// pure `processMessageContentUpdate` are mocked here alongside the writes.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    getMessageInConversation: vi.fn(),
+    editGlobalMessage: vi.fn().mockResolvedValue(undefined),
+    softDeleteGlobalMessage: vi.fn().mockResolvedValue(undefined),
+  },
+  processMessageContentUpdate: vi.fn((existing, newContent) => newContent),
+}));
+
+vi.mock('@/lib/websocket/broadcast-triggered-by', () => ({
+  resolveTriggeredBy: vi
+    .fn()
+    .mockResolvedValue({ userId: 'user_123', displayName: 'Tester', browserSessionId: '' }),
+}));
+
 vi.mock('@/lib/repositories/global-conversation-repository', () => ({
   globalConversationRepository: {
     getConversationById: vi.fn(),
-    getMessageById: vi.fn(),
-    updateMessageContent: vi.fn(),
-    softDeleteMessage: vi.fn(),
   },
-}));
-
-// Mock chat-message-repository for processMessageContentUpdate
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  processMessageContentUpdate: vi.fn((existing, newContent) => newContent),
 }));
 
 // Mock auth (boundary)
@@ -60,6 +71,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -104,12 +116,26 @@ const mockMessage = (overrides: Partial<{
   content: string;
   role: string;
   isActive: boolean;
+  createdAt: Date;
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id ?? mockMessageId,
   conversationId: overrides.conversationId ?? mockConversationId,
   content: overrides.content ?? 'Hello, AI!',
   role: overrides.role ?? 'user',
   isActive: overrides.isActive ?? true,
+  createdAt: overrides.createdAt ?? new Date('2024-01-01T00:00:10Z'),
+  status: overrides.status ?? 'complete' as const,
+  // Widened to the full `UnifiedMessageRow` by the reader cutover (epic
+  // "Agent-Session Single Source of Truth", Phase 4 / D6, PR 12): the global
+  // read seam is now `messageRepository.getMessageInConversation`, which
+  // returns the same column set as every other unified reader.
+  userId: null as string | null,
+  messageType: 'standard' as const,
+  editedAt: null as Date | null,
+  toolCalls: null as unknown,
+  toolResults: null as unknown,
+  source: null,
 });
 
 const createContext = (id: string, messageId: string) => ({
@@ -139,12 +165,12 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
     vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
       mockConversation()
     );
-    vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(
+    vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(
       mockMessage()
     );
 
     // Default: update succeeds
-    vi.mocked(globalConversationRepository.updateMessageContent).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.editGlobalMessage).mockResolvedValue(undefined);
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -206,7 +232,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
     });
 
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(null);
 
       const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
       const context = createContext(mockConversationId, mockMessageId);
@@ -216,6 +242,20 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(mockMessage({ status: 'streaming' }));
+
+      const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
+      const context = createContext(mockConversationId, mockMessageId);
+
+      const response = await PATCH(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(messageRepository.editGlobalMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -242,13 +282,12 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
         mockUserId,
         mockConversationId
       );
-      expect(globalConversationRepository.getMessageById).toHaveBeenCalledWith(
+      expect(messageRepository.getMessageInConversation).toHaveBeenCalledWith(
         mockConversationId,
         mockMessageId
       );
-      expect(globalConversationRepository.updateMessageContent).toHaveBeenCalledWith(
-        mockMessageId,
-        'Updated'
+      expect(messageRepository.editGlobalMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId, updatedContent: 'Updated' })
       );
     });
 
@@ -271,7 +310,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(globalConversationRepository.updateMessageContent).mockRejectedValue(
+      vi.mocked(messageRepository.editGlobalMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -290,7 +329,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
   describe('activity logging boundary', () => {
     it('should log message_update with null driveId for global conversations', async () => {
       const existingMessage = mockMessage({ content: 'Original content' });
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(existingMessage);
 
       const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated content' });
       const context = createContext(mockConversationId, mockMessageId);
@@ -302,7 +341,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
         'message_update',
         expect.objectContaining({
           id: mockMessageId,
-          pageId: mockConversationId,
+          pageId: null,
           driveId: null,
           conversationType: 'global',
         }),
@@ -350,7 +389,7 @@ describe('PATCH /api/ai/global/[id]/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(null);
 
       const request = createPatchRequest(mockConversationId, mockMessageId, { content: 'Updated' });
       const context = createContext(mockConversationId, mockMessageId);
@@ -374,12 +413,12 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
     vi.mocked(globalConversationRepository.getConversationById).mockResolvedValue(
       mockConversation()
     );
-    vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(
+    vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(
       mockMessage()
     );
 
     // Default: delete succeeds
-    vi.mocked(globalConversationRepository.softDeleteMessage).mockResolvedValue(undefined);
+    vi.mocked(messageRepository.softDeleteGlobalMessage).mockResolvedValue(undefined);
 
     // Default: actor info for activity logging
     vi.mocked(getActorInfo).mockResolvedValue({
@@ -417,7 +456,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
     });
 
     it('should return 404 when message does not exist', async () => {
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockConversationId, mockMessageId);
       const context = createContext(mockConversationId, mockMessageId);
@@ -427,6 +466,20 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       expect(response.status).toBe(404);
       expect(body.error).toBe('Message not found');
+    });
+
+    it('should return 409 when the message is a still-streaming placeholder', async () => {
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(mockMessage({ status: 'streaming' }));
+
+      const request = createDeleteRequest(mockConversationId, mockMessageId);
+      const context = createContext(mockConversationId, mockMessageId);
+
+      const response = await DELETE(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(body.error).toMatch(/still generating/i);
+      expect(messageRepository.softDeleteGlobalMessage).not.toHaveBeenCalled();
     });
   });
 
@@ -449,7 +502,9 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
       await DELETE(request, context);
 
-      expect(globalConversationRepository.softDeleteMessage).toHaveBeenCalledWith(mockMessageId);
+      expect(messageRepository.softDeleteGlobalMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ messageId: mockMessageId })
+      );
     });
 
     it('should log successful deletion', async () => {
@@ -471,7 +526,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(globalConversationRepository.softDeleteMessage).mockRejectedValue(
+      vi.mocked(messageRepository.softDeleteGlobalMessage).mockRejectedValue(
         new Error('Database error')
       );
 
@@ -490,7 +545,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
   describe('activity logging boundary', () => {
     it('should log message_delete with previous content for global conversations', async () => {
       const existingMessage = mockMessage({ content: 'Content to be deleted' });
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(existingMessage);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(existingMessage);
 
       const request = createDeleteRequest(mockConversationId, mockMessageId);
       const context = createContext(mockConversationId, mockMessageId);
@@ -502,7 +557,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
         'message_delete',
         expect.objectContaining({
           id: mockMessageId,
-          pageId: mockConversationId,
+          pageId: null,
           driveId: null,
           conversationType: 'global',
         }),
@@ -549,7 +604,7 @@ describe('DELETE /api/ai/global/[id]/messages/[messageId]', () => {
     });
 
     it('should NOT log activity when message not found', async () => {
-      vi.mocked(globalConversationRepository.getMessageById).mockResolvedValue(null);
+      vi.mocked(messageRepository.getMessageInConversation).mockResolvedValue(null);
 
       const request = createDeleteRequest(mockConversationId, mockMessageId);
       const context = createContext(mockConversationId, mockMessageId);
@@ -567,8 +622,8 @@ describe('processMessageContentUpdate (pure function)', () => {
 
   beforeAll(async () => {
     const actualModule = await vi.importActual<
-      typeof import('@/lib/repositories/chat-message-repository')
-    >('@/lib/repositories/chat-message-repository');
+      typeof import('@/lib/repositories/message-repository')
+    >('@/lib/repositories/message-repository');
     processMessageContentUpdate = actualModule.processMessageContentUpdate;
   });
 

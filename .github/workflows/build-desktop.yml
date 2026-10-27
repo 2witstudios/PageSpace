@@ -22,29 +22,31 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun run --filter 'desktop' build
 
       - name: Import code signing certificate
         env:
@@ -85,14 +87,14 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Package macOS app (signed and notarized)
-        run: pnpm --filter desktop package:mac
+        run: bun run --filter 'desktop' package:mac
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-packages
           path: |
@@ -108,38 +110,40 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun run --filter 'desktop' build
 
       - name: Package Windows app
-        run: pnpm --filter desktop package:win
+        run: bun run --filter 'desktop' package:win
         env:
           CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: windows-packages
           path: |
@@ -154,35 +158,37 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: '20'
 
-      - name: Install pnpm
-        uses: pnpm/action-setup@v5
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Set version from git tag
         run: |
           VERSION=${GITHUB_REF#refs/tags/desktop-v}
           echo "Setting version to $VERSION"
           cd apps/desktop
-          npm version $VERSION --no-git-tag-version --allow-same-version
+          # Set the version directly with node — `npm version` reifies the whole
+          # bun workspace and fails on `workspace:*` deps (EUNSUPPORTEDPROTOCOL).
+          VERSION="$VERSION" node -e 'const fs=require("fs");const p=JSON.parse(fs.readFileSync("package.json"));p.version=process.env.VERSION;fs.writeFileSync("package.json",JSON.stringify(p,null,2)+"\n")'
+          echo "package.json version is now: $(node -e 'console.log(require("./package.json").version)')"
         shell: bash
 
       - name: Build desktop app TypeScript
-        run: pnpm --filter desktop build
+        run: bun run --filter 'desktop' build
 
       - name: Package Linux app
-        run: pnpm --filter desktop package:linux
+        run: bun run --filter 'desktop' package:linux
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: linux-packages
           path: |

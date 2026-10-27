@@ -3,6 +3,7 @@
 import { useParams, useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 import { DriveMembers } from '@/components/members/DriveMembers';
+import { DriveJoinRequests } from '@/components/members/DriveJoinRequests';
 import { useDriveStore } from '@/hooks/useDrive';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -61,7 +62,8 @@ export default function MembersPage() {
           </Button>
         </div>
         
-        <DriveMembers driveId={driveId} />
+        <DriveJoinRequests drive={drive} />
+        <DriveMembers driveId={driveId} driveKind={drive.kind} />
       </div>
     </div>
   );

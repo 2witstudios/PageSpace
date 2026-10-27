@@ -504,4 +504,101 @@ describe('useSocketStore', () => {
       expect(io).not.toHaveBeenCalled();
     });
   });
+
+  /**
+   * REGRESSION GATE — the mount storm.
+   *
+   * `connect()` awaits a token fetch before it can write the Socket into the store, and about
+   * thirty call sites reach this store through `useSocket()`. A dozen-plus of them mount in
+   * the same React commit, so they all called `connect()` in the same tick, all read
+   * `socket === null`, and all called `io()`. One landed in the store; the rest became live
+   * orphans holding long-poll connections on the app's own origin until the browser's
+   * six-per-origin budget was gone — at which point live delivery and ordinary `fetch` both
+   * stopped. Measured on the production-accurate e2e topology: NINE `io()` calls per pane
+   * open, eight of them inside the same millisecond, of which only two ever connected.
+   *
+   * These tests fail if a stable identity can ever mint more than one socket again.
+   */
+  describe('single-flight connect (the mount storm)', () => {
+    beforeEach(() => {
+      // Clears any in-flight guard left by an earlier test so each case starts cold.
+      useSocketStore.getState().disconnect();
+      vi.mocked(io).mockClear();
+    });
+
+    it('given many connect() calls in one tick, should create exactly one socket', async () => {
+      const { connect } = useSocketStore.getState();
+
+      // Twenty hooks mounting in one React commit. None of them awaits the others — that is
+      // the whole point, and is exactly how the real call sites behave.
+      await Promise.all(Array.from({ length: 20 }, () => connect()));
+
+      expect(io).toHaveBeenCalledTimes(1);
+    });
+
+    it('given many connect() calls in one tick, should fetch exactly one socket token', async () => {
+      const { connect } = useSocketStore.getState();
+
+      await Promise.all(Array.from({ length: 20 }, () => connect()));
+
+      const tokenCalls = vi
+        .mocked(global.fetch)
+        .mock.calls.filter(([url]) => url === '/api/auth/socket-token');
+      expect(tokenCalls).toHaveLength(1);
+    });
+
+    it('given a second connect() while the first is still fetching its token, should not mint a rival socket', async () => {
+      let releaseToken: () => void = () => {};
+      const tokenGate = new Promise<void>((resolve) => {
+        releaseToken = resolve;
+      });
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url === '/api/auth/socket-token') {
+          await tokenGate;
+          return { ok: true, json: async () => ({ token: 'ps_sock_gated' }) };
+        }
+        return { ok: true };
+      });
+
+      const { connect } = useSocketStore.getState();
+      const first = connect();
+      // The store still holds `socket: null` here — the ONLY thing that can stop this
+      // caller minting a second socket is the in-flight gate.
+      const second = connect();
+
+      expect(io).not.toHaveBeenCalled();
+      releaseToken();
+      await Promise.all([first, second]);
+
+      expect(io).toHaveBeenCalledTimes(1);
+    });
+
+    it('given disconnect() lands while a connect is mid-token-fetch, should not resurrect a socket', async () => {
+      let releaseToken: () => void = () => {};
+      const tokenGate = new Promise<void>((resolve) => {
+        releaseToken = resolve;
+      });
+      global.fetch = vi.fn().mockImplementation(async (url: string) => {
+        if (url === '/api/auth/socket-token') {
+          await tokenGate;
+          return { ok: true, json: async () => ({ token: 'ps_sock_gated' }) };
+        }
+        return { ok: true };
+      });
+
+      const { connect, disconnect } = useSocketStore.getState();
+      const attempt = connect();
+
+      // The user logs out before the token comes back.
+      disconnect();
+
+      releaseToken();
+      await attempt;
+
+      // The superseded attempt must stand down: no socket in the store, and — the part that
+      // actually leaks — no live Socket created outside it either.
+      expect(io).not.toHaveBeenCalled();
+      expect(useSocketStore.getState().socket).toBeNull();
+    });
+  });
 });

@@ -27,6 +27,7 @@ interface PageSuggestion {
   label: string;
   type: 'page' | 'user';
   description?: string;
+  data?: { pageType?: string };
 }
 
 const searchFetcher = async (url: string): Promise<PageSuggestion[]> => {
@@ -49,6 +50,8 @@ interface SingleProps {
   onChange: (id: string | null) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Restrict suggestions to one page type, e.g. 'SHEET'. Omit for all types. */
+  pageTypeFilter?: string;
 }
 
 interface MultiProps {
@@ -59,6 +62,8 @@ interface MultiProps {
   placeholder?: string;
   disabled?: boolean;
   max?: number;
+  /** Restrict suggestions to one page type, e.g. 'SHEET'. Omit for all types. */
+  pageTypeFilter?: string;
 }
 
 type Props = SingleProps | MultiProps;
@@ -67,21 +72,22 @@ type Props = SingleProps | MultiProps;
 // the props.value / onChange contract — this picker has no internal selection state
 // that a remote refetch could clobber. The two SWRs below (searchFetcher, pageFetcher)
 // are read-only display: they fetch search results and chip titles, but neither writes
-// back to selection. The hasLoadedRef + isPaused gates still apply so the chip label
-// and the search list don't flicker mid-edit when an editing session is active, mirroring
-// the contract the dialog uses for its own triggers/agents SWRs (see useEditingSession).
+// back to selection. PageLabel retains the hasLoadedRef + isPaused guard so the chip
+// label doesn't flicker mid-edit. The search SWR intentionally omits it: revalidateOnFocus:
+// false already blocks background refetch, and pausing on isAnyEditing() during EventModal's
+// long-lived 'form' session is correct — label chips should stay frozen mid-form-edit.
 // No dedicated "remote refetch must not clobber selection" test is added because the
 // data flow makes that property structural rather than behavioural.
 
 function PageLabel({ pageId }: { pageId: string }) {
-  // Pause background revalidation while any editing session is active so a remote
+  // Pause background revalidation during document/form editing so a remote
   // task_updated broadcast cannot refetch and clobber the chip label mid-edit.
   // Initial load is unaffected because pageLoadedRef gates the pause until first success.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
+  const isAnyEditing = useEditingStore((s) => s.isAnyEditing());
   const pageLoadedRef = useRef(false);
   const { data, error } = useSWR(`/api/pages/${pageId}`, pageFetcher, {
     revalidateOnFocus: false,
-    isPaused: () => pageLoadedRef.current && isAnyActive,
+    isPaused: () => pageLoadedRef.current && isAnyEditing,
     onSuccess: () => {
       pageLoadedRef.current = true;
     },
@@ -91,14 +97,10 @@ function PageLabel({ pageId }: { pageId: string }) {
 }
 
 export function TriggerPagePicker(props: Props) {
-  const { driveId, mode, placeholder, disabled } = props;
+  const { driveId, mode, placeholder, disabled, pageTypeFilter } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounce(query, 200);
-
-  // Same pause-while-editing contract as PageLabel — see comment there for rationale.
-  const isAnyActive = useEditingStore((s) => s.isAnyActive());
-  const searchLoadedRef = useRef(false);
 
   const searchKey = open && driveId
     ? `/api/mentions/search?q=${encodeURIComponent(debouncedQuery)}&driveId=${driveId}&types=page`
@@ -106,10 +108,6 @@ export function TriggerPagePicker(props: Props) {
   const { data: results = [], isLoading } = useSWR(searchKey, searchFetcher, {
     revalidateOnFocus: false,
     keepPreviousData: true,
-    isPaused: () => searchLoadedRef.current && isAnyActive,
-    onSuccess: () => {
-      searchLoadedRef.current = true;
-    },
   });
   const searching = isLoading || query !== debouncedQuery;
 
@@ -183,12 +181,12 @@ export function TriggerPagePicker(props: Props) {
               value={query}
               onValueChange={setQuery}
             />
-            <CommandList>
+            <CommandList onWheel={(e) => e.stopPropagation()}>
               <CommandEmpty>
                 {searching ? 'Searching…' : 'No pages found.'}
               </CommandEmpty>
               {results
-                .filter((r) => r.type === 'page')
+                .filter((r) => r.type === 'page' && (!pageTypeFilter || r.data?.pageType === pageTypeFilter))
                 .map((page) => {
                   const isSelected = selectedIds.has(page.id);
                   const blocked = !isSelected && atMax;

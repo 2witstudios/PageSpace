@@ -1,0 +1,176 @@
+import { pgTable, text, integer, timestamp, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
+import { wallets } from './wallets';
+
+/**
+ * What a hold or ledger row's money is FOR (point-guard ruling on ow-c7b; fe9db1nm):
+ *   - 'ai'            an AI call.
+ *   - 'compute'       compute a PERSON ran (WAL-9): sandbox runtime, the terminal, browsers, their
+ *                     session's machine storage. On an org pool it is that member's draw on the
+ *                     pool, so it counts toward their per-consumer cap with their AI (WAL-2).
+ *   - 'drive_compute' an ENVIRONMENT's or published APP's accrual: its storage, wakes and awake
+ *                     time. On an org drive it is recorded under the env's cost owner — the member
+ *                     who created it, else the drive lead ([D-OW-28]) — and counts toward their cap.
+ * The seat reads (seat-allowance `loadSeatCapFacts`, credit-consume `recordSeatOvershoot`) test
+ * this column against SEAT_COUNTED_SPEND_KINDS. Every row written before the column existed was
+ * AI spend, hence the default; compute rows written before 'drive_compute' existed carry 'compute'.
+ *
+ * No CHECK constraint, deliberately: validating one scans the whole (hot, growing) ledger under
+ * an ACCESS EXCLUSIVE lock at deploy, whereas a NOT NULL column with a constant default is a
+ * metadata-only change on PostgreSQL 11+. The type is enforced by `SpendKind` at every writer.
+ */
+export const SPEND_KINDS = ['ai', 'compute', 'drive_compute'] as const;
+export type SpendKind = (typeof SPEND_KINDS)[number];
+
+/**
+ * creditLedger — append-only audit/provenance. One row per grant, purchase, or
+ * usage decrement. The unique indexes are the correctness backbone:
+ *   - one USAGE decrement per aiUsageLogId  (each AI call billed exactly once)
+ *   - one credit per stripeRef              (each payment credited exactly once)
+ * aiUsageLogId is a soft link (no FK) because aiUsageLogs is purged on retention.
+ * The usage-log index is scoped to entryType='usage' on purpose: a uncovered-cost
+ * 'adjustment' (debt) row is written alongside the usage row and links to the SAME
+ * aiUsageLogId, so the uniqueness must apply to the usage decrement only.
+ */
+export const creditLedger = pgTable('credit_ledger', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  /**
+   * The person the row is recorded under (the consumer of a call, the funder of a transfer).
+   * [D-OW-58] ledger rows are the WALLET's financial records: when the person deletes their
+   * account, rows on wallets they do not own (an org pool, a drive wallet) are kept with this
+   * reference anonymised (SET NULL — readers show a "former member"); rows on their own
+   * personal root go with that wallet (walletId cascades).
+   */
+  userId: text('userId').references(() => users.id, { onDelete: 'set null' }),
+  // WAL-5: the wallet this row moved money in or out of. For every row written before
+  // wallets existed it is the user's personal root wallet (backfilled by 0303/0304).
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant) | 'donation' / 'wallet_topup' (a transfer pair: out of the payer, into the drive wallet) | 'allocation_draw' (a transfer pair: what a child wallet's spend drew from its parent's allocation, out of the parent and into the child) | 'debt_forgiven' (a renewal's clamp forgave debt) | 'allocation_reset' (a drive wallet's debt netted from its next allocation) | 'leg_refund' (an owner leg refunded out of a drive wallet) | 'opening_balance' (the WAL-5 cutover's one row per wallet, migration 0350) | 'seat_overshoot_month' / 'seat_overshoot_day' (attribution only, no money)
+  bucket: text('bucket').notNull(), // 'monthly' | 'topup'
+  amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
+  appliedCents: integer('appliedCents'), // signed amount actually decremented from the balance (usage rows). |applied| <= |amount|; the gap is debt recorded as an adjustment row.
+  chargeMillicents: integer('chargeMillicents'), // precise per-call charge in millicents (usage rows) — the sub-cent-accurate source for settlement/retry
+  aiUsageLogId: text('aiUsageLogId'), // soft link to aiUsageLogs.id (no FK)
+  realCostCents: integer('realCostCents'), // round(cost*100) pre-markup, for audit
+  markupBps: integer('markupBps').default(15000).notNull(),
+  stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
+  paidCents: integer('paidCents'), // what the Stripe invoice actually paid (monthly_grant rows) — the grant is derived from it (MON-2), so the ratio is auditable per row
+  consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
+  consumeError: text('consumeError'),
+  // Idempotency arbiter for the async cost-reconcile cron's correction rows. The usage
+  // unique index is scoped to entryType='usage', so it does NOT block a second
+  // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
+  // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
+  reconcileGenerationKey: text('reconcileGenerationKey'),
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
+  /**
+   * WAL-6b, on a usage CLAIM row: the chosen source's wallet a drive rule moved this call off (the
+   * hold's fallbackFromWalletId, or the turn's for a hold-less follow-on), recorded with the claim so
+   * a settle the backfill cron retries lands overshoot exactly where the in-line settle would have —
+   * never on the consumer. Null on every other row and on a call that did not fall back.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
+  /**
+   * SPEND-10, on usage and reconcile rows: the automation the call ran for when no person was present
+   * (a cron, a trigger, a scheduled run, Zoom enrichment; [D-OW-34]: recorded as its creator in userId),
+   * a typed reference encoded and parsed ONLY by lib billing/automation-attribution (`workflow:<id>` |
+   * `zoom:<connectionId>`). The lead's spend view groups by it, so automation spend is listed as the
+   * automation rather than merged into its creator. A soft link (no FK): deleting a workflow keeps its
+   * spend history. Null for a person's own call, a channel mention or a manual Run (SPEND-6).
+   */
+  automationRef: text('automationRef'),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
+  walletIdx: index('credit_ledger_wallet_idx').on(table.walletId, table.createdAt),
+  usageLogUnique: uniqueIndex('credit_ledger_usage_log_unique')
+    .on(table.aiUsageLogId)
+    .where(sql`${table.aiUsageLogId} IS NOT NULL AND ${table.entryType} = 'usage'`),
+  stripeRefUnique: uniqueIndex('credit_ledger_stripe_ref_unique')
+    .on(table.stripeRef)
+    .where(sql`${table.stripeRef} IS NOT NULL`),
+  // One reconcile correction per generation set — makes a re-run / overlapping cron a no-op.
+  reconcileKeyUnique: uniqueIndex('credit_ledger_reconcile_key_unique')
+    .on(table.reconcileGenerationKey)
+    .where(sql`${table.reconcileGenerationKey} IS NOT NULL`),
+  consumeStatusIdx: index('credit_ledger_consume_status_idx').on(table.consumeStatus, table.createdAt),
+}));
+
+/**
+ * creditHolds — short-lived reservations placed by the gate BEFORE a call and
+ * released at settle. The gate checks the balance up front but the real cost is
+ * only known after the stream, so a hold does two jobs at once:
+ *   - reserves `estCents` of estimated spend, subtracted from spendable in the
+ *     gate decision so concurrent calls can't collectively overshoot the balance
+ *   - serves as the in-flight counter — the free-tier concurrency cap is just a
+ *     COUNT of this user's non-expired holds
+ * consumeCredits deletes the hold inside the settle transaction. A crashed stream
+ * leaves an orphan hold that would permanently shrink spendable, so the reconcile
+ * cron sweeps any hold past `expiresAt`. `aiUsageLogId` is a nullable soft link
+ * (no FK) recorded for provenance when the settling call is known.
+ */
+export const creditHolds = pgTable('credit_holds', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // WAL-5: holds are per wallet — the wallet this reservation is against.
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  /**
+   * WAL-6b: set only when a drive's fallback rule moved the call off the source it chose — the
+   * chosen source's wallet. The settle lands any overshoot where THAT choice would have put it,
+   * so a fallback onto the consumer's own credits never leaves them the overshoot. Null when the
+   * call spends what it named; set null if that wallet is deleted before the settle.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
+  estCents: integer('estCents').notNull(),
+  aiUsageLogId: text('aiUsageLogId'),
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),
+}, (table) => ({
+  // The gate sums & counts a user's non-expired holds on every request — index the
+  // hot lookup. The expiry index keeps the reconcile sweep (DELETE WHERE expiresAt
+  // < now) cheap as the table grows.
+  userIdx: index('credit_holds_user_idx').on(table.userId),
+  walletIdx: index('credit_holds_wallet_idx').on(table.walletId),
+  expiresIdx: index('credit_holds_expires_idx').on(table.expiresAt),
+  estNonNeg: check('credit_holds_est_cents_nonneg', sql`${table.estCents} >= 0`),
+}));
+
+/**
+ * billing_epochs — instants a billing rule went live on THIS deployment, stamped once by the first
+ * code path that needs one and never moved (INSERT … ON CONFLICT DO NOTHING).
+ *
+ * 'org_compute': when org drives' compute (WAL-9) began charging the org pool. Before it, every
+ * compute meter refused an org payer and left the row's watermark behind; accrual from before the
+ * epoch is forgiven, never charged (`billing/org-compute-epoch-core.ts`).
+ */
+export const billingEpochs = pgTable('billing_epochs', {
+  key: text('key').primaryKey(),
+  startedAt: timestamp('startedAt', { mode: 'date', withTimezone: true }).notNull(),
+});
+
+export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
+  user: one(users, {
+    fields: [creditLedger.userId],
+    references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [creditLedger.walletId],
+    references: [wallets.id],
+  }),
+}));
+
+export const creditHoldsRelations = relations(creditHolds, ({ one }) => ({
+  user: one(users, {
+    fields: [creditHolds.userId],
+    references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [creditHolds.walletId],
+    references: [wallets.id],
+  }),
+}));

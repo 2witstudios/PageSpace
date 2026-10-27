@@ -15,8 +15,8 @@ import * as auth from '../auth';
 import * as sessions from '../sessions';
 // Core schema
 import * as core from '../core';
-// Permissions schema
-import * as permissions from '../permissions';
+// Content tags schema
+import * as contentTagsSchema from '../content-tags';
 // Members schema
 import * as members from '../members';
 // Chat schema
@@ -65,6 +65,7 @@ import * as calendar from '../calendar';
 // Workflows schema
 import * as workflows from '../workflows';
 import * as workflowRuns from '../workflow-runs';
+import * as driveEnvs from '../drive-envs';
 
 const schemaDir = resolve(process.cwd(), 'src/schema');
 
@@ -80,7 +81,6 @@ describe('Schema definitions', () => {
       expect(auth.users).toBeDefined();
       expect(auth.deviceTokens).toBeDefined();
       expect(auth.mcpTokens).toBeDefined();
-      expect(auth.mcpTokenDrives).toBeDefined();
       expect(auth.verificationTokens).toBeDefined();
       expect(auth.socketTokens).toBeDefined();
       expect(auth.passkeys).toBeDefined();
@@ -90,8 +90,6 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(auth.usersRelations).toBeDefined();
       expect(auth.deviceTokensRelations).toBeDefined();
-      expect(auth.mcpTokensRelations).toBeDefined();
-      expect(auth.mcpTokenDrivesRelations).toBeDefined();
       expect(auth.verificationTokensRelations).toBeDefined();
       expect(auth.socketTokensRelations).toBeDefined();
       expect(auth.passkeysRelations).toBeDefined();
@@ -119,9 +117,7 @@ describe('Schema definitions', () => {
     it('exports tables', () => {
       expect(core.drives).toBeDefined();
       expect(core.pages).toBeDefined();
-      expect(core.chatMessages).toBeDefined();
       expect(core.tags).toBeDefined();
-      expect(core.pageTags).toBeDefined();
       expect(core.storageEvents).toBeDefined();
       expect(core.favorites).toBeDefined();
       expect(core.mentions).toBeDefined();
@@ -131,27 +127,23 @@ describe('Schema definitions', () => {
     it('exports relations', () => {
       expect(core.drivesRelations).toBeDefined();
       expect(core.pagesRelations).toBeDefined();
-      expect(core.chatMessagesRelations).toBeDefined();
       expect(core.tagsRelations).toBeDefined();
-      expect(core.pageTagsRelations).toBeDefined();
       expect(core.favoritesRelations).toBeDefined();
       expect(core.mentionsRelations).toBeDefined();
       expect(core.userMentionsRelations).toBeDefined();
     });
   });
 
-  describe('permissions schema', () => {
+  describe('content-tags schema', () => {
     it('exports enums', () => {
-      expect(permissions.permissionAction).toBeDefined();
-      expect(permissions.subjectType).toBeDefined();
+      expect(contentTagsSchema.contentTagTargetKind).toBeDefined();
+      expect(contentTagsSchema.contentTagAnchorStatus).toBeDefined();
+      expect(contentTagsSchema.contentTagSource).toBeDefined();
     });
 
-    it('exports tables', () => {
-      expect(permissions.permissions).toBeDefined();
-    });
-
-    it('exports relations', () => {
-      expect(permissions.permissionsRelations).toBeDefined();
+    it('exports tables and relations', () => {
+      expect(contentTagsSchema.contentTags).toBeDefined();
+      expect(contentTagsSchema.contentTagsRelations).toBeDefined();
     });
   });
 
@@ -165,6 +157,12 @@ describe('Schema definitions', () => {
       expect(members.userProfiles).toBeDefined();
       expect(members.driveMembers).toBeDefined();
       expect(members.pagePermissions).toBeDefined();
+      expect(members.mcpTokenDrives).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(members.mcpTokensRelations).toBeDefined();
+      expect(members.mcpTokenDrivesRelations).toBeDefined();
     });
   });
 
@@ -207,6 +205,11 @@ describe('Schema definitions', () => {
       expect(conversations.conversationsRelations).toBeDefined();
       expect(conversations.messagesRelations).toBeDefined();
     });
+
+    // `closedInWorkspaceAt` was pinned here as "listing membership, kept
+    // separate from isActive". Both it and `workspaceId` are gone: membership
+    // is a node row, and closing a thread out of a workspace destroys that
+    // node rather than stamping a column.
   });
 
   describe('notifications schema', () => {
@@ -309,13 +312,16 @@ describe('Schema definitions', () => {
     it('calculateVersionExpiresAt returns date 30 days in future by default', () => {
       const before = Date.now();
       const result = versioning.calculateVersionExpiresAt();
-      const after = Date.now();
 
       expect(result).toBeInstanceOf(Date);
-      const diffMs = result.getTime() - before;
-      const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
-      expect(diffMs).toBeGreaterThanOrEqual(thirtyDaysMs - 1000);
-      expect(diffMs).toBeLessThanOrEqual(thirtyDaysMs + (after - before) + 1000);
+      // setDate works in local calendar days, so when a DST transition falls
+      // inside the 30-day window the real-time difference is 30 days ±1h (CI
+      // runs in UTC and never sees this; local hosts do, every autumn).
+      // Compare at day level, like the custom-createdAt test below.
+      const diffDays = Math.round(
+        (result.getTime() - before) / (24 * 60 * 60 * 1000)
+      );
+      expect(diffDays).toBe(30);
     });
 
     it('calculateVersionExpiresAt respects custom createdAt date', () => {
@@ -543,6 +549,16 @@ describe('Schema definitions', () => {
 
     it('exports relations', () => {
       expect(workflowRuns.workflowRunsRelations).toBeDefined();
+    });
+  });
+
+  describe('drive_envs schema', () => {
+    it('exports tables', () => {
+      expect(driveEnvs.driveEnvs).toBeDefined();
+    });
+
+    it('exports relations', () => {
+      expect(driveEnvs.driveEnvsRelations).toBeDefined();
     });
   });
 });

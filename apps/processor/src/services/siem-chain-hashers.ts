@@ -1,5 +1,8 @@
 import { createHash } from 'crypto';
 import { stableStringify } from '@pagespace/lib/utils/stable-stringify';
+import { computeEmissionHash } from '@pagespace/lib/audit/emission-hash';
+import { computeChainHash } from '@pagespace/lib/audit/chain-step';
+import type { AuditEvent } from '@pagespace/lib/audit/security-audit';
 
 /**
  * Per-source hash recomputation strategies for the SIEM delivery preflight.
@@ -118,4 +121,53 @@ export function recomputeSecurityAuditHash(
   });
 
   return createHash('sha256').update(serialized).digest('hex');
+}
+
+/**
+ * SecurityAuditHashableFields plus the admin-plane era discriminator.
+ *
+ * Post-cutover (#890 Phase 2) the admin store's security_audit_log chain
+ * holds two hash eras: legacy rows carried over by the backfill keep
+ * emission_hash NULL and were hashed with computeSecurityEventHash; rows
+ * appended by the audit chainer carry emission_hash and satisfy
+ * event_hash = H(emission_hash, previous_hash). Loads from the legacy main
+ * table (break-glass) always set emissionHash to null — that table has no
+ * such column and only ever held the legacy formula.
+ */
+export interface SecurityAuditEraFields extends SecurityAuditHashableFields {
+  emissionHash: string | null;
+}
+
+/**
+ * Era-aware recompute of the expected `eventHash` for a security_audit_log
+ * entry — the read-side mirror of verifyStoredEntryHash in
+ * packages/lib/src/audit/security-audit-chain-verifier.ts.
+ *
+ * The stored emission_hash selects the formula by PRESENCE only; the hash
+ * itself is derived from row data (computeEmissionHash), so a tamper that
+ * only rewrites the stored emission_hash column cannot smuggle modified data
+ * past delivery. Stored-emission equality itself is the cron verifier's
+ * check, not the preflight's.
+ */
+export function recomputeSecurityAuditHashEraAware(
+  data: SecurityAuditEraFields,
+  previousHash: string
+): string {
+  if (data.emissionHash === null) {
+    return recomputeSecurityAuditHash(data, previousHash);
+  }
+
+  // Reconstruct the hashed event exactly as verifyStoredEntryHash does —
+  // nullable DB columns become undefined; PII never participates (#541).
+  const event: AuditEvent = {
+    eventType: data.eventType as AuditEvent['eventType'],
+    serviceId: data.serviceId ?? undefined,
+    resourceType: data.resourceType ?? undefined,
+    resourceId: data.resourceId ?? undefined,
+    details: data.details ?? undefined,
+    riskScore: data.riskScore ?? undefined,
+    anomalyFlags: data.anomalyFlags ?? undefined,
+  };
+
+  return computeChainHash(computeEmissionHash(event, data.timestamp), previousHash);
 }

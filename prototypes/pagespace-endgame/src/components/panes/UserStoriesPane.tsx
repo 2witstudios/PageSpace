@@ -81,7 +81,7 @@ const categories: Category[] = [
     description: "ChatGPT-like: talk to AI with tools, context, and memory.",
     stories: [
       { as: "user", want: "chat with AI globally or scoped to a specific page/drive", so: "the AI has the right context for my question", status: "live", notes: "Conversations table with type field: global, page, drive. Context via contextId." },
-      { as: "user", want: "choose from 100+ models across 11 providers", so: "I can use the best model for each task", status: "live", notes: "ai-providers-config.ts: pagespace, openrouter (paid/free), google, openai, anthropic, xai, ollama, lmstudio, azure, glm, minimax" },
+      { as: "user", want: "choose from 100+ models across many vendors", so: "I can use the best model for each task", status: "live", notes: "ai-providers-config.ts: all cloud models routed via OpenRouter, grouped by real vendor (openai, anthropic, google, xai, deepseek, qwen, mistral, …); plus local/configured azure, ollama, lmstudio" },
       { as: "user", want: "AI that can create, edit, search, and organize my pages", so: "the AI is a real collaborator, not just a chatbot", status: "live", notes: "39 tools across 14 tool files: page CRUD, search, tasks, calendar, agents, web, channels, drives" },
       { as: "user", want: "AI that can search the web for current information", so: "answers aren't limited to training data", status: "live", notes: "Brave Search API with domain and recency filtering via BRAVE_API_KEY" },
       { as: "user", want: "AI that can manage my tasks (create, update, assign)", so: "I can delegate task management to the AI", status: "live", notes: "update_task + get_assigned_tasks tools with custom statuses, priority, due dates, multi-assignee" },

@@ -2,12 +2,17 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { holdsAcceptedGuestRow } from '@pagespace/lib/permissions/membership-queries';
+import { isDriveMemberRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
+import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
+import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -48,28 +53,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    // Check authorization
-    const isOwner = drive.ownerId === userId;
-    let hasAccess = isOwner;
-
-    if (!isOwner) {
-      // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-      // page tree of a drive they have not joined. Closes Review C2.
-      const membership = await db.query.driveMembers.findFirst({
-        where: and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, userId),
-          isNotNull(driveMembers.acceptedAt)
-        ),
-      });
-      hasAccess = !!membership;
-    }
-
-    if (!hasAccess) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    // Check authorization. A scoped MCP token is its own drive member — gate on
+    // the TOKEN's membership, not the owning user's.
+    const relationship = isScopedMCPAuth(auth) ? null : await loadDriveRelationship(actorFromAuth(auth), drive);
+    if (isScopedMCPAuth(auth)) {
+      // Membership gate only — the tree below is filtered to the TOKEN's
+      // per-page view set, so per-page custom-role grants still work.
+      if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
+      }
+    } else {
+      // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
+      // only, so a pending invitee does not read the page tree of a drive they have not joined).
+      // A GUEST row (redeemed page share link) is no membership but passes this gate on purpose:
+      // the tree below is cut to getUserAccessiblePagesInDrive, which gives a guest only the
+      // pages they hold explicit grants on.
+      const admitted = relationship !== null
+        && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
+      if (!admitted) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
+      }
     }
 
     // Fetch all non-trashed pages for the drive
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const pageResults = await db.query.pages.findMany({
       where: and(
         eq(pages.driveId, driveId),
@@ -78,9 +85,22 @@ export async function POST(request: Request) {
       orderBy: [asc(pages.position)],
     });
 
-    const pageTree = buildTree(pageResults);
+    // Non-owners must not see private pages they don't have explicit access to.
+    // getUserAccessiblePagesInDrive handles owner/admin (returns all) vs member (non-private + explicit).
+    // Scoped MCP tokens filter by the TOKEN's own accessible pages.
+    let visiblePages = pageResults;
+    if (isScopedMCPAuth(auth)) {
+      const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
+      const accessibleIds = new Set(accessible.map(page => page.id));
+      visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
+    } else if (!relationship?.isOwner) {
+      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(actorFromAuth(auth), driveId));
+      visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
+    }
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'build_page_tree', pageCount: pageResults.length } });
+    const pageTree = buildTree(visiblePages);
+
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'drive_page_tree', resourceId: driveId, details: { action: 'build_page_tree', pageCount: visiblePages.length } });
 
     return NextResponse.json({ tree: pageTree });
   } catch (error) {

@@ -35,6 +35,7 @@ export async function GET(req: Request) {
   auditRequest(req, { eventType: 'data.read', userId, resourceType: 'favorites', resourceId: 'self' });
 
   try {
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const userFavorites = await db.query.favorites.findMany({
       where: eq(favorites.userId, userId),
       orderBy: [asc(favorites.position), desc(favorites.createdAt)],

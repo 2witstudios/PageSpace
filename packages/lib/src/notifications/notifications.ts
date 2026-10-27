@@ -7,15 +7,19 @@ import { createId } from '@paralleldrive/cuid2';
 import { sendNotificationEmail } from '../services/notification-email-service';
 import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { sendPushNotification, type PushNotificationPayload } from './push-notifications';
+import { decryptUserRow } from '../auth/user-repository';
+import { decryptField } from '../encryption/field-crypto';
 
 // Export types and guards
 export * from './types';
 export * from './guards';
+export * from './derive-badge-count';
 import type { NotificationType } from './types';
+import { deriveBadgeCount } from './derive-badge-count';
 
 async function sendBadgedPush(userId: string, payload: PushNotificationPayload) {
   try {
-    const badge = await getUnreadNotificationCount(userId);
+    const badge = deriveBadgeCount(await getUnreadNotificationCount(userId));
     await sendPushNotification(userId, { ...payload, badge });
   } catch (error) {
     console.error('Failed to send badged push notification:', error);
@@ -24,7 +28,7 @@ async function sendBadgedPush(userId: string, payload: PushNotificationPayload) 
 
 async function sendSilentBadgeUpdate(userId: string) {
   try {
-    const badge = await getUnreadNotificationCount(userId);
+    const badge = deriveBadgeCount(await getUnreadNotificationCount(userId));
     await sendPushNotification(userId, { silent: true, badge });
   } catch (error) {
     console.error('Failed to send silent badge update:', error);
@@ -119,11 +123,12 @@ export async function getUserNotifications(userId: string, limit = 50) {
 
   type NotificationResult = (typeof userNotifications)[number];
 
-  return userNotifications.map((row: NotificationResult) => ({
+  return Promise.all(userNotifications.map(async (row: NotificationResult) => ({
     ...row.notification,
-    triggeredByUser: row.triggeredByUser,
+    // Decrypt the joined actor's PII at the edge (legacy plaintext passes through).
+    triggeredByUser: await decryptUserRow(row.triggeredByUser),
     drive: row.drive,
-  }));
+  })));
 }
 
 export async function getUnreadNotificationCount(userId: string) {
@@ -180,6 +185,70 @@ export async function markAllNotificationsAsRead(userId: string) {
     );
 
   void sendSilentBadgeUpdate(userId);
+}
+
+/**
+ * Marks a user's unread MENTION notifications for a specific page as read
+ * (rows left behind after `channel_read_status` is upserted — Hole C). Scoped
+ * to `userId` so one user can never mark another user's notifications read.
+ *
+ * Filtered to `type: 'MENTION'`, not just `pageId` — a page can also carry
+ * PERMISSION_UPDATED/PAGE_SHARED/TASK_ASSIGNED notifications with the same
+ * `pageId` (see createPermissionNotification/createTaskAssignedNotification
+ * below), and reading a channel must not silently dismiss those.
+ */
+export async function markPageNotificationsRead(userId: string, pageId: string): Promise<number> {
+  const updated = await db
+    .update(notifications)
+    .set({
+      isRead: true,
+      readAt: new Date(),
+    })
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.pageId, pageId),
+        eq(notifications.type, 'MENTION'),
+        eq(notifications.isRead, false)
+      )
+    )
+    .returning({ id: notifications.id });
+
+  void sendSilentBadgeUpdate(userId);
+
+  return updated.length;
+}
+
+/**
+ * Marks a user's unread NEW_DIRECT_MESSAGE notifications for a specific DM
+ * conversation as read (rows left behind after reading the conversation —
+ * Hole E). The `conversationId` predicate mirrors
+ * `createOrUpdateMessageNotification`'s lookup exactly so the write and read
+ * sides cannot drift apart. Scoped to `userId` so one user can never mark
+ * another user's notifications read, and to `type: 'NEW_DIRECT_MESSAGE'` so a
+ * future notification type that happens to store the same `conversationId`
+ * in its metadata is never swept up by this call.
+ */
+export async function markDmConversationNotificationsRead(userId: string, conversationId: string): Promise<number> {
+  const updated = await db
+    .update(notifications)
+    .set({
+      isRead: true,
+      readAt: new Date(),
+    })
+    .where(
+      and(
+        eq(notifications.userId, userId),
+        eq(notifications.type, 'NEW_DIRECT_MESSAGE'),
+        eq(notifications.isRead, false),
+        sql`${notifications.metadata}->>'conversationId' = ${conversationId}`
+      )
+    )
+    .returning({ id: notifications.id });
+
+  void sendSilentBadgeUpdate(userId);
+
+  return updated.length;
 }
 
 export async function markConnectionRequestActioned(
@@ -240,9 +309,13 @@ export async function createPermissionNotification(
 
   if (!page) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
+  // Decrypt PII at the edge: the actor's name is embedded verbatim into the
+  // stored notification `message` + email-template metadata (denormalized display
+  // snapshots, NOT encrypted columns), so it must be plaintext (GDPR #965).
+  const triggeredByUserRow = await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   const permissionList = [];
   if (permissions.canView) permissionList.push('view');
@@ -307,9 +380,12 @@ export async function createDriveNotification(
 
   if (!drive) return null;
 
-  const triggeredByUser = triggeredByUserId ? await db.query.users.findFirst({
+  // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into the
+  // notification `message` + email-template metadata (plaintext display fields).
+  const triggeredByUserRow = triggeredByUserId ? await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   }) : null;
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   let notificationType: NotificationType;
   let title: string;
@@ -356,12 +432,14 @@ export async function createOrUpdateMessageNotification(
   triggeredByUserId: string,
   senderName?: string
 ) {
-  // Get sender name if not provided
+  // Get sender name if not provided. Decrypt PII at the edge (GDPR #965): the
+  // sender name is snapshotted into the notification title/push/email, which are
+  // plaintext display surfaces (legacy plaintext passes through unchanged).
   if (!senderName) {
     const sender = await db.query.users.findFirst({
       where: eq(users.id, triggeredByUserId),
     });
-    senderName = sender?.name || 'Someone';
+    senderName = (await decryptField(sender?.name)) || 'Someone';
   }
 
   // Check if there's an existing unread notification for this specific conversation
@@ -436,7 +514,8 @@ export async function createOrUpdateMessageNotification(
 export async function createMentionNotification(
   targetUserId: string,
   pageId: string,
-  triggeredByUserId: string
+  triggeredByUserId: string,
+  options?: { mentionerNameOverride?: string }
 ) {
   // Don't notify users who mention themselves
   if (targetUserId === triggeredByUserId) return null;
@@ -450,11 +529,16 @@ export async function createMentionNotification(
 
   if (!page) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
-    where: eq(users.id, triggeredByUserId),
-  });
+  // Decrypt PII at the edge (GDPR #965): the mentioner name is snapshotted into
+  // the notification message/metadata (plaintext display surface).
+  const triggeredByUserRow = options?.mentionerNameOverride
+    ? null
+    : await db.query.users.findFirst({
+        where: eq(users.id, triggeredByUserId),
+      });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
-  const mentionerName = triggeredByUser?.name || 'Someone';
+  const mentionerName = options?.mentionerNameOverride || triggeredByUser?.name || 'Someone';
 
   return createNotification({
     userId: targetUserId,
@@ -496,9 +580,12 @@ export async function createTaskAssignedNotification(
 
   if (!taskListPage) return null;
 
-  const triggeredByUser = await db.query.users.findFirst({
+  // Decrypt PII at the edge (GDPR #965): the assigner name is snapshotted into
+  // the notification message/metadata (plaintext display surface).
+  const triggeredByUserRow = await db.query.users.findFirst({
     where: eq(users.id, triggeredByUserId),
   });
+  const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
   const assignerName = triggeredByUser?.name || 'Someone';
 

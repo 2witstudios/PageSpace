@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isOnPrem } from '../deployment-mode';
 
 /**
  * Server-side environment variable validation schema.
@@ -16,6 +17,78 @@ export const serverEnvSchema = z
         'DATABASE_URL must be a valid PostgreSQL connection string'
       ),
 
+    // Admin Postgres (trust plane) — dedicated database for the tamper-evident
+    // security audit chain and related admin/audit tables, isolated from the app
+    // DB in every deployment mode. Optional at the schema level: the mode
+    // decision (dedicated / break-glass / main-db / fail) is owned by
+    // resolveAdminDbMode at adminDb init, not here, so non-audit code paths can
+    // still validate env. An EMPTY string is explicitly accepted (via
+    // `.or(z.literal(''))`) and treated as UNSET — resolveAdminDbMode already
+    // maps '' → unset (→ the silent 'main-db' default). Rejecting '' here would
+    // crash the process at boot (instrumentation.ts calls validateEnv) BEFORE
+    // the mode decision runs, defeating the incident fix for the common
+    // `ADMIN_DATABASE_URL=` blank-value form. A NON-empty value must still be a
+    // postgres URL.
+    ADMIN_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional()
+      .or(z.literal('')),
+    ADMIN_DATABASE_SSL: z.enum(['true', 'false']).optional(),
+    ADMIN_DB_POOL_MAX: z.coerce.number().int().positive().optional(),
+
+    // GDPR eraser identity (#890 Phase 2, leaf 6): the web pseudonymization
+    // route connects to the Admin PG as admin_gdpr_eraser_user through this
+    // URL. Optional at the schema level — when unset, the pseudonymize route
+    // refuses (503) via the eraser client, never at app boot. An EMPTY string is
+    // accepted and treated as UNSET, mirroring ADMIN_DATABASE_URL and the eraser
+    // client (resolveAdminEraserDbMode maps '' → unavailable): a blank
+    // `ADMIN_ERASER_DATABASE_URL=` must not crash boot.
+    ADMIN_ERASER_DATABASE_URL: z
+      .string()
+      .min(1, 'ADMIN_ERASER_DATABASE_URL must not be empty when set')
+      .refine(
+        (url) => url.startsWith('postgresql://') || url.startsWith('postgres://'),
+        'ADMIN_ERASER_DATABASE_URL must be a valid PostgreSQL connection string'
+      )
+      .optional()
+      .or(z.literal('')),
+
+    // Break-glass rollback ONLY: arms the fallback that permits audit writes to
+    // the main DB (which must alert loudly) when the Admin PG is unavailable.
+    // Never a supported steady state. Accept any string so a stray value (e.g.
+    // ADMIN_DB_BREAK_GLASS=1) never fails app-wide env validation; consumers
+    // arm break-glass only on the exact value 'true' (fail-closed otherwise).
+    ADMIN_DB_BREAK_GLASS: z.string().optional(),
+
+    // Opt-in trust-plane enforcement. When exactly 'true' AND ADMIN_DATABASE_URL
+    // is unset, the adminDb mode is 'fail' (fail closed) instead of the silent
+    // 'main-db' default. Set only in deployments that HAVE adopted the dedicated
+    // Admin PG and want a missing URL to halt rather than fall back to the main
+    // DB. Accept any string so a stray value never fails app-wide env
+    // validation; consumers arm it only on the exact value 'true'.
+    AUDIT_TRUST_PLANE_REQUIRED: z.string().optional(),
+
+    // ClickHouse analytics tier (#890 Phase 3) — off by default. Only the
+    // exact value CLICKHOUSE_ENABLED='true' turns it on (accept any string so
+    // a stray value never fails app-wide env validation; the exact-match gate
+    // lives in observability/clickhouse-env.ts). All connection vars are
+    // optional at the schema level: the three-state fail-fast (off → no CH /
+    // on+configured → client / on+misconfigured → throw) is enforced by the
+    // client shell at init, not here, so non-analytics code paths still
+    // validate env. Credentials are server-side secrets — never NEXT_PUBLIC_,
+    // placeholders only in .env.example.
+    CLICKHOUSE_ENABLED: z.string().optional(),
+    CLICKHOUSE_URL: z.string().optional(),
+    CLICKHOUSE_HOST: z.string().optional(),
+    CLICKHOUSE_USER: z.string().optional(),
+    CLICKHOUSE_PASSWORD: z.string().optional(),
+    CLICKHOUSE_DATABASE: z.string().optional(),
+
     // CSRF Protection (required in production/development, optional in test)
     CSRF_SECRET: z.string().optional(),
 
@@ -31,18 +104,25 @@ export const serverEnvSchema = z
       .default('info'),
 
     // Optional URLs
-    WEB_APP_URL: z.string().url().optional(),
-    NEXT_PUBLIC_REALTIME_URL: z.string().url().optional(),
-    INTERNAL_REALTIME_URL: z.string().url().optional(),
+    WEB_APP_URL: z.string().url().optional().or(z.literal('')),
+    NEXT_PUBLIC_REALTIME_URL: z.string().url().optional().or(z.literal('')),
+    INTERNAL_REALTIME_URL: z.string().url().optional().or(z.literal('')),
 
     // Optional OAuth
     GOOGLE_OAUTH_CLIENT_ID: z.string().optional(),
     GOOGLE_OAUTH_CLIENT_SECRET: z.string().optional(),
-    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional(),
+    GOOGLE_OAUTH_REDIRECT_URI: z.string().url().optional().or(z.literal('')),
 
-    // Optional AI keys
-    GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
+    // AI keys. OpenRouter powers the cloud model picker; OpenAI is required for
+    // voice mode (direct api.openai.com). The rest are optional, kept for future
+    // native (non-OpenRouter) provider routing.
     OPENROUTER_DEFAULT_API_KEY: z.string().optional(),
+    OPENAI_DEFAULT_API_KEY: z.string().optional(),
+    ANTHROPIC_DEFAULT_API_KEY: z.string().optional(),
+    GOOGLE_AI_DEFAULT_API_KEY: z.string().optional(),
+    XAI_DEFAULT_API_KEY: z.string().optional(),
+    GLM_CODER_DEFAULT_API_KEY: z.string().optional(),
+    MINIMAX_DEFAULT_API_KEY: z.string().optional(),
 
     // Optional monitoring
     MONITORING_INGEST_KEY: z.string().optional(),
@@ -52,15 +132,146 @@ export const serverEnvSchema = z
     // Optional OAuth state
     OAUTH_STATE_SECRET: z.string().min(32).optional(),
     APPLE_SERVICE_ID: z.string().min(1).optional(),
+    // Sign in with Apple token revocation (TN3194) — all optional; absent means the
+    // token exchange is skipped and deletion falls back to manual instructions.
+    APPLE_TEAM_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_KEY_ID: z.string().min(1).optional(),
+    APPLE_SIGN_IN_PRIVATE_KEY: z.string().min(1).optional(),
 
     // Optional Stripe
     STRIPE_SECRET_KEY: z.string().min(1).optional(),
     STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
 
+    // Optional App Store In-App Purchase (billing/apple/apple-verify). Production
+    // purchases verify only once APPLE_IAP_APP_APPLE_ID is set.
+    // Blank values are allowed and read as unset, exactly as appleVerifierConfigFromEnv reads
+    // them (a declared-but-blank optional must never fail boot validation).
+    APPLE_IAP_BUNDLE_ID: z.string().optional(),
+    APPLE_IAP_APP_APPLE_ID: z.string().regex(/^\s*\d*\s*$/).optional(),
+    APPLE_IAP_ALLOW_SANDBOX: z.string().optional(),
+    APPLE_IAP_ONLINE_CHECKS: z.string().optional(),
+    APPLE_IAP_SANDBOX_MAX_FUNDINGS: z.string().regex(/^\s*\d*\s*$/).optional(),
+    APPLE_IAP_SANDBOX_FUNDED_USER_IDS: z.string().optional(),
+
     // Optional real-time / cron / cookie
     REALTIME_BROADCAST_SECRET: z.string().min(1).optional(),
     CRON_SECRET: z.string().min(1).optional(),
     COOKIE_DOMAIN: z.string().min(1).optional(),
+
+    // Agent code execution global kill-switch (default OFF). Accept any string so
+    // a stray value (e.g. CODE_EXECUTION_ENABLED=0) never fails app-wide env
+    // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
+    CODE_EXECUTION_ENABLED: z.string().optional(),
+
+    // Local environments (the user's own machine via the zero-trust bridge):
+    // cloud opt-in, same contract as CODE_EXECUTION_ENABLED — only the exact
+    // string 'true' enables (isLocalEnvsEnabled()). The signing key is the
+    // base64 PKCS#8 Ed25519 key every grant is signed with; optional here so a
+    // Sprite-only deployment validates, and loaded fail-closed only on a
+    // local-env path (loadServerSigningKey()).
+    LOCAL_ENVS_ENABLED: z.string().optional(),
+    // `.or('')`: a declared-but-blank placeholder reads as unset, like the
+    // other optional secrets here; the superRefine below is what requires a
+    // real value once the feature is on.
+    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional().or(z.literal('')),
+    // Rotation form (Codex C10): comma-separated keys, current first, previous
+    // after. EITHER variable satisfies the boot check below — the same rule the
+    // loader applies (`parseServerSigningKeyring`: KEYS wins when both are set).
+    ENV_BRIDGE_SIGNING_KEYS: z.string().min(1).optional().or(z.literal('')),
+
+    // Server-held secret keying the sandbox session-key HMAC (see
+    // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
+    // but a blank placeholder (SANDBOX_SESSION_SECRET=) is accepted — mirroring
+    // the URL vars' `.or(z.literal(''))` — so an empty value disables sandbox
+    // acquisition (the lifecycle layer fails closed) rather than failing
+    // app-wide env validation at startup.
+    SANDBOX_SESSION_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Fly Sprites API token (Bearer) for the code-execution driver. Optional: a
+    // blank value disables sandbox provisioning (the driver fails closed with an
+    // auth error surfaced as a provisioning failure) rather than failing app-wide
+    // env validation. Read via resolveSpritesToken (services/sandbox/...).
+    SPRITES_API_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // Published-app hosting global kill-switch (default OFF). Accept any string so
+    // a stray value (e.g. APP_HOSTING_ENABLED=0) never fails app-wide env
+    // validation; isAppHostingEnabled() enables only on the exact value 'true'.
+    APP_HOSTING_ENABLED: z.string().optional(),
+
+    // Dev-server preview (dark). Same contract as APP_HOSTING_ENABLED — only the
+    // exact string 'true' enables (isDevPreviewEnabled()). DEV_PREVIEW_APEX is
+    // the DEDICATED registrable domain preview hosts live under; no default,
+    // and the feature behaves as off until it is set (resolveDevPreviewApex()).
+    DEV_PREVIEW_ENABLED: z.string().optional(),
+    DEV_PREVIEW_APEX: z.string().optional(),
+
+    // Fly Machines org token (Bearer) for the published-app provisioner. Optional:
+    // a blank value disables provisioning (the flaps client fails closed with an
+    // auth error surfaced as a provisioning failure) rather than failing app-wide
+    // env validation. Read via resolveFlyMachinesToken (services/app-hosting/...).
+    FLY_MACHINES_ORG_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // The ONE Fly network every published app is created on. Optional: unset falls
+    // back to PUBLISHED_APPS_NETWORK_DEFAULT. This is an org-level override (e.g. a
+    // separate staging network), never a per-app value — fly-replay cannot cross
+    // networks, so all published apps must share one.
+    PUBLISHED_APPS_NETWORK: z.string().optional(),
+
+    // The published-app runtime knobs: how long an app may go unvisited before the
+    // idle reaper stops it, how often the router refreshes its recency stamp, and
+    // the per-app daily awake budget past which an app is parked. All optional and
+    // all string-typed for the same reason APP_HOSTING_ENABLED is: a malformed value
+    // must not fail app-wide env validation for a feature that is dark by default.
+    // The resolvers in services/app-hosting/app-hosting-env.ts parse them at CALL
+    // time and fall back to their documented defaults (900s / 60s / 43200s) for
+    // anything that is not a non-negative integer — a typo must not silently switch
+    // off the reaper (leaving the fleet awake) or the cap (leaving one app's daily
+    // spend unbounded). An explicit 0 disables each one.
+    PUBLISHED_APP_IDLE_STOP_SECONDS: z.string().optional(),
+    PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS: z.string().optional(),
+    PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP: z.string().optional(),
+
+    // The apex published apps are served from (`<subdomain>.<apex>`). Optional in
+    // the schema, but REQUIRED by the superRefine below once APP_HOSTING_ENABLED
+    // is 'true' — unset only falls back to PUBLISHED_APPS_APEX_DEFAULT while
+    // hosting is dark. Deliberately a DIFFERENT
+    // apex from `*.pagespace.site`, which is not on the Public Suffix List — a
+    // published app runs customer server code on its own origin, so sharing a
+    // registrable domain with other published content would let one app set
+    // cookies every other one sends. Read via resolvePublishedAppsApex.
+    PUBLISHED_APPS_APEX: z.string().optional(),
+
+    // The Fly app that terminates the published-apps apex, emits fly-replay, and
+    // holds custom-domain certs. Optional: falls back to FLY_PROXY_APP_NAME and
+    // then to APP_ROUTER_FLY_APP_DEFAULT. It MUST have been created on
+    // PUBLISHED_APPS_NETWORK — fly-replay cannot cross Fly 6PN networks, and an
+    // app's network is fixed at create time. See routing-env.ts.
+    APP_ROUTER_FLY_APP_NAME: z.string().optional(),
+
+    // Server secret the per-app fly-replay `state` key is derived from (see
+    // services/app-hosting/app-replay-key.ts). A configured value must be >= 32
+    // chars, but a blank placeholder is accepted — mirroring
+    // SANDBOX_SESSION_SECRET — so an empty value makes the router refuse to
+    // emit replays (fail closed) rather than failing app-wide env validation.
+    APP_REPLAY_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Shared secret proving a router request came from the edge proxy. Optional
+    // and blank-tolerant for the same reason; the router treats an unset value
+    // as "refuse everything", never as "skip the check" — the endpoint would
+    // otherwise be a world-callable fly-replay emitter for the whole Fly org.
+    // A CONFIGURED value must clear the same >=32 floor as APP_REPLAY_SECRET: a
+    // guessable secret is not a weaker check, it is the absence of one, and this
+    // is the check that stops the endpoint being world-callable. Enforced again
+    // in resolveAppRouterProxySecret, which reads process.env directly.
+    APP_ROUTER_PROXY_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Sentry server/edge DSN. Fail-loud in production for cloud/tenant (see
+    // superRefine below) — a missing DSN previously meant Sentry.init({dsn:
+    // undefined}) silently no-op'd with zero alerts ever reaching a human.
+    // Onprem is exempt: Sentry is a third-party SaaS integration, and onprem
+    // already disables that class of integration (OAuth, external AI,
+    // Calendar) per deployment-mode.ts.
+    SENTRY_DSN: z.string().optional(),
   })
   .superRefine((data, ctx) => {
     // In non-test environments, require CSRF_SECRET and ENCRYPTION_KEY
@@ -81,6 +292,47 @@ export const serverEnvSchema = z
       }
     }
 
+    // App hosting serves customer-authored SERVER code on subdomains of one apex.
+    // Because that apex must be on the Public Suffix List before it carries
+    // untrusted origins — otherwise one published app sets a `domain=<apex>`
+    // cookie every other published app then sends — the apex is not something a
+    // deployment may arrive at by default. PUBLISHED_APPS_APEX_DEFAULT stays the
+    // documented value and keeps resolvePublishedAppsApex from ever returning ''
+    // (an empty apex would make parseAppHost claim EVERY hostname), but turning
+    // hosting on requires naming the apex explicitly, so the PSL prerequisite has
+    // an owner who chose it rather than inheriting it silently. See ROUTING.md.
+    if (data.APP_HOSTING_ENABLED === 'true' && !data.PUBLISHED_APPS_APEX?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'PUBLISHED_APPS_APEX must be set explicitly when APP_HOSTING_ENABLED=true — published apps run customer server code, so the apex they share has to be a deliberate, PSL-registered choice rather than a default',
+        path: ['PUBLISHED_APPS_APEX'],
+      });
+    }
+
+    // Local environments sign every bridge grant with the server signing key
+    // (ENV_BRIDGE_SIGNING_KEY, or the rotation list ENV_BRIDGE_SIGNING_KEYS),
+    // and loadServerSigningKeyring() fails closed without one — which, at
+    // request time, is a generic 500 on the first local-env create. Boot is
+    // where an operator should learn the key is missing, and only once the
+    // feature is actually on: a deployment that never enables local envs must
+    // not be asked for a signing key.
+    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim() && !data.ENV_BRIDGE_SIGNING_KEYS?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'ENV_BRIDGE_SIGNING_KEY (or ENV_BRIDGE_SIGNING_KEYS for rotation) must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
+        path: ['ENV_BRIDGE_SIGNING_KEY'],
+      });
+    }
+
+    if (data.NODE_ENV === 'production' && !isOnPrem() && !data.SENTRY_DSN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'SENTRY_DSN is required in production (cloud/tenant) so crashes reach Sentry — onprem deployments are exempt',
+        path: ['SENTRY_DSN'],
+      });
+    }
   });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -128,6 +380,20 @@ export const getEnvErrors = (): string[] => {
 export const isEnvValid = (): boolean => {
   const result = serverEnvSchema.safeParse(process.env);
   return result.success;
+};
+
+/**
+ * Fail-loud SENTRY_DSN check for services that don't run the full
+ * serverEnvSchema (realtime, processor, control-plane, admin). Mirrors the
+ * schema's production/onprem-exempt SENTRY_DSN rule via process.env directly.
+ * @throws Error naming the service if production, non-onprem, and SENTRY_DSN is unset.
+ */
+export const requireSentryDsn = (serviceName: string): void => {
+  if (process.env.NODE_ENV === 'production' && !isOnPrem() && !process.env.SENTRY_DSN) {
+    throw new Error(
+      `SENTRY_DSN is required in production for ${serviceName} so crashes reach Sentry (onprem deployments are exempt).`
+    );
+  }
 };
 
 // Cached validated env - validated once on first access

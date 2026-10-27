@@ -1,13 +1,20 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 import { db } from '@pagespace/db/db'
-import { eq, and } from '@pagespace/db/operators'
+import { eq, and, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { users } from '@pagespace/db/schema/auth';
+import { driveRoles } from '@pagespace/db/schema/members';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { computeSandboxEligibilityByDrive, membershipRowsOf, resolveEditableDriveIds } from './sandbox-eligibility-by-drive';
+import { loadDriveRelationships } from '@pagespace/lib/permissions/drive-relationship-loader';
+import { isOrgActive } from '@pagespace/lib/organizations/status';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 interface AgentSummary {
   id: string;
@@ -27,6 +34,7 @@ interface AgentSummary {
   enabledTools?: string[];
   enabledToolsCount?: number;
   hasSystemPrompt: boolean;
+  defaultEnvId?: string | null;
 }
 
 /**
@@ -37,7 +45,7 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'multi_drive_list', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'multi_drive_list', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const { userId } = auth;
@@ -50,18 +58,67 @@ export async function GET(request: Request) {
 
     // Get all drives
     const allDrives = await db
-      .select({ id: drives.id, name: drives.name, slug: drives.slug, ownerId: drives.ownerId })
+      .select({ id: drives.id, name: drives.name, slug: drives.slug, ownerId: drives.ownerId, orgId: drives.orgId, orgVisibility: drives.orgVisibility })
       .from(drives)
       .where(eq(drives.isTrashed, false));
 
     // Filter drives by access
     const accessibleDrives = [];
     for (const drive of allDrives) {
-      const hasAccess = await getUserDriveAccess(userId, drive.id);
+      const hasAccess = await getPrincipalDriveAccess(auth, drive.id);
       if (hasAccess) {
         accessibleDrives.push(drive);
       }
     }
+
+    // Batch-fetch each accessible drive's OWNER tier, once for the whole
+    // request — a drive's sandbox eligibility is the PAYER's tier (the
+    // owner), not the requester's, same rule agent-sessions billing/quota
+    // already apply. Several drives commonly share one owner, so this is
+    // deduped by ownerId, not one query per drive.
+    const ownerIds = Array.from(new Set(accessibleDrives.map((d) => d.ownerId)));
+    const ownerRows = ownerIds.length
+      ? await db.select({ id: users.id, subscriptionTier: users.subscriptionTier }).from(users).where(inArray(users.id, ownerIds))
+      : [];
+    // The requester's edit-capable memberships, batched — the flag is "can
+    // THIS requester use the sandbox there" (payer tier AND actor edit access
+    // AND the kill switch), not payer tier alone (review #2326): a
+    // viewer-role member would otherwise be offered shell affordances every
+    // enforcement point then 403s. Custom roles bound a MEMBER's drive-wide
+    // edit exactly as `getUserDrivePermissions` does (codex round 13): the
+    // role's driveWidePermissions must grant canEdit explicitly, an
+    // unresolvable role fails closed, and ADMINs bypass custom roles —
+    // otherwise a view-only custom-role member sees an enabled Shell item
+    // that provisioning then rejects with insufficient_role.
+    // The org-aware memberships, batched (one rows query plus the shared resolver's org queries).
+    const membershipRows = membershipRowsOf(await loadDriveRelationships(actorFromAuth(auth), accessibleDrives));
+    const customRoleIds = Array.from(
+      new Set(membershipRows.filter((row) => row.role !== 'ADMIN' && row.customRoleId).map((row) => row.customRoleId as string)),
+    );
+    const customRoleRows = customRoleIds.length
+      ? await db
+          .select({ id: driveRoles.id, driveId: driveRoles.driveId, driveWidePermissions: driveRoles.driveWidePermissions })
+          .from(driveRoles)
+          .where(inArray(driveRoles.id, customRoleIds))
+      : [];
+    const editableDriveIds = resolveEditableDriveIds(
+      membershipRows,
+      customRoleRows.map((row) => ({
+        ...row,
+        driveWidePermissions: row.driveWidePermissions as { canEdit?: boolean } | null,
+      })),
+    );
+    // SEAT-9 / WAL-8: a lapsed org's drives advertise no sandbox — one status read per distinct org.
+    const driveOrgIds = [...new Set(accessibleDrives.map((drive) => drive.orgId).filter((orgId): orgId is string => orgId !== null))];
+    const lapsedOrgIds = new Set(
+      (await Promise.all(driveOrgIds.map(async (orgId) => ((await isOrgActive(orgId)) ? null : orgId)))).filter((orgId): orgId is string => orgId !== null),
+    );
+    const sandboxEligibleByDrive = computeSandboxEligibilityByDrive(
+      accessibleDrives,
+      ownerRows,
+      { userId, editableDriveIds, codeExecutionEnabled: isCodeExecutionEnabled() },
+      lapsedOrgIds,
+    );
 
     // Filter by MCP token scope (if scoped)
     const allowedDriveIds = getAllowedDriveIds(auth);
@@ -76,7 +133,12 @@ export async function GET(request: Request) {
       driveSlug: string;
       agentCount: number;
       agents: AgentSummary[];
+      /** Whether THIS REQUESTER can use the sandbox in this drive (payer tier + actor edit access + kill switch). */
+      sandboxEligible: boolean;
+      /** The deployment's `LOCAL_ENVS_ENABLED` — how the create step learns whether to offer "This computer". */
+      localEnvsEnabled: boolean;
     }[] = [];
+    const localEnvsEnabled = isLocalEnvsEnabled();
     const allAccessibleAgents: AgentSummary[] = [];
 
     // Get agents from each accessible drive (filtered by MCP scope)
@@ -94,7 +156,8 @@ export async function GET(request: Request) {
           aiModel: pages.aiModel,
           content: pages.content,
           createdAt: pages.createdAt,
-          updatedAt: pages.updatedAt
+          updatedAt: pages.updatedAt,
+          defaultEnvId: pages.defaultEnvId
         })
         .from(pages)
         .where(and(
@@ -107,7 +170,7 @@ export async function GET(request: Request) {
       // Filter by view permissions and build agent info
       const accessibleAgentsInDrive: AgentSummary[] = [];
       for (const agent of driveAgents) {
-        const canView = await canUserViewPage(userId, agent.id);
+        const canView = await canPrincipalViewPage(auth, agent.id);
         if (canView) {
           // Build agent info object
           const agentInfo: AgentSummary = {
@@ -124,6 +187,7 @@ export async function GET(request: Request) {
             driveName: drive.name,
             driveSlug: drive.slug,
             hasSystemPrompt: !!agent.systemPrompt,
+            defaultEnvId: agent.defaultEnvId,
           };
 
           // Add system prompt if requested
@@ -154,7 +218,9 @@ export async function GET(request: Request) {
           driveName: drive.name,
           driveSlug: drive.slug,
           agentCount: accessibleAgentsInDrive.length,
-          agents: accessibleAgentsInDrive
+          agents: accessibleAgentsInDrive,
+          sandboxEligible: sandboxEligibleByDrive.get(drive.id) ?? false,
+          localEnvsEnabled,
         });
       }
     }
@@ -179,7 +245,7 @@ export async function GET(request: Request) {
       },
       nextSteps: [
         totalAgentCount > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating some',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         'Use list_agents for drive-specific agent listings',
         `Accessible drives: ${scopedDrives.map(d => d.name).join(', ')}`
       ]

@@ -4,10 +4,7 @@ import { NextResponse } from 'next/server';
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
-}));
-
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  canUserEditPage: vi.fn(),
+  canPrincipalEditPage: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -24,6 +21,19 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   createTaskTriggerWorkflow: vi.fn().mockResolvedValue(undefined),
   recomputeTaskTriggerMetadata: vi.fn().mockResolvedValue(undefined),
 }));
+
+// The route resolves its timezone through resolveTimezone. Wiring the mock's
+// resolveTimezone to the mocked getUserTimezone keeps the existing profile /
+// UTC assertions below testing the route end to end; the precedence rule
+// itself is pinned in personalization-utils.test.ts.
+vi.mock('@/lib/ai/core/personalization-utils', () => {
+  const getUserTimezone = vi.fn().mockResolvedValue(undefined);
+  return {
+    getUserTimezone,
+    resolveTimezone: async (explicit: string | null | undefined, userId: string) =>
+      explicit?.trim() || (await getUserTimezone(userId)) || 'UTC',
+  };
+});
 
 vi.mock('@/lib/websocket', () => ({
   broadcastTaskEvent: vi.fn(),
@@ -61,10 +71,10 @@ vi.mock('@pagespace/db/schema/tasks', () => ({ taskItems: {}, taskLists: {} }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'id', agentPageId: 'agentPageId', prompt: 'prompt', instructionPageId: 'instructionPageId', contextPageIds: 'contextPageIds' } }));
 vi.mock('@pagespace/db/schema/task-triggers', () => ({ taskTriggers: { id: 'id', taskItemId: 'taskItemId', triggerType: 'triggerType', workflowId: 'workflowId', isEnabled: 'isEnabled', nextRunAt: 'nextRunAt', lastFiredAt: 'lastFiredAt', lastFireError: 'lastFireError', createdAt: 'createdAt', updatedAt: 'updatedAt' } }));
 
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, canPrincipalEditPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { createTaskTriggerWorkflow, recomputeTaskTriggerMetadata } from '@/lib/workflows/task-trigger-helpers';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { GET, PUT } from '../route';
 import { DELETE } from '../[triggerType]/route';
 
@@ -121,10 +131,10 @@ describe('Task triggers API', () => {
 
     it('returns 403 when user lacks edit permission (trigger configs are editor-only)', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
 
       const res = await GET(mkRequest('GET'), { params: mkParams() });
       expect(res.status).toBe(403);
@@ -132,10 +142,10 @@ describe('Task triggers API', () => {
 
     it('returns triggers list on success', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       const triggerRow = { id: 'trg-1', triggerType: 'completion', agentPageId, prompt: 'do it', isEnabled: true, workflowId: 'wf-1' };
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
@@ -161,10 +171,10 @@ describe('Task triggers API', () => {
 
     it('returns 403 when user lacks edit permission', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(false);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
 
       const res = await PUT(
         mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go' }),
@@ -175,10 +185,10 @@ describe('Task triggers API', () => {
 
     it('rejects due_date trigger when task has no due date', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
 
       const res = await PUT(
         mkRequest('PUT', { triggerType: 'due_date', agentPageId, prompt: 'go' }),
@@ -191,10 +201,10 @@ describe('Task triggers API', () => {
 
     it('upserts trigger and returns 200 on success', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
           innerJoin: vi.fn(() => ({
@@ -211,12 +221,82 @@ describe('Task triggers API', () => {
       expect(createTaskTriggerWorkflow).toHaveBeenCalledOnce();
     });
 
+    it('uses the request body timezone for the trigger workflow', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([{ id: 'trg-3', triggerType: 'completion', workflowId: 'wf-3' }]),
+          })),
+        })),
+      } as never);
+
+      const res = await PUT(
+        mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go', timezone: 'America/Chicago' }),
+        { params: mkParams() },
+      );
+      expect(res.status).toBe(200);
+      expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'America/Chicago' }));
+      expect(getUserTimezone).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the user profile timezone when the body omits it', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
+      vi.mocked(getUserTimezone).mockResolvedValue('Asia/Tokyo');
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([{ id: 'trg-4', triggerType: 'completion', workflowId: 'wf-4' }]),
+          })),
+        })),
+      } as never);
+
+      const res = await PUT(
+        mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go' }),
+        { params: mkParams() },
+      );
+      expect(res.status).toBe(200);
+      expect(getUserTimezone).toHaveBeenCalledWith(userId);
+      expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Asia/Tokyo' }));
+    });
+
+    it('falls back to UTC when neither the body nor the user profile provide a timezone', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
+      vi.mocked(getUserTimezone).mockResolvedValue(undefined);
+      vi.mocked(db.select).mockReturnValueOnce({
+        from: vi.fn(() => ({
+          innerJoin: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([{ id: 'trg-5', triggerType: 'completion', workflowId: 'wf-5' }]),
+          })),
+        })),
+      } as never);
+
+      const res = await PUT(
+        mkRequest('PUT', { triggerType: 'completion', agentPageId, prompt: 'go' }),
+        { params: mkParams() },
+      );
+      expect(res.status).toBe(200);
+      expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }));
+    });
+
     it('returns 500 if the trigger row is missing after upsert', async () => {
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
-      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, taskListId, dueDate: null, metadata: null } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({ id: taskId, page: { parentId: pageId }, dueDate: null, metadata: null } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, driveId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
       // Simulate the post-upsert re-query coming back empty (race / constraint loss)
       vi.mocked(db.select).mockReturnValueOnce({
         from: vi.fn(() => ({
@@ -248,12 +328,12 @@ describe('Task triggers API', () => {
       const taskMetadata = { hasTrigger: true, triggerTypes: ['completion', 'due_date'] };
       vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
         id: taskId,
-        taskListId,
+        page: { parentId: pageId },
         metadata: taskMetadata,
       } as never);
-      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId, pageId } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
       vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
-      vi.mocked(canUserEditPage).mockResolvedValue(true);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
 
       const res = await DELETE(mkRequest('DELETE'), { params: mkDeleteParams('completion') });
       expect(res.status).toBe(200);
@@ -262,6 +342,41 @@ describe('Task triggers API', () => {
       expect(db.update).toHaveBeenCalledTimes(1);
       // Metadata recompute is delegated to the shared helper (DB-truth source)
       expect(recomputeTaskTriggerMetadata).toHaveBeenCalledWith(db, taskId, taskMetadata);
+    });
+
+    it('returns 403 when principal lacks edit permission (mcp-aware check)', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+        id: taskId,
+        page: { parentId: pageId },
+        metadata: null,
+      } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(false);
+
+      const res = await DELETE(mkRequest('DELETE'), { params: mkDeleteParams('completion') });
+      expect(res.status).toBe(403);
+    });
+
+    it('requests mcp-compatible auth options, matching the sibling PUT/GET route', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId } as never);
+      vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+        id: taskId,
+        page: { parentId: pageId },
+        metadata: null,
+      } as never);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: taskListId } as never);
+      vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: pageId, isTrashed: false } as never);
+      vi.mocked(canPrincipalEditPage).mockResolvedValue(true);
+
+      const request = mkRequest('DELETE');
+      await DELETE(request, { params: mkDeleteParams('completion') });
+
+      expect(authenticateRequestWithOptions).toHaveBeenCalledWith(
+        request,
+        { allow: ['session', 'mcp'], requireCSRF: true },
+      );
     });
   });
 });

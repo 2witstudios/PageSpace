@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo, Fragment } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, getPermissionErrorMessage } from '@/hooks/usePermissions';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { TreePage, MessageWithUser } from '@/hooks/usePageTree';
-import { StreamingMarkdown } from '@/components/ai/shared/chat/StreamingMarkdown';
+import { MessageWithUser } from '@/hooks/usePageTree';
+import { RichText, addHardLineBreaks } from '@/components/messages/RichText';
+import { MessageLinkPreviews } from '@/components/messages/MessageLinkPreviews';
 import {
   Conversation,
   ConversationContent,
@@ -18,13 +19,22 @@ import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/components/shared/MessageHoverToolbar';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Lock, Check, X } from 'lucide-react';
-import { MessageAttachment } from '@/components/shared/MessageAttachment';
+import { Lock, Check, X, MessageSquareText, Webhook } from 'lucide-react';
+import { PageWebhooksDialog } from '@/components/shared/PageWebhooksDialog';
+import { MessageAttachments } from '@/components/shared/MessageAttachments';
+import type { MessageAttachmentLike } from '@/lib/attachment-utils';
+import { createId } from '@paralleldrive/cuid2';
+import { reconcileOptimistic, sameAttachmentBatch } from '@/lib/messages/reconcile-optimistic';
 import MessageQuoteBlock from '@/components/messages/MessageQuoteBlock';
+import { ThreadOriginBadge } from '@/components/messages/ThreadOriginBadge';
+import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
+import { isCommandInertForMessage } from '@/lib/commands/command-chip-model';
+import { normalizeCommandExecutionList } from '@/lib/commands/execution-indicator-model';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 import { buildThreadPreview } from '@pagespace/lib/services/preview';
 import { post, del, patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import { refetchNotificationsIfMarkedRead } from '@/stores/useNotificationStore';
 import { useThreadPanelStore } from '@/stores/useThreadPanelStore';
 import { ThreadPanel } from '@/components/layout/middle-content/page-views/thread/ThreadPanel';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -33,25 +43,72 @@ import {
   type AttachmentMeta,
   type FileRelation,
 } from '@/lib/attachment-utils';
-import { isFirstInGroup } from '@/lib/messages/grouping';
+import { isFirstInGroup, formatMessageDate } from '@/lib/messages/grouping';
+import { MessageDateSeparator } from '@/components/messages/MessageDateSeparator';
 import { formatDistanceToNow } from 'date-fns';
+import { cn } from '@/lib/utils';
+import { useFindStore } from '@/stores/useFindStore';
+import { useDraft } from '@/hooks/useDraft';
+import { buildDraftKey } from '@/lib/draft/draft';
+
+interface MessageAttachmentBearing {
+  content?: string;
+  fileId?: string | null;
+  attachments?: Array<{ fileId?: string | null; position?: number }> | null;
+}
+
+const authorOf = (m: { userId?: string | null }) => m.userId;
+
+/**
+ * Fallback used ONLY when a confirmation carries no `clientNonce` — what a pod
+ * that predates the nonce broadcasts, so it is reachable during a rolling
+ * deploy. Same text, same first file, same author (checked by the reconciler).
+ */
+const looksLikeSameSend = (
+  pending: MessageAttachmentBearing,
+  confirmed: MessageAttachmentBearing,
+) => pending.content === confirmed.content && sameAttachmentBatch(pending, confirmed);
+
+
+/** Coalesces the re-mark-as-read POST across a burst of incoming messages. */
+const MARK_READ_DEBOUNCE_MS = 1000;
+
+interface ChannelRef {
+  id: string;
+  driveId: string;
+}
 
 interface ChannelViewProps {
-  page: TreePage;
+  page: ChannelRef;
+}
+
+interface CommandExecutionEntry {
+  label: string;
+  status: 'used' | 'skipped';
+  reason?: 'page_trashed' | 'no_access' | 'not_found' | 'disabled';
+  entryPageTitle?: string;
 }
 
 // AI sender metadata for messages posted by AI tools
 interface AiMeta {
-  senderType: 'global_assistant' | 'agent';
+  senderType: 'global_assistant' | 'agent' | 'webhook';
   senderName: string;
   agentPageId?: string;
+  // Universal Commands execution feedback (UX spec §7) on agent replies —
+  // one entry per resolved command in the triggering message, in order.
+  // Rows persisted before multi-command support shipped still carry a
+  // single object (no data migration for the jsonb column) — always read
+  // this through normalizeCommandExecutionList, never assume the array shape.
+  commandExecution?: CommandExecutionEntry[] | CommandExecutionEntry;
 }
+
 
 // Extended message type with reactions and file attachment
 interface MessageWithReactions extends MessageWithUser {
   reactions?: Reaction[];
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
+  attachments?: MessageAttachmentLike[] | null;
   file?: FileRelation | null;
   aiMeta?: AiMeta | null;
   editedAt?: string | null;
@@ -59,12 +116,52 @@ interface MessageWithReactions extends MessageWithUser {
   quotedMessage?: QuotedMessageSnapshot | null;
   replyCount?: number;
   lastReplyAt?: string | null;
+  mirroredFromId?: string | null;
+  mirroredFrom?: { parentId: string | null } | null;
+  /**
+   * Correlation id for an in-flight send. Set on the optimistic row and echoed
+   * by the server on the POST response and the socket broadcast; never stored.
+   */
+  clientNonce?: string;
 }
 
 function ChannelView({ page }: ChannelViewProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<MessageWithReactions[]>([]);
-  const [inputValue, setInputValue] = useState('');
+  const { draft: inputValue, setDraft: setInputValue, clearDraft: clearInputDraft } = useDraft(
+    buildDraftKey('channel', page.id),
+  );
+
+  // Find in page
+  const findQuery = useFindStore((s) => s.query);
+  const findIndex = useFindStore((s) => s.currentIndex);
+  const isFindOpen = useFindStore((s) => s.isOpen);
+  const reportMatches = useFindStore((s) => s.reportMatches);
+  const [findMatchIds, setFindMatchIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!isFindOpen || !findQuery) {
+      setFindMatchIds([]);
+      reportMatches(0);
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const ids = messages
+      .filter((m) => m.content?.toLowerCase().includes(q))
+      .map((m) => m.id);
+    setFindMatchIds(ids);
+    reportMatches(ids.length);
+  }, [isFindOpen, findQuery, messages, reportMatches]);
+
+  useEffect(() => {
+    const id = findMatchIds[findIndex];
+    if (!id) return;
+    const el = document.querySelector(`[data-message-id="${id}"]`);
+    el?.scrollIntoView({ block: 'center' });
+  }, [findIndex, findMatchIds]);
+
+  const findMatchSet = useMemo(() => new Set(findMatchIds), [findMatchIds]);
+  const currentFindMsgId = findMatchIds[findIndex] ?? null;
   const channelInputRef = useRef<ChannelInputRef>(null);
 
   // Use centralized socket store for proper authentication
@@ -88,6 +185,7 @@ function ChannelView({ page }: ChannelViewProps) {
   // Use the centralized permissions hook
   const { permissions } = usePermissions(page.id);
   const canEdit = permissions?.canEdit || false;
+  const [webhooksOpen, setWebhooksOpen] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -113,6 +211,49 @@ function ChannelView({ page }: ChannelViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id]);
 
+  const markChannelRead = useCallback(() => {
+    post<{ success: boolean; notificationsMarkedRead: number }>(`/api/channels/${page.id}/read`, {})
+      .then((res) => refetchNotificationsIfMarkedRead(res.notificationsMarkedRead))
+      .catch(() => {
+        // Silently ignore errors - marking as read is not critical
+      });
+  }, [page.id]);
+
+  // Advancing the watermark only on open left every message that arrived while
+  // you sat reading the channel counted as unread, inflating the sidebar badge
+  // until you navigated away and back. Re-mark as messages land, debounced so a
+  // busy channel does not POST per message, and only while the tab is actually
+  // visible — a backgrounded tab must not silently clear unread you never saw.
+  const markReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleMarkChannelRead = useCallback(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (markReadTimerRef.current) clearTimeout(markReadTimerRef.current);
+    markReadTimerRef.current = setTimeout(() => {
+      markReadTimerRef.current = null;
+      markChannelRead();
+    }, MARK_READ_DEBOUNCE_MS);
+  }, [markChannelRead]);
+
+  // Keyed on page.id, not [], because CenterPanel reuses this component across
+  // channels: a timer left pending from the channel you just left would post a
+  // read for it a second after it stopped being on screen.
+  useEffect(() => () => {
+    if (markReadTimerRef.current) {
+      clearTimeout(markReadTimerRef.current);
+      markReadTimerRef.current = null;
+    }
+  }, [page.id]);
+
+  // Coming back to a tab that was hidden while messages arrived: those are on
+  // screen now, so clear them rather than waiting for the next message.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') markChannelRead();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [markChannelRead]);
+
   useEffect(() => {
     const fetchMessages = async () => {
       const res = await fetchWithAuth(`/api/channels/${page.id}/messages`);
@@ -122,12 +263,10 @@ function ChannelView({ page }: ChannelViewProps) {
       setNextCursor(data.nextCursor ?? null);
 
       // Mark channel as read when viewed
-      post(`/api/channels/${page.id}/read`, {}).catch(() => {
-        // Silently ignore errors - marking as read is not critical
-      });
+      markChannelRead();
     };
     fetchMessages();
-  }, [page.id]);
+  }, [page.id, markChannelRead]);
 
   // Connect to socket store when user is available
   useEffect(() => {
@@ -151,13 +290,11 @@ function ChannelView({ page }: ChannelViewProps) {
       // the ThreadPanel; until then, drop them here so the thread API does
       // not pollute the live channel view of older clients.
       if (message.parentId) return;
-      setMessages((prev) => {
-        // If the message is already in the list, don't add it again.
-        if (prev.find((m) => m.id === message.id)) {
-          return prev;
-        }
-        return [...prev.filter(m => !m.id.startsWith('temp-')), message];
-      });
+      setMessages((prev) =>
+        reconcileOptimistic(prev, message, authorOf, looksLikeSameSend),
+      );
+      // It is on screen now, so it is not unread.
+      scheduleMarkChannelRead();
     };
 
     const handleThreadCountUpdated = (data: {
@@ -182,7 +319,7 @@ function ChannelView({ page }: ChannelViewProps) {
       socket.off('new_message', handleNewMessage);
       socket.off('thread_reply_count_updated', handleThreadCountUpdated);
     };
-  }, [socket, connectionStatus, page.id]);
+  }, [socket, connectionStatus, page.id, scheduleMarkChannelRead]);
 
   const handleStartQuote = useCallback((m: MessageWithReactions) => {
     if (m.id.startsWith('temp-')) return;
@@ -206,7 +343,7 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleSubmit = async (
     content: string,
-    attachment?: FileAttachment,
+    attachments: FileAttachment[],
     activeQuoteId?: string | null,
     activeQuoteSnapshot?: QuotedMessageSnapshot | null,
   ) => {
@@ -219,7 +356,21 @@ function ChannelView({ page }: ChannelViewProps) {
 
     const messageContent = typeof content === 'string' ? content : JSON.stringify(content);
 
-    const tempId = `temp-${Date.now()}`;
+    const attachmentPayload = attachments.map((attachment) => ({
+      fileId: attachment.id,
+      attachmentMeta: {
+        originalName: attachment.originalName,
+        size: attachment.size,
+        mimeType: attachment.mimeType,
+        contentHash: attachment.contentHash,
+      },
+    }));
+
+    // createId(), not Date.now(): several sends can start inside one
+    // millisecond, and a duplicate id here is a duplicate React key, which
+    // strands the extra rows on screen until the list remounts.
+    const clientNonce = createId();
+    const tempId = `temp-${clientNonce}`;
     const optimisticMessage: MessageWithReactions = {
       id: tempId,
       pageId: page.id,
@@ -232,16 +383,22 @@ function ChannelView({ page }: ChannelViewProps) {
       user: {
         id: user.id,
         name: user.name || 'You',
-        image: null,
+        image: user.image ?? null,
       },
-      // Include attachment info in optimistic message
-      fileId: attachment?.id || null,
-      attachmentMeta: attachment ? {
-        originalName: attachment.originalName,
-        size: attachment.size,
-        mimeType: attachment.mimeType,
-        contentHash: attachment.contentHash,
-      } : null,
+      // Render the whole batch optimistically, and keep the legacy singular
+      // fields pointing at the first file so anything still reading them
+      // agrees with the gallery.
+      fileId: attachmentPayload[0]?.fileId ?? null,
+      attachmentMeta: attachmentPayload[0]?.attachmentMeta ?? null,
+      // Carry position on the optimistic rows too, so the gallery's ordering
+      // never has to lean on sort stability to look right before the server
+      // echo replaces them.
+      attachments: attachmentPayload.map(({ fileId, attachmentMeta }, position) => ({
+        fileId,
+        attachmentMeta,
+        position,
+      })),
+      clientNonce,
       quotedMessageId: activeQuoteId ?? null,
       // Carry the snapshot through the optimistic phase so the embed renders
       // immediately; the server's enriched payload will replace it.
@@ -251,25 +408,36 @@ function ChannelView({ page }: ChannelViewProps) {
     setMessages((prev) => [...prev, optimisticMessage]);
 
     try {
-      await post(`/api/channels/${page.id}/messages`, {
-        content: messageContent,
-        fileId: attachment?.id,
-        attachmentMeta: attachment ? {
-          originalName: attachment.originalName,
-          size: attachment.size,
-          mimeType: attachment.mimeType,
-          contentHash: attachment.contentHash,
-        } : undefined,
-        quotedMessageId: activeQuoteId ?? undefined,
-      });
+      const persistedMessage = await post<MessageWithReactions | null>(
+        `/api/channels/${page.id}/messages`,
+        {
+          content: messageContent,
+          attachments: attachmentPayload,
+          quotedMessageId: activeQuoteId ?? undefined,
+          clientNonce,
+        },
+      );
 
-      // The new message will be received via the socket connection,
-      // which will replace the optimistic one.
+      // Normally the socket echo retires the optimistic row. But the send does
+      // not require a live socket — it only checks `canEdit` — so on a dropped
+      // connection no echo ever arrives and the pending row would sit there
+      // looking unsent until a refetch. The POST response is the same enriched
+      // message the broadcast carries, nonce included, so reconcile with it
+      // too; whichever lands second is deduped by id.
+      if (persistedMessage?.id) {
+        setMessages((prev) =>
+          reconcileOptimistic(prev, persistedMessage, authorOf, looksLikeSameSend),
+        );
+      }
     } catch (error) {
       // If the API call fails, remove the optimistic message
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
+      // Put the files back too. They are already in S3, but the composer
+      // cleared on send, so without this a failed ten-photo send would make the
+      // user pick and re-upload all ten.
+      channelInputRef.current?.restoreAttachments(attachments);
       // Restore the quote chip so the user's retry still carries the quote
       // they originally selected; without this the failed-send recovery would
       // silently strip the quote context.
@@ -282,22 +450,22 @@ function ChannelView({ page }: ChannelViewProps) {
 
   const handleTopLevelSubmit = ({
     content,
-    attachment,
+    attachments,
   }: {
     content: string;
-    attachment?: FileAttachment;
+    attachments: FileAttachment[];
   }) => {
-    if (!content.trim() && !attachment) return;
+    if (!content.trim() && attachments.length === 0) return;
     if (!canEdit) {
       toast.error(getPermissionErrorMessage('send', 'channel'));
       return;
     }
     const activeQuoteId = quotedMessageId;
     const activeQuoteSnapshot = activeQuotedSnapshot;
-    setInputValue('');
+    clearInputDraft();
     channelInputRef.current?.clear();
     clearQuote();
-    handleSubmit(content, attachment, activeQuoteId, activeQuoteSnapshot);
+    handleSubmit(content, attachments, activeQuoteId, activeQuoteSnapshot);
   };
 
   // Load older messages when scrolling to top
@@ -327,7 +495,7 @@ function ChannelView({ page }: ChannelViewProps) {
       prev.map((m) => {
         if (m.id !== messageId) return m;
         const optimisticReaction: Reaction = {
-          id: `temp-${Date.now()}`,
+          id: `temp-${createId()}`,
           emoji,
           userId: user.id,
           user: { id: user.id, name: user.name || 'You' },
@@ -527,12 +695,20 @@ function ChannelView({ page }: ChannelViewProps) {
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
           </div>
+          {normalizeCommandExecutionList(m.aiMeta?.commandExecution).map((execution, index) => (
+            <CommandExecutionIndicator key={index} data={execution} />
+          ))}
           {m.content && (
             <div className="prose prose-sm dark:prose-invert max-w-none">
-              <StreamingMarkdown content={m.content} isStreaming={false} />
+              <RichText
+                content={isAi ? m.content : addHardLineBreaks(m.content)}
+                isStreaming={false}
+                commandChipInert={isCommandInertForMessage(m.content, isAi)}
+              />
             </div>
           )}
-          <MessageAttachment message={m} />
+          {m.content && <MessageLinkPreviews content={m.content} />}
+          <MessageAttachments message={m} />
         </div>
       </div>
     );
@@ -544,7 +720,7 @@ function ChannelView({ page }: ChannelViewProps) {
       return { name: fromList.user.name ?? fallbackName ?? 'Member', image: fromList.user.image };
     }
     if (authorId === user?.id) {
-      return { name: user?.name ?? 'You', image: null };
+      return { name: user?.name ?? 'You', image: user?.image ?? null };
     }
     return { name: fallbackName ?? 'Member', image: null };
   };
@@ -555,6 +731,7 @@ function ChannelView({ page }: ChannelViewProps) {
       contextId={page.id}
       parentId={threadPanelParentId}
       currentUserId={user?.id ?? null}
+      driveId={page.driveId}
       parentSlot={renderParentSlot()}
       resolveAuthor={resolveThreadAuthor}
       replyCountHint={threadParent?.replyCount}
@@ -566,6 +743,23 @@ function ChannelView({ page }: ChannelViewProps) {
     <div className="flex h-full w-full">
     <MessageDropZone inputRef={channelInputRef} enabled={canEdit} className="flex flex-col h-full flex-1 min-w-0">
         <div className="flex-grow overflow-hidden relative">
+          {/* Deliberately not permission-gated: the dialog itself explains the
+              owner/admin requirement, so the feature stays discoverable. */}
+          <button
+            type="button"
+            onClick={() => setWebhooksOpen(true)}
+            title="Incoming Webhooks"
+            aria-label="Incoming Webhooks"
+            className="absolute top-2 right-4 z-10 flex items-center justify-center size-7 rounded-full bg-background/80 backdrop-blur border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+          >
+            <Webhook size={14} aria-hidden />
+          </button>
+          <PageWebhooksDialog
+            open={webhooksOpen}
+            onOpenChange={setWebhooksOpen}
+            pageId={page.id}
+            pageType="CHANNEL"
+          />
           <Conversation className="h-full">
             <ConversationContent className="max-w-4xl mx-auto p-4">
                     {hasMore && (
@@ -585,7 +779,9 @@ function ChannelView({ page }: ChannelViewProps) {
                         const aiLabel = isAi
                           ? m.aiMeta!.senderType === 'global_assistant'
                             ? 'global assistant'
-                            : 'agent'
+                            : m.aiMeta!.senderType === 'webhook'
+                              ? 'webhook'
+                              : 'agent'
                           : null;
                         const avatarFallback = isAi
                           ? m.aiMeta!.senderType === 'agent' ? 'A' : m.aiMeta!.senderName?.[0]
@@ -608,8 +804,20 @@ function ChannelView({ page }: ChannelViewProps) {
                         const isRealMessage = !m.id.startsWith('temp-') && editingMessageId !== m.id;
                         const showOwnerActions = isOwnMessage && isRealMessage;
                         const replyCount = m.replyCount ?? 0;
+                        const currentDateStr = new Date(m.createdAt).toDateString();
+                        const previousDateStr = previous ? new Date(previous.createdAt).toDateString() : null;
+                        const showDateSeparator = currentDateStr !== previousDateStr;
                         return (
-                        <div key={m.id} className={`group/msg flex items-start gap-4 ${rowSpacing}`}>
+                        <Fragment key={m.id}>
+                        {showDateSeparator && <MessageDateSeparator label={formatMessageDate(m.createdAt)} />}
+                        <div
+                          data-message-id={m.id}
+                          className={cn(
+                            `group/msg flex items-start gap-4 ${rowSpacing} relative rounded`,
+                            findMatchSet.has(m.id) && 'find-highlight',
+                            currentFindMsgId === m.id && 'find-highlight-current',
+                          )}
+                        >
                             {isFirst ? (
                               <Avatar className="shrink-0">
                                   {!isAi && <AvatarImage src={m.user?.image || ''} />}
@@ -617,12 +825,12 @@ function ChannelView({ page }: ChannelViewProps) {
                               </Avatar>
                             ) : (
                               <div className="size-8 shrink-0 relative" aria-hidden>
-                                <span className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
+                                <span data-hover-only="" className="absolute inset-y-0 right-2 flex items-center text-[10px] text-muted-foreground opacity-0 group-hover/msg:opacity-100 transition-opacity tabular-nums">
                                   {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                 </span>
                               </div>
                             )}
-                            <div className="flex flex-col min-w-0 flex-1 relative">
+                            <div className={cn("flex flex-col min-w-0 flex-1", !isFirst && "[@media(hover:none)]:pr-28 touch:pr-28")}>
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
@@ -675,20 +883,35 @@ function ChannelView({ page }: ChannelViewProps) {
                                   </div>
                                 ) : (
                                   <>
+                                    {m.mirroredFromId && (
+                                      <ThreadOriginBadge
+                                        onOpenThread={m.mirroredFrom?.parentId
+                                          ? () => openThread({ source: 'channel', contextId: page.id, parentId: m.mirroredFrom!.parentId! })
+                                          : undefined}
+                                      />
+                                    )}
                                     {(m.quotedMessage || m.quotedMessageId) && (
                                       <MessageQuoteBlock quoted={m.quotedMessage ?? null} />
                                     )}
+                                    {normalizeCommandExecutionList(m.aiMeta?.commandExecution).map((execution, index) => (
+                                      <CommandExecutionIndicator key={index} data={execution} />
+                                    ))}
                                     {m.content && (
                                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [overflow-wrap:anywhere] min-w-0">
-                                        <StreamingMarkdown content={m.content} isStreaming={false} />
+                                        <RichText
+                                          content={isAi ? m.content : addHardLineBreaks(m.content)}
+                                          isStreaming={false}
+                                          commandChipInert={isCommandInertForMessage(m.content, isAi)}
+                                        />
                                       </div>
                                     )}
+                                    {m.content && <MessageLinkPreviews content={m.content} />}
                                     {!isFirst && m.editedAt && (
                                       <span className="text-xs text-muted-foreground italic">(Edited)</span>
                                     )}
                                   </>
                                 )}
-                                <MessageAttachment message={m} />
+                                <MessageAttachments message={m} />
                                 {replyCount > 0 && (
                                   <button
                                     type="button"
@@ -696,11 +919,12 @@ function ChannelView({ page }: ChannelViewProps) {
                                       openThread({ source: 'channel', contextId: page.id, parentId: m.id })
                                     }
                                     data-testid={`thread-footer-${m.id}`}
-                                    className="mt-1 self-start text-xs text-muted-foreground hover:text-foreground hover:underline"
+                                    className="mt-1 self-start flex items-center gap-1 text-xs font-medium text-primary rounded px-1.5 py-0.5 -ml-1.5 hover:bg-primary/10 transition-colors"
                                   >
+                                    <MessageSquareText size={12} aria-hidden />
                                     {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
                                     {m.lastReplyAt
-                                      ? ` · last reply ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
+                                      ? ` · ${formatDistanceToNow(new Date(m.lastReplyAt), { addSuffix: true })}`
                                       : ''}
                                   </button>
                                 )}
@@ -713,28 +937,28 @@ function ChannelView({ page }: ChannelViewProps) {
                                     canReact={permissions?.canView || false}
                                   />
                                 )}
-                                {isRealMessage && (
-                                  <MessageHoverToolbar
-                                    canReact={permissions?.canView || false}
-                                    canEdit={showOwnerActions}
-                                    canDelete={showOwnerActions}
-                                    canReplyInThread={!m.id.startsWith('temp-')}
-                                    canQuoteReply={true}
-                                    reactions={m.reactions}
-                                    currentUserId={user?.id}
-                                    className={!isFirst ? 'top-0' : undefined}
-                                    onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
-                                    onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
-                                    onQuoteReply={() => handleStartQuote(m)}
-                                    onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
-                                    onDelete={() => handleDeleteMessage(m.id)}
-                                    onReplyInThread={() =>
-                                      openThread({ source: 'channel', contextId: page.id, parentId: m.id })
-                                    }
-                                  />
-                                )}
                             </div>
+                            {isRealMessage && (
+                              <MessageHoverToolbar
+                                canReact={permissions?.canView || false}
+                                canEdit={showOwnerActions}
+                                canDelete={showOwnerActions}
+                                canReplyInThread={!m.id.startsWith('temp-')}
+                                canQuoteReply={true}
+                                reactions={m.reactions}
+                                currentUserId={user?.id}
+                                onAddReaction={(emoji) => handleAddReaction(m.id, emoji)}
+                                onRemoveReaction={(emoji) => handleRemoveReaction(m.id, emoji)}
+                                onQuoteReply={() => handleStartQuote(m)}
+                                onEdit={() => { setEditingMessageId(m.id); setEditContent(m.content); }}
+                                onDelete={() => handleDeleteMessage(m.id)}
+                                onReplyInThread={() =>
+                                  openThread({ source: 'channel', contextId: page.id, parentId: m.id })
+                                }
+                              />
+                            )}
                         </div>
+                        </Fragment>
                         );
                     })}
             </ConversationContent>
@@ -775,7 +999,10 @@ function ChannelView({ page }: ChannelViewProps) {
     )}
     {threadPanel && isMobile && (
       <Sheet open onOpenChange={(o) => { if (!o) closeThread(); }}>
-        <SheetContent side="right" className="w-full sm:max-w-full p-0">
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-full p-0"
+        >
           <SheetTitle className="sr-only">Thread</SheetTitle>
           {threadPanel}
         </SheetContent>

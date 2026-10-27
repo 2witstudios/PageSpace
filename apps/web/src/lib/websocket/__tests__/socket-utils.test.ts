@@ -46,13 +46,15 @@ import {
   broadcastDriveMemberEvent,
   broadcastDriveMemberEventToRecipients,
   broadcastTaskEvent,
-  broadcastUsageEvent,
+  broadcastCreditsEvent,
   broadcastAiStreamStart,
   broadcastChatUserMessage,
   broadcastAiMessageEdited,
   broadcastAiMessageDeleted,
   broadcastAiUndoApplied,
   broadcastAiConversationAdded,
+  notifyShellAgentActivity,
+  type ShellActivityEventPayload,
   type ChatUserMessagePayload,
   type ChatMessageEditedPayload,
   type ChatMessageDeletedPayload,
@@ -66,10 +68,11 @@ import {
   type DriveEventPayload,
   type DriveMemberEventPayload,
   type TaskEventPayload,
-  type UsageEventPayload,
+  type CreditsEventPayload,
   type AiStreamStartPayload,
   type AiStreamCompletePayload,
 } from '../socket-utils';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 
 describe('socket-utils', () => {
@@ -162,6 +165,10 @@ describe('socket-utils', () => {
       await expect(broadcastPageEvent(payload)).resolves.not.toThrow();
     });
   });
+
+  // kickUserFromRooms moved to @pagespace/lib/realtime/kick-client (#2158);
+  // its coverage now lives in
+  // packages/lib/src/realtime/__tests__/kick-client.test.ts.
 
   describe('broadcastDriveEvent', () => {
     it('given drive event with recipients, should route to each user channel', async () => {
@@ -445,23 +452,26 @@ describe('socket-utils', () => {
     });
   });
 
-  describe('broadcastUsageEvent', () => {
-    it('given usage event, should route to notifications:{userId} channel', async () => {
-      const payload: UsageEventPayload = {
+  describe('broadcastCreditsEvent', () => {
+    it('given credits event, should route to notifications:{userId} channel', async () => {
+      const payload: CreditsEventPayload = {
         userId: 'user-123',
         operation: 'updated',
-        subscriptionTier: 'pro',
-        standard: { current: 50, limit: 100, remaining: 50 },
-        pro: { current: 200, limit: 500, remaining: 300 },
+        billingEnabled: true,
+        monthly: { remaining: 350, allowance: 500, periodEnd: null },
+        topup: { remaining: 1000 },
+        debt: 0,
+        spendable: 1350,
+        reserved: 0,
       };
 
-      await broadcastUsageEvent(payload);
+      await broadcastCreditsEvent(payload);
 
       const fetchCall = mockFetch.mock.calls[0];
       const requestBody = JSON.parse(fetchCall[1].body);
 
       expect(requestBody.channelId).toBe('notifications:user-123');
-      expect(requestBody.event).toBe('usage:updated');
+      expect(requestBody.event).toBe('credits:updated');
     });
   });
 
@@ -570,6 +580,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       };
 
@@ -590,6 +601,7 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       });
 
@@ -603,8 +615,46 @@ describe('socket-utils', () => {
         messageId: 'msg-1',
         pageId: 'page-1',
         conversationId: 'conv-1',
+        startedAt: '2024-01-01T00:00:00.000Z',
         triggeredBy: { userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' },
       })).resolves.not.toThrow();
+    });
+  });
+
+  describe('notifyShellAgentActivity', () => {
+    const payload: ShellActivityEventPayload = {
+      sessionId: 'conv-1',
+      command: 'echo hi',
+      output: 'hi',
+      exitCode: 0,
+      agentLabel: 'Agent Bob',
+    };
+
+    it('given a valid payload, should POST it to the route the realtime server serves', async () => {
+      // Pinned against the shared constant rather than a literal: this caller
+      // spent the whole rebuild posting to `/api/terminal-activity`, a route
+      // that stopped existing when the bridge was re-keyed.
+      await notifyShellAgentActivity(payload);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe(`http://localhost:3001${SHELL_BRIDGE_ROUTES.activity}`);
+      expect(SHELL_BRIDGE_ROUTES.activity).toBe('/api/shell-activity');
+      expect(JSON.parse(init.body)).toEqual(payload);
+    });
+
+    it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
+      process.env.INTERNAL_REALTIME_URL = '';
+
+      await notifyShellAgentActivity(payload);
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('given fetch throws, should not throw (best-effort)', async () => {
+      mockFetch.mockRejectedValue(new Error('Network error'));
+
+      await expect(notifyShellAgentActivity(payload)).resolves.not.toThrow();
     });
   });
 
@@ -637,6 +687,20 @@ describe('socket-utils', () => {
 
       const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
       expect(requestBody.payload.aborted).toBe(true);
+    });
+
+    it('given a conversationId, should include it in the broadcast payload', async () => {
+      const payload: AiStreamCompletePayload = {
+        messageId: 'msg-1',
+        pageId: 'page-1',
+        conversationId: 'conv-xyz',
+        aborted: false,
+      };
+
+      await broadcastAiStreamComplete(payload);
+
+      const requestBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(requestBody.payload.conversationId).toBe('conv-xyz');
     });
 
     it('given no INTERNAL_REALTIME_URL, should not call fetch', async () => {
@@ -876,13 +940,16 @@ describe('socket-utils', () => {
       expect(body.channelId).toBe('user:test-user:tasks');
     });
 
-    it('given usage event, should route to user notifications channel', async () => {
-      await broadcastUsageEvent({
+    it('given credits event, should route to user notifications channel', async () => {
+      await broadcastCreditsEvent({
         userId: 'test-user',
         operation: 'updated',
-        subscriptionTier: 'free',
-        standard: { current: 0, limit: 100, remaining: 100 },
-        pro: { current: 0, limit: 0, remaining: 0 },
+        billingEnabled: true,
+        monthly: { remaining: 500, allowance: 500, periodEnd: null },
+        topup: { remaining: 0 },
+        debt: 0,
+        spendable: 500,
+        reserved: 0,
       });
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);

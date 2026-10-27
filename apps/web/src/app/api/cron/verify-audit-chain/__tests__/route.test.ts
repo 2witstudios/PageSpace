@@ -2,13 +2,14 @@
  * Contract tests for /api/cron/verify-audit-chain
  *
  * Verifies: structured logging, no breakPoint in response (info disclosure),
- * generic error messages, and verifyAndAlert integration.
+ * generic error messages, and full-audit-verification integration (#890
+ * Phase 2, leaf 5: chain + anchors + co-stream where configured).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockVerifyAndAlert, mockLoggers } = vi.hoisted(() => ({
-  mockVerifyAndAlert: vi.fn(),
+const { mockRunFullAuditVerification, mockLoggers } = vi.hoisted(() => ({
+  mockRunFullAuditVerification: vi.fn(),
   mockLoggers: {
     security: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
@@ -19,8 +20,8 @@ vi.mock('@/lib/auth/cron-auth', () => ({
   validateSignedCronRequest: vi.fn(),
 }));
 
-vi.mock('@pagespace/lib/audit/security-audit-alerting', () => ({
-  verifyAndAlert: mockVerifyAndAlert,
+vi.mock('@pagespace/lib/audit/full-audit-verification', () => ({
+  runFullAuditVerification: mockRunFullAuditVerification,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -77,6 +78,25 @@ const BROKEN_CHAIN_RESULT = {
   },
 };
 
+const SKIPPED_ANCHORS = {
+  configured: false as const,
+  skippedReason: 'anchoring is not enabled (AUDIT_ANCHOR_ENABLED)',
+};
+const SKIPPED_CO_STREAM = {
+  configured: false as const,
+  skippedReason: 'no collector co-stream records supplied',
+};
+
+function fullResult(chain: typeof VALID_CHAIN_RESULT | typeof BROKEN_CHAIN_RESULT, overrides: Record<string, unknown> = {}) {
+  return {
+    chain,
+    anchors: SKIPPED_ANCHORS,
+    coStream: SKIPPED_CO_STREAM,
+    isValid: chain.isValid,
+    ...overrides,
+  };
+}
+
 function makeRequest(): Request {
   return new Request('http://localhost:3000/api/cron/verify-audit-chain');
 }
@@ -85,7 +105,7 @@ describe('/api/cron/verify-audit-chain', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
-    mockVerifyAndAlert.mockResolvedValue(VALID_CHAIN_RESULT);
+    mockRunFullAuditVerification.mockResolvedValue(fullResult(VALID_CHAIN_RESULT));
   });
 
   it('returns auth error when cron request is invalid', async () => {
@@ -118,7 +138,7 @@ describe('/api/cron/verify-audit-chain', () => {
   });
 
   it('returns invalid chain result without breakPoint in response', async () => {
-    mockVerifyAndAlert.mockResolvedValue(BROKEN_CHAIN_RESULT);
+    mockRunFullAuditVerification.mockResolvedValue(fullResult(BROKEN_CHAIN_RESULT));
 
     const response = await GET(makeRequest());
     const body = await response.json();
@@ -131,7 +151,7 @@ describe('/api/cron/verify-audit-chain', () => {
   });
 
   it('logs breakPoint details server-side on chain failure', async () => {
-    mockVerifyAndAlert.mockResolvedValue(BROKEN_CHAIN_RESULT);
+    mockRunFullAuditVerification.mockResolvedValue(fullResult(BROKEN_CHAIN_RESULT));
 
     await GET(makeRequest());
 
@@ -144,7 +164,7 @@ describe('/api/cron/verify-audit-chain', () => {
   });
 
   it('returns generic error message on exception', async () => {
-    mockVerifyAndAlert.mockRejectedValue(new Error('DB connection lost'));
+    mockRunFullAuditVerification.mockRejectedValue(new Error('DB connection lost'));
 
     const response = await GET(makeRequest());
     const body = await response.json();
@@ -157,7 +177,7 @@ describe('/api/cron/verify-audit-chain', () => {
 
   it('logs actual error server-side on exception', async () => {
     const error = new Error('DB connection lost');
-    mockVerifyAndAlert.mockRejectedValue(error);
+    mockRunFullAuditVerification.mockRejectedValue(error);
 
     await GET(makeRequest());
 
@@ -167,10 +187,51 @@ describe('/api/cron/verify-audit-chain', () => {
     );
   });
 
-  it('calls verifyAndAlert with periodic source', async () => {
+  it('calls runFullAuditVerification with periodic source and stopOnFirstBreak', async () => {
     await GET(makeRequest());
 
-    expect(mockVerifyAndAlert).toHaveBeenCalledWith('periodic', { stopOnFirstBreak: true });
+    expect(mockRunFullAuditVerification).toHaveBeenCalledWith({
+      source: 'periodic',
+      chain: { stopOnFirstBreak: true },
+    });
+  });
+
+  it('reports skipped anchor/co-stream checks with their reasons (explicit degradation)', async () => {
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.anchors).toEqual(SKIPPED_ANCHORS);
+    expect(body.coStream).toEqual(SKIPPED_CO_STREAM);
+    expect(body.chainValid).toBe(true);
+  });
+
+  it('given a configured anchor check that fails, reports composite isValid=false while chainValid stays true', async () => {
+    mockRunFullAuditVerification.mockResolvedValue(
+      fullResult(VALID_CHAIN_RESULT, {
+        anchors: {
+          configured: true,
+          report: {
+            allMatch: false,
+            results: [],
+            counts: { match: 1, hash_mismatch: 1, seq_gap: 0, unverifiable: 0 },
+          },
+        },
+        isValid: false,
+      })
+    );
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(body.isValid).toBe(false);
+    expect(body.chainValid).toBe(true);
+    expect(body.anchors).toEqual({
+      configured: true,
+      allMatch: false,
+      counts: { match: 1, hash_mismatch: 1, seq_gap: 0, unverifiable: 0 },
+    });
+    // Anchor details beyond counts (hashes, seqs) never leak into the response.
+    expect(body.anchors).not.toHaveProperty('results');
   });
 
   it('logs audit event on successful chain verification', async () => {
@@ -183,7 +244,7 @@ describe('/api/cron/verify-audit-chain', () => {
   });
 
   it('logs audit event on failed chain verification', async () => {
-    mockVerifyAndAlert.mockResolvedValue(BROKEN_CHAIN_RESULT);
+    mockRunFullAuditVerification.mockResolvedValue(fullResult(BROKEN_CHAIN_RESULT));
 
     await GET(makeRequest());
 
@@ -194,7 +255,7 @@ describe('/api/cron/verify-audit-chain', () => {
   });
 
   it('does not log audit event when verification throws', async () => {
-    mockVerifyAndAlert.mockRejectedValue(new Error('DB connection lost'));
+    mockRunFullAuditVerification.mockRejectedValue(new Error('DB connection lost'));
 
     await GET(makeRequest());
 

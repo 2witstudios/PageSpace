@@ -1,6 +1,4 @@
 import Tesseract from 'tesseract.js';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { contentStore } from '../server';
 import type { OCRJobData, OCRResult } from '../types';
@@ -28,21 +26,11 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
 
   loggers.processor.info('OCR job started', { contentHash, provider });
 
-  // Check if OCR result already cached
-  const cacheDir = path.dirname(await contentStore.getCachePath(contentHash, 'ocr'));
-  const ocrCachePath = path.join(cacheDir, 'ocr-text.txt');
-
-  try {
-    const cached = await fs.readFile(ocrCachePath, 'utf-8');
+  // Check if OCR result already cached in S3
+  const cachedBuf = await contentStore.getCache(contentHash, 'ocr-text.txt');
+  if (cachedBuf) {
     loggers.processor.info('OCR cache hit', { contentHash });
-    return {
-      success: true,
-      cached: true,
-      text: cached,
-      provider
-    };
-  } catch {
-    // Not cached, proceed with OCR
+    return { success: true, cached: true, text: cachedBuf.toString('utf-8'), provider };
   }
 
   // Get original image
@@ -63,9 +51,8 @@ export async function processOCR(data: OCRJobData): Promise<OCRResult> {
       ocrText = await performAIVisionOCR(contentHash);
     }
 
-    // Cache the OCR result
-    await fs.mkdir(cacheDir, { recursive: true });
-    await fs.writeFile(ocrCachePath, ocrText);
+    // Cache the OCR result in S3
+    await contentStore.saveCache(contentHash, 'ocr-text.txt', Buffer.from(ocrText), 'text/plain');
 
     loggers.processor.info('OCR succeeded', {
       contentHash,

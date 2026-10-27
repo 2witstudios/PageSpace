@@ -5,7 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
-import { getBackendProvider } from '@/lib/ai/core/ai-providers-config';
+import { DEFAULT_PROVIDER } from '@/lib/ai/core/ai-providers-config';
 import type { ProviderSettings } from '../chat-types';
 
 interface UseProviderSettingsOptions {
@@ -47,7 +47,7 @@ export function useProviderSettings({
 }: UseProviderSettingsOptions = {}): UseProviderSettingsResult {
   const [isLoading, setIsLoading] = useState(true);
   const [providerSettings, setProviderSettings] = useState<ProviderSettings | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<string>('pagespace');
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER);
   const [selectedModel, setSelectedModel] = useState<string>('');
 
   // Load provider settings
@@ -83,10 +83,9 @@ export function useProviderSettings({
   const isProviderConfigured = useCallback(
     (provider: string): boolean => {
       if (!providerSettings) return false;
-      const backendProvider = getBackendProvider(provider);
-      const status =
-        providerSettings.providers[backendProvider as keyof typeof providerSettings.providers] ??
-        providerSettings.providers[provider as keyof typeof providerSettings.providers];
+      // The availability map is keyed by the user-facing provider name (every cloud
+      // vendor resolves to the shared OpenRouter key server-side).
+      const status = providerSettings.providers[provider as keyof typeof providerSettings.providers];
       return status?.isAvailable ?? false;
     },
     [providerSettings]

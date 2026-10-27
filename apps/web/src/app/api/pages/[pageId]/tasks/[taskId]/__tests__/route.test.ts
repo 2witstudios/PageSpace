@@ -7,20 +7,28 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn((result) => 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
+  },
+  canPrincipalViewPage: async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
-    canUserEditPage: vi.fn(),
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  canUserEditPage: vi.fn(),
+  canUserViewPage: vi.fn().mockResolvedValue(false),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    api: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-    ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-  },
-  logger: {
-    child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })),
-  },
-}));
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const mkLogger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() });
+  return {
+    loggers: { api: mkLogger(), ai: mkLogger(), realtime: mkLogger() },
+    logger: mkLogger(),
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
@@ -30,7 +38,25 @@ vi.mock('@/lib/workflows/task-trigger-helpers', () => ({
   cancelTaskDueDateTrigger: vi.fn().mockResolvedValue(undefined),
   fireCompletionTrigger: vi.fn().mockResolvedValue(undefined),
   disableTaskTriggers: vi.fn().mockResolvedValue(undefined),
+  createTaskTriggerWorkflow: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock('@/lib/ai/tools/task-helpers', () => ({
+  reorderTaskPeers: vi.fn().mockResolvedValue({ index: 0, position: 0 }),
+}));
+
+// The route resolves its timezone through resolveTimezone. Wiring the mock's
+// resolveTimezone to the mocked getUserTimezone keeps the existing profile /
+// UTC assertions below testing the route end to end; the precedence rule
+// itself is pinned in personalization-utils.test.ts.
+vi.mock('@/lib/ai/core/personalization-utils', () => {
+  const getUserTimezone = vi.fn().mockResolvedValue(undefined);
+  return {
+    getUserTimezone,
+    resolveTimezone: async (explicit: string | null | undefined, userId: string) =>
+      explicit?.trim() || (await getUserTimezone(userId)) || 'UTC',
+  };
+});
 
 vi.mock('@pagespace/lib/utils/enums', () => ({
     PageType: { DOCUMENT: 'DOCUMENT', FOLDER: 'FOLDER', TASK_LIST: 'TASK_LIST' },
@@ -50,6 +76,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 
 vi.mock('@pagespace/lib/notifications/notifications', () => ({
   createTaskAssignedNotification: vi.fn().mockResolvedValue(undefined),
+  createMentionNotification: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/services/api/page-mutation-service', () => ({
@@ -137,15 +164,26 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(() => ({})),
 }));
 
+vi.mock('@/lib/tasks/completion-guard', () => ({
+  checkSubTasksComplete: vi.fn().mockResolvedValue(null),
+  SUBTASKS_INCOMPLETE_STATUS: 422,
+}));
+
 // ---------- Imports (after mocks) ----------
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
-import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
+import { createTaskAssignedNotification, createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { checkSubTasksComplete } from '@/lib/tasks/completion-guard';
+import { createTaskTriggerWorkflow, syncTaskDueDateTrigger } from '@/lib/workflows/task-trigger-helpers';
+import { reorderTaskPeers } from '@/lib/ai/tools/task-helpers';
+import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ---------- Helpers ----------
 
@@ -198,9 +236,8 @@ const baseTask = {
   assigneeAgentId: null,
   pageId: 'linked-page-1',
   completedAt: null,
-  taskListId: mockTaskListId,
   position: 0,
-  page: { title: 'Existing Task' },
+  page: { title: 'Existing Task', parentId: mockPageId },
 };
 
 function setupTaskLookup(taskList = { id: mockTaskListId }, task: Record<string, unknown> | null = baseTask) {
@@ -208,11 +245,19 @@ function setupTaskLookup(taskList = { id: mockTaskListId }, task: Record<string,
   vi.mocked(db.query.taskItems.findFirst).mockResolvedValue(task as never);
 }
 
+// Column values handed to the task update inside the tx, newest last. Lets a
+// test assert what was actually written (e.g. the parsed due date) rather than
+// only what the route echoed back.
+const capturedUpdates: Record<string, unknown>[] = [];
+
 function setupTransaction(returnedTask: Record<string, unknown> = baseTask) {
   vi.mocked(db.transaction).mockImplementation(async (callback) => {
     const txUpdateReturning = vi.fn().mockResolvedValue([returnedTask]);
     const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
-    const txUpdateSet = vi.fn(() => ({ where: txUpdateWhere }));
+    const txUpdateSet = vi.fn((values: Record<string, unknown>) => {
+      capturedUpdates.push(values);
+      return { where: txUpdateWhere };
+    });
 
     const tx = {
       update: vi.fn(() => ({ set: txUpdateSet })),
@@ -272,15 +317,16 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.error).toBe('You need edit permission to update tasks');
   });
 
-  it('returns 404 when task list is not found', async () => {
+  it('returns 404 when task not found (task list absent)', async () => {
     setupAuth();
     setupCanEdit(true);
     vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue(null as never);
 
     const response = await PATCH(createPatchRequest({ title: 'x' }), context);
     expect(response.status).toBe(404);
     const body = await response.json();
-    expect(body.error).toBe('Task list not found');
+    expect(body.error).toBe('Task not found');
   });
 
   it('returns 404 when task is not found', async () => {
@@ -700,7 +746,7 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     });
 
     vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
-    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title' }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title', parentId: mockPageId }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
 
     const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
     expect(response.status).toBe(200);
@@ -715,6 +761,46 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
       expect.objectContaining({ title: 'New Title' })
     );
     expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('stamps the task row on a title-only edit, so the echo it broadcasts is unique', async () => {
+    // The title lives on the linked PAGE, so a title-only PATCH used to leave
+    // task_items untouched — and the row's updatedAt is what the broadcast
+    // carries. Clients tell their own echo from a foreign one by matching that
+    // stamp, so two tabs renaming the same task inside the 30s echo TTL sent
+    // the SAME stamp and the second tab read the first's edit as its own and
+    // dropped it. On an expanded sub-list, which has no revalidation triggers
+    // at all, that edit is then lost until a page reload.
+    setupAuth();
+    setupCanEdit(true);
+    const taskWithPage = { ...baseTask, pageId: 'linked-page-1' };
+    setupTaskLookup({ id: mockTaskListId }, taskWithPage);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    const setCalls: Record<string, unknown>[] = [];
+    vi.mocked(db.transaction).mockImplementation(async (callback) => {
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage }]);
+      const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+      const txUpdateSet = vi.fn((vals: Record<string, unknown>) => {
+        setCalls.push(vals);
+        return { where: txUpdateWhere };
+      });
+      const txSelectLimit = vi.fn().mockResolvedValue([{ revision: 1 }]);
+      const tx = {
+        update: vi.fn(() => ({ set: txUpdateSet })),
+        delete: vi.fn(() => ({ where: vi.fn() })),
+        insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
+        select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: txSelectLimit })) })) })),
+      };
+      return callback(tx as never);
+    });
+    vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title', parentId: mockPageId }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+    const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
+
+    expect(response.status).toBe(200);
+    expect(setCalls.some((vals) => vals.updatedAt instanceof Date)).toBe(true);
   });
 
   it('handles PageRevisionMismatchError with expectedRevision (409)', async () => {
@@ -996,6 +1082,319 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     const response = await PATCH(createPatchRequest({ assigneeAgentId: 'agent-1' }), context);
     expect(response.status).toBe(200);
   });
+
+
+  it('returns 422 when checkSubTasksComplete reports incomplete sub-tasks', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+      { slug: 'open', group: 'todo' },
+      { slug: 'finished', group: 'done' },
+    ] as never);
+    vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (2 of 3 remaining)',
+      pending: 2,
+      total: 3,
+    });
+
+    const response = await PATCH(createPatchRequest({ status: 'finished' }), context);
+    expect(response.status).toBe(422);
+    const body = await response.json();
+    expect(body.error).toContain('Complete all sub-tasks first');
+    expect(body.pending).toBe(2);
+    expect(body.total).toBe(3);
+  });
+
+  it('returns 422 in fallback mode when completing a task with incomplete sub-tasks', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, completedAt: null });
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(checkSubTasksComplete).mockResolvedValueOnce({
+      code: 'SUBTASKS_INCOMPLETE',
+      error: 'Complete all sub-tasks first (1 of 2 remaining)',
+      pending: 1,
+      total: 2,
+    });
+
+    const response = await PATCH(createPatchRequest({ status: 'completed' }), context);
+    expect(response.status).toBe(422);
+    const body = await response.json();
+    expect(body.error).toContain('Complete all sub-tasks first');
+    expect(body.pending).toBe(1);
+    expect(body.total).toBe(2);
+  });
+
+  it('does not call checkSubTasksComplete when status is not done-group', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask });
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([
+      { slug: 'open', group: 'todo' },
+      { slug: 'finished', group: 'done' },
+    ] as never);
+    setupTransaction({ ...baseTask, status: 'open' });
+    setupRelationsLookup({ ...baseTask, status: 'open', assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+    await PATCH(createPatchRequest({ status: 'open' }), context);
+    expect(checkSubTasksComplete).not.toHaveBeenCalled();
+  });
+
+  it('does not fire createMentionNotification when description is not part of the update', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup();
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction({ ...baseTask, priority: 'high' });
+    setupRelationsLookup({ ...baseTask, priority: 'high', assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+    const response = await PATCH(createPatchRequest({ priority: 'high' }), context);
+
+    expect(response.status).toBe(200);
+    expect(createMentionNotification).not.toHaveBeenCalled();
+  });
+
+  it('does not notify the updater even if they self-@mention in the new description', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const selfMention = `ping @[Me](${mockUserId}:user)`;
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: selfMention, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    setupTransaction({ ...baseTask, description: selfMention });
+
+    const response = await PATCH(createPatchRequest({ description: selfMention }), context);
+
+    expect(response.status).toBe(200);
+    expect(createMentionNotification).not.toHaveBeenCalledWith(
+      mockUserId,
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not notify a @mentioned user who cannot view the task page', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const newDesc = 'cc @[Outsider](user-outsider:user)';
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    setupTransaction({ ...baseTask, description: newDesc });
+
+    const response = await PATCH(createPatchRequest({ description: newDesc }), context);
+
+    expect(response.status).toBe(200);
+    expect(createMentionNotification).not.toHaveBeenCalled();
+  });
+
+  it('stores note (and status change) in task metadata lastUpdate', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, status: 'pending', metadata: { existing: true } } as never) // existingTask lookup
+      .mockResolvedValueOnce({ ...baseTask, status: 'completed', assignee: null, assigneeAgent: null, user: null, assignees: [] } as never); // relations lookup
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    let capturedUpdateArgs: Record<string, unknown> | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...baseTask, status: 'completed' }]);
+      const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+      const txUpdateSet = vi.fn((vals: Record<string, unknown>) => {
+        capturedUpdateArgs = vals;
+        return { where: txUpdateWhere };
+      });
+      const tx = {
+        update: vi.fn(() => ({ set: txUpdateSet })),
+        delete: vi.fn(() => ({ where: vi.fn() })),
+        insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) })),
+        })),
+      };
+      return callback(tx);
+    });
+
+    const response = await PATCH(createPatchRequest({ status: 'completed', note: 'done early' }), context);
+    expect(response.status).toBe(200);
+    expect(capturedUpdateArgs).toMatchObject({
+      metadata: {
+        existing: true,
+        lastUpdate: expect.objectContaining({
+          note: 'done early',
+          statusChange: { from: 'pending', to: 'completed' },
+        }),
+      },
+    });
+  });
+
+  it('delegates position updates to reorderTaskPeers for clamping and re-densification', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup();
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction(baseTask);
+    setupRelationsLookup({ ...baseTask, position: 2, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(reorderTaskPeers).mockResolvedValue({ index: 2, position: 2 });
+
+    const response = await PATCH(createPatchRequest({ position: 99 }), context);
+    expect(response.status).toBe(200);
+    expect(reorderTaskPeers).toHaveBeenCalledWith(mockPageId, mockTaskId, 99, { userId: mockUserId });
+  });
+
+  it('creates an agent trigger workflow when agentTrigger is provided', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2025-06-01') });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction({ ...baseTask, dueDate: new Date('2025-06-01') });
+    setupRelationsLookup({ ...baseTask, dueDate: new Date('2025-06-01'), assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue('America/New_York');
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+
+    expect(response.status).toBe(200);
+    expect(createTaskTriggerWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      driveId: 'drive-1',
+      taskId: mockTaskId,
+      agentTrigger: expect.objectContaining({ agentPageId: 'agent-1', triggerType: 'due_date' }),
+      timezone: 'America/New_York',
+    }));
+  });
+
+  /**
+   * The stored due date and the trigger scheduled against it have to agree on
+   * the instant. The timezone was already resolved for the trigger, but the due
+   * date itself went through a bare `new Date()`, so a naive value was read in
+   * the server's zone and the two disagreed by the caller's offset (#2404).
+   *
+   * Asserted as the GAP between two callers rather than one absolute instant:
+   * a fixed expectation passes under the old parse on any machine whose zone
+   * matches the profile, which is exactly how this survived locally.
+   */
+  const patchDueDate = async (profileTimezone: string, dueDate: string) => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, baseTask);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction(baseTask);
+    setupRelationsLookup({ ...baseTask, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue(profileTimezone);
+    capturedUpdates.length = 0;
+
+    const response = await PATCH(createPatchRequest({ dueDate }), context);
+    expect(response.status).toBe(200);
+    return capturedUpdates.find(values => 'dueDate' in values)?.dueDate as Date | null;
+  };
+
+  it('reads a naive due date in the caller profile timezone', async () => {
+    const chicago = await patchDueDate('America/Chicago', '2026-02-19T19:00:00');
+    const tokyo = await patchDueDate('Asia/Tokyo', '2026-02-19T19:00:00');
+
+    // UTC-6 vs UTC+9 in February. Read in the server's zone, both would be equal.
+    expect(Number(chicago) - Number(tokyo)).toBe(15 * 60 * 60 * 1000);
+  });
+
+  it('schedules the due-date trigger against the same instant it stored', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, baseTask);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction(baseTask);
+    setupRelationsLookup({ ...baseTask, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue('America/Chicago');
+    capturedUpdates.length = 0;
+
+    const response = await PATCH(createPatchRequest({ dueDate: '2026-02-19T19:00:00' }), context);
+
+    expect(response.status).toBe(200);
+    const stored = capturedUpdates.find(values => 'dueDate' in values)?.dueDate;
+    expect(syncTaskDueDateTrigger).toHaveBeenCalledWith(mockTaskId, stored);
+  });
+
+  it('leaves an absolute due date alone and never reads the profile for it', async () => {
+    const stored = await patchDueDate('America/Chicago', '2026-02-19T19:00:00Z');
+
+    expect(stored).toEqual(new Date('2026-02-19T19:00:00Z'));
+    expect(getUserTimezone).not.toHaveBeenCalled();
+  });
+
+  it('#1837 finding #10 — echoes the created trigger in the response, not just the generic task block', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: new Date('2025-06-01') });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupTransaction({ ...baseTask, dueDate: new Date('2025-06-01') });
+    setupRelationsLookup({ ...baseTask, dueDate: new Date('2025-06-01'), assignee: null, assigneeAgent: null, user: null, assignees: [] });
+    vi.mocked(getUserTimezone).mockResolvedValue('America/New_York');
+    vi.mocked(createTaskTriggerWorkflow).mockResolvedValueOnce({
+      workflowId: 'wf-1',
+      triggerId: 'trg-1',
+      triggerType: 'due_date',
+      nextRunAt: new Date('2025-06-01'),
+      isEnabled: true,
+    });
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.agentTrigger).toEqual({
+      workflowId: 'wf-1',
+      triggerId: 'trg-1',
+      triggerType: 'due_date',
+      nextRunAt: expect.any(String),
+      isEnabled: true,
+    });
+  });
+
+  it('returns 400 for a due_date agentTrigger when the task has no due date', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    setupTaskLookup({ id: mockTaskListId }, { ...baseTask, dueDate: null });
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    const response = await PATCH(createPatchRequest({
+      agentTrigger: { agentPageId: 'agent-1', prompt: 'go', triggerType: 'due_date' },
+    }), context);
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toMatch(/due date/i);
+    expect(createTaskTriggerWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('returns 200 even when createMentionNotification throws during task update', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const newDesc = 'cc @[Alice](user-alice:user)';
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce({ ...baseTask, description: null } as never)
+      .mockResolvedValueOnce({ ...baseTask, description: newDesc, assignee: null, assigneeAgent: null, user: null, assignees: [] } as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(createMentionNotification).mockRejectedValue(new Error('notification service down'));
+    setupTransaction({ ...baseTask, description: newDesc });
+
+    const response = await PATCH(createPatchRequest({ description: newDesc }), context);
+
+    expect(response.status).toBe(200);
+  });
 });
 
 describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
@@ -1026,15 +1425,16 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(body.error).toBe('You need edit permission to delete tasks');
   });
 
-  it('returns 404 when task list not found', async () => {
+  it('returns 404 when task not found (task list absent)', async () => {
     setupAuth();
     setupCanEdit(true);
     vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue(null as never);
 
     const response = await DELETE(createDeleteRequest(), context);
     expect(response.status).toBe(404);
     const body = await response.json();
-    expect(body.error).toBe('Task list not found');
+    expect(body.error).toBe('Task not found');
   });
 
   it('returns 404 when task not found', async () => {
@@ -1177,6 +1577,61 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(broadcastPageEvent).not.toHaveBeenCalled();
   });
 
+  it('hard-deletes the taskItems row after trashing the linked page (no resurrection on restore)', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+      ...baseTask, pageId: 'linked-page-1',
+    } as never);
+
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([{ revision: 3 }]),
+        })),
+      })),
+    } as never);
+    vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: undefined } as never);
+
+    let deleteWhereArg: unknown = null;
+    vi.mocked(db.delete).mockReturnValue({
+      where: vi.fn((cond: unknown) => {
+        deleteWhereArg = cond;
+        return Promise.resolve(undefined);
+      }),
+    } as never);
+
+    const response = await DELETE(createDeleteRequest(), context);
+    expect(response.status).toBe(200);
+    expect(db.delete).toHaveBeenCalledTimes(1);
+    expect(deleteWhereArg).toBeTruthy();
+  });
+
+  it('does not hard-delete the taskItems row when trashing hits a revision conflict', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst).mockResolvedValue({
+      ...baseTask, pageId: 'linked-page-1',
+    } as never);
+
+    vi.mocked(db.select).mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn().mockResolvedValue([{ revision: 3 }]),
+        })),
+      })),
+    } as never);
+
+    const { PageRevisionMismatchError: PRME } = await import('@/services/api/page-mutation-service');
+    vi.mocked(applyPageMutation).mockRejectedValueOnce(new PRME('Conflict', 5, 3));
+
+    const response = await DELETE(createDeleteRequest(), context);
+    expect(response.status).toBe(409);
+    expect(db.delete).not.toHaveBeenCalled();
+  });
+
   it('skips page broadcast when taskListPage is null but linkedPage exists', async () => {
     setupAuth();
     setupCanEdit(true);
@@ -1203,5 +1658,149 @@ describe('DELETE /api/pages/[pageId]/tasks/[taskId]', () => {
       taskId: mockTaskId,
     }));
     expect(broadcastPageEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/pages/[pageId]/tasks/[taskId] — startDate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Drop any queued Once values a previous test left unconsumed.
+    vi.mocked(db.query.taskItems.findFirst).mockReset();
+    capturedUpdates.length = 0;
+    vi.mocked(checkMCPPageScope).mockResolvedValue(null as never);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.taskAssignees.findMany).mockResolvedValue([] as never);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+    setupAuth();
+    setupCanEdit(true);
+  });
+
+  const withRelations = (task: Record<string, unknown>) => ({
+    ...task, assignee: null, assigneeAgent: null, user: null, assignees: [],
+  });
+
+  /** First findFirst = the existing row; second = the post-update fetch. */
+  const setupExisting = (existing: Record<string, unknown>, afterUpdate: Record<string, unknown> = existing) => {
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce(existing as never)
+      .mockResolvedValueOnce(withRelations(afterUpdate) as never);
+    setupTransaction(afterUpdate);
+  };
+
+  it('stores an ISO startDate, returns it, and records it in the audit updatedFields', async () => {
+    const start = new Date('2026-03-01T00:00:00Z');
+    setupExisting(baseTask, { ...baseTask, startDate: start });
+
+    const response = await PATCH(createPatchRequest({ startDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(response.status).toBe(200);
+    expect(capturedUpdates.find(v => 'startDate' in v)?.startDate).toEqual(start);
+    expect((await response.json()).startDate).toBe(start.toISOString());
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      details: expect.objectContaining({ updatedFields: expect.arrayContaining(['startDate']) }),
+    }));
+  });
+
+  it('includes startDate in the task_updated broadcast payload', async () => {
+    const start = new Date('2026-03-01T00:00:00Z');
+    setupExisting(baseTask, { ...baseTask, startDate: start });
+
+    await PATCH(createPatchRequest({ startDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(broadcastTaskEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'task_updated',
+      data: expect.objectContaining({ startDate: start }),
+    }));
+  });
+
+  it('clears startDate with null', async () => {
+    setupExisting({ ...baseTask, startDate: new Date('2026-03-01T00:00:00Z') }, { ...baseTask, startDate: null });
+
+    const response = await PATCH(createPatchRequest({ startDate: null }), context);
+
+    expect(response.status).toBe(200);
+    const write = capturedUpdates.find(v => 'startDate' in v);
+    expect(write).toBeDefined();
+    expect(write?.startDate).toBeNull();
+  });
+
+  it('does not touch startDate when the field is absent', async () => {
+    setupExisting(baseTask, { ...baseTask, priority: 'high' });
+
+    const response = await PATCH(createPatchRequest({ priority: 'high' }), context);
+
+    expect(response.status).toBe(200);
+    expect(capturedUpdates.some(v => 'startDate' in v)).toBe(false);
+  });
+
+  it('returns 400 for an invalid startDate without writing', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({ startDate: 'not-a-date' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Invalid start date');
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the new startDate is after the new dueDate', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({
+      startDate: '2026-03-10T00:00:00Z',
+      dueDate: '2026-03-01T00:00:00Z',
+    }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('compares a new startDate against the EXISTING dueDate when dueDate is absent', async () => {
+    setupExisting({ ...baseTask, dueDate: new Date('2026-03-01T00:00:00Z') });
+
+    const response = await PATCH(createPatchRequest({ startDate: '2026-03-05T00:00:00Z' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+  });
+
+  it('compares a new dueDate against the EXISTING startDate when startDate is absent', async () => {
+    setupExisting({ ...baseTask, startDate: new Date('2026-03-05T00:00:00Z') });
+
+    const response = await PATCH(createPatchRequest({ dueDate: '2026-03-01T00:00:00Z' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Start date must be on or before the due date');
+  });
+
+  it('accepts a startDate equal to the dueDate', async () => {
+    const same = new Date('2026-03-01T00:00:00Z');
+    setupExisting({ ...baseTask, dueDate: same }, { ...baseTask, dueDate: same, startDate: same });
+
+    const response = await PATCH(createPatchRequest({ startDate: same.toISOString() }), context);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('allows clearing the dueDate even when the stored startDate is set', async () => {
+    setupExisting(
+      { ...baseTask, startDate: new Date('2026-03-05T00:00:00Z'), dueDate: new Date('2026-03-10T00:00:00Z') },
+      { ...baseTask, startDate: new Date('2026-03-05T00:00:00Z'), dueDate: null },
+    );
+
+    const response = await PATCH(createPatchRequest({ dueDate: null }), context);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('returns 400 for an invalid dueDate instead of writing an Invalid Date', async () => {
+    setupExisting(baseTask);
+
+    const response = await PATCH(createPatchRequest({ dueDate: 'garbage' }), context);
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe('Invalid due date');
   });
 });

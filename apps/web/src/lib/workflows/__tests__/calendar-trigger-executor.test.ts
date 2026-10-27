@@ -5,8 +5,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ============================================================================
 
 const {
-  mockIncrementUsage,
   mockExecuteWorkflow,
+  mockCanConsumeAI,
+  mockReleaseHold,
   mockSelect,
   mockSelectFrom,
   mockSelectWhere,
@@ -15,6 +16,8 @@ const {
   mockUpdateWhere,
   mockIsUserDriveMember,
   mockInnerJoin,
+  mockInsert,
+  mockInsertValues,
   makeChildLogger,
 } = vi.hoisted(() => {
   const makeChildLogger = (): Record<string, unknown> => ({
@@ -25,8 +28,9 @@ const {
     child: vi.fn(() => makeChildLogger()),
   });
   return {
-    mockIncrementUsage: vi.fn(),
     mockExecuteWorkflow: vi.fn(),
+    mockCanConsumeAI: vi.fn(),
+    mockReleaseHold: vi.fn(),
     mockSelect: vi.fn(),
     mockSelectFrom: vi.fn(),
     mockSelectWhere: vi.fn(),
@@ -35,6 +39,8 @@ const {
     mockUpdateWhere: vi.fn(),
     mockIsUserDriveMember: vi.fn(),
     mockInnerJoin: vi.fn(),
+    mockInsert: vi.fn(),
+    mockInsertValues: vi.fn(),
     makeChildLogger,
   };
 });
@@ -43,8 +49,10 @@ vi.mock('@pagespace/db/db', () => ({
   db: {
     select: mockSelect,
     update: mockUpdate,
+    insert: mockInsert,
   },
 }));
+vi.mock('@pagespace/db/schema/workflow-runs', () => ({ workflowRuns: { id: 'id' } }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
@@ -89,8 +97,12 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
 }));
 
-vi.mock('@/lib/subscription/usage-service', () => ({
-  incrementUsage: mockIncrementUsage,
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: mockCanConsumeAI,
+}));
+
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: mockReleaseHold,
 }));
 
 vi.mock('@/lib/logging/mask', () => ({
@@ -98,6 +110,7 @@ vi.mock('@/lib/logging/mask', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     isUserDriveMember: mockIsUserDriveMember,
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -145,6 +158,7 @@ const createWorkflowRow = (overrides: Record<string, unknown> = {}) => ({
   eventDebounceSecs: null,
   instructionPageId: null,
   isEnabled: true,
+  ownerLeftAt: null,
   nextRunAt: null,
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -187,10 +201,11 @@ describe('executeCalendarTrigger', () => {
     vi.clearAllMocks();
 
     mockIsUserDriveMember.mockResolvedValue(true);
-    mockIncrementUsage.mockResolvedValue({ success: true });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok' });
+    mockReleaseHold.mockResolvedValue(undefined);
 
     // Default select chain.
-    // Call order in executor: 1=workflow load, 2=agent preflight, 3=attendees
+    // Call order in executor: 1=workflow load, 2=agent preflight, 3=user tier, 4=attendees
     mockSelect.mockReturnValue({ from: mockSelectFrom });
     mockSelectFrom.mockReturnValue({
       innerJoin: mockInnerJoin,
@@ -200,16 +215,43 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([createWorkflowRow()])                    // workflow load
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])    // agent preflight
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier for credit gate
       .mockResolvedValue([]);                                           // attendees + anything else
 
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: vi.fn().mockResolvedValue(undefined) });
 
     mockExecuteWorkflow.mockResolvedValue({
       success: true,
       durationMs: 500,
       conversationId: 'conv-1',
+    });
+  });
+
+  describe('a trigger whose owner left ([D-OW-36])', () => {
+    const ownerLeftCases: Array<[string, CalendarTrigger, Record<string, unknown>]> = [
+      ['its workflow is flagged owner-left', createTrigger(), { ownerLeftAt: new Date() }],
+      ['the scheduler\'s account was deleted (no scheduler)', createTrigger({ scheduledById: null }), {}],
+      ['the workflow\'s creator account was deleted (no creator)', createTrigger(), { createdBy: null }],
+    ];
+
+    it.each(ownerLeftCases)('SPEND-6 (partial) when %s: skipped before the access check, the credit gate or any hold, with a cancelled run recording owner_left', async (_label, trigger, workflowOverrides) => {
+      mockSelectWhere.mockReset();
+      mockSelectWhere.mockResolvedValueOnce([createWorkflowRow(workflowOverrides)]).mockResolvedValue([]);
+
+      const result = await executeCalendarTrigger(trigger, createEvent());
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_left');
+      expect(mockIsUserDriveMember).not.toHaveBeenCalled();
+      expect(mockCanConsumeAI).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockInsertValues).toHaveBeenCalledWith(expect.objectContaining({
+        workflowId: 'wf-1', sourceTable: 'calendarTriggers', sourceId: 'trg-1', status: 'cancelled', error: expect.stringContaining('owner_left'),
+      }));
     });
   });
 
@@ -226,6 +268,7 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([workflow])
       .mockResolvedValueOnce([{ id: 'agent-9', isTrashed: false }])
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
       .mockResolvedValue([]);
     const trigger = createTrigger();
     const event = createEvent({ timezone: 'America/New_York' });
@@ -264,7 +307,8 @@ describe('executeCalendarTrigger', () => {
     mockSelectWhere
       .mockResolvedValueOnce([createWorkflowRow()])
       .mockResolvedValueOnce([{ id: 'agent-1', isTrashed: false }])
-      .mockResolvedValueOnce([
+      .mockResolvedValueOnce([{ subscriptionTier: 'free' }])           // user tier
+      .mockResolvedValueOnce([                                          // attendees
         { name: 'Alice', email: 'alice@test.com' },
         { name: null, email: 'bob@test.com' },
       ])
@@ -275,16 +319,6 @@ describe('executeCalendarTrigger', () => {
     const promptOverride = mockExecuteWorkflow.mock.calls[0][0].eventContext?.promptOverride ?? '';
     expect(promptOverride).toContain('Alice');
     expect(promptOverride).toContain('bob@test.com');
-  });
-
-  it('fails when daily AI call limit is reached', async () => {
-    mockIncrementUsage.mockResolvedValue({ success: false });
-
-    const result = await executeCalendarTrigger(createTrigger(), createEvent());
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('limit');
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   it('does not write per-fire state to calendar_triggers — executor handles workflow_runs', async () => {
@@ -349,11 +383,10 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('workflow');
-    expect(mockIncrementUsage).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('fails without consuming usage when agent page is missing', async () => {
+  it('fails when agent page is missing', async () => {
     mockSelectWhere.mockReset();
     mockSelectWhere
       .mockResolvedValueOnce([createWorkflowRow()])
@@ -363,7 +396,49 @@ describe('executeCalendarTrigger', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('agent');
-    expect(mockIncrementUsage).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-6 (partial) the gate names the drive as consumer, never the scheduling user\'s credits', async () => {
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('user-123', 'free', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      skipDailyCap: true,
+    });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1', reason: 'ok', walletId: 'w-drive' });
+
+    await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsumeAI.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips execution and returns failure when credit gate denies', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const result = await executeCalendarTrigger(createTrigger(), createEvent());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('credit gate denied');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });

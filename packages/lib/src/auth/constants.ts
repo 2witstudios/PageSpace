@@ -10,6 +10,13 @@ import { isOnPrem } from '../deployment-mode';
  */
 export const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * Marks sessions minted by the standalone admin console (apps/admin) via the
+ * sessions.createdByService column. Lets login revocation be scoped per-app so
+ * an admin login does not revoke web sessions, and vice versa.
+ */
+export const ADMIN_SESSION_SERVICE = 'admin-console';
+
 
 /**
  * Idle session timeout in milliseconds.
