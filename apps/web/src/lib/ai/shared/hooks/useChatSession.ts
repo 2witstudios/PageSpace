@@ -81,7 +81,7 @@ import {
   readAdmissionEnvelope,
 } from '@/lib/ai/core/detached-stream-mode';
 import { openStreamSession } from '@/lib/ai/streams/streamSessionRegistry';
-import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import { isPausingToolPartType } from '@/lib/ai/tools/pausing-tools';
 
 /** The status vocabulary the surfaces already speak, kept so their branches do not churn. */
 export type ChatSessionStatus = 'ready' | 'submitted' | 'streaming' | 'error';
@@ -215,7 +215,7 @@ export const useChatSession = ({
       if (message.role !== 'assistant') return message;
       let changed = false;
       const parts = message.parts.map((part) => {
-        if (part.type !== `tool-${ASK_USER_TOOL_NAME}`) return part;
+        if (!isPausingToolPartType(part.type)) return part;
         const toolCallId = (part as { toolCallId?: unknown }).toolCallId;
         const patch = patches.find((candidate) => candidate.toolCallId === toolCallId);
         if (!patch) return part;

@@ -28,6 +28,7 @@ import {
   SPRITE_SANDBOX_CAPABILITIES,
 } from '../../sandbox-host';
 import type { MachineResultFrame } from '../../../../env-bridge/machine-signatures';
+import { MAX_FS_WRITE_FILES } from '../../../../env-bridge/frame-codec';
 import type { UnsignedGrantFrame } from '../../../../env-bridge/grant-args';
 
 const ENV_ID = 'env-local-1';
@@ -201,6 +202,17 @@ describe('createLocalEnvSandboxHost — files', () => {
         { path: '/w/b.bin', contentB64: Buffer.from([1, 2, 3]).toString('base64') },
       ],
     });
+  });
+
+  it('given MORE files than the wire cap, should refuse here and send NOTHING — the daemon drops an over-cap frame instead of answering it (A4)', async () => {
+    const fake = fakeTransport({ reply: async () => ({ type: 'fs_write_result', grantId: 'g1', ok: true, sig: b64('s') }) });
+    const handle = await connectedHandle(fake);
+    const over = Array.from({ length: MAX_FS_WRITE_FILES + 1 }, (_unused, index) => ({ path: `/w/f${index}`, content: 'x' }));
+    await expect(handle.writeFiles(over)).rejects.toMatchObject({ reason: `too_many_files:${MAX_FS_WRITE_FILES + 1}>${MAX_FS_WRITE_FILES}` });
+    expect(fake.sent).toEqual([]);
+    // Exactly at the cap still goes out.
+    await handle.writeFiles(over.slice(0, MAX_FS_WRITE_FILES));
+    expect(fake.sent).toHaveLength(1);
   });
 
   it('given the machine reports the write FAILED, should throw — writeFiles resolving is what every caller treats as proof the bytes landed', async () => {

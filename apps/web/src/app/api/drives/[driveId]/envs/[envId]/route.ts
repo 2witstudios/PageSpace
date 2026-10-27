@@ -1,9 +1,27 @@
 /**
  * One drive environment — `/api/drives/[driveId]/envs/[envId]`.
  *
- * GET    → { env }                 — any accepted member of the drive
- * PATCH  { name } → { env }        — drive OWNER or ADMIN
- * DELETE ?force=true → { deleted }  — drive OWNER or ADMIN
+ * GET    → { env }                          — any accepted member of the drive
+ * PATCH  { name } → { env }                 — drive OWNER or ADMIN
+ * PATCH  { serverPolicy } → { env, serverPolicy } — the ENV OWNER only (D-6)
+ * PATCH  { paused } → { env, paused }       — the ENV OWNER only (D-6; Stop / Resume, GA wave 3)
+ * PATCH  { visibleToGlobalAssistant } → { env, visibleToGlobalAssistant } — the ENV OWNER only (D-6)
+ * DELETE ?force=true → { deleted }          — drive OWNER or ADMIN
+ *
+ * **`visibleToGlobalAssistant` is visibility, never authority.** It decides
+ * whether the global assistant — the one agent whose context spans every drive
+ * the person belongs to — may SEE and therefore address this environment. It
+ * grants nothing: who may drive a local machine is still its enrolling owner
+ * alone, so the toggle is the owner's too, by `drive_env_local.ownerId` and
+ * never by a drive role. Default off; absence is never a grant.
+ *
+ * **Four PATCH fields, four rules, one per request.** A rename is drive
+ * administration, so it keeps the owner-or-admin gate. `serverPolicy` — what
+ * PageSpace may ask a LOCAL machine to do, enforced at signing (GA wave 1) —
+ * belongs to the human who enrolled the machine and to nobody else: the check
+ * is against `drive_env_local.ownerId`, never a drive role, and a drive admin
+ * who did not enrol it is refused 403 naming the owner ([D-6]). The store
+ * write is a compare-and-set on `(envId, ownerId, revokedAt IS NULL)`.
  *
  * **`driveId` is checked against the row, not trusted from the path.** An env's
  * id is globally unique, so a member of drive A could otherwise reach drive B's
@@ -40,12 +58,16 @@ import {
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { renameDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
+import { patchDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
 import {
   deleteEnv,
   renameEnv,
+  readEnvDTO,
   resolveEnvInDrive,
   revokeEnv,
+  setEnvServerPolicy,
+  setEnvPaused,
+  setEnvGlobalAssistantVisibility,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
@@ -76,7 +98,9 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     const env = await resolveEnvInDrive(envId, driveId);
     if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
 
-    return NextResponse.json({ env: toDriveEnvDTO(env) });
+    // Through the facts join: a LOCAL row handed bare to `toDriveEnvDTO` throws
+    // (by design), which used to make this GET a 500 for every local env.
+    return NextResponse.json({ env: await readEnvDTO(env) });
   } catch (error) {
     loggers.api.error('Failed to read drive environment', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to read environment' }, { status: 500 });
@@ -92,6 +116,141 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
+    const body = await request.json().catch(() => null);
+    const parsed = patchDriveEnvRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Exactly one of a non-empty environment name, a server policy ({ ops: [exec | fs_read | fs_write], checkpoint: false }), paused (true | false), or visibleToGlobalAssistant (true | false) is required' }, { status: 400 });
+    }
+
+    // ---- visibleToGlobalAssistant: the env OWNER only (D-6). Whether the
+    // global assistant may reach this environment at all. Default off, and
+    // turning it on widens nothing about WHO may drive the machine.
+    if (parsed.data.visibleToGlobalAssistant !== undefined) {
+      const env = await resolveEnvInDrive(envId, driveId);
+      if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (env.substrate !== 'local') {
+        // A Sprite env has no enrolling owner, so there is nobody this write
+        // could be owner-checked against — refused rather than fallen back to
+        // a drive role. See the column docblock.
+        return NextResponse.json({ error: 'Only a local environment has an owner who can change this', reason: 'not_local' }, { status: 409 });
+      }
+      const visible = parsed.data.visibleToGlobalAssistant;
+      const result = await setEnvGlobalAssistantVisibility({ envId, requesterId: auth.userId, visible });
+      if (!result.ok) {
+        if (result.reason === 'not_owner') {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId: auth.userId,
+            resourceType: 'drive_env',
+            resourceId: envId,
+            details: { route: 'drive-envs', operation: 'set_global_assistant_visibility', driveId, ownerId: result.ownerId },
+            riskScore: 0.4,
+          });
+          return NextResponse.json(
+            { error: `Only this machine's owner (the user who enrolled it, ${result.ownerId}) can change what the global assistant may reach — drive admins can delete or revoke it, but not drive it`, reason: 'not_owner', ownerId: result.ownerId },
+            { status: 403 },
+          );
+        }
+        if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+        return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+      }
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation: 'set_global_assistant_visibility', driveId, envId, visibleToGlobalAssistant: result.visibleToGlobalAssistant },
+      });
+      // Re-read: the DTO must report the value as WRITTEN, not the row this
+      // request read before the CAS.
+      const updated = await resolveEnvInDrive(envId, driveId);
+      return NextResponse.json({ env: await readEnvDTO(updated ?? env), visibleToGlobalAssistant: result.visibleToGlobalAssistant });
+    }
+
+    // ---- paused: STOP / RESUME, the env OWNER only (D-6; GA wave 3). Pauses
+    // the env's grants without deleting it or revoking its key; a drive admin
+    // who did not enrol the machine keeps Delete and is refused here.
+    if (parsed.data.paused !== undefined) {
+      const env = await resolveEnvInDrive(envId, driveId);
+      if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (env.substrate !== 'local') {
+        return NextResponse.json({ error: 'Only a local environment can be stopped', reason: 'not_local' }, { status: 409 });
+      }
+      const operation = parsed.data.paused ? 'pause' : 'resume';
+      const result = await setEnvPaused({ envId, requesterId: auth.userId, paused: parsed.data.paused });
+      if (!result.ok) {
+        if (result.reason === 'not_owner') {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId: auth.userId,
+            resourceType: 'drive_env',
+            resourceId: envId,
+            details: { route: 'drive-envs', operation, driveId, ownerId: result.ownerId },
+            riskScore: 0.4,
+          });
+          return NextResponse.json(
+            { error: `Only this machine's owner (the user who enrolled it, ${result.ownerId}) can stop or resume it — drive admins can delete or revoke it, but not drive it`, reason: 'not_owner', ownerId: result.ownerId },
+            { status: 403 },
+          );
+        }
+        if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+        return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+      }
+      // Honest about the MACHINE (as the approval revoke is): 200 only when it
+      // signed an ack (or on Resume, which needs none); 202 when the pause went
+      // out and was not acknowledged in time; `no_live_socket` means the
+      // replica holding the socket delivers it on its next heartbeat (within
+      // one ping interval). The grants are refused from this moment either way.
+      const machine = 'machine' in result ? result.machine : null;
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation, driveId, envId, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) },
+      });
+      const body = { env: await readEnvDTO(env), paused: result.paused, ...(machine !== null && { machine: machine.kind, ...(machine.kind === 'acknowledged' && { killed: machine.killed }) }) };
+      return NextResponse.json(body, { status: machine !== null && machine.kind === 'unacknowledged' ? 202 : 200 });
+    }
+
+    // ---- serverPolicy: the env OWNER only (D-6). No drive role is consulted:
+    // a plain member who enrolled the machine may; an admin who did not may not.
+    if (parsed.data.serverPolicy !== undefined) {
+      const env = await resolveEnvInDrive(envId, driveId);
+      if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (env.substrate !== 'local') {
+        return NextResponse.json({ error: 'Only a local environment has a server policy', reason: 'not_local' }, { status: 409 });
+      }
+      const result = await setEnvServerPolicy({ envId, requesterId: auth.userId, serverPolicy: parsed.data.serverPolicy });
+      if (!result.ok) {
+        if (result.reason === 'not_owner') {
+          auditRequest(request, {
+            eventType: 'authz.access.denied',
+            userId: auth.userId,
+            resourceType: 'drive_env',
+            resourceId: envId,
+            details: { route: 'drive-envs', operation: 'set_server_policy', driveId, ownerId: result.ownerId },
+            riskScore: 0.4,
+          });
+          return NextResponse.json(
+            { error: `Only this machine's owner (the user who enrolled it, ${result.ownerId}) can change what it may run — drive admins can delete or revoke it, but not drive it`, reason: 'not_owner', ownerId: result.ownerId },
+            { status: 403 },
+          );
+        }
+        if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+        return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
+      }
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation: 'set_server_policy', driveId, envId, ops: result.serverPolicy.ops },
+      });
+      return NextResponse.json({ env: await readEnvDTO(env), serverPolicy: result.serverPolicy });
+    }
+
+    // ---- name: drive administration (owner or admin), unchanged.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
       auditRequest(request, {
         eventType: 'authz.access.denied',
@@ -107,13 +266,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
       return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     }
 
-    const body = await request.json().catch(() => null);
-    const parsed = renameDriveEnvRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'A non-empty environment name is required' }, { status: 400 });
-    }
-
-    const result = await renameEnv({ envId, name: parsed.data.name });
+    const result = await renameEnv({ envId, name: parsed.data.name ?? '' });
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
       return NextResponse.json({ error: 'An environment with this name already exists' }, { status: 409 });
@@ -129,8 +282,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
 
     return NextResponse.json({ env: toDriveEnvDTO(result.env) });
   } catch (error) {
-    loggers.api.error('Failed to rename drive environment', error instanceof Error ? error : new Error(String(error)));
-    return NextResponse.json({ error: 'Failed to rename environment' }, { status: 500 });
+    loggers.api.error('Failed to update drive environment', error instanceof Error ? error : new Error(String(error)));
+    return NextResponse.json({ error: 'Failed to update environment' }, { status: 500 });
   }
 }
 
@@ -160,27 +313,56 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     }
 
     // A local env's machine is revoked BEFORE the row goes: the stamp, the
-    // sessions and the socket (C4). The row deletion below then cascades the
-    // sibling away; a later token mint finds nothing and fails either way.
-    let revoked: { sessionsRevoked: number; machine: string; alreadyRevoked: boolean } | null = null;
-    if (env.substrate === 'local') {
+    // sessions and the socket (C4). The row deletion then cascades the sibling
+    // away; a later token mint finds nothing and fails either way.
+    //
+    // **But only when the row is actually going.** This used to run here,
+    // unconditionally, before `deleteEnv` was called at all — so a delete
+    // refused `409 live_sessions` had already stamped `revokedAt`, revoked
+    // every session, closed the socket and made the daemon delete its key,
+    // while the caller was told the delete did not happen. The cautious path
+    // (omitting `?force` precisely to avoid harming live sessions) was the
+    // destructive one, and per R-8 in the posture document it left an env that
+    // can never take a new machine — the row is still there, so it cannot be
+    // recreated. Found by the M1 exit gate, 2026-09-09.
+    //
+    // It is now the delete transaction's `beforeDelete`: it runs under the row
+    // lock, AFTER the live-session guard has passed and immediately before the
+    // row goes. There is no window in which a refusal has revoked anything,
+    // and no re-check to race — the guard and the revoke are the same
+    // critical section.
+    // A one-cell box rather than a plain `let`: the assignment happens inside
+    // the hook's closure, where narrowing cannot follow it, and TypeScript
+    // would otherwise keep the variable at `null` for every later read.
+    type RevokeReport = { sessionsRevoked: number; machine: string; alreadyRevoked: boolean };
+    const performed: { revoked: RevokeReport | null } = { revoked: null };
+    const revokeBeforeDelete = async (): Promise<void> => {
       const revocation = await revokeEnv({ envId, reason: 'owner_revoked' });
       if (revocation.ok) {
-        revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
-        auditRequest(request, {
-          eventType: 'auth.token.revoked',
-          userId: auth.userId,
-          resourceType: 'drive_env',
-          resourceId: envId,
-          details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
-        });
+        performed.revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
       }
-    }
+    };
 
     // Opt-in by exact value: any other spelling reads as "not forced", so a
     // stray `?force` or `?force=0` can never destroy a drive's shared work.
     const force = new URL(request.url).searchParams.get('force') === 'true';
-    const result = await deleteEnv({ envId, force });
+    const result = env.substrate === 'local'
+      ? await deleteEnv({ envId, force, beforeDelete: revokeBeforeDelete })
+      : await deleteEnv({ envId, force });
+    const revoked = performed.revoked;
+
+    // Audited only once the revoke has actually happened — which, since it is
+    // the delete's `beforeDelete`, means only on a delete that succeeded. A
+    // 409 writes no `auth.token.revoked` row, because it revoked nothing.
+    if (revoked) {
+      auditRequest(request, {
+        eventType: 'auth.token.revoked',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId,
+        details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
+      });
+    }
 
     // Two refusals, both terminal. There is deliberately no `teardown_failed`
     // arm any more: the delete now kills the Sprite only AFTER the row is gone,

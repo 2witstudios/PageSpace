@@ -79,6 +79,10 @@ How access is resolved: drive ownership, drive admin membership, direct page per
 ### [Zero-Trust Architecture](/docs/security/zero-trust)
 
 Token design, service-to-service authentication, session lifecycle, rate limiting, and the hash-chained audit log.
+
+### [Local Environments](/docs/security/local-environments)
+
+What an agent running on your own computer guarantees and exactly where the guarantees stop: signed single-use requests, owner-only control, confined file access, and no sandbox around commands.
 `;
 
 export default function SecurityPage() {

@@ -20,6 +20,22 @@ describe('audit-log (invariant 10: append-only JSONL, cross-referenceable with t
     expect(Object.keys(JSON.parse(line))[0]).toBe('ts');
   });
 
+  describe('A5: the line names the paths, so the machine\'s own record can answer "what did it write"', () => {
+    it('given an fs op with paths, should append them under `paths`, after every existing field and in request order', () => {
+      const line = formatAuditLine({ ...ENTRY, op: 'fs_write', exitCode: null, paths: ['/home/u/proj/a', '/home/u/proj/.git/hooks/pre-commit'] }, NOW);
+      expect(JSON.parse(line).paths).toEqual(['/home/u/proj/a', '/home/u/proj/.git/hooks/pre-commit']);
+      // The JSONL consumer contract: every field the server's join uses keeps
+      // its name AND its position, and `paths` comes last.
+      expect(Object.keys(JSON.parse(line))).toEqual(['ts', 'grantId', 'principal', 'op', 'verdict', 'argsHash', 'exitCode', 'paths']);
+    });
+
+    it('given an exec (or any entry with no paths), should NOT gain a paths field — the line stays exactly as it was', () => {
+      expect(Object.keys(JSON.parse(formatAuditLine(ENTRY, NOW)))).toEqual(['ts', 'grantId', 'principal', 'op', 'verdict', 'argsHash', 'exitCode']);
+      expect(Object.keys(JSON.parse(formatAuditLine({ ...ENTRY, paths: null }, NOW)))).not.toContain('paths');
+      expect(Object.keys(JSON.parse(formatAuditLine({ ...ENTRY, paths: [] }, NOW)))).not.toContain('paths');
+    });
+  });
+
   it('given a dropped frame with no grant, should still record a line with nulls rather than skipping it', () => {
     const line = formatAuditLine({ grantId: null, principal: null, op: null, verdict: 'dropped:malformed', argsHash: null, exitCode: null }, NOW);
     expect(JSON.parse(line)).toMatchObject({ grantId: null, principal: null, op: null, verdict: 'dropped:malformed', argsHash: null, exitCode: null });

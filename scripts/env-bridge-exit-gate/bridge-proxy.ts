@@ -61,8 +61,8 @@
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from 'node:http';
 import { appendFileSync } from 'node:fs';
 import { decodeFrame, encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
-import { acceptUpgrade, openClient, type MinSocket } from './ws-min';
-import { expect, optional, required, summarize } from './report';
+import { acceptUpgrade, openClient, type MinSocket } from './ws-min.ts';
+import { expect, optional, required, summarize } from './report.ts';
 
 const upstream = new URL(required('PAGESPACE_GATE_UPSTREAM'));
 const port = Number(optional('PAGESPACE_GATE_PROXY_PORT') ?? '8788');
@@ -128,11 +128,29 @@ async function main(): Promise<void> {
       return;
     }
     const daemonSocket = acceptUpgrade(socket, key, head);
+    // BUFFER FROM THE FIRST INSTANT. The daemon sends `hello` the moment its
+    // socket opens, and that is BEFORE `openClient` has finished dialling the
+    // app — so a `message` listener attached in `wire()` misses it, the app
+    // never sees a hello, and the socket dies 10 s later with
+    // `1008 Handshake timeout`. This is the same race the app itself was
+    // fixed for on 2026-09-08 (`6bd4560ad`); the proxy needs the same buffer,
+    // or every run through it stalls before the first grant. Frames queued
+    // here are drained into the real relay in `wire()`, in arrival order.
+    const beforeWire: string[] = [];
+    const queue = (text: string): void => {
+      beforeWire.push(text);
+    };
+    daemonSocket.on('message', queue);
     const target = new URL(req.url, upstream);
     target.protocol = upstream.protocol === 'https:' ? 'wss:' : 'ws:';
 
     void openClient(target.toString(), { Authorization: req.headers.authorization ?? '' })
-      .then((appSocket) => wire(daemonSocket, appSocket))
+      .then((appSocket) => {
+        daemonSocket.removeListener('message', queue);
+        wire(daemonSocket, appSocket);
+        for (const text of beforeWire) daemonSocket.emit('message', text);
+        beforeWire.length = 0;
+      })
       .catch((error: unknown) => {
         log({ kind: 'upstream_upgrade_failed', error: error instanceof Error ? error.message : String(error) });
         daemonSocket.close(1011, 'upstream upgrade failed');

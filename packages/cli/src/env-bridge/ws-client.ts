@@ -146,6 +146,15 @@ export function createBridgeConnection(deps: BridgeConnectionDeps): BridgeConnec
           const result = await deps.dispatcher.handle(effect.frame);
           if (result.kind === 'reply') send(target, result.frame);
           else if (result.kind === 'revoke_verified') await revoke(target);
+          else if (result.kind === 'approval_revoked') {
+            // Signed ack back to the server; the enrollment stands and the socket stays open.
+            send(target, result.frame);
+            deps.log(`approval ${result.approvalId} revoked by the server (${result.removed} row${result.removed === 1 ? '' : 's'} removed); acknowledged, still connected`);
+          } else if (result.kind === 'paused') {
+            // STOP (GA wave 3): processes are already dead and challenges dropped; the signed ack goes back and the socket stays open.
+            send(target, result.frame);
+            deps.log(`stopped by the owner: killed ${result.killed} running process group${result.killed === 1 ? '' : 's'}, dropped ${result.dropped} pending approval${result.dropped === 1 ? '' : 's'}; still connected, grants resume when the owner resumes`);
+          }
           break;
         }
         case 'reject':

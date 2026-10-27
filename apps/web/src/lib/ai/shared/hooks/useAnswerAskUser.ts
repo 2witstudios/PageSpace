@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
-import { ASK_USER_TOOL_NAME, type AskUserOutput } from '@/lib/ai/tools/ask-user-tools';
+import { ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
+import type { PausingToolName } from '@/lib/ai/tools/pausing-tools';
 import { selectAnswerableAskUserToolCallIds } from '@/lib/ai/streams/selectAnswerableAskUserToolCallIds';
 import type { RenderedMessage } from '@/lib/ai/streams/selectRenderedMessages';
 import { useAskUserAnsweringStore } from '@/stores/useAskUserAnsweringStore';
@@ -47,9 +48,10 @@ export interface UseAnswerAskUserOptions {
  */
 
 export interface UseAnswerAskUserResult {
-  /** toolCallIds of ask_user parts currently answerable on THIS surface. */
+  /** toolCallIds of pausing-tool parts (ask_user, request_env_approval) currently answerable on THIS surface. */
   answerableToolCallIds: ReadonlySet<string>;
-  submitAnswers: (toolCallId: string, output: AskUserOutput) => void;
+  /** Submit a client result for a pausing tool; `tool` defaults to ask_user (the original caller). */
+  submitAnswers: (toolCallId: string, output: unknown, tool?: PausingToolName) => void;
 }
 
 /**
@@ -90,7 +92,7 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
   );
 
   const submitAnswers = useCallback(
-    (toolCallId: string, output: AskUserOutput) => {
+    (toolCallId: string, output: unknown, tool: PausingToolName = ASK_USER_TOOL_NAME) => {
       // Guard: still answerable on THIS render. Cheap and correct for the ordinary
       // single-surface case; claimAnswering below is what actually arbitrates a race.
       if (!answerableToolCallIds.has(toolCallId)) return;
@@ -121,7 +123,7 @@ export function useAnswerAskUser(options: UseAnswerAskUserOptions): UseAnswerAsk
           // to copy the snapshot in before every re-invocation.
           const body = await buildBody();
           const { dispatched } = await addToolResult({
-            tool: ASK_USER_TOOL_NAME,
+            tool,
             toolCallId,
             output,
             conversationId: conversationId!,

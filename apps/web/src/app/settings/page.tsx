@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound, Laptop } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { MarketingLink } from "@/components/ui/MarketingLink";
 import { filterSettingsItems } from "./settings-visibility";
@@ -162,6 +162,13 @@ export default function SettingsPage() {
           href: "/settings/local-mcp",
           available: true,
           desktopOnly: true,
+        },
+        {
+          title: "Local environments",
+          description: "Your own computers as environments: what they run now, and what runs without asking",
+          icon: Laptop,
+          href: "/settings/local-envs",
+          available: true,
         },
       ]),
     },

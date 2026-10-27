@@ -120,10 +120,31 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(unique, 'enrollmentId must be unique').toBeDefined();
   });
 
-  it('stores only the machine PUBLIC key + fingerprint and which server key was pinned — never private material or a reusable secret', () => {
+  it('stores only PUBLIC key material — never private material or a reusable secret', () => {
+    /**
+     * `ownerCredentials` (hardening B) is the ONE allowed name matching these
+     * words, and it is allowed EXPLICITLY rather than by loosening the guard:
+     * it holds the owner's passkey public keys, pinned at enrolment so the
+     * machine can verify the owner's click itself. A public key verifies
+     * signatures and cannot make them, so a leaked row is still worth nothing
+     * — which is the property this test actually defends. The row below pins
+     * that it stays that shape.
+     */
+    const ALLOWED = new Set(['ownerCredentials']);
     for (const forbidden of ['machinePrivateKey', 'credential', 'secret', 'token']) {
-      expect(Object.keys(localColumns).some((k) => k.toLowerCase().includes(forbidden.toLowerCase())), `no column resembling ${forbidden}`).toBe(false);
+      const matches = Object.keys(localColumns).filter((k) => k.toLowerCase().includes(forbidden.toLowerCase()) && !ALLOWED.has(k));
+      expect(matches, `no column resembling ${forbidden}`).toEqual([]);
     }
+  });
+
+  it('the one allowed credential-shaped column carries PUBLIC keys only — a field that could hold private material would have to be added here first', () => {
+    const source = readFileSync(path.join(import.meta.dirname, '..', 'drive-env-local.ts'), 'utf8');
+    const shape = source.slice(source.indexOf('export interface DriveEnvLocalOwnerCredentials'));
+    const body = shape.slice(0, shape.indexOf('}\n'));
+    // Exactly these fields, and nothing that reads like a secret.
+    expect(body).toMatch(/credentials: \{ credentialId: string; publicKeyCose: string \}\[\];/);
+    expect(body).not.toMatch(/privateKey|secret|token|signature|seed/i);
+    expect(localColumns.ownerCredentials.dataType).toBe('json');
   });
 
   it('exists from the moment the env is created — so the key columns are NULL until enrolled, and a CHECK makes an ENROLLED row carry its key', () => {
@@ -151,10 +172,10 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(localColumns.challengeUsedAt.notNull).toBe(false);
   });
 
-  it('defaults bindPolicy to owner (RCE on personal hardware warrants the strictest default) and exports the closed set', () => {
+  it('defaults bindPolicy to owner and exports a closed set of exactly ONE value — a machine is driven by its owner only ([D-6], invariant 13), structurally', () => {
     expect(localColumns.bindPolicy.notNull).toBe(true);
     expect(localColumns.bindPolicy.hasDefault).toBe(true);
-    expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner', 'admins', 'members']);
+    expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner']);
   });
 
   it('carries a CHECK that bindPolicy is one of the closed set, built FROM the exported set so the two cannot drift apart', () => {

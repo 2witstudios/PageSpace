@@ -14,13 +14,16 @@
  *  - the policy file is loaded once and its status printed — missing or
  *    untrusted ⇒ the daemon still starts, advertises, and denies everything
  *    (`no_policy`), never crashes (invariant 5);
- *  - `ask` mode needs a terminal to ask on: headless + `ask` refuses to
- *    start rather than silently deny or silently allow.
+ *  - `ask` mode asks in the terminal when there is one, and otherwise (or
+ *    with PAGESPACE_ENV_ASK=chat) freezes each request under a challenge for
+ *    the owner's click in the PageSpace chat (GA wave 2, Tier B) — never a
+ *    silent deny, never a silent allow.
  *
  * AUTH-EXEMPT (`run.ts`): a machine has no login; its key is its credential.
  * Long-running (`routes.ts`): the handler resolves once the first connect is
  * under way and the process lives on the socket; exits go through `exit`.
  */
+import { randomUUID } from 'node:crypto';
 import * as clack from '@clack/prompts';
 import { appendFile, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { readdirSync, statSync } from 'node:fs';
@@ -35,16 +38,20 @@ import { machineProfileName } from '../../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
 import { signWithMachineKey, type SignWithMachineKey } from '../../env-bridge/keypair.js';
-import { ed25519Verify, envBridgeHash } from '../../env-bridge/crypto.js';
+import { ed25519Verify, envBridgeHash, envBridgeSha256, webauthnVerify } from '../../env-bridge/crypto.js';
+import type { PinnedOwnerApproval } from '../../env-bridge/lib-core.js';
 import { createAuditLog, defaultAuditPath } from '../../env-bridge/audit-log.js';
-import { createAskPrompter } from '../../env-bridge/ask.js';
+import { createAskPrompter, describeScope, describeSubject } from '../../env-bridge/ask.js';
+import { createApprovalsStore, defaultApprovalsPath, writeApprovalsFile } from '../../env-bridge/approvals-store.js';
+import { createChallengeStore } from '../../env-bridge/challenge-store.js';
+import { resolveCommand, type CommandResolverDeps } from '../../env-bridge/command-resolver.js';
+import { APPROVAL_SCOPES, type ApprovalScope } from '../../env-bridge/lib-core.js';
 import { createDispatcher, DAEMON_CAPABILITIES } from '../../env-bridge/dispatcher.js';
 import { createNodeExecRunner, type ExecRunner } from '../../env-bridge/exec-runner.js';
-import type { CommandResolverDeps } from '../../env-bridge/command-resolver.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
-import { createPathProbe } from '../../env-bridge/path-probe.js';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
+import { createPathProbe, createStatMode } from '../../env-bridge/path-probe.js';
+import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile, describePolicyWarnings } from '../../env-bridge/policy.js';
 import { signHello } from '../../env-bridge/result-signer.js';
 import { mintBridgeToken } from '../../env-bridge/token.js';
 import { assertSecureHost, bridgeSocketUrl } from '../../env-bridge/secure-host.js';
@@ -85,15 +92,51 @@ export interface EnvConnectHandlerDeps {
   readonly appendAuditLine: (path: string, line: string) => Promise<void>;
   readonly pidFile: PidFileStore;
   readonly probe: PathProbe;
+  /** The mode an existing file already has — the sensitive-write classifier's "will this still be executable?" (Codex P1 on hardening A). */
+  readonly statMode: (path: string) => number | null;
   readonly createExecRunner: (resolver: CommandResolverDeps) => ExecRunner;
   readonly createFsRunner: () => FsRunner;
   readonly createSocket: SocketFactory;
   readonly confirm: (message: string) => Promise<boolean>;
+  /** How long a terminal approval is remembered (GA wave 2); omitted ⇒ the default scope. */
+  readonly chooseScope?: (subjects: readonly string[]) => Promise<ApprovalScope>;
+  /** The atomic 0600 writer for `~/.pagespace/env-approvals.json`. */
+  readonly writeApprovals: (path: string, content: string) => Promise<void>;
+  /** Id for an approval the terminal prompt writes. */
+  readonly approvalId: () => string;
+  /** Id for a pending chat approval (a challenge). */
+  readonly challengeId: () => string;
+  /** This process's hello epoch; defaults to a random UUID minted once per process. Injectable for tests. */
+  readonly daemonEpoch?: string;
   /** Register a handler for SIGINT / SIGTERM. */
   readonly onSignal: (handler: (signal: string) => void) => void;
   readonly exit: (code: number) => void;
   /** Test hook: observe the live connection and runner. */
   readonly onStarted?: (controls: { connection: BridgeConnection; execRunner: ExecRunner }) => void;
+}
+
+/** `PAGESPACE_ENV_ASK=chat` sends every ask to the PageSpace chat even when a terminal is attached; without a terminal the chat is the only place to ask. */
+export const ASK_MODE_ENV_VAR = 'PAGESPACE_ENV_ASK';
+
+function askInChat(ctx: Parameters<CommandHandler>[0]): boolean {
+  return !ctx.isTTY || ctx.env[ASK_MODE_ENV_VAR]?.trim().toLowerCase() === 'chat';
+}
+
+/**
+ * What this daemon will accept as proof of the owner's click, said plainly at
+ * start (hardening B, leaf B5). Three honest states, and the one that matters
+ * — nothing pinned — says both what will happen and how to fix it.
+ */
+export function describeOwnerApprovalForConnect(pinned: PinnedOwnerApproval | undefined, chatAsks: boolean): string {
+  const count = pinned?.credentials.length ?? 0;
+  if (count > 0) {
+    return `Owner credentials: ${count} passkey${count === 1 ? '' : 's'} pinned (${pinned!.origin}). An approval in the PageSpace chat must be signed by one of them, over the exact request this machine froze; PageSpace cannot produce one, and cannot add a key to this list. "pagespace env owner-keys" shows them.`;
+  }
+  const reason = pinned === undefined ? 'this machine pinned none when it enrolled' : 'you had no passkey registered when this machine enrolled';
+  const consequence = chatAsks
+    ? 'so approvals in the PageSpace chat will be REFUSED and nothing will run through them'
+    : 'so approvals in the PageSpace chat will be REFUSED; requests that are not pre-approved will prompt in this terminal instead';
+  return `Owner credentials: NONE pinned — ${reason}, ${consequence}. Register a passkey in PageSpace and RE-ENROL this machine to use chat approvals; a key can never be added to a machine afterwards, by PageSpace or by anyone else, which is what makes the check worth anything.`;
 }
 
 export function pidFilePath(homedir: string, enrollmentId: string): string {
@@ -138,15 +181,35 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write(`${describePolicyRefusal(loaded.reason ?? 'missing', policyPath)}\n`);
     } else {
       ctx.stderr.write(`Policy ${policyPath}: mode ${loaded.policy.mode}, principals ${loaded.policy.principals.join(', ') || '(none)'}, ops ${loaded.policy.ops.join(', ') || '(none)'}, roots ${loaded.policy.roots.join(', ')}\n`);
-      if (loaded.policy.mode === 'ask' && !ctx.isTTY) {
-        ctx.stderr.write('Policy mode "ask" needs an interactive terminal to ask on, and there is none (stdin is not a TTY). Use mode "allowlist" or "deny" for a headless machine, or run env connect in a terminal.\n');
-        return EXIT_RUNTIME_ERROR;
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) ctx.stderr.write(`${warning.message}\n`);
+      if (loaded.policy.mode === 'ask') {
+        ctx.stderr.write(
+          askInChat(ctx)
+            ? `Policy mode "ask": requests that are not pre-approved will wait for your click in the PageSpace chat${ctx.isTTY ? ` (${ASK_MODE_ENV_VAR}=chat)` : ' (no terminal to ask on)'}.\n`
+            : `Policy mode "ask": requests that are not pre-approved will prompt in this terminal (set ${ASK_MODE_ENV_VAR}=chat to answer in the PageSpace chat instead).\n`,
+        );
       }
     }
+
+    // ONE clear line about what this machine will accept as proof that a human
+    // clicked (hardening B, leaf B5) — printed before anything can be asked,
+    // because "chat approvals will be refused" is not a thing to discover
+    // mid-session from a denial code.
+    ctx.stderr.write(`${describeOwnerApprovalForConnect(credential.ownerApproval, askInChat(ctx))}\n`);
 
     const log = (line: string) => ctx.stderr.write(`[env connect] ${line}\n`);
     const auditPath = defaultAuditPath(ctx.env, deps.homedir);
     const audit = createAuditLog({ appendLine: (line) => deps.appendAuditLine(auditPath, line), now: deps.now, onError: log });
+    // GA wave 3, leaf 7 (generalised in hardening A6): every widening the
+    // owner's policy carries is honoured — it is their own file — and audited
+    // ONCE at connect, so the trail says what this daemon started with. The
+    // loop is over CODES: a new warning is audited by existing, not by adding
+    // another special case here.
+    if (loaded.policy !== null) {
+      for (const warning of describePolicyWarnings(loaded.policy, { homedir: deps.homedir })) {
+        await audit.record({ grantId: null, principal: null, op: 'policy', verdict: `policy_warning:${warning.code}`, argsHash: null, exitCode: null });
+      }
+    }
     const resolver: CommandResolverDeps = {
       platform: deps.platform,
       env: ctx.env,
@@ -156,7 +219,22 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     };
     const execRunner = deps.createExecRunner(resolver);
     const fsRunner = deps.createFsRunner();
-    const ask = loaded.policy?.mode === 'ask' && ctx.isTTY ? createAskPrompter({ confirm: deps.confirm, write: (chunk) => ctx.stderr.write(chunk) }) : null;
+    const ask = loaded.policy?.mode === 'ask' && ctx.isTTY ? createAskPrompter({ confirm: deps.confirm, chooseScope: deps.chooseScope, write: (chunk) => ctx.stderr.write(chunk) }) : null;
+    // Tier B: a request the terminal cannot (or should not) be asked about is
+    // frozen here and answered by the owner's click in the chat.
+    const challenges = createChallengeStore({ newId: deps.challengeId });
+
+    // Durable approvals (GA wave 2): the machine's own file, through the same
+    // one-descriptor adapter and trust rules as the policy. Re-read at every
+    // decision; written only after an owner's byte-compared approval.
+    const approvalsPath = defaultApprovalsPath(ctx.env, deps.homedir);
+    const approvals = createApprovalsStore({ path: approvalsPath, uid: deps.uid, open: deps.openPolicy, write: deps.writeApprovals, now: deps.now, log });
+    const approvalsLoaded = approvals.reload();
+    ctx.stderr.write(
+      approvalsLoaded.reason === null || approvalsLoaded.reason === 'missing'
+        ? `Approvals ${approvalsPath}: ${approvalsLoaded.approvals.length} in force.\n`
+        : `Approvals ${approvalsPath}: ignored (${approvalsLoaded.reason}) — every non-pre-approved request will ask.\n`,
+    );
 
     const dispatcher = createDispatcher({
       envId: credential.envId,
@@ -172,14 +250,24 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       nonces: createDaemonNonceStore(),
       policy: () => loaded.policy,
       probe: deps.probe,
+      statMode: deps.statMode,
       execRunner,
       fsRunner,
       audit,
       ask,
+      approvals,
+      resolveArgv0: (name) => resolveCommand(name, resolver),
+      ids: { approvalId: deps.approvalId },
+      challenges,
+      // The owner's pinned passkeys (hardening B): what lets this daemon
+      // verify the click itself instead of trusting the server that sent it.
+      ...(credential.ownerApproval !== undefined && { ownerApproval: { pinned: credential.ownerApproval, sha256: envBridgeSha256, verifyWebauthn: webauthnVerify } }),
+      preferChat: askInChat(ctx),
       log,
       limits: DEFAULT_FRAME_LIMITS,
     });
 
+    const daemonEpoch = deps.daemonEpoch ?? randomUUID();
     const pidPath = pidFilePath(deps.homedir, enrollmentId);
     let exiting = false;
     // A pid write that a heartbeat tick already started; shutdown awaits it
@@ -201,7 +289,9 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     const connection = createBridgeConnection({
       url: bridgeSocketUrl(host, credential.envId),
       mintToken: async () => (await mintBridgeToken({ host, credential, fetch: deps.fetch, sign: deps.sign })).token,
-      hello: () => signHello({ type: 'hello', envId: credential.envId, capabilities: DAEMON_CAPABILITIES, policyDigest: loaded.digest }, { privateKey: credential.privateKey, sign: deps.sign }),
+      // `daemonEpoch` (GA wave 3, Codex P2 #7): minted ONCE per process — a reconnect keeps it, a restart changes it — and
+      // attested inside the signed hello, so the server may expire this process's session approvals when it changes.
+      hello: () => signHello({ type: 'hello', envId: credential.envId, capabilities: DAEMON_CAPABILITIES, policyDigest: loaded.digest, daemonEpoch }, { privateKey: credential.privateKey, sign: deps.sign }),
       dispatcher,
       audit,
       createSocket: deps.createSocket,
@@ -290,6 +380,17 @@ async function clackConfirm(message: string): Promise<boolean> {
   return answer === true;
 }
 
+/** The scope picker after an approval; Ctrl-C here is a decline (the prompter treats a throw as one). */
+async function clackChooseScope(subjects: readonly string[]): Promise<ApprovalScope> {
+  const answer = await clack.select<ApprovalScope>({
+    message: `Remember this approval of ${subjects.map(describeSubject).join(', ')} for how long?`,
+    initialValue: '30d',
+    options: APPROVAL_SCOPES.map((scope) => ({ value: scope, label: describeScope(scope) })),
+  });
+  if (clack.isCancel(answer)) throw new Error('cancelled');
+  return answer;
+}
+
 export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   createCredentialStore,
   fetch: (...args) => globalThis.fetch(...args),
@@ -304,10 +405,15 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   appendAuditLine,
   pidFile: nodePidFile,
   probe: createPathProbe(),
+  statMode: createStatMode(),
   createExecRunner: createNodeExecRunner,
   createFsRunner: () => createFsRunner(),
   createSocket: (url, headers) => new WebSocket(url, { headers }),
   confirm: clackConfirm,
+  chooseScope: clackChooseScope,
+  writeApprovals: writeApprovalsFile,
+  approvalId: () => `local_${crypto.randomUUID()}`,
+  challengeId: () => `ch_${crypto.randomUUID()}`,
   onSignal: (handler) => {
     process.on('SIGINT', () => handler('SIGINT'));
     process.on('SIGTERM', () => handler('SIGTERM'));

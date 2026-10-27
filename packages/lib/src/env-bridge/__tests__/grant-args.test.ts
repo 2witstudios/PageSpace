@@ -124,9 +124,23 @@ describe('executionRequestForFrame — decideExecution consumes the SAME project
     expect(executionRequestForFrame(execMin)).toStrictEqual({ op: 'exec', cmd: 'ls', args: [], env: {} });
   });
 
-  it('grant_fs_read ⇒ paths; grant_fs_write ⇒ the files\' paths (each confined by decideExecution)', () => {
+  it('grant_fs_read ⇒ paths; grant_fs_write ⇒ the files\' paths AND their modes, index-aligned (hardening A1)', () => {
     expect(executionRequestForFrame(fsRead)).toStrictEqual({ op: 'fs_read', paths: ['/home/u/proj/a', '/home/u/proj/b'] });
-    expect(executionRequestForFrame(fsWrite)).toStrictEqual({ op: 'fs_write', paths: ['/home/u/proj/a', '/home/u/proj/b'] });
+    // The mode is what makes a write executable, so the decision layer must see
+    // it: `writeModes` is index-aligned with `paths`, and a file with no mode
+    // holds its place as `null` rather than being omitted.
+    expect(executionRequestForFrame(fsWrite)).toStrictEqual({ op: 'fs_write', paths: ['/home/u/proj/a', '/home/u/proj/b'], writeModes: [0o644, null] });
+  });
+
+  it('A1: writeModes is set for fs_write ONLY — an fs_read or an exec never carries one', () => {
+    for (const frame of [execFull, execMin, fsRead, ptyFull, ptyMin]) {
+      expect(executionRequestForFrame(frame)).not.toHaveProperty('writeModes');
+    }
+  });
+
+  it('A1: writeModes stays aligned when EVERY file omits its mode (all null, never an empty array)', () => {
+    const noModes: GrantFrame = { type: 'grant_fs_write', grant: GRANT, sig: SIG, files: [{ path: '/home/u/proj/a', contentB64: '' }, { path: '/home/u/proj/b', contentB64: '' }] };
+    expect(executionRequestForFrame(noModes)).toStrictEqual({ op: 'fs_write', paths: ['/home/u/proj/a', '/home/u/proj/b'], writeModes: [null, null] });
   });
 
   it('grant_pty_open ⇒ cmd from command, args, cwd', () => {

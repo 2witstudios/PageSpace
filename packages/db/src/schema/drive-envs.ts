@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, bigint, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, bigint, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -124,6 +124,35 @@ export const driveEnvs = pgTable('drive_envs', {
    * this is the reserved substrate axis and not the deleted use-case kind.
    */
   substrate: text('substrate').notNull().default('sprite'),
+
+  /**
+   * May the GLOBAL ASSISTANT reach this environment? Default FALSE, and the
+   * absence of a value is never a grant.
+   *
+   * **Why the flag lives HERE, on `drive_envs`, and not on the local sibling.**
+   * The question "may the one agent whose context spans every drive act in
+   * this environment?" is asked of an ENVIRONMENT, not of a substrate. A
+   * cloud Sprite env and a user's own machine must answer it the same way,
+   * through one column and one read, or the answer drifts the moment a
+   * second substrate arrives. `drive_env_local` holds only facts that ONLY a
+   * bridged machine has (a pinned key, a heartbeat, a bind policy); visibility
+   * is not one of them.
+   *
+   * **What it is, and what it is NOT.** It decides only what the global
+   * assistant can SEE and therefore address. It grants nothing: for a local
+   * env, who may actually drive the machine is still `bindPolicy = 'owner'`
+   * decided by `drive_env_local.ownerId` ([D-6], invariant 13), and turning
+   * visibility on does not widen that by one user. Turning it OFF is checked
+   * on every call, not only at bind, so revoking it refuses the next call
+   * rather than honouring an earlier reach.
+   *
+   * **Who may change it** is the environment's OWNER — `drive_env_local.ownerId`
+   * for a local env — never a drive role. A Sprite env has no such owner, so
+   * no surface can set this column true for one today; it is therefore
+   * fail-closed for that substrate by construction rather than by omission,
+   * and the day cloud envs grow an owner they answer through this same column.
+   */
+  visibleToGlobalAssistant: boolean('visibleToGlobalAssistant').notNull().default(false),
 
   /**
    * AUDIT ONLY: who created the env. `set null` because the env is

@@ -53,6 +53,44 @@ export interface GrantPrincipal {
   readonly conversationId: string;
 }
 
+/**
+ * The owner's click in the chat, carried on the grant that re-issues the
+ * request it answers (GA wave 2, Tier B). Signed with the grant under the
+ * pinned server key, so the daemon verifies it with the key it already
+ * holds and it cannot be moved onto another grant. The daemon honours it
+ * ONLY against a request it froze itself under `challengeId` (leaf 7).
+ */
+export interface ApprovalIntent {
+  readonly challengeId: string;
+  /** How long the machine should remember the approval — the owner's choice on the card. */
+  readonly scope: 'once' | 'session' | '30d' | 'until_revoked';
+  /** ms since epoch; the click is refused after this (the challenge's own TTL is the grant that froze it). */
+  readonly expiresAt: number;
+  /**
+   * THE PROOF A HUMAN CLICKED (hardening B, leaf B3). A WebAuthn assertion
+   * from one of the passkeys the machine pinned at enrolment, over a
+   * challenge derived from the exact request the machine froze
+   * (`owner-approval.ts`). The server RELAYS it — it does not verify and
+   * discard it, as the step-up flow does — because the party that has to be
+   * convinced is the machine, and the machine will not be convinced by the
+   * server.
+   *
+   * Optional on the WIRE so that its absence is answered with the precise
+   * `approval_unproven` rather than a blanket `malformed` on the whole grant.
+   * It is NOT optional in effect: the daemon refuses a click without one
+   * (leaf B5).
+   */
+  readonly assertion?: ApprovalAssertion;
+}
+
+/**
+ * The four fields of a WebAuthn assertion, all base64url exactly as
+ * `@simplewebauthn/browser` returns them. Declared HERE rather than in
+ * `owner-approval.ts` because it is part of the grant's wire format and the
+ * canonical bytes `encodeGrant` produces; the verifier imports it back.
+ */
+export type ApprovalAssertion = z.infer<typeof approvalAssertionSchema>;
+
 export interface Grant {
   readonly grantId: string;
   /** The env this grant is for. A grant for another machine never runs here. */
@@ -66,6 +104,8 @@ export interface Grant {
   /** Expiry, ms since epoch. `exp - iat` must not exceed GRANT_MAX_TTL_MS. */
   readonly exp: number;
   readonly nonce: string;
+  /** Present only on a grant re-issued by the owner's click (GA wave 2). */
+  readonly approvalIntent?: ApprovalIntent;
 }
 
 export type GrantDenyReason =
@@ -134,6 +174,31 @@ const principalSchema = z
 
 // `.strict()` everywhere: an extra field is not "ignored", it is a malformed
 // grant. A privileged-looking `isAdmin: true` riding along must fail closed.
+/**
+ * Bounds are generous ceilings on real WebAuthn values, present so hostile
+ * bytes cost nothing to refuse; `.strict()` for the same reason every schema
+ * here is.
+ */
+export const approvalAssertionSchema = z
+  .object({
+    credentialId: z.string().min(1).max(1024),
+    /** base64url; at least 37 bytes decoded (32-byte rpIdHash + flags + counter). */
+    authenticatorData: z.string().min(1).max(4096),
+    clientDataJSON: z.string().min(1).max(8192),
+    /** base64url ASN.1 DER ECDSA signature. */
+    signature: z.string().min(1).max(1024),
+  })
+  .strict();
+
+const approvalIntentSchema = z
+  .object({
+    challengeId: z.string().min(1),
+    scope: z.enum(['once', 'session', '30d', 'until_revoked']),
+    expiresAt: z.number().int().nonnegative(),
+    assertion: approvalAssertionSchema.optional(),
+  })
+  .strict();
+
 const grantSchema = z
   .object({
     grantId: z.string().min(1),
@@ -144,6 +209,7 @@ const grantSchema = z
     iat: z.number().int().nonnegative(),
     exp: z.number().int().nonnegative(),
     nonce: z.string().min(1),
+    approvalIntent: approvalIntentSchema.optional(),
   })
   .strict();
 
@@ -166,6 +232,28 @@ export function encodeGrant(grant: Grant): Uint8Array {
     iat: grant.iat,
     exp: grant.exp,
     nonce: grant.nonce,
+    // Appended ONLY when present, so every grant without a click keeps the
+    // exact bytes it always had; a click cannot be added or altered in flight.
+    ...(grant.approvalIntent !== undefined && {
+      approvalIntent: {
+        challengeId: grant.approvalIntent.challengeId,
+        scope: grant.approvalIntent.scope,
+        expiresAt: grant.approvalIntent.expiresAt,
+        // Appended only when present, for the same reason the intent itself
+        // is: a grant that carried no assertion keeps the exact bytes it had.
+        // Under the server's signature like every other field, so the
+        // assertion cannot be swapped or stripped in flight — though the
+        // machine's own check is what actually decides (leaf B4).
+        ...(grant.approvalIntent.assertion !== undefined && {
+          assertion: {
+            credentialId: grant.approvalIntent.assertion.credentialId,
+            authenticatorData: grant.approvalIntent.assertion.authenticatorData,
+            clientDataJSON: grant.approvalIntent.assertion.clientDataJSON,
+            signature: grant.approvalIntent.assertion.signature,
+          },
+        }),
+      },
+    }),
   };
   return new TextEncoder().encode(JSON.stringify(canonical));
 }
@@ -204,6 +292,26 @@ const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 export function decodeBase64(value: string): Uint8Array | null {
   if (value.length === 0 || value.length % 4 !== 0 || !BASE64_RE.test(value)) return null;
   return new Uint8Array(Buffer.from(value, 'base64'));
+}
+
+const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Strict base64url → bytes; `null` for anything that is not well-formed
+ * base64url. WebAuthn speaks base64url everywhere (credential ids,
+ * `authenticatorData`, `clientDataJSON`, signatures, and the challenge inside
+ * client data), so the owner-approval gate needs this alongside the standard
+ * base64 the wire uses for keys and signatures. Unpadded, as WebAuthn emits:
+ * a length of `4n + 1` is impossible for real base64url and is refused.
+ */
+export function decodeBase64Url(value: string): Uint8Array | null {
+  if (value.length === 0 || value.length % 4 === 1 || !BASE64URL_RE.test(value)) return null;
+  return new Uint8Array(Buffer.from(value, 'base64url'));
+}
+
+/** Bytes → unpadded base64url, the encoding every WebAuthn field and derived challenge uses. */
+export function encodeBase64Url(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64url');
 }
 
 /**

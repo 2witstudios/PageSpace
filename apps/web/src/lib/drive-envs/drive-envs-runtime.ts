@@ -15,9 +15,12 @@
  */
 
 import { db } from '@pagespace/db/db';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
+import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
@@ -35,26 +38,39 @@ import {
   type DriveEnvRecord,
   type DriveEnvStore,
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
+import { createDbGrantAuditStore, toDriveEnvActivityDTO, GRANT_AUDIT_LIST_LIMIT, type GrantAuditStore } from '@pagespace/lib/services/drive-envs/grant-audit-store';
+import { createDbApprovalMirrorStore, toDriveEnvApprovalDTO, APPROVAL_MIRROR_LIST_LIMIT, type ApprovalMirrorStore, type DriveEnvApprovalRecord, type RememberApprovalInput } from '@pagespace/lib/services/drive-envs/approval-mirror-store';
+import type { DriveEnvApprovalDTO } from '@pagespace/lib/drive-envs/env-contract';
+import type { DriveEnvActivityDTO } from '@pagespace/lib/drive-envs/env-contract';
 import {
   createDriveEnv,
   listDriveEnvs,
+  localFactsFor,
   renameDriveEnv,
+  setLocalEnvServerPolicy,
+  setLocalEnvPaused,
+  setGlobalAssistantVisibility,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
   type CreateDriveEnvResult,
   type RenameDriveEnvResult,
+  type SetLocalEnvServerPolicyResult,
+  type SetLocalEnvPausedResult,
+  type SetGlobalAssistantVisibilityResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
-import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvServerPolicy } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
+import type { PauseNotifyOutcome } from '@/lib/env-bridge/pause';
 import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { listPasskeyPublicKeys, PASSKEY_CONFIG } from '@pagespace/lib/auth/passkey-service';
 import { MACHINE_CREDENTIAL_AUTHENTICATION } from '@pagespace/lib/auth/authentication-evidence';
 import {
   enrollLocalDriveEnv,
@@ -96,6 +112,156 @@ async function liveConnectionReader(): Promise<LiveConnectionReader> {
 export function getDriveEnvStore(): Promise<DriveEnvStore> {
   envStorePromise ??= createDbDriveEnvStore();
   return envStorePromise;
+}
+
+let grantAuditStorePromise: Promise<GrantAuditStore> | null = null;
+
+/** ONE env's activity, newest first — the panel's read. Access is the ROUTE's (owner-only); this only projects. */
+export async function listEnvActivity(input: { envId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
+  const rows = await (await getGrantAuditStore()).listForEnv({ envId: input.envId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });
+  return rows.map(toDriveEnvActivityDTO);
+}
+
+let approvalMirrorPromise: Promise<ApprovalMirrorStore> | null = null;
+
+/** The approval MIRROR (GA wave 3, leaf 5): visibility and revocation only; the seam route tests mock. */
+export function getApprovalMirrorStore(): Promise<ApprovalMirrorStore> {
+  approvalMirrorPromise ??= createDbApprovalMirrorStore();
+  return approvalMirrorPromise;
+}
+
+/** The click ran and the machine remembered: mirror it. Never throws — the click's answer does not depend on the mirror. */
+export async function rememberEnvApproval(input: RememberApprovalInput): Promise<DriveEnvApprovalRecord | null> {
+  try {
+    return await (await getApprovalMirrorStore()).remember(input);
+  } catch (error) {
+    loggers.api.error('Approval mirror write failed', error instanceof Error ? error : new Error(String(error)));
+    return null;
+  }
+}
+
+export async function markEnvApprovalRevoked(input: { id: string; envId: string; by: string }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markRevoked({ id: input.id, envId: input.envId, by: input.by, now: new Date() });
+}
+
+export async function markEnvApprovalAcknowledged(input: { id: string; envId: string; removed: number }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markAcknowledged({ id: input.id, envId: input.envId, removed: input.removed, now: new Date() });
+}
+
+/** A hello from daemon process `epoch` (Codex P2 #7): expire this env's session-scoped mirror rows held by any other process. */
+export async function expireSessionEnvApprovalsForOtherEpoch(input: { envId: string; epoch: string }): Promise<number> {
+  return (await getApprovalMirrorStore()).expireSessionRowsForOtherEpoch({ envId: input.envId, epoch: input.epoch, now: new Date() });
+}
+
+/** Revokes owed to the machine — what the socket route replays on the daemon's hello. */
+export async function listUnacknowledgedEnvApprovalRevokes(envId: string): Promise<DriveEnvApprovalRecord[]> {
+  return (await getApprovalMirrorStore()).listUnacknowledgedRevokes(envId);
+}
+
+/** ONE env's approvals in force — the drive settings read (owner-only at the route). */
+export async function listEnvApprovals(envId: string): Promise<DriveEnvApprovalDTO[]> {
+  const rows = await (await getApprovalMirrorStore()).listActiveForEnv({ envId, now: new Date(), limit: APPROVAL_MIRROR_LIST_LIMIT });
+  return rows.map((row) => toDriveEnvApprovalDTO(row));
+}
+
+/** Approvals in force across every machine the user OWNS — the account page's read, selected by owner in the store. */
+export async function listOwnerApprovals(ownerId: string): Promise<DriveEnvApprovalDTO[]> {
+  const rows = await (await getApprovalMirrorStore()).listActiveForOwner({ ownerId, now: new Date(), limit: APPROVAL_MIRROR_LIST_LIMIT });
+  return rows.map((row) => toDriveEnvApprovalDTO(row, { driveId: row.driveId, envName: row.envName, envLabel: row.envLabel }));
+}
+
+/** Every machine the user OWNS across drives, as DTOs with their drive — the account page's read. */
+export async function listOwnerMachines(ownerId: string): Promise<Array<{ env: DriveEnvDTO; driveId: string }>> {
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
+  const rows = await store.listLocalByOwner(ownerId);
+  const now = Date.now();
+  return rows.map(({ env, local }) => ({ env: toDriveEnvDTO(env, localFactsFor(env, local, liveConnection(env.id), now)), driveId: env.driveId }));
+}
+
+/**
+ * Every environment the GLOBAL ASSISTANT may reach for this user — the backing
+ * read for `list_environments` and for `GET /api/env-bridge/environments`
+ * (leaf B).
+ *
+ * BOTH conditions are the store's, in SQL: the caller owns the machine AND the
+ * environment is visible to the global assistant. Ownership is the real access
+ * filter and is deliberately NOT drive membership — a drive relationship is not
+ * an entitlement to every row inside it (PR #2609) — which is also why a
+ * machine in a drive the owner has since left is still listed: it is their
+ * computer.
+ */
+export async function listGlobalAssistantEnvironments(
+  /** Who is asking; code execution in each cloud env's drive is asked of their credential. */
+  actor: AccessActor,
+  /**
+   * The acting ORIGIN, threaded so discovery asks `canRunCode` the identical
+   * question resolution will. Without it an agent-origin call saw a laxer list
+   * than the next call would honour — not a hole (the stricter side is the one
+   * that authorizes) but exactly the drift this whole arrangement exists to
+   * prevent. Defaults to a user-origin view for the registration-time caller,
+   * which has no request to take an origin from.
+   */
+  origin: { requestOrigin?: 'user' | 'agent'; agentPageId?: string } = {},
+): Promise<Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }>> {
+  const { requestOrigin = 'user', agentPageId } = origin;
+  const userId = actor.userId;
+  const store = await getDriveEnvStore();
+
+  // **`LOCAL_ENVS_ENABLED` gates LOCAL MACHINES ONLY**, and this is the ONE
+  // place that decides it, so discovery, resolution and the eligibility strip
+  // cannot answer differently.
+  //
+  // It is the cloud opt-in for exposing PERSONAL HARDWARE to a shared drive
+  // (invariant 11). A drive's own cloud sandbox is not personal hardware and
+  // has nothing to do with that opt-in: gating it here made the founder's
+  // ruling fail for exactly the case it exists for — a person whose own tier
+  // cannot run a personal sandbox, but who can run code in a paid team drive,
+  // got nothing, because the flag is off on every deployment.
+  const localEnvsEnabled = isLocalEnvsEnabled();
+
+  const [localRows, spriteCandidates] = await Promise.all([
+    // LOCAL machines: the owner's own, only the ones they switched on, and only
+    // while the deployment allows personal hardware at all. Not read otherwise.
+    localEnvsEnabled ? store.listVisibleToGlobalAssistantByOwner(userId) : Promise.resolve([]),
+    // CLOUD envs: CANDIDATES from the drives this person is actually in. A
+    // drive relationship is not an entitlement (PR #2609), so every one of
+    // these is still put to `canRunCode` below. Never gated on the flag.
+    store.listSpriteEnvsInUserDrives(userId),
+  ]);
+
+  // The AUTHORITY for a cloud env, asked once per DISTINCT drive — several envs
+  // in one drive are one question. `canRunCode`'s answer is used verbatim:
+  // same kill switch, same payer tier, same drive access and `canEdit` the
+  // person meets to run code there from any other surface. Founder ruling: if
+  // the user can, their global assistant can — nothing more, nothing less.
+  const decidedByDrive = new Map<string, boolean>();
+  const cloud: Array<{ id: string; label: string; substrate: 'sprite' | 'local'; driveId: string }> = [];
+  for (const env of spriteCandidates) {
+    let allowed = decidedByDrive.get(env.driveId);
+    if (allowed === undefined) {
+      allowed = (await canRunCode({ actor, driveId: env.driveId, requestOrigin, agentPageId })).ok;
+      decidedByDrive.set(env.driveId, allowed);
+    }
+    if (allowed) cloud.push({ id: env.id, label: env.name, substrate: env.substrate, driveId: env.driveId });
+  }
+
+  return [
+    ...cloud,
+    ...localRows.map(({ env, local }) => ({ id: env.id, label: local.label, substrate: env.substrate, driveId: env.driveId })),
+  ];
+}
+
+
+/** Activity across every machine a user OWNS, newest first — the account page's read. */
+export async function listOwnerActivity(input: { ownerId: string; limit?: number }): Promise<DriveEnvActivityDTO[]> {
+  const rows = await (await getGrantAuditStore()).listForOwner({ ownerId: input.ownerId, limit: input.limit ?? GRANT_AUDIT_LIST_LIMIT });
+  return rows.map(toDriveEnvActivityDTO);
+}
+
+/** The server-side grant audit (GA wave 3) — one store, built on first use, the seam route tests mock. */
+export function getGrantAuditStore(): Promise<GrantAuditStore> {
+  grantAuditStorePromise ??= createDbGrantAuditStore();
+  return grantAuditStorePromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +353,15 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     store,
     now: () => new Date(),
     identity: envBridgeIdentity(),
+    // The owner's passkeys, pinned by the machine at enrolment (hardening B,
+    // leaf B1). Public keys only, straight from the passkey store — this is
+    // the first time `passkeys.publicKey` leaves the server, and it is what
+    // ends the machine having to take the server's word that a human clicked.
+    ownerCredentials: {
+      rpId: PASSKEY_CONFIG.rpId,
+      origin: PASSKEY_CONFIG.origin,
+      list: (ownerId) => listPasskeyPublicKeys(ownerId),
+    },
     // The socket token is the machine OWNER's, bound to this env (resourceId)
     // and drive; the env-bridge socket route checks scope, resource and the
     // enrollment before accepting it. Type 'mcp' so no generic web route
@@ -218,8 +393,8 @@ export async function createEnvInDrive(input: {
   driveId: string;
   name: string;
   createdBy: string;
-  /** Present for a LOCAL env: the machine label and its owner (the creating user). */
-  local?: { label: string; ownerId: string };
+  /** Present for a LOCAL env: the machine label, its owner (the creating user) and the explicit server policy. */
+  local?: { label: string; ownerId: string; serverPolicy: DriveEnvServerPolicy };
 }): Promise<CreateDriveEnvResult> {
   const store = await getDriveEnvStore();
   return createDriveEnv({
@@ -272,9 +447,59 @@ export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
   return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection } });
 }
 
+/**
+ * ONE env as a DTO, with a local env's facts joined the way the listing joins
+ * them (sibling row + this replica's socket registry). `toDriveEnvDTO` throws
+ * for a local row without its facts, deliberately, so every single-row answer
+ * goes through here rather than calling it bare.
+ */
+export async function readEnvDTO(env: DriveEnvRecord): Promise<DriveEnvDTO> {
+  if (env.substrate !== 'local') return toDriveEnvDTO(env);
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
+  const sibling = await store.findLocalByEnvId(env.id);
+  return toDriveEnvDTO(env, localFactsFor(env, sibling ?? undefined, liveConnection(env.id), Date.now()));
+}
+
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
   const store = await getDriveEnvStore();
   return renameDriveEnv({ envId: input.envId, name: input.name, deps: { store, now: () => new Date() } });
+}
+
+/** Owner-only ([D-6]): the service compares `requesterId` against the ROW's owner; no drive role is consulted. */
+export async function setEnvServerPolicy(input: { envId: string; requesterId: string; serverPolicy: DriveEnvServerPolicy }): Promise<SetLocalEnvServerPolicyResult> {
+  const store = await getDriveEnvStore();
+  return setLocalEnvServerPolicy({ envId: input.envId, requesterId: input.requesterId, serverPolicy: input.serverPolicy, deps: { store, now: () => new Date() } });
+}
+
+/**
+ * STOP / RESUME (GA wave 3): owner-only through the service's CAS; on a
+ * successful Stop, the requests in flight on THIS replica fail typed `paused`
+ * at once (other replicas learn it on their next persisted heartbeat, see the
+ * socket route). Resume needs no client action — the next grant simply signs.
+ */
+export type SetEnvPausedResult = SetLocalEnvPausedResult | { ok: true; paused: true; machine: PauseNotifyOutcome };
+
+export async function setEnvPaused(input: { envId: string; requesterId: string; paused: boolean }): Promise<SetEnvPausedResult> {
+  const store = await getDriveEnvStore();
+  const result = await setLocalEnvPaused({ envId: input.envId, requesterId: input.requesterId, paused: input.paused, deps: { store, now: () => new Date() } });
+  if (!result.ok || !result.paused) return result;
+  // In flight on THIS replica: fail now. Running on the MACHINE: the signed
+  // pause goes over the socket if this replica holds it; otherwise the holder
+  // sends it on its next heartbeat and this answers `no_live_socket`.
+  const [{ getEnvBridgeClient }, { pauseLocalEnvMachine }] = await Promise.all([import('@/lib/env-bridge/bridge-client'), import('@/lib/env-bridge/pause')]);
+  getEnvBridgeClient().pauseEnv(input.envId);
+  const delivered = await pauseLocalEnvMachine({ envId: input.envId });
+  return { ok: true, paused: true, machine: delivered.ok ? delivered.machine : { kind: 'no_live_socket' } };
+}
+
+/**
+ * Turn an environment's visibility to the GLOBAL ASSISTANT on or off — the
+ * account settings toggle and the drive settings toggle both land here. Null
+ * plumbing only: the owner-only decision is the store's compare-and-set.
+ */
+export async function setEnvGlobalAssistantVisibility(input: { envId: string; requesterId: string; visible: boolean }): Promise<SetGlobalAssistantVisibilityResult> {
+  const store = await getDriveEnvStore();
+  return setGlobalAssistantVisibility({ envId: input.envId, requesterId: input.requesterId, visible: input.visible, deps: { store, now: () => new Date() } });
 }
 
 /**
@@ -287,9 +512,9 @@ export async function revokeEnv(input: { envId: string; reason: string }): Promi
   return revokeLocalEnv(input);
 }
 
-export async function deleteEnv(input: { envId: string; force: boolean }): Promise<DeleteDriveEnvResult> {
+export async function deleteEnv(input: { envId: string; force: boolean; beforeDelete?: () => Promise<void> }): Promise<DeleteDriveEnvResult> {
   const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
-  return deleteDriveEnv({ envId: input.envId, force: input.force, deps: { store, host, now: () => new Date() } });
+  return deleteDriveEnv({ envId: input.envId, force: input.force, beforeDelete: input.beforeDelete, deps: { store, host, now: () => new Date() } });
 }
 
 /**

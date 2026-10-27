@@ -45,6 +45,12 @@ export interface EnvGroup<T> {
    * orphan (the question does not apply).
    */
   enrolled: boolean | null;
+  /**
+   * A LOCAL env's OWNER (`drive_env_local.ownerId`): the row shows the live
+   * activity panel to this user and to nobody else ([D-6]). Null for a Sprite
+   * env, an orphan, or a dead local env whose owner was erased.
+   */
+  ownerId: string | null;
   sessions: T[];
 }
 
@@ -90,6 +96,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: env.substrate,
       machineLabel: env.substrate === 'local' ? env.label : null,
       enrolled: env.substrate === 'local' ? env.enrolled : null,
+      ownerId: env.substrate === 'local' ? env.ownerId : null,
       sessions: sessionsByEnv.get(env.id) ?? [],
     }))
     .sort(byEnvDisplayName);
@@ -103,6 +110,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: null,
       machineLabel: null,
       enrolled: null,
+      ownerId: null,
       sessions: sessionsByEnv.get(envId) ?? [],
     }))
     .sort(byEnvDisplayName);

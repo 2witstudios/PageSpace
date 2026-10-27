@@ -47,6 +47,7 @@ import {
 } from '../sandbox-host';
 import type { MachineResultFrame } from '../../../env-bridge/machine-signatures';
 import type { UnsignedGrantFrame } from '../../../env-bridge/grant-args';
+import { MAX_FS_WRITE_FILES } from '../../../env-bridge/frame-codec';
 import type { RunCommandArgs, SandboxRunResult, WriteFileEntry } from './types';
 
 /**
@@ -86,6 +87,28 @@ export class LocalEnvGrantDeniedError extends Error {
   ) {
     super(`Local environment ${envId} denied the request: ${reason}`);
     this.name = 'LocalEnvGrantDeniedError';
+  }
+}
+
+/**
+ * PageSpace itself refused to SIGN the grant (`decideSign` in the bridge
+ * client): the op is not in the env's `serverPolicy`, or the env is revoked,
+ * paused or the feature is off. The daemon never saw a frame. Distinct from
+ * {@link LocalEnvGrantDeniedError} (the MACHINE refused) and from a
+ * disconnected env, because each has a different owner: this one is fixed on
+ * the environment's settings page by the machine's owner, and by nobody else.
+ * Thrown by the production transport, which maps the bridge client's typed
+ * `server_denied` failure onto it so this package can name it without
+ * importing apps/web.
+ */
+export class LocalEnvServerDeniedError extends Error {
+  constructor(
+    readonly envId: string,
+    /** `decideSign`'s reason word: `flag_disabled | revoked | paused | server_denied`. */
+    readonly reason: string,
+  ) {
+    super(`PageSpace refused to sign the request for local environment ${envId}: ${reason}`);
+    this.name = 'LocalEnvServerDeniedError';
   }
 }
 
@@ -191,6 +214,11 @@ function buildHandle({ transport, envId }: { transport: BridgeTransport; envId: 
     },
 
     async writeFiles(files: WriteFileEntry[]): Promise<void> {
+      // The wire caps a write grant at `MAX_FS_WRITE_FILES` (hardening A4) and
+      // the daemon DROPS an over-cap frame rather than answering it, so refuse
+      // here where the caller can see why, instead of waiting for a reply that
+      // will never come.
+      if (files.length > MAX_FS_WRITE_FILES) throw new LocalEnvGrantDeniedError(envId, `too_many_files:${files.length}>${MAX_FS_WRITE_FILES}`);
       // Content is part of the SIGNED projection (`grant-args.ts`), so a grant
       // to write one thing cannot be replayed to write another to the path.
       const frame: UnsignedGrantFrame = {

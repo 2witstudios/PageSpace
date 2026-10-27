@@ -33,11 +33,13 @@
  *   bun scripts/env-bridge-exit-gate/identity-negatives.ts
  */
 import { execFileSync } from 'node:child_process';
-import { createPrivateKey, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
-import { expect, failed, optional, required, skip, summarize } from './report';
+import { generateKeyPairSync, sign as nodeSign } from 'node:crypto';
+import { expect, failed, optional, required, skip, summarize } from './report.ts';
 
 const host = required('PAGESPACE_GATE_HOST');
 const cliBin = required('PAGESPACE_GATE_CLI');
+/** Where `dist/bin.js` lives ON THE MACHINE, when the CLI rows run there (`PAGESPACE_GATE_CLI_EXEC`). */
+const machineCliBin = optional('PAGESPACE_GATE_MACHINE_CLI') ?? cliBin;
 const flagOff = optional('PAGESPACE_GATE_FLAG') === 'off';
 
 interface Answer {
@@ -67,10 +69,28 @@ function outcome(answer: Answer): string {
   return `${answer.code} ${typeof reason === 'string' ? reason : '(no reason)'}`;
 }
 
-/** Run the built CLI and return its combined output plus exit code; a non-zero exit is DATA here, not a throw. */
+/**
+ * Run the built CLI and return its combined output plus exit code; a non-zero
+ * exit is DATA here, not a throw.
+ *
+ * `PAGESPACE_GATE_CLI_EXEC` runs it ON THE MACHINE instead of on this host. It
+ * is the whole command up to and including the node invocation — e.g.
+ * `docker exec gate-machine node` when the enrolled machine is a container, or
+ * `ssh someone@laptop node` when it is not this computer at all — and
+ * `PAGESPACE_GATE_MACHINE_CLI` is where `dist/bin.js` lives over there.
+ * N08/N09 are about
+ * the MACHINE CREDENTIAL being kept out of the ordinary auth chain, and that
+ * credential lives in the machine's own store: run them anywhere else and both
+ * inspect an empty profile and pass because nothing is there — the same
+ * vacuous-pass class Codex found in this harness at #2555. Set it whenever the
+ * daemon does not run on the operator's own machine.
+ */
 function cli(args: readonly string[]): { code: number; out: string } {
+  const prefix = optional('PAGESPACE_GATE_CLI_EXEC');
+  const [command, ...lead] = prefix === null ? [process.execPath] : prefix.split(/\s+/);
+  const argv = prefix === null ? [cliBin, ...args] : [...lead, machineCliBin, ...args];
   try {
-    const out = execFileSync(process.execPath, [cliBin, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execFileSync(command as string, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, out };
   } catch (error) {
     const e = error as { status?: number; stdout?: string; stderr?: string };
@@ -83,10 +103,27 @@ async function flagOffPass(): Promise<number> {
   const cookie = required('PAGESPACE_GATE_COOKIE');
   // N10 — a drive owner asking for a local env on a deployment that has none.
   // 501, not 400: the request is well-formed, the deployment cannot serve it.
+  //
+  // "Well-formed" is doing real work in that sentence, and this row got it
+  // wrong twice (found by running it, 2026-09-09):
+  //
+  //  - it is a WRITE, so it needs `X-CSRF-Token` and a matching `Origin`.
+  //    Without them the route answers 403 at the door and the flag is never
+  //    consulted — the same shape as the missing `--host` Codex found at
+  //    #2555: a refusal that looks like the one you wanted and proves nothing.
+  //  - since GA wave 1 a local env cannot be created without a `serverPolicy`
+  //    (the owner must say what PageSpace may ask of the machine), and that
+  //    validation runs BEFORE the feature gate, so a body without one answers
+  //    400 "A server policy … is required" — again never reaching the flag.
+  //
+  // Both make the row FAIL rather than pass vacuously, which is the harness
+  // working; the fix is to send the request a real client would send.
+  const csrf = await call('/api/auth/csrf', { headers: { cookie } });
+  const csrfToken = typeof csrf.json?.csrfToken === 'string' ? csrf.json.csrfToken : '';
   const created = await call(`/api/drives/${driveId}/envs`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie },
-    body: JSON.stringify({ name: 'gate-flag-off', substrate: 'local', label: 'gate-flag-off' }),
+    headers: { 'content-type': 'application/json', cookie, 'X-CSRF-Token': csrfToken, origin: host },
+    body: JSON.stringify({ name: `gate-flag-off-${Date.now()}`, substrate: 'local', label: 'gate-flag-off', serverPolicy: { ops: ['fs_read'], checkpoint: false } }),
   });
   expect('N10', 501, created.code, 'POST /envs {substrate:"local"} with the flag off');
 
@@ -177,7 +214,11 @@ async function main(): Promise<number> {
     // Byte-for-byte what `encodeChallenge` produces
     // (packages/lib/src/env-bridge/challenge.ts:57) — key order included.
     const bytes = Buffer.from(JSON.stringify({ nonce: strangerNonce, enrollmentId, exp: new Date(strangerExp).getTime() }));
-    const signature = nodeSign(null, bytes, createPrivateKey(stranger.privateKey)).toString('base64');
+    // `generateKeyPairSync('ed25519')` with no encoding already returns
+    // KeyObjects, and `createPrivateKey` REFUSES a PrivateKeyObject
+    // (ERR_INVALID_ARG_TYPE) — so wrapping it threw before the row could run
+    // and N05 never tested anything. Sign with the key object directly.
+    const signature = nodeSign(null, bytes, stranger.privateKey).toString('base64');
     const forged = await postJson('/api/env-bridge/token', { enrollmentId, nonce: strangerNonce, signature });
     expect('N05', '401 bad_signature', outcome(forged), 'a valid signature made by a key this env never pinned');
   } else {
@@ -192,7 +233,7 @@ async function main(): Promise<number> {
   // N07 — and it is not an MCP token either: `env:bridge` is deliberately
   // outside `mcp:*`, so mcp-ws closes 1008 rather than serving tools.
   try {
-    const { openClient } = await import('./ws-min');
+    const { openClient } = await import('./ws-min.ts');
     const wsUrl = `${host.replace(/^http/, 'ws')}/api/mcp-ws`;
     const closed = await new Promise<string>((resolve) => {
       const timer = setTimeout(() => resolve('timeout: never closed'), 10_000);

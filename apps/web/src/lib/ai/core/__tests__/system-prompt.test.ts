@@ -79,6 +79,33 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('/workspace');
   });
 
+  it('given an addressed execution tool, should say WHERE an environmentId comes from — the other half of the July fix', () => {
+    // `cf576fbc1`: the model invented a plausible target and every call was
+    // refused, and the post-mortem found the PROMPT encouraged it. The tool
+    // descriptions were fixed with the field; this is the prompt half, and it
+    // is what makes the mandatory field succeed on the first call rather than
+    // fail on it.
+    const result = buildSystemPrompt(false, undefined, true, ['bash', 'readFile']);
+    expect(result).toContain('REQUIRED environmentId');
+    expect(result).toContain('list_environments');
+    expect(result).toMatch(/copy an id from its output exactly/);
+    expect(result).toMatch(/never construct, guess or shorten one/);
+    expect(result).toMatch(/there is no default/);
+    // And the recovery: read back where it actually ran.
+    expect(result).toMatch(/Every result names the environment it actually ran in/);
+    // Named for exactly the addressed tools the agent holds — not the git/gh
+    // or shell families, which take no environmentId.
+    expect(result).toContain('bash/readFile each take a REQUIRED environmentId');
+  });
+
+  it('given NO addressed execution tool, should not mention environmentId at all', () => {
+    // A shell-only surface takes no addressing field; telling it to pass one
+    // is the same class of mistake as July's.
+    const result = buildSystemPrompt(false, undefined, true, ['spawn_shell', 'send_shell']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('environmentId');
+  });
+
   it('given codeExecutionEnabled true but allowedToolNames has no sandbox tool, should NOT include sandbox guidance', () => {
     // The per-agent sandboxEnabled switch (filterToolsForSandboxEnablement) strips
     // every sandbox tool including bash from allowedToolNames without touching the

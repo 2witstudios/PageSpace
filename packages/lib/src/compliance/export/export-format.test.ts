@@ -69,6 +69,8 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     streamState: [],
     contentTags: [],
     localEnvironments: [],
+    localEnvironmentActivity: [],
+    localEnvironmentApprovals: [],
     organizations: [],
     orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
     wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
@@ -265,6 +267,8 @@ describe('toPortableExport', () => {
       agentWorkspaces: [{ id: 'w1', role: 'owner', driveId: 'd1', name: 'W', lastActiveAt: D2, endedAt: null, createdAt: D1, updatedAt: D2, shells: [], nodes: [] }],
       streamState: [{ messageId: 'sm1', conversationId: 'c1', status: 'complete', parts: [{ type: 'text', text: 'hi' }], frames: [{ type: 'text-delta', id: 't1', delta: 'hi' }], startedAt: D1, completedAt: D2 }],
       localEnvironments: [],
+    localEnvironmentActivity: [],
+    localEnvironmentApprovals: [],
     });
     const portable = toPortableExport(full);
 

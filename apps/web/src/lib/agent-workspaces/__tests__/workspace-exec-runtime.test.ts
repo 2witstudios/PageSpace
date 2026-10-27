@@ -21,10 +21,12 @@ vi.mock('@pagespace/lib/services/sandbox/tool-runners', () => ({ runBashInSandbo
 vi.mock('@/lib/ai/tools/sandbox-tools-runtime', () => ({
   buildRealSandboxRunDeps: mockBuildRunDeps,
   productionSandboxGate: mockGate,
+  ownSandboxTarget: (c: { conversationId: string; driveId?: string }) => ({ id: c.conversationId, kind: 'conversation', label: 'own', driveId: c.driveId ?? null }),
 }));
 
 import { execInWorkspace, resolveWorkspaceExecActorContext } from '../workspace-exec-runtime';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 
 const DRIVE_SESSION = { id: 'ws-1', ownerId: 'session-owner', driveId: 'drive-1', endedAt: null } as never;
 const GLOBAL_SESSION = { id: 'ws-2', ownerId: 'session-owner', driveId: null, endedAt: null } as never;
@@ -74,7 +76,7 @@ describe('resolveWorkspaceExecActorContext', () => {
 });
 
 describe('execInWorkspace', () => {
-  const ctx = { userId: 'caller', tenantId: 'drive-owner', conversationId: 'workspace-exec:ws-1' } as never;
+  const ctx = { userId: 'caller', tenantId: 'drive-owner', conversationId: 'workspace-exec:ws-1' } as SandboxActorContext;
   const CALLER = credentialActor('caller', null);
 
   it('given a gate denial, should answer it and NEVER reach the runner', async () => {
@@ -87,7 +89,8 @@ describe('execInWorkspace', () => {
   it('given an allowed call, should run through deps whose session resolver answers the ROUTE-AUTHORIZED row', async () => {
     const result = await execInWorkspace({ session: DRIVE_SESSION, ctx, actor: CALLER, command: 'ls', cwd: 'repo', timeoutMs: 9 });
     expect(result).toEqual({ success: true, stdout: 'ok', stderr: '', exitCode: 0, truncated: false });
-    expect(mockRunBash).toHaveBeenCalledWith({ command: 'ls', cwd: 'repo', timeoutMs: 9, ctx, deps: { deps: true } });
+    // The workspace's OWN sandbox is named explicitly (leaf C: acquireSandbox has no fallback target).
+    expect(mockRunBash).toHaveBeenCalledWith({ command: 'ls', cwd: 'repo', timeoutMs: 9, ctx: { ...ctx, environment: { id: ctx.conversationId, kind: 'conversation', label: 'own', driveId: null } }, deps: { deps: true } });
     // The gate and the provisioning re-check are both asked of the requester's credential (SEC-2/3).
     expect(mockGate).toHaveBeenCalledWith(ctx, CALLER);
     expect(mockBuildRunDeps).toHaveBeenCalledWith(expect.objectContaining({ actor: CALLER }));

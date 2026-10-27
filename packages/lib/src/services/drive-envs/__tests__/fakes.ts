@@ -29,6 +29,8 @@ export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecor
     driveId: DRIVE_ID,
     name: 'staging',
     createdBy: 'user-1',
+    // Default OFF — the absence of a value is never a grant (leaf A).
+    visibleToGlobalAssistant: false,
     spriteKey: null,
     sandboxId: null,
     spriteInstanceId: null,
@@ -56,7 +58,13 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     machineKeyFingerprint: null,
     serverKeyId: null,
     capabilities: null,
-    serverPolicy: { ops: [], checkpoint: false },
+    daemonEpoch: null,
+    // A MINTED row always carries the dialog's explicit policy (GA wave 1);
+    // the column's deny-all default is the backstop for a row some path
+    // forgot. Tests that want the backstop set `{ ops: [] }` explicitly.
+    serverPolicy: { ops: ['fs_read', 'fs_write', 'exec'], checkpoint: false },
+    /** Pinned by `pinMachineKey` at enrolment (hardening B); NULL before that, exactly as the column is. */
+    ownerCredentials: null,
     bindPolicy: 'owner',
     enrollmentCodeHash: null,
     enrollmentCodeExpiresAt: null,
@@ -68,6 +76,8 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     lastSeenAt: null,
     enrolledAt: null,
     revokedAt: null,
+    pausedAt: null,
+    pauseOwedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
@@ -86,6 +96,16 @@ export interface FakeDriveEnvStore {
   /** payerId → envs owned across their drives, the quota's input. */
   ownedEnvs: Map<string, number>;
   calls: { deleteIfUnoccupied: number; requestTeardown: number; stampSpriteTornDown: number };
+}
+
+/** Which drives a user owns or has accepted membership of — the fake's stand-in for the members join. */
+const driveMemberships = new Map<string, Set<string>>();
+
+/** Declare a user as a member of a drive, for `listSpriteEnvsInUserDrives`. */
+export function grantDriveMembership(userId: string, driveId: string): void {
+  const drives = driveMemberships.get(userId) ?? new Set<string>();
+  drives.add(driveId);
+  driveMemberships.set(userId, drives);
 }
 
 export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date = () => NOW): FakeDriveEnvStore {
@@ -156,14 +176,18 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return [...local.values()].filter((sibling) => sibling.driveId === driveId);
     },
 
-    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, enrollmentCodeHash, now: at }) {
+    async listLocalByOwner(ownerId) {
+      return [...local.values()].filter((sibling) => sibling.ownerId === ownerId).flatMap((sibling) => { const env = rows.get(sibling.envId); return env ? [{ env, local: sibling }] : []; });
+    },
+
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrollmentCodeHash, now: at }) {
       const sibling = local.get(envId);
       // The real store's compare-and-set: only a pending, unrevoked row with an
       // unconsumed code — still the code that was VERIFIED — may be enrolled,
       // and enrolling consumes the code.
       if (!sibling || sibling.enrolledAt !== null || sibling.enrollmentCodeUsedAt !== null || sibling.revokedAt !== null) return false;
       if (sibling.enrollmentCodeHash !== enrollmentCodeHash) return false;
-      local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
+      local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, ownerCredentials, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
       return true;
     },
 
@@ -194,10 +218,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
-    async recordHello({ envId, capabilities, now: at }) {
+    async recordHello({ envId, capabilities, daemonEpoch, now: at }) {
       const sibling = local.get(envId);
       if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
-      local.set(envId, { ...sibling, capabilities, lastSeenAt: at, updatedAt: at });
+      local.set(envId, { ...sibling, capabilities, daemonEpoch, lastSeenAt: at, updatedAt: at });
       return true;
     },
 
@@ -213,6 +237,64 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       // CAS on `revokedAt IS NULL`: a second revoke is an answer (false), not a rewrite of the stamp.
       if (!sibling || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
+      return true;
+    },
+
+    async setPaused({ envId, ownerId, paused, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked; Stop keeps the first stamp.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      if (paused && sibling.pausedAt !== null) return true;
+      // Resume clears `pausedAt` only; the owed marker waits for the machine's ack.
+      local.set(envId, paused ? { ...sibling, pausedAt: at, pauseOwedAt: at, updatedAt: at } : { ...sibling, pausedAt: null, updatedAt: at });
+      return true;
+    },
+
+    async clearPauseOwed({ envId, pausedAt }) {
+      const sibling = local.get(envId);
+      if (!sibling || sibling.pauseOwedAt?.getTime() !== pausedAt.getTime()) return false;
+      local.set(envId, { ...sibling, pauseOwedAt: null });
+      return true;
+    },
+
+    async listSpriteEnvsInUserDrives(userId) {
+      // The real store's predicate, modelled: Sprite substrate, in a drive the
+      // user owns or has ACCEPTED membership of. The fake has no membership
+      // table, so `driveMemberships` is the seam the tests drive it through.
+      return [...rows.values()].filter(
+        (row) => row.substrate === 'sprite' && (driveMemberships.get(userId)?.has(row.driveId) ?? false),
+      );
+    },
+
+    async listVisibleToGlobalAssistantByOwner(ownerId) {
+      // The real store's predicate, verbatim: the caller OWNS the machine, it
+      // is not revoked, AND the env is visible to the global assistant.
+      const out: Array<{ env: DriveEnvRecord; local: DriveEnvLocalRecord }> = [];
+      for (const sibling of local.values()) {
+        const row = rows.get(sibling.envId);
+        if (!row) continue;
+        if (sibling.ownerId !== ownerId || sibling.revokedAt !== null || !row.visibleToGlobalAssistant) continue;
+        out.push({ env: row, local: sibling });
+      }
+      return out;
+    },
+
+    async setGlobalAssistantVisibility({ envId, ownerId, visible, now: at }) {
+      // The real store's CAS predicate, verbatim: the env exists, the SIBLING's
+      // owner is the caller, and it is not revoked. The column lives on the env
+      // row; the owner lives on the sibling.
+      const row = rows.get(envId);
+      const sibling = local.get(envId);
+      if (!row || !sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      rows.set(envId, { ...row, visibleToGlobalAssistant: visible, updatedAt: at });
+      return true;
+    },
+
+    async setServerPolicy({ envId, ownerId, serverPolicy, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's CAS predicate, verbatim: owner AND not revoked.
+      if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, serverPolicy: { ops: [...serverPolicy.ops], checkpoint: serverPolicy.checkpoint }, updatedAt: at });
       return true;
     },
 

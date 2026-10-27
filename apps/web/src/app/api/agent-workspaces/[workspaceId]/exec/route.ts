@@ -30,6 +30,9 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 const ROUTE = 'agent-workspaces/[workspaceId]/exec';
 
+/** The chat `bash` tool's input, minus the addressing field: the path names the workspace. */
+const workspaceExecInputSchema = bashInputSchema.omit({ environmentId: true });
+
 type RouteContext = { params: Promise<{ workspaceId: string }> };
 
 /** Every refusal the gate or runner can answer, mapped to a status. Exhaustive by type. */
@@ -51,6 +54,10 @@ const DENIAL_STATUS: Record<SandboxToolDenialReason, number> = {
   no_agent_access: 403,
   org_policy: 403,
   local_bind_denied: 403,
+  // The machine's owner turned this op off in serverPolicy; PageSpace refused to sign.
+  local_server_denied: 403,
+  // The machine froze the request for its owner's click in chat.
+  local_approval_required: 409,
   credit_exhausted: 402,
   concurrency_limit: 429,
   session_runtime_exceeded: 429,
@@ -91,7 +98,9 @@ export async function POST(request: Request, context: RouteContext) {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
-  const parsed = bashInputSchema.safeParse(body);
+  // The route ADDRESSES the workspace by its path, so the chat tool's mandatory
+  // `environmentId` has no meaning here and is not accepted.
+  const parsed = workspaceExecInputSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: parsed.error.issues.map((issue) => issue.message).join('; '), reason: 'invalid_input' },

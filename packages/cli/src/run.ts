@@ -25,6 +25,7 @@ import { envEnrollHandler, envTokenHandler } from './commands/env.js';
 import { envConnectHandler } from './commands/env/connect.js';
 import { envDisconnectHandler } from './commands/env/disconnect.js';
 import { envPolicyHandler } from './commands/env/policy.js';
+import { envOwnerKeysHandler } from './commands/env/owner-keys.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -106,10 +107,11 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   envTokenHandler,
   // The daemon and its local helpers likewise: `env connect` earns its own
   // socket token from the machine key on every connect, `env disconnect`
-  // signals a local process, `env policy` reads a local file.
+  // signals a local process, and `env policy` / `env owner-keys` read local files.
   envConnectHandler,
   envDisconnectHandler,
   envPolicyHandler,
+  envOwnerKeysHandler,
 ]);
 
 /**

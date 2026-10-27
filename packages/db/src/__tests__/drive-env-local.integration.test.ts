@@ -176,6 +176,18 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect(code).toBe(CHECK_VIOLATION);
   });
 
+  it.each(['admins', 'members'])("given a sibling inserted with the REMOVED bindPolicy %s ([D-6]: a machine is driven by its owner only), should be refused by the narrowed CHECK (23514) — the value cannot exist in the row", async (removed) => {
+    const { user, drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: `bp-${removed}`, substrate: 'local' }).returning();
+    let code: string | undefined;
+    try {
+      await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: user.id, bindPolicy: removed, label: 'm', enrollmentId: `enr_bp_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe(CHECK_VIOLATION);
+  });
+
   it("given a sibling owned by a user, DELETING that user should cascade the sibling (Art 17: the machine's identity facts go with the subject) while the drive env row survives as a dead local env", async () => {
     const { user, drive } = await seed();
     const machineOwner = await factories.createUser();

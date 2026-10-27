@@ -99,3 +99,22 @@ export function parseMachinePolicy(input: unknown): MachinePolicy | null {
   const parsed = machinePolicySchema.safeParse(input);
   return parsed.success ? parsed.data : null;
 }
+
+/**
+ * The stored `drive_env_local.serverPolicy` (jsonb) as the server trusts it:
+ * a closed op set and a boolean checkpoint, nothing else. Same posture as
+ * `parseMachinePolicy` — `null` for anything not fully recognized, so a row
+ * that drifted (an op outside the union, a missing field, a stray key) can
+ * only ever make the server MORE restrictive (`decideSign` denies on null).
+ */
+export const serverPolicySchema = z
+  .object({
+    ops: z.array(z.enum(GRANT_OPS)),
+    checkpoint: z.boolean(),
+  })
+  .strict();
+
+export function parseServerPolicy(input: unknown): ServerPolicy | null {
+  const parsed = serverPolicySchema.safeParse(input);
+  return parsed.success ? parsed.data : null;
+}

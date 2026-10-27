@@ -18,6 +18,7 @@
  */
 
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { anyReachableEnvironmentPayerAllows } from './reachable-environment-payers';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** `driveId`: the agent page's own drive (null for the global assistant). */
@@ -66,5 +67,37 @@ export async function resolveSandboxToolEligibilityForConversation(
   if (typeof surface === 'object') {
     return canRunCodeForSession({ actor, driveId: surface.imagoHomeDriveId, ownerId: actor.userId });
   }
-  return canRunCodeForSession({ actor, driveId: null, ownerId: actor.userId });
+  if (await canRunCodeForSession({ actor, driveId: null, ownerId: actor.userId })) return true;
+  // Last: a GLOBAL conversation whose own coordinates are ineligible may still
+  // be able to run in an environment it can reach — a free-tier person who owns
+  // a visible machine in a Pro-owned drive is eligible THERE, because the tier
+  // leg keys on the PAYER (see this module's own header, and `canRunCode`'s).
+  // Without this the compute family is stripped from the request before
+  // `list_environments` can be called at all, so fixing the tool's own gate
+  // alone would change nothing (Codex P1, #2616).
+  return hasEligibleReachableEnvironment(actor);
+}
+
+/**
+ * Does this user own any environment, visible to the global assistant, whose
+ * PAYER would authorize them?
+ *
+ * The ITERATION — which payers get asked, once per distinct drive, failing
+ * closed — belongs to `anyReachableEnvironmentPayerAllows`, shared with the
+ * discovery gate so the two cannot drift: fixing one without the other changes
+ * nothing, because this strip removes the tool before that gate can allow it.
+ *
+ * What is local to this call site is the AUTHORIZER, deliberately: this stands
+ * where tool REGISTRATION stands, so it asks `canRunCodeForSession` — the same
+ * question the rest of this module asks — while the gate stands where a call
+ * stands and asks the full call-time gate. The probe has the shape the run will
+ * be gated with: the environment's payer, and NO drive, because a local env
+ * authorizes on machine ownership (which the listing has already established
+ * for every row it returns).
+ */
+function hasEligibleReachableEnvironment(actor: AccessActor): Promise<boolean> {
+  return anyReachableEnvironmentPayerAllows({
+    actor,
+    authorize: (payer) => canRunCodeForSession({ actor, driveId: null, ownerId: payer.payerId }),
+  });
 }

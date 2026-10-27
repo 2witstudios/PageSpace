@@ -17,18 +17,26 @@
  * `@pagespace/lib` specifier survives in any runtime import.
  */
 export { GRANT_OPS, GRANT_MAX_CLOCK_SKEW_MS, decodeBase64, verifyGrant } from '@pagespace/lib/env-bridge/grant';
-export type { Ed25519Verify, Grant, GrantOp, GrantPrincipal, GrantVerdict, HashBytes, NonceStore, VerifyGrantInput } from '@pagespace/lib/env-bridge/grant';
+export type { ApprovalIntent, Ed25519Verify, Grant, GrantOp, GrantPrincipal, GrantVerdict, HashBytes, NonceStore, VerifyGrantInput } from '@pagespace/lib/env-bridge/grant';
 export { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame } from '@pagespace/lib/env-bridge/grant-args';
 export type { GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 export { decideExecution } from '@pagespace/lib/env-bridge/decide-execution';
 export type { DecideExecutionInput, ExecutionVerdict, NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
+export { APPROVAL_SCOPES, APPROVALS_FILE_VERSION, DEFAULT_APPROVAL_SCOPE, approvalExpiry, isDurableScope, parseApprovalsFile } from '@pagespace/lib/env-bridge/decide-approval';
+export type { ApprovalScope, DurableApproval } from '@pagespace/lib/env-bridge/decide-approval';
+export { describeSensitiveWrite } from '@pagespace/lib/env-bridge/classify-write';
+export type { SensitiveWrite } from '@pagespace/lib/env-bridge/classify-write';
 export { parseMachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
+export { policyWarnings } from '@pagespace/lib/env-bridge/policy-warnings';
+export type { PolicyWarning, PolicyWarningInput, PolicyWarningOptions } from '@pagespace/lib/env-bridge/policy-warnings';
 export type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 export type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
-export { encodeHelloForSigning, encodeResultForSigning, resultHashForFrame, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
+export { encodeApprovalRevokeForSigning, encodeHelloForSigning, encodeResultForSigning, machineResultBindingId, OWNER_APPROVAL_SIGNING_DOMAIN, resultHashForFrame, verifyPause, verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
+export { coseToJwk, deriveOwnerApprovalChallenge, ownerApprovalRequestHash, pendingRequestForWire, SUPPORTED_COSE_ALGORITHMS, verifyOwnerApproval } from '@pagespace/lib/env-bridge/owner-approval';
+export type { ApprovalIntentScope, OwnerApprovalDenyReason, OwnerApprovalRequest, OwnerApprovalVerdict, PinnedOwnerApproval, PinnedOwnerCredential, Sha256Bytes, VerifyWebauthnSignature, WebauthnPublicKey } from '@pagespace/lib/env-bridge/owner-approval';
 export type { MachineResultFrame, MachineResultFrameType } from '@pagespace/lib/env-bridge/machine-signatures';
 export { decodeFrame, encodeFrame, execOutputCeiling, fsReadContentCeiling } from '@pagespace/lib/env-bridge/frame-codec';
-export type { Frame, FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
+export type { Frame, FrameLimits, PendingApproval } from '@pagespace/lib/env-bridge/frame-codec';
 export { initialBridgeSession, isSupersededClose, reduceBridgeSession } from '@pagespace/lib/env-bridge/bridge-session';
 export type { BridgeEffect, BridgeSessionState, BridgeStatus, HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
 export { isHardDeniedEnvVar } from '@pagespace/lib/env-bridge/scrub-env';

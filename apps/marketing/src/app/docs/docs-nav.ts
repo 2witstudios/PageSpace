@@ -106,6 +106,7 @@ export const docsNav: NavSection[] = [
       { title: "Authentication", href: "/docs/security/authentication", icon: KeyRound },
       { title: "Permissions", href: "/docs/security/permissions", icon: Users },
       { title: "Zero-Trust", href: "/docs/security/zero-trust", icon: Eye },
+      { title: "Local Environments", href: "/docs/security/local-environments", icon: Monitor },
     ],
   },
 ];

@@ -22,7 +22,7 @@ import {
   type SandboxActorContext,
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
-import { buildRealSandboxRunDeps, productionSandboxGate } from '@/lib/ai/tools/sandbox-tools-runtime';
+import { buildRealSandboxRunDeps, ownSandboxTarget, productionSandboxGate } from '@/lib/ai/tools/sandbox-tools-runtime';
 import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
@@ -95,7 +95,10 @@ export async function execInWorkspace(input: {
     command: input.command,
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
-    ctx: input.ctx,
+    // The workspace's OWN sandbox, named explicitly: `acquireSandbox` has no
+    // fallback target (leaf C), and this route addresses the workspace, never
+    // a persistent environment.
+    ctx: { ...input.ctx, environment: ownSandboxTarget(input.ctx) },
     deps: buildRealSandboxRunDeps({ actor: input.actor, resolveSession: async () => ({ ok: true, session }) }),
   });
 }

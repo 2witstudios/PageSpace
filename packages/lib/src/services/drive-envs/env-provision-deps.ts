@@ -44,8 +44,7 @@ import { LocalEnvNotConnectedError, type SandboxHost } from '../sandbox/sandbox-
 import type { SubscriptionTier } from '../subscription-utils';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
 import { isLocalEnvsEnabled } from './local-envs-enabled';
-import { gateLocalEnv, noLiveConnections, resolveDriveActorRole, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
-import type { ActorRole } from '../../env-bridge/decide-bind';
+import { gateLocalEnv, noLiveConnections, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
 import type { OrgPolicies } from '../../organizations/policies-core';
 import { environmentsDecision } from '../../organizations/org-action-decisions';
 import type { AccessActor } from '../../permissions/access-actor';
@@ -197,8 +196,6 @@ export interface EnsureDriveEnvSandboxDeps {
    * until the socket route (t07) exists, so status derives from the heartbeat.
    */
   liveConnection?: LiveConnectionReader;
-  /** LOCAL envs only. Test seam; production resolves the role with the centralized permission helper. */
-  resolveActorRole?: (input: { actor: AccessActor; driveId: string }) => Promise<ActorRole>;
   /** LOCAL envs only. `LOCAL_ENVS_ENABLED`; read from the environment when absent. */
   localEnvsEnabled?: boolean;
   /**
@@ -221,7 +218,7 @@ export interface EnsureDriveEnvSandboxDeps {
 /**
  * The server-side gate for a LOCAL env, fed the real inputs from the same deps
  * a provision uses: the payer (so `canRunCode` bills the right tenant), the
- * requester's drive role, the flag and the live-socket reading. Shared by the
+ * flag and the live-socket reading — never a drive role ([D-6]). Shared by the
  * provisioner below and by the session-spawn bind, so both ask ONE question.
  */
 export async function gateLocalEnvForRequester({
@@ -231,13 +228,30 @@ export async function gateLocalEnvForRequester({
 }: {
   row: Pick<DriveEnvRecord, 'id' | 'driveId' | 'substrate'>;
   requester: AccessActor;
-  deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'resolveActorRole' | 'localEnvsEnabled'>;
+  deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'localEnvsEnabled'>;
 }): Promise<LocalEnvGateVerdict> {
   const payer = await deps.resolvePayer(row.driveId);
-  // A vanished drive has nobody to authorize against; the code-exec gate's own
-  // vocabulary says so rather than this module inventing a verdict.
+  // A vanished drive has nobody to bill; the code-exec gate's own vocabulary
+  // says so rather than this module inventing a verdict.
+  //
+  // **`driveId` is deliberately NOT passed to `canRunCode`.** The env's drive
+  // is the PAYER coordinate — `payer.payerId` carries it, and the tier leg
+  // resolves against it exactly as before — but the actor's own drive EDIT
+  // ACCESS is not what entitles them here. A local env is one person's own
+  // computer and [D-6] makes binding structurally owner-only: `decideBind`
+  // decides it two lines below, on `drive_env_local.ownerId`, with no actor
+  // role in its input at all. Running the drive-role leg as well meant the
+  // owner who LEFT the drive was refused `code_exec_denied` / `no_drive_access`
+  // on their own hardware, which is neither what [D-6] says nor what the
+  // machines listing promises when it keeps showing them their computer
+  // (Codex P2, #2616).
+  //
+  // This removes a redundant check, not the ownership one — the same shape as
+  // leaf D's drive comparison, and for the same reason. A non-owner now falls
+  // to `bind_policy` instead of `code_exec_denied`, which is the accurate word
+  // for why they are refused. The kill switch and the tier leg are untouched.
   const canRun = payer
-    ? () => canRunCode({ actor: requester, driveId: row.driveId, ownerId: payer.payerId, requestOrigin: 'user' })
+    ? () => canRunCode({ actor: requester, ownerId: payer.payerId, requestOrigin: 'user' })
     : async () => ({ ok: false as const, reason: 'no_drive_access' as const });
   return gateLocalEnv({
     row,
@@ -245,7 +259,6 @@ export async function gateLocalEnvForRequester({
     deps: {
       store: deps.store,
       canRunCode: canRun,
-      resolveActorRole: () => (deps.resolveActorRole ?? resolveDriveActorRole)({ actor: requester, driveId: row.driveId }),
       liveConnection: deps.liveConnection ?? noLiveConnections,
       flagEnabled: deps.localEnvsEnabled ?? isLocalEnvsEnabled(),
       now: () => new Date(),
