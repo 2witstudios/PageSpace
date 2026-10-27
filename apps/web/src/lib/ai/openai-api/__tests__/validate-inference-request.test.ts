@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { validateInferenceRequest } from '../validate-inference-request';
 
 describe('validateInferenceRequest', () => {

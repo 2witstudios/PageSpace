@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from '@/lib/ai/tools/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 import { resolveGenerationAdmission } from '../generation-admission';
 

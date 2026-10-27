@@ -1,6 +1,6 @@
 import { describe, test, beforeEach, afterEach, expect, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import type { Socket } from 'socket.io-client';
 
 // xterm is a DOM/canvas library the shell imports dynamically; stub it so what's

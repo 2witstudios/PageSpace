@@ -243,12 +243,16 @@
 }
 
 @custom-variant short (@media (max-height: 660px));
+/* Inside the phone frame (data-tier="phone"): the shared column heads and rows take the phone's
+   52px heads, 40px controls and no column rules, so every phone screen reads as one app. */
+@custom-variant phone (&:where([data-tier="phone"] *));
 
 @layer base {
-  /* The frame owns the viewport: the page never scrolls, the panes do. */
+  /* The frame owns the viewport: the page never scrolls, the panes do. 100dvh follows iOS
+     Safari's URL bar, which 100vh sits under. */
   body {
     margin: 0;
-    height: 100vh;
+    height: 100dvh;
     overflow: hidden;
     /* The field the glass sits on: one flat neutral, as PageSpace paints
        its canvas (myimago ADR 0029). */
@@ -279,6 +283,24 @@
      and a halo around the whole reading column reads as a border. */
   [contenteditable]:focus-visible {
     box-shadow: none;
+  }
+
+  /* iOS zooms into a focused text field under 16px. On touch screens every field and editor is
+     at least 16px, so focus never zooms and pinch zoom stays free; fine pointers (the desktop)
+     keep their sizes. A field with no size utility inherits at least 16px; one with a small
+     size utility (text-sm is var(--text-sm)) reads 16px from the tokens redefined on it, and
+     larger sizes such as titles are untouched. */
+  @media (pointer: coarse) {
+    input,
+    textarea,
+    select,
+    [contenteditable]:not([contenteditable='false']) {
+      font-size: max(16px, 1em);
+      --text-2xs: 16px;
+      --text-xs: 16px;
+      --text-sm: 16px;
+      --text-base: 16px;
+    }
   }
 }
 

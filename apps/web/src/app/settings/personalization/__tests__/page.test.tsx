@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, vi, beforeEach } from 'vitest';
-import { assert } from '@/lib/memory/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import PersonalizationSettingsPage from '../page';
 import { useOrgReauthStore } from '@/stores/useOrgReauthStore';
 

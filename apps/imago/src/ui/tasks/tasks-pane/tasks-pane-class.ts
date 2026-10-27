@@ -5,8 +5,9 @@ import { cn } from '../../cn';
 const rowBase =
   'flex w-full cursor-pointer text-left text-sm no-underline transition-colors duration-120 ease-standard hover:no-underline';
 
+/* On a phone the list is the screen, not a sidebar beside the open list: full ink. */
 const rowTone = (selected: boolean): string =>
-  selected ? 'bg-accent-soft text-ink' : 'text-ink-muted hover:bg-surface-overlay hover:text-ink';
+  selected ? 'bg-accent-soft text-ink' : 'text-ink-muted hover:bg-surface-overlay hover:text-ink phone:text-ink';
 
 /** A task list's row: its title and count on one line, its bar and meta under it. */
 export const taskListRowClass = (selected: boolean): string =>
@@ -32,8 +33,8 @@ export const taskListMetaClass = 'truncate text-2xs text-ink-faint';
 export const taskViewClass = (selected: boolean): string =>
   cn(
     rowBase,
-    'h-8 items-center gap-2 rounded-lg px-2',
-    selected ? 'bg-accent-soft font-medium text-accent-deep' : 'text-ink-muted hover:bg-surface-overlay hover:text-ink',
+    'h-8 items-center gap-2 rounded-lg px-2 phone:h-phone-row',
+    selected ? 'bg-accent-soft font-medium text-accent-deep' : 'text-ink-muted hover:bg-surface-overlay hover:text-ink phone:text-ink',
   );
 
 export const taskViewDotClass = (dotClass: string): string => cn('size-2 flex-none rounded-sm', dotClass);
@@ -48,7 +49,7 @@ export const tasksPaneLabelClass = 'px-2 pb-1 pt-1 text-2xs font-medium uppercas
 export const tasksPaneMessageClass = 'px-2 text-sm text-ink-muted';
 
 /** A task in the pane's Needs attention glance: its title, then its due label. */
-export const taskGlanceRowClass = cn(rowBase, 'h-8 items-center gap-2 rounded-lg px-2', rowTone(false));
+export const taskGlanceRowClass = cn(rowBase, 'h-8 items-center gap-2 rounded-lg px-2 phone:h-phone-row', rowTone(false));
 
 /** The glance's "See all" link, under its rows. */
 export const taskGlanceMoreClass = 'px-2 pt-1 text-2xs text-ink-faint no-underline hover:text-ink hover:no-underline';

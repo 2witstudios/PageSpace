@@ -1,8 +1,11 @@
 import { cn } from '../../cn';
 
-/** The 64px blue bar that replaces the spine on a phone (C-Resp-Phone-Tree). */
+/**
+ * The 64px blue bar that replaces the spine on a phone (C-Resp-Phone-Tree); its ground runs on
+ * under the home indicator.
+ */
 export const phoneBarClass =
-  'flex h-phone-bar flex-none items-stretch bg-spine px-1 pb-1 text-spine-on';
+  'phone-safe-bar flex h-phone-bar flex-none items-stretch bg-spine px-1 text-spine-on';
 
 /** One bar item: icon over a 10.5px label, the active one marked at its top edge. */
 export const phoneBarItemClass = (current: boolean): string =>

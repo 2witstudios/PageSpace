@@ -26,7 +26,7 @@ const compile = async (classes: readonly string[]): Promise<string> => {
 const selectorOf = (cls: string): string => `.${cls.replace(/[:/.]/g, (char) => `\\${char}`)}`;
 
 const base =
-  'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm no-underline transition-colors duration-120 ease-standard hover:no-underline';
+  'flex h-8 w-full cursor-pointer items-center gap-2 rounded-lg px-2 text-left text-sm no-underline transition-colors duration-120 ease-standard hover:no-underline phone:h-phone-row';
 
 describe('messageRowClass()', () => {
   test('a quiet row', () => {
@@ -34,7 +34,7 @@ describe('messageRowClass()', () => {
       given: 'a row that is neither open nor unread',
       should: 'be a 32px row in muted ink that comes up to full ink on hover',
       actual: messageRowClass({ selected: false, unread: false }),
-      expected: `${base} font-normal text-ink-muted hover:bg-surface-overlay hover:text-ink`,
+      expected: `${base} font-normal text-ink-muted hover:bg-surface-overlay hover:text-ink phone:text-ink`,
     });
   });
 

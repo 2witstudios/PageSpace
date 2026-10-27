@@ -78,7 +78,7 @@ beforeEach(() => {
 afterEach(unmountAll);
 
 describe('PhoneDocHead (IMC-11.3)', () => {
-  test('Back to Pages, the parent over the title, presence, the count and Page actions', async () => {
+  test('Back to its section, the parent over the title, presence, the count and Page actions', async () => {
     const root = render();
     await settle(() => {
       if (label(root, 'Page actions') === null) throw new Error('page not loaded');
@@ -94,6 +94,20 @@ describe('PhoneDocHead (IMC-11.3)', () => {
         root.querySelector('[role="dialog"]'),
       ],
       expected: ['/d1/files', true, 'DA', '3', null],
+    });
+  });
+
+  test('Back returns to the section the page was opened from', async () => {
+    navigation.pathname = '/d1/messages/plan';
+    const root = render();
+    await settle(() => {
+      if (label(root, 'Page actions') === null) throw new Error('page not loaded');
+    });
+    assert({
+      given: 'a page opened from Messages',
+      should: 'go Back to Messages, not Pages',
+      actual: [label(root, 'Back to Messages')?.getAttribute('href'), label(root, 'Back to Pages')],
+      expected: ['/d1/messages', null],
     });
   });
 

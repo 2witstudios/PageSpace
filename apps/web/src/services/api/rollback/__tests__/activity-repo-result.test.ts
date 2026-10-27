@@ -1,5 +1,5 @@
 import { describe, it, vi } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ activityLogs: { id: 'id', pageId: 'pageId', driveId: 'driveId', timestamp: 'timestamp', userId: 'userId', operation: 'operation', isAiGenerated: 'isAiGenerated', resourceType: 'resourceType' } }));

@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import type { FinishReason, ModelMessage, UIMessageChunk, UIMessageStreamWriter } from 'ai';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { runAgentWithRetry, isRunAborted, type AgentStreamResult } from '../run-agent-with-retry';
 
 interface FakeAttempt {

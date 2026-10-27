@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { resolveHoldDisposition } from '../resolve-hold-disposition';
 
 describe('resolveHoldDisposition', () => {

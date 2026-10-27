@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // ============================================================================
 // Smoke tests for the ShareDialog off-platform invite branch.

@@ -8,7 +8,7 @@
  */
 import React from 'react';
 import { describe, it, vi } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TaskCompactRow } from '../TaskCompactRow';

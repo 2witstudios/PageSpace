@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import {
   extractImageFromResult,
   extractImageCost,

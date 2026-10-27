@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, vi, type Mock } from 'vitest';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
 // (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,

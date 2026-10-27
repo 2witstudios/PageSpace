@@ -35,7 +35,7 @@ import { sectionPath } from '../tabs/tabs-model';
 import { columnsFor, type Columns } from '../stage/columns';
 import { AccountNavPane, DriveSettingsNavPane } from '../../settings/settings-nav/settings-nav-pane';
 import { Rail } from '../rail/rail';
-import { PhoneAsk } from '../phone/phone-ask';
+import { PhoneAsk, PhonePageAsk } from '../phone/phone-ask';
 import { PhoneBottomBar } from '../phone/phone-bar';
 import { PhoneChatBack } from '../phone/phone-chat-back';
 import { PhoneDocHead } from '../phone/phone-doc-head';
@@ -323,7 +323,7 @@ export function Shell({ children, homeDriveId, initialDrives }: ShellProps) {
         onTree && stage.driveId !== null ? (
           <PhoneAsk href={`/${encodeURIComponent(stage.driveId)}`} />
         ) : pageObject !== null && !asking ? (
-          <PhoneAsk onPress={() => setAskedAt(pathname)} />
+          <PhonePageAsk pageId={pageObject.pageId} onPress={() => setAskedAt(pathname)} />
         ) : null,
       bar: asking ? null : <PhoneBottomBar stage={routeStage} driveId={railDrive(stage, homeDriveId)} />,
       palette: <><CommandPalette stage={routeStage} homeDriveId={homeDriveId} drives={drives} /><RetainedSurface fill={false}><OrgReauthenticationPrompt /></RetainedSurface></>,

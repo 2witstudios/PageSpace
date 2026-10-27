@@ -13,7 +13,7 @@
  * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable.
  */
 import { describe, it, beforeAll, vi } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { db } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';

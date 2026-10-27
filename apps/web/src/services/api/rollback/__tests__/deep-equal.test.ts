@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { deepEqual } from '../deep-equal';
 
 describe('deepEqual — reference / primitive identity', () => {

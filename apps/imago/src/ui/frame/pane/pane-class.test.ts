@@ -37,7 +37,7 @@ describe('paneHeaderClass', () => {
       given: 'any pane header',
       should: 'be the 48px row with a hairline under it',
       actual: paneHeaderClass,
-      expected: 'flex h-pane-header flex-none items-center gap-1 border-b border-hairline pr-2 pl-4 text-sm',
+      expected: 'flex h-pane-header flex-none items-center gap-1 border-b border-hairline pr-2 pl-4 text-sm phone:h-phone-head phone:pr-1 phone:pl-4 phone:text-base',
     });
   });
 });
@@ -49,7 +49,7 @@ describe('paneControlClass', () => {
       should: 'be a borderless 28px ghost square that tints on hover',
       actual: paneControlClass,
       expected:
-        'flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-muted no-underline hover:bg-fill hover:text-ink hover:no-underline',
+        'flex size-head-control flex-none cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-ink-muted no-underline hover:bg-fill hover:text-ink hover:no-underline phone:size-spine-tile-small phone:rounded-lg phone:text-ink',
     });
   });
 });
