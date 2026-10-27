@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, verifyAdminAuth, isAdminAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { listEnabledProviders, createProvider, seedBuiltinProviders, refreshBuiltinProviders } from '@pagespace/lib/integrations/repositories/provider-repository';
-import { builtinProviderList } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { builtinProviderList, isBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+
+import { sanitizeConnectMetadata } from '@/lib/integrations/connect-metadata';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -62,19 +64,25 @@ export async function GET(request: Request) {
       });
     }
 
-    // Strip config details for listing (security)
-    const safeProviders = providers.map((p) => ({
-      id: p.id,
-      slug: p.slug,
-      name: p.name,
-      description: p.description,
-      iconUrl: p.iconUrl,
-      documentationUrl: p.documentationUrl,
-      providerType: p.providerType,
-      isSystem: p.isSystem,
-      enabled: p.enabled,
-      createdAt: p.createdAt,
-    }));
+    // Strip config details for listing (security), but surface the two
+    // connect-time fields the dialog needs to explain what is being granted.
+    const safeProviders = providers.map((p) => {
+      const { oauthScopeDescriptions, connectNotes } = sanitizeConnectMetadata(p.config);
+      return {
+        id: p.id,
+        slug: p.slug,
+        name: p.name,
+        description: p.description,
+        iconUrl: p.iconUrl,
+        documentationUrl: p.documentationUrl,
+        providerType: p.providerType,
+        isSystem: p.isSystem,
+        enabled: p.enabled,
+        createdAt: p.createdAt,
+        oauthScopeDescriptions,
+        connectNotes,
+      };
+    });
 
     auditRequest(request, { eventType: 'data.read', userId: auth.userId, resourceType: 'integration_provider', resourceId: 'list', details: { providerCount: safeProviders.length } });
 
@@ -93,11 +101,10 @@ export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
-  // Only admins can create providers
+  // Only admins can create providers. verifyAdminAuth returns a NextResponse
+  // (truthy) on denial, so the type guard is the only correct check.
   const adminAuth = await verifyAdminAuth(request);
-  if (!adminAuth) {
-    return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
-  }
+  if (isAdminAuthError(adminAuth)) return adminAuth;
 
   try {
     const body = await request.json();
@@ -111,6 +118,15 @@ export async function POST(request: Request) {
     }
 
     const { slug, name, description, iconUrl, documentationUrl, providerType, config, driveId } = validation.data;
+
+    // Builtin slugs are reserved: a custom provider that claimed one would
+    // shadow the builtin at seed time and confuse slug-based resolution.
+    if (isBuiltinProvider(slug)) {
+      return NextResponse.json(
+        { error: `Slug "${slug}" is reserved for a builtin provider` },
+        { status: 409 }
+      );
+    }
 
     const provider = await createProvider(db, {
       slug,

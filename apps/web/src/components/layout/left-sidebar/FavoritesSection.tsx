@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback, type MouseEvent } from "react";
+import { useState, useCallback, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ExternalLink, Folder, MoreHorizontal, Star } from "lucide-react";
 import { useTabsStore } from "@/stores/useTabsStore";
+import { useTouchDevice } from "@/hooks/useTouchDevice";
 import { shouldOpenInNewTab } from "@/lib/tabs/tab-navigation-utils";
 import {
   Collapsible,
@@ -19,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageTypeIcon } from "@/components/common/PageTypeIcon";
-import { useFavorites } from "@/hooks/useFavorites";
+import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { useCapacitor } from "@/hooks/useCapacitor";
@@ -30,7 +31,8 @@ import { toast } from "sonner";
 
 export default function FavoritesSection() {
   const router = useRouter();
-  const { favorites, isLoading, isSynced, fetchFavorites, removeFavoriteById } = useFavorites();
+  const { favorites, isLoading, isSynced, removeFavoriteById } = useFavorites();
+  useFavoritesSync();
   const isSheetBreakpoint = useBreakpoint("(max-width: 1023px)");
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
   const favoritesCollapsed = useLayoutStore((state) => state.favoritesCollapsed);
@@ -39,12 +41,6 @@ export default function FavoritesSection() {
   const { isNative } = useCapacitor();
   const isTablet = useIsTablet();
   const hideTabActions = isNative && !isTablet;
-
-  useEffect(() => {
-    if (!isSynced) {
-      fetchFavorites();
-    }
-  }, [isSynced, fetchFavorites]);
 
   const handleNavigate = useCallback((href: string, itemType: "page" | "drive", e?: MouseEvent) => {
     if (e && shouldOpenInNewTab(e)) {
@@ -153,6 +149,7 @@ interface FavoriteItemProps {
 
 function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, hideTabActions }: FavoriteItemProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const isTouchDevice = useTouchDevice();
 
   const title =
     favorite.itemType === "drive"
@@ -207,7 +204,7 @@ function FavoriteItem({ favorite, onNavigate, onOpenInNewTab, onRemove, hideTabA
             size="icon"
             className={cn(
               "absolute right-1 h-6 w-6 transition-opacity",
-              isHovered ? "opacity-100" : "opacity-0"
+              isTouchDevice || isHovered ? "opacity-100" : "opacity-0"
             )}
             onClick={(e) => e.stopPropagation()}
           >

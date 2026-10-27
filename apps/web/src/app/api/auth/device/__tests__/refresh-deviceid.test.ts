@@ -8,6 +8,7 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_token'),
     validateSession: vi.fn().mockResolvedValue({ sessionId: 'sid_123' }),
+    revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -59,6 +60,7 @@ vi.mock('@pagespace/db/transactions/auth-transactions', () => ({
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
   appendSessionCookie: vi.fn(),
+  getSessionFromCookies: vi.fn(() => null),
 }));
 
 import { POST } from '../refresh/route';

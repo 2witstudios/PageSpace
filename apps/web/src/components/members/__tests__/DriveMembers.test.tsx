@@ -10,9 +10,9 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
   del: (...a: unknown[]) => mockDel(...a),
   post: (...a: unknown[]) => mockPost(...a),
 }));
-const stableToast = vi.fn();
-vi.mock('@/hooks/useToast', () => ({
-  useToast: () => ({ toast: stableToast }),
+const mocks = vi.hoisted(() => ({ toastError: vi.fn(), toastSuccess: vi.fn() }));
+vi.mock('sonner', () => ({
+  toast: { error: mocks.toastError, success: mocks.toastSuccess },
 }));
 
 type SocketHandler = (p: { driveId: string }) => void;
@@ -67,6 +67,46 @@ const okMembers = (
     json: () => Promise.resolve({ currentUserRole, members, pendingInvites }),
   });
 
+const okAgentMembers = (currentUserRole = 'OWNER') =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ agentMembers: [], currentUserRole }),
+  });
+
+const okAppMembers = (currentUserRole = 'OWNER') =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ appMembers: [], currentUserRole }),
+  });
+
+const okRoles = () =>
+  Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({ roles: [] }),
+  });
+
+// fetchMembers() fires 4 parallel requests on each invocation (members, agents/members, apps/members, roles).
+// On initial mount, DriveShareLinkSection adds 2 more (keyed on driveId, not socket events): its
+// `Promise.allSettled` requests /share-links and /roles. It used to add only 1 here — not because
+// it made one request, but because /share-links went out on plain `fetch` and was invisible to this
+// spy. That plain fetch carried no Bearer, so the call 401'd on the desktop shell; moving it to
+// `fetchWithAuth` is what makes it visible to this count.
+const MEMBER_FETCHES = 4;
+const SHARE_LINK_SECTION_FETCHES = 2;
+const FETCHES_PER_CALL = MEMBER_FETCHES + SHARE_LINK_SECTION_FETCHES;
+
+const urlAwareMock = (
+  members: ReturnType<typeof member>[],
+  currentUserRole = 'OWNER',
+  pendingInvites: PendingInviteFixture[] = [],
+) =>
+  (url: string) => {
+    if (url.endsWith('/agents/members')) return okAgentMembers(currentUserRole);
+    if (url.endsWith('/apps/members')) return okAppMembers(currentUserRole);
+    if (url.endsWith('/roles')) return okRoles();
+    return okMembers(members, currentUserRole, pendingInvites);
+  };
+
 const EVENTS = ['drive:member_added', 'drive:member_removed', 'drive:member_role_changed'] as const;
 
 describe('DriveMembers', () => {
@@ -93,8 +133,8 @@ describe('DriveMembers', () => {
   });
 
   it('Given accepted members and pending invites, renders both sections with correct counts', async () => {
-    mockFetchWithAuth.mockImplementation(() =>
-      okMembers(
+    mockFetchWithAuth.mockImplementation(
+      urlAwareMock(
         [member({ userId: 'a1' }), member({ userId: 'a2' })],
         'OWNER',
         [samplePending(), samplePending({ id: 'inv_2', email: 'b@example.com' })],
@@ -107,42 +147,44 @@ describe('DriveMembers', () => {
   });
 
   it('Renders no pending section when API returns an empty pendingInvites array', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([member({ userId: 'm1' })]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([member({ userId: 'm1' })]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText(/members \(/i);
     expect(screen.queryByText(/pending invitations/i)).not.toBeInTheDocument();
   });
 
   it('Given the component mounts, subscribes to all three drive member events', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(1));
   });
 
   it.each(EVENTS)('Given %s fires for current driveId, refetches the member list', async (event) => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    // DriveShareLinkSection mounts in a useEffect after currentUserRole resolves — wait for it.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL));
 
     socket.__emit(event, { driveId: 'drive-1' });
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(2));
+    // Socket event only re-triggers fetchMembers() (3 requests); /roles is keyed on driveId, not socket events.
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL + MEMBER_FETCHES));
   });
 
   it('Does NOT refetch when the event is for a different driveId', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL));
 
     socket.__emit('drive:member_added', { driveId: 'other' });
     await new Promise((r) => setTimeout(r, 20));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(FETCHES_PER_CALL);
   });
 
   it('Given the component unmounts, unsubscribes from all three events', async () => {
-    mockFetchWithAuth.mockImplementation(() => okMembers([]));
+    mockFetchWithAuth.mockImplementation(urlAwareMock([]));
     const { unmount } = render(<DriveMembers driveId="drive-1" />);
     await screen.findByText('Members (0)');
     EVENTS.forEach((e) => expect(socket.__count(e)).toBe(1));

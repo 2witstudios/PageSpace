@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Layers, HardDrive, Sparkles, Users, Search, KeyRound } from "lucide-react";
+import { ArrowRight, Layers, HardDrive, Sparkles, Users, Search, KeyRound, Package, Terminal, Bot } from "lucide-react";
 import { createMetadata } from "@/lib/metadata";
 
 export const metadata = createMetadata({
@@ -16,6 +16,9 @@ const features = [
   { title: "Sharing & Permissions", href: "/docs/features/sharing", icon: Users, description: "Who sees what — drive roles and per-page grants in plain English." },
   { title: "Search", href: "/docs/features/search", icon: Search, description: "Find pages, drives, people, and text across everything you can see." },
   { title: "Accounts & Sign In", href: "/docs/features/accounts", icon: KeyRound, description: "Passkeys, magic links, devices — and why there's no password to forget." },
+  { title: "PageSpace SDK", href: "/docs/features/sdk", icon: Package, description: "The typed TypeScript client — call drives, pages, tasks, search, and agents from your own code." },
+  { title: "PageSpace CLI", href: "/docs/features/cli", icon: Terminal, description: "Your workspace in the shell — scriptable commands, scoped keys, and the pagespace mcp server." },
+  { title: "Agent API", href: "/docs/features/agent-api", icon: Bot, description: "Call any agent as an OpenAI-compatible endpoint — its system prompt and tools, server-side. The backend for a chat app." },
 ];
 
 export default function FeaturesIndexPage() {

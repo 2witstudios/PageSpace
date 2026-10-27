@@ -15,13 +15,19 @@ export const sessions = pgTable('sessions', {
   deviceId: text('device_id'),
 
   // Session metadata
-  type: text('type', { enum: ['user', 'service', 'mcp', 'device'] }).notNull(),
+  // 'socket' = short-lived (5 min) Socket.IO handshake bridge token, minted from
+  // an already-authenticated web session to bypass sameSite: 'strict' cookies.
+  type: text('type', { enum: ['user', 'service', 'mcp', 'device', 'socket'] }).notNull(),
   scopes: text('scopes').array().notNull().default(sql`ARRAY[]::text[]`),
 
   // Resource binding
   resourceType: text('resource_type'),
   resourceId: text('resource_id'),
   driveId: text('drive_id'),
+
+  // Verified sign-in ceremony; renewal must preserve the original time and assurance.
+  authenticatedAt: timestamp('authenticated_at', { mode: 'date' }),
+  authenticationAssurance: text('authentication_assurance', { enum: ['single_factor', 'user_verified_passkey'] }),
 
   // Security context
   tokenVersion: integer('token_version').notNull(),

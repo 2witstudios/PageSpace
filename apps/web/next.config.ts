@@ -1,48 +1,200 @@
 import type { NextConfig } from "next";
 import path from "path";
+import fs from "fs";
+import { builtinModules } from "module";
 import CopyPlugin from "copy-webpack-plugin";
+import { withSentryConfig } from "@sentry/nextjs";
+import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 
-const nextConfig: NextConfig = {
+// Guard: only externalize workspace packages when running in production AND
+// their dist directories exist. The production check prevents stale dist/
+// directories from silently overriding source edits during `bun run dev`.
+// Docker builds always run with NODE_ENV=production and pre-build packages
+// before this file is evaluated, so both conditions are satisfied there.
+//
+// One list drives the dist check, the transpilePackages fallback and the
+// externals predicate below, so a new workspace package is one edit here.
+const WORKSPACE_PACKAGES = ["db", "lib", "editor", "browser-worker"] as const;
+const workspaceDistReady =
+  process.env.NODE_ENV === "production" &&
+  WORKSPACE_PACKAGES.every((pkg) =>
+    fs.existsSync(path.resolve(__dirname, `../../packages/${pkg}/dist`))
+  );
+
+type ExternalsFn = (
+  data: { context: string; request: string; contextInfo?: { issuer?: string } },
+  callback: (err?: Error | null, result?: string) => void
+) => void;
+
+// webpack's `externals` can be an array, a single entry, or unset; normalize
+// to an array and append. Shared by the nodejs externalization and the edge
+// guard below so a fix to the merge logic can't apply to one runtime only.
+type WebpackConfig = { externals?: unknown };
+function pushExternal(config: WebpackConfig, external: ExternalsFn): void {
+  if (Array.isArray(config.externals)) {
+    config.externals.push(external);
+  } else if (config.externals) {
+    config.externals = [config.externals, external];
+  } else {
+    config.externals = [external];
+  }
+}
+
+// Node built-ins the Edge runtime actually provides (per Next.js edge-runtime
+// docs). Everything else in `module`'s builtinModules is Node-only.
+const EDGE_SUPPORTED_BUILTINS = new Set(["buffer", "events", "util", "assert", "async_hooks"]);
+const nodeOnlyBuiltins = new Set(
+  builtinModules.filter((m) => !m.startsWith("_") && !EDGE_SUPPORTED_BUILTINS.has(m))
+);
+// Node-only npm packages that don't necessarily import a built-in at their
+// entry point (native bindings, lazy requires) — deny them by name.
+const NODE_ONLY_PACKAGES = new Set([
+  "pg", "pg-pool", "pg-protocol", "pg-native", "pg-connection-string", "dotenv",
+]);
+
+// Fail the BUILD when an edge bundle (middleware) reaches a Node-only module.
+// Next.js itself only WARNS ("A Node.js API is used (…) which is not supported
+// in the Edge Runtime") and defers the crash to request time — verified
+// empirically: a probe import of the Node-only logger built green and then
+// 500'd every request, which is exactly how prod went down the day middleware
+// first registered. Built-ins are an allowlist inversion (everything Node
+// ships minus what edge provides) so new Node-only imports — crypto, vm,
+// worker_threads, whatever ships next — are denied by default rather than
+// waiting for someone to extend a hand-maintained list.
+const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
+  const bare = request.startsWith("node:") ? request.slice("node:".length) : request;
+  if (
+    nodeOnlyBuiltins.has(bare) ||
+    NODE_ONLY_PACKAGES.has(bare) ||
+    request.startsWith("@pagespace/db")
+  ) {
+    return callback(new Error(
+      `Edge bundle imports Node-only module '${request}'` +
+      (contextInfo?.issuer ? ` (via ${contextInfo.issuer})` : "") +
+      `. The Edge runtime cannot execute it at request time — middleware and ` +
+      `everything it imports must stay on edge-safe leaf modules ` +
+      `(see apps/web/src/middleware.ts header comment).`
+    ));
+  }
+  callback();
+};
+
+// Node-only modules that client bundles reach through dead server code
+// (pg via @pagespace/db, the ClickHouse writers via @pagespace/lib's logging)
+// and resolve to an empty module there. Shared by webpack's resolve.fallback
+// and Turbopack's browser-conditioned resolveAlias below.
+const CLIENT_EMPTY_NODE_MODULES = ["fs", "fs/promises", "dns", "net", "tls", "pg-native", "process", "os"];
+
+// Monaco's AMD loader and pdf.js's worker are served as files, not bundled.
+// webpack() copies them with CopyPlugin; Turbopack never runs webpack(), so a
+// `next dev --turbopack` session copies them as the config loads instead.
+const staticAssetCopies = (outputPath: string) => [
+  {
+    from: path.dirname(require.resolve("monaco-editor/min/vs/loader.js")),
+    to: path.join(outputPath, "static", "monaco", "vs"),
+  },
+  {
+    from: require.resolve("pdfjs-dist/build/pdf.worker.min.mjs"),
+    to: path.join(__dirname, "public", "pdf.worker.min.mjs"),
+  },
+];
+
+// Always a full copy (13 MB of Monaco, well under 0.2 s): a freshness check on
+// the directory would miss a file changed inside it.
+function copyStaticAssets(outputPath: string): void {
+  for (const { from, to } of staticAssetCopies(outputPath)) {
+    fs.cpSync(from, to, { recursive: true, force: true });
+  }
+}
+
+// Set by `next dev --turbopack` before this file is evaluated.
+if (process.env.TURBOPACK) {
+  copyStaticAssets(path.join(__dirname, ".next"));
+}
+
+// Named export so tests can assert on rewrites()/redirects() without going
+// through withSentryConfig's wrapping.
+export const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@pagespace/db", "@pagespace/lib"],
-  webpack: (config, { isServer }) => {
+  outputFileTracingRoot: path.join(__dirname, "../.."),
+  transpilePackages: workspaceDistReady ? [] : WORKSPACE_PACKAGES.map((pkg) => `@pagespace/${pkg}`),
+  // Preserve RFC 8252 loopback redirect_uri query values; NextRequest URL
+  // normalization rewrites percent-encoded 127.0.0.1 to localhost otherwise.
+  skipMiddlewareUrlNormalize: true,
+  // pg resolves via bun's cache path (~/.bun/install/cache/pg@.../), which
+  // contains no "node_modules" segment, so Next.js's path-based heuristic
+  // fails to auto-externalize it. List it explicitly here as a backstop; the
+  // webpack function below handles @pagespace/db and @pagespace/lib the same way.
+  // NOTE: @fly/sprites must NOT be listed here. serverExternalPackages makes
+  // Next.js emit require() at runtime, which fails for ESM-only packages. Instead
+  // it is a direct dependency of apps/web so webpack bundles it as a server chunk.
+  serverExternalPackages: ["pg"],
+  // `next dev --turbopack` reads this instead of webpack(). Builds stay on
+  // webpack, so the edge Node-only guard and the dist externals still run
+  // there; a Turbopack dev session compiles workspace packages from source.
+  turbopack: {
+    resolveAlias: Object.fromEntries(
+      [...CLIENT_EMPTY_NODE_MODULES, "@clickhouse/client"].map((name) => [
+        name,
+        { browser: "./src/lib/empty-module.cjs" },
+      ])
+    ),
+  },
+  webpack: (config, { isServer, nextRuntime }) => {
+    // No extensionAlias: the ESM workspace packages (@pagespace/editor,
+    // @pagespace/browser-worker) import siblings as `./x.ts`, which both
+    // webpack and Turbopack resolve as written, and tsc's
+    // rewriteRelativeImportExtensions emits as `./x.js` for Node's dist.
+
+    // Externalization emits `require()` calls, which only the Node.js runtime
+    // can execute. The edge compile (middleware) has no require(): it must
+    // bundle everything from source so Next's edge static analysis fails the
+    // BUILD on Node-only imports instead of 500ing every request at runtime —
+    // exactly what took prod down when middleware first registered (PR #1932:
+    // "Native module not found: @pagespace/lib/logging/logger-config").
+    if (isServer && nextRuntime === 'nodejs') {
+      // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
+      // When workspaceDistReady, also externalize every WORKSPACE_PACKAGES
+      // entry so Next emits require('@pagespace/...') calls resolved to dist/.
+      const bunWorkspaceExternals = (
+        { request }: { context: string; request: string },
+        callback: (err?: Error | null, result?: string) => void
+      ) => {
+        if (
+          request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
+          request === 'pg-native' ||
+          (workspaceDistReady &&
+            WORKSPACE_PACKAGES.some((pkg) => request.startsWith(`@pagespace/${pkg}`)))
+        ) {
+          return callback(null, `commonjs ${request}`);
+        }
+        callback();
+      };
+
+      pushExternal(config, bunWorkspaceExternals);
+    }
+
+    if (isServer && nextRuntime === 'edge') {
+      pushExternal(config, edgeNodeOnlyGuard);
+    }
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
-        fs: false,
-        dns: false,
-        net: false,
-        tls: false,
-        'pg-native': false,
-        process: false,
-        os: false,
+        ...Object.fromEntries(CLIENT_EMPTY_NODE_MODULES.map((name) => [name, false])),
+      };
+      // The ClickHouse analytics client (#890 Phase 3) is server-only and
+      // imports node:os/node:http at module scope, which resolve.fallback
+      // does not cover (node: prefix). Client bundles reach it transitively
+      // through @pagespace/lib's logging writers (dead code in the browser,
+      // same as pg above) — stub the whole package out.
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@clickhouse/client': false,
       };
       const outputPath = config.output.path ?? path.join(__dirname, ".next");
 
-      config.plugins.push(
-        new CopyPlugin({
-          patterns: [
-            {
-              from: path.dirname(require.resolve("monaco-editor/min/vs/loader.js")),
-              to: path.join(outputPath, "static", "monaco", "vs"),
-            },
-            {
-              from: require.resolve("pdfjs-dist/build/pdf.worker.min.mjs"),
-              to: path.join(__dirname, "public", "pdf.worker.min.mjs"),
-            },
-          ],
-        })
-      );
+      config.plugins.push(new CopyPlugin({ patterns: staticAssetCopies(outputPath) }));
 
-      // @gridland/web requires bun:ffi at build time — alias to its shipped browser shims.
-      const gridlandShims = path.join(__dirname, "node_modules/@gridland/web/src/shims");
-      const bunFfiShim = path.join(gridlandShims, "bun-ffi.ts");
-      config.resolve.alias = {
-        ...config.resolve.alias,
-        "bun:ffi": bunFfiShim,
-        "bun-ffi-structs": path.join(gridlandShims, "bun-ffi-structs.ts"),
-        bun: bunFfiShim,
-      };
     }
 
     return config;
@@ -57,6 +209,48 @@ const nextConfig: NextConfig = {
       { source: '/dashboard/:driveId/inbox', destination: '/dashboard/:driveId/channels', permanent: false },
     ];
   },
+  async rewrites() {
+    // beforeFiles: /.well-known/* must be rewritten BEFORE Next's filesystem +
+    // prerender check, otherwise the prerendered 404 for that namespace (Next
+    // treats it as static because public/.well-known/ exists) wins and the
+    // afterFiles rewrite never fires. See RFC 8414 discovery — pagespace-cli.
+    return {
+      beforeFiles: [...WELL_KNOWN_REWRITES],
+      // ROLLING-DEPLOY COMPAT, one release only (agent_sessions →
+      // agent_workspaces, epic Phase 5). Fly rolls web instance by instance, so
+      // a browser holding a pre-rename bundle keeps calling the old paths for
+      // minutes after the new code is serving. afterFiles: the real
+      // `/api/agent-workspaces/**` handlers are matched first and this only
+      // catches what would otherwise 404. Middleware runs BEFORE rewrites, and
+      // its `/api/:path*` matcher covers both spellings identically, so auth is
+      // unchanged. The contract PR deletes this block.
+      afterFiles: [
+        // The BARE old path. It read `/api/agent-workspaces` →
+        // `/api/agent-workspaces`, a rewrite to itself and a no-op — a sed
+        // casualty from the rename, since the source is the one spelling here
+        // that must stay OLD (review finding). Kept rather than deleted: the
+        // `:path*` rule below happens to cover the bare path too, but relying
+        // on whether `:path*` matches zero segments is not what a compat shim
+        // should rest on.
+        {
+          source: "/api/agent-sessions",
+          destination: "/api/agent-workspaces",
+        },
+        {
+          source: "/api/agent-sessions/:path*",
+          destination: "/api/agent-workspaces/:path*",
+        },
+      ],
+    };
+  },
 };
 
-export default nextConfig;
+const sentryBuildOptions = {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  silent: !process.env.CI,
+  tunnelRoute: "/sentry-tunnel",
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  widenClientFileUpload: true,
+};
+export default withSentryConfig(nextConfig, sentryBuildOptions);

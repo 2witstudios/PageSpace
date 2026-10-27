@@ -8,6 +8,7 @@ export const contactSubmissions = pgTable('contact_submissions', {
   subject: text('subject').notNull(),
   message: text('message').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  resolvedAt: timestamp('resolvedAt', { mode: 'date' }),
 }, (table) => {
   return {
     emailIdx: index('contact_submissions_email_idx').on(table.email),

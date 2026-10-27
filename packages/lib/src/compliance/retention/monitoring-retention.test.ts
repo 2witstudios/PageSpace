@@ -34,10 +34,14 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
   errorLogs: { id: 'errorLogs.id', timestamp: 'errorLogs.timestamp' },
   userActivities: { id: 'userActivities.id', timestamp: 'userActivities.timestamp' },
 }));
+vi.mock('../../observability/clickhouse-client', () => ({
+  isClickHouseEnabled: vi.fn(() => false),
+}));
 
 import {
   getRetentionConfig,
   getRetentionCutoff,
+  getAiUsageLogsRetentionDays,
   cleanupApiMetrics,
   cleanupSystemLogs,
   cleanupErrorLogs,
@@ -45,6 +49,7 @@ import {
   runMonitoringRetentionCleanup,
 } from './monitoring-retention';
 import { apiMetrics, systemLogs, errorLogs, userActivities } from '@pagespace/db/schema/monitoring';
+import { isClickHouseEnabled } from '../../observability/clickhouse-client';
 
 const originalEnv = process.env;
 
@@ -54,8 +59,10 @@ beforeEach(() => {
   delete process.env.RETENTION_SYSTEM_LOGS_DAYS;
   delete process.env.RETENTION_ERROR_LOGS_DAYS;
   delete process.env.RETENTION_USER_ACTIVITIES_DAYS;
+  delete process.env.RETENTION_AI_USAGE_LOGS_DAYS;
   vi.clearAllMocks();
   mockReturning.mockResolvedValue([]);
+  vi.mocked(isClickHouseEnabled).mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -114,6 +121,31 @@ describe('getRetentionConfig', () => {
 
     expect(config.apiMetricsDays).toBe(90);
     expect(config.errorLogsDays).toBe(90);
+  });
+});
+
+describe('getAiUsageLogsRetentionDays', () => {
+  it('given_noEnvVar_returnsDefaultOf90', () => {
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+  });
+
+  it('given_validPositiveInt_returnsThatValue', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '30';
+    expect(getAiUsageLogsRetentionDays()).toBe(30);
+  });
+
+  it('given_zeroNegativeOrNonNumeric_fallsBackTo90', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '0';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '-7';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = 'nope';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
+  });
+
+  it('given_emptyString_fallsBackTo90', () => {
+    process.env.RETENTION_AI_USAGE_LOGS_DAYS = '';
+    expect(getAiUsageLogsRetentionDays()).toBe(90);
   });
 });
 
@@ -245,5 +277,26 @@ describe('runMonitoringRetentionCleanup', () => {
     mockReturning.mockRejectedValue(new Error('disk full'));
 
     await expect(runMonitoringRetentionCleanup()).rejects.toThrow('disk full');
+  });
+
+  it('given_clickhouseEnabled_isANoOpForTheFourAnalyticsTables', async () => {
+    // Post-cutover, retention for the 4 tables is enforced by CH table TTLs
+    // (clickhouse-ddl.ts). Running the PG purges too would double-handle;
+    // the frozen pre-cutover PG rows are removed by the Phase 6 drop.
+    vi.mocked(isClickHouseEnabled).mockReturnValue(true);
+
+    const results = await runMonitoringRetentionCleanup();
+
+    expect(results).toEqual([]);
+    expect(mockDeleteTable).not.toHaveBeenCalled();
+  });
+
+  it('given_clickhouseDisabled_pgPurgesRunExactlyAsBefore', async () => {
+    vi.mocked(isClickHouseEnabled).mockReturnValue(false);
+
+    const results = await runMonitoringRetentionCleanup();
+
+    expect(results).toHaveLength(4);
+    expect(mockDeleteTable).toHaveBeenCalledTimes(4);
   });
 });

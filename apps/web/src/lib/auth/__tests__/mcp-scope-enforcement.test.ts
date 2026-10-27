@@ -82,9 +82,12 @@ import {
   checkMCPCreateScope,
   filterDrivesByMCPScope,
   getAllowedDriveIds,
+  isManageKeysOnly,
   type MCPAuthResult,
   type SessionAuthResult,
+  type OAuthAuthResult,
 } from '../index';
+import { manageKeysScopedAuthResult } from './manage-keys-fixture';
 
 describe('MCP Scope Enforcement', () => {
   beforeEach(() => {
@@ -124,6 +127,30 @@ describe('MCP Scope Enforcement', () => {
     sessionId: 'session-xyz',
   });
 
+  const createScopedOAuthAuth = (allowedDriveIds: string[]): OAuthAuthResult => ({
+    tokenType: 'oauth',
+    userId: 'user-123',
+    role: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-abc',
+    scopes: { account: false, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
+    driveScopes: allowedDriveIds.map((driveId) => ({ driveId, role: null, customRoleId: null })),
+    allowedDriveIds,
+  });
+
+  const createAccountScopedOAuthAuth = (): OAuthAuthResult => ({
+    tokenType: 'oauth',
+    userId: 'user-123',
+    role: 'user',
+    tokenVersion: 1,
+    adminRoleVersion: 0,
+    tokenId: 'oauth-token-abc',
+    scopes: { account: true, offlineAccess: false, drives: new Map(), manageKeys: false, allDrives: false, updateKeyId: null, activateKeyId: null, newKeyName: null },
+    driveScopes: [],
+    allowedDriveIds: [],
+  });
+
   // ===========================================================================
   // 1. getAllowedDriveIds
   // ===========================================================================
@@ -146,6 +173,55 @@ describe('MCP Scope Enforcement', () => {
       const result = getAllowedDriveIds(auth);
 
       expect(result).toEqual(['drive-1', 'drive-2']);
+    });
+
+    it('given account-scoped OAuth auth, should return empty array (full access, like an unscoped MCP token)', () => {
+      const result = getAllowedDriveIds(createAccountScopedOAuthAuth());
+
+      expect(result).toEqual([]);
+    });
+
+    it('given drive-scoped OAuth auth, should return the allowed drive IDs', () => {
+      const auth = createScopedOAuthAuth(['drive-1', 'drive-2']);
+      const result = getAllowedDriveIds(auth);
+
+      expect(result).toEqual(['drive-1', 'drive-2']);
+    });
+
+    it('given service auth carrying an inherited ceiling, should return that ceiling', () => {
+      // THE escalation guard for agent dispatch. A worker spawned by a
+      // drive-scoped MCP token runs in a fresh request under service auth; if
+      // this fell through to the session branch below it would read as `[]` =
+      // FULL ACCESS, and the scoped token's worker would reach every drive its
+      // user can — an escalation, not a convenience.
+      const result = getAllowedDriveIds({
+        tokenType: 'service',
+        service: 'agent-dispatch',
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 1,
+        allowedDriveIds: ['drive-1', 'drive-2'],
+        originatingMcpTokenId: 'mcp-token-1',
+      });
+
+      expect(result).toEqual(['drive-1', 'drive-2']);
+    });
+
+    it('given service auth with no ceiling, should return empty array (full access)', () => {
+      // A dispatch that started from a session or an unscoped token inherits no
+      // ceiling — the same `[]` convention every other credential shape uses.
+      const result = getAllowedDriveIds({
+        tokenType: 'service',
+        service: 'agent-dispatch',
+        userId: 'user-1',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 1,
+        allowedDriveIds: [],
+      });
+
+      expect(result).toEqual([]);
     });
   });
 
@@ -175,6 +251,27 @@ describe('MCP Scope Enforcement', () => {
 
     it('given scoped MCP token, should deny access to out-of-scope drive', () => {
       const auth = createScopedMCPAuth(['drive-1']);
+      const result = checkMCPDriveScope(auth, 'drive-other');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('given account-scoped OAuth token, should allow access to any drive (full access)', () => {
+      const result = checkMCPDriveScope(createAccountScopedOAuthAuth(), 'any-drive');
+
+      expect(result).toBeNull();
+    });
+
+    it('given drive-scoped OAuth token, should allow access to an in-scope drive — scope narrowing bites', () => {
+      const auth = createScopedOAuthAuth(['drive-1', 'drive-2']);
+      const result = checkMCPDriveScope(auth, 'drive-1');
+
+      expect(result).toBeNull();
+    });
+
+    it('given drive-scoped OAuth token, should deny access to an out-of-scope drive with 403 — scope narrowing bites', () => {
+      const auth = createScopedOAuthAuth(['drive-1']);
       const result = checkMCPDriveScope(auth, 'drive-other');
 
       expect(result).not.toBeNull();
@@ -426,6 +523,70 @@ describe('MCP Scope Enforcement', () => {
       // Scope check confirms filter result
       expect(checkMCPDriveScope(auth, 'drive-1')).toBeNull();
       expect(checkMCPDriveScope(auth, 'drive-3')).not.toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // 7. MANAGE-KEYS-ONLY CREDENTIAL (zero-content-scope OAuth token)
+  // ===========================================================================
+  //
+  // `parseScopeList` mints scopes.manageKeys: true today via the manage_keys
+  // token. These tests pin down that every helper below already denies
+  // content access instead of applying the empty-driveScopes-means-full-access
+  // convention every other credential relies on.
+
+  describe('manage-keys-only credential', () => {
+    it('isManageKeysOnly identifies a manage-keys-scoped OAuth credential', () => {
+      expect(isManageKeysOnly(manageKeysScopedAuthResult())).toBe(true);
+    });
+
+    it('isManageKeysOnly is false for every credential kind that exists today', () => {
+      expect(isManageKeysOnly(createSessionAuth())).toBe(false);
+      expect(isManageKeysOnly(createUnscopedMCPAuth())).toBe(false);
+      expect(isManageKeysOnly(createScopedMCPAuth(['drive-1']))).toBe(false);
+      expect(isManageKeysOnly(createAccountScopedOAuthAuth())).toBe(false);
+      expect(isManageKeysOnly(createScopedOAuthAuth(['drive-1']))).toBe(false);
+    });
+
+    it('getAllowedDriveIds never returns an empty array (which would mean full access)', () => {
+      const result = getAllowedDriveIds(manageKeysScopedAuthResult());
+
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('checkMCPDriveScope denies access to any drive', () => {
+      const result = checkMCPDriveScope(manageKeysScopedAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPPageScope denies access to any page without a DB lookup', async () => {
+      const result = await checkMCPPageScope(manageKeysScopedAuthResult(), 'any-page');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+      expect(mockPageFindFirst).not.toHaveBeenCalled();
+    });
+
+    it('filterDrivesByMCPScope filters every drive out', () => {
+      const result = filterDrivesByMCPScope(manageKeysScopedAuthResult(), ['drive-1', 'drive-2']);
+
+      expect(result).toEqual([]);
+    });
+
+    it('checkMCPCreateScope denies creating a new drive', () => {
+      const result = checkMCPCreateScope(manageKeysScopedAuthResult(), null);
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
+    });
+
+    it('checkMCPCreateScope denies creating a resource in any existing drive', () => {
+      const result = checkMCPCreateScope(manageKeysScopedAuthResult(), 'any-drive');
+
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe(403);
     });
   });
 });

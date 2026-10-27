@@ -18,6 +18,7 @@ import {
   markPasskeyRegisterOptionsIssued,
 } from '../passkey-register-handoff';
 import { hashToken } from '../token-utils';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 const originalNodeEnv = process.env.NODE_ENV;
 let dbAvailable = false;
@@ -38,7 +39,8 @@ describe('passkey-register-handoff (Postgres-backed auth_handoff_tokens)', () =>
     try {
       await db.select().from(authHandoffTokens).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('passkey-register-handoff.integration.test.ts', error);
       dbAvailable = false;
     }
   });

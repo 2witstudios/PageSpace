@@ -9,6 +9,7 @@ import {
   navigateInTab as navigateInTabFn,
   goBack as goBackFn,
   goForward as goForwardFn,
+  goToHistoryIndex as goToHistoryIndexFn,
   updateTabMeta as updateTabMetaFn,
   canGoBack,
   canGoForward,
@@ -39,11 +40,13 @@ interface TabsState {
   reorderTab: (fromIndex: number, toIndex: number) => void;
   pinTab: (tabId: string) => void;
   unpinTab: (tabId: string) => void;
-  navigateInTab: (tabId: string, path: string) => void;
-  navigateInActiveTab: (path: string) => void;
+  navigateInTab: (tabId: string, path: string, search?: string) => void;
+  navigateInActiveTab: (path: string, search?: string) => void;
   goBackInActiveTab: () => void;
   goForwardInActiveTab: () => void;
+  setActiveTabHistoryIndex: (index: number) => void;
   duplicateTab: (tabId: string) => void;
+  updateActiveTabSearch: (search: string) => void;
   updateTabMeta: (tabId: string, meta: TabMetaUpdate) => void;
   updateTabMetaByPageId: (pageId: string, meta: TabMetaUpdate) => void;
 
@@ -52,6 +55,45 @@ interface TabsState {
   selectCanGoBack: (state: TabsState) => boolean;
   selectCanGoForward: (state: TabsState) => boolean;
 }
+
+/** The shape `partialize` actually persists — not the full store. */
+type PersistedTabsState = { tabs: Tab[]; activeTabId: string | null };
+
+/**
+ * v1 added `Tab.search` (required). A tab persisted under v0 rehydrates
+ * without it (`undefined`, not `''`), which fails `navigateInTab`'s no-op
+ * check (`undefined !== ''`) on the very next same-path sync and pushes a
+ * spurious duplicate history entry — backfill it here instead. A standalone,
+ * exported function (rather than inline in the `persist()` config below) so
+ * it's directly unit-testable without needing to drive an actual rehydration.
+ *
+ * Defensive about the WHOLE persisted shape, not just the field being
+ * migrated: `localStorage` is outside this app's control (hand-edited,
+ * partially written, corrupted by an extension), and zustand's `persist`
+ * middleware has no fallback for a `migrate` that throws — the rehydration
+ * promise rejects, `onRehydrateStorage`'s callback below receives `undefined`
+ * instead of the store, `state?.setRehydrated()` silently no-ops via optional
+ * chaining, and `rehydrated` stays `false` forever — freezing the entire tab
+ * bar with no visible error (`useTabSync` no-ops on every render while
+ * `!rehydrated`). Always returning a well-formed `PersistedTabsState`, even
+ * from garbage input, is what prevents that class of failure.
+ */
+export const migrateTabsStorage = (persistedState: unknown, version: number): PersistedTabsState => {
+  const state = (persistedState && typeof persistedState === 'object' ? persistedState : {}) as {
+    tabs?: unknown;
+    activeTabId?: unknown;
+  };
+  const rawTabs = Array.isArray(state.tabs) ? state.tabs : [];
+  const activeTabId = typeof state.activeTabId === 'string' ? state.activeTabId : null;
+
+  if (version < 1) {
+    return {
+      activeTabId,
+      tabs: rawTabs.map((tab) => ({ ...tab, search: tab?.search ?? '' })),
+    };
+  }
+  return { activeTabId, tabs: rawTabs as Tab[] };
+};
 
 export const useTabsStore = create<TabsState>()(
   persist(
@@ -239,21 +281,21 @@ export const useTabsStore = create<TabsState>()(
         set({ tabs: newTabs });
       },
 
-      navigateInTab: (tabId, path) => {
+      navigateInTab: (tabId, path, search = '') => {
         const { tabs } = get();
         const tabIndex = tabs.findIndex(t => t.id === tabId);
         if (tabIndex === -1) return;
 
         const newTabs = [...tabs];
-        newTabs[tabIndex] = navigateInTabFn(newTabs[tabIndex], path);
+        newTabs[tabIndex] = navigateInTabFn(newTabs[tabIndex], path, search);
 
         set({ tabs: newTabs });
       },
 
-      navigateInActiveTab: (path) => {
+      navigateInActiveTab: (path, search = '') => {
         const { activeTabId, navigateInTab } = get();
         if (!activeTabId) return;
-        navigateInTab(activeTabId, path);
+        navigateInTab(activeTabId, path, search);
       },
 
       goBackInActiveTab: () => {
@@ -282,12 +324,25 @@ export const useTabsStore = create<TabsState>()(
         set({ tabs: newTabs });
       },
 
+      setActiveTabHistoryIndex: (index) => {
+        const { tabs, activeTabId } = get();
+        if (!activeTabId) return;
+
+        const tabIndex = tabs.findIndex(t => t.id === activeTabId);
+        if (tabIndex === -1) return;
+
+        const newTabs = [...tabs];
+        newTabs[tabIndex] = goToHistoryIndexFn(newTabs[tabIndex], index);
+
+        set({ tabs: newTabs });
+      },
+
       duplicateTab: (tabId) => {
         const { tabs } = get();
         const tab = tabs.find(t => t.id === tabId);
         if (!tab) return;
 
-        const newTab = createTabFn({ path: tab.path, title: tab.title, pageType: tab.pageType });
+        const newTab = createTabFn({ path: tab.path, search: tab.search, title: tab.title, pageType: tab.pageType });
         const tabIndex = tabs.findIndex(t => t.id === tabId);
 
         const newTabs = [...tabs];
@@ -297,6 +352,22 @@ export const useTabsStore = create<TabsState>()(
           tabs: newTabs,
           activeTabId: newTab.id,
         });
+      },
+
+      updateActiveTabSearch: (search) => {
+        const { activeTabId, tabs } = get();
+        if (!activeTabId) return;
+
+        const tabIndex = tabs.findIndex(t => t.id === activeTabId);
+        if (tabIndex === -1) return;
+
+        const tab = tabs[tabIndex];
+        if (tab.search === search) return;
+
+        const newTabs = [...tabs];
+        newTabs[tabIndex] = navigateInTabFn(tab, tab.path, search);
+
+        set({ tabs: newTabs });
       },
 
       updateTabMeta: (tabId, meta) => {
@@ -343,6 +414,8 @@ export const useTabsStore = create<TabsState>()(
     }),
     {
       name: 'tabs-storage',
+      version: 1,
+      migrate: migrateTabsStorage,
       partialize: (state) => ({
         tabs: state.tabs,
         activeTabId: state.activeTabId,
@@ -355,7 +428,6 @@ export const useTabsStore = create<TabsState>()(
 );
 
 // Export standalone selectors
-export const selectTabCount = (state: TabsState) => state.tabs.length;
 export const selectHasMultipleTabs = (state: TabsState) => state.tabs.length > 1;
 export const selectActiveTab = (state: TabsState) =>
   state.tabs.find(t => t.id === state.activeTabId) ?? null;

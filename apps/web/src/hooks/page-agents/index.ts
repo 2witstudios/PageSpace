@@ -12,7 +12,3 @@ export {
   type SidebarAgentInfo,
   type UseSidebarAgentStateReturn,
 } from './usePageAgentSidebarState';
-export {
-  usePageAgentSidebarChat,
-  type UseSidebarChatReturn,
-} from './usePageAgentSidebarChat';

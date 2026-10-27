@@ -22,6 +22,8 @@ const companyLinks = [
   { label: "Contact", href: "/contact" },
   { label: "Privacy", href: "/privacy" },
   { label: "Terms", href: "/terms" },
+  { label: "Cookies", href: "/cookies" },
+  { label: "Subprocessors", href: "/subprocessors" },
 ];
 
 function FooterLinkGroup({ title, links }: { title: string; links: { label: string; href: string }[] }) {
@@ -55,7 +57,7 @@ export function SiteFooter() {
             <Link href="/" className="flex items-center gap-2">
               <Image
                 src="/android-chrome-192x192.png"
-                alt="PageSpace"
+                alt=""
                 width={20}
                 height={20}
                 className="rounded"
@@ -63,7 +65,7 @@ export function SiteFooter() {
               <span className="font-semibold text-foreground">PageSpace</span>
             </Link>
             <p className="mt-3 text-sm text-muted-foreground max-w-[220px]">
-              AI-powered workspace for docs, code, and collaboration.
+              The workspace that keeps working. Get on the same page.
             </p>
             <a
               href="https://github.com/2witstudios/PageSpace"

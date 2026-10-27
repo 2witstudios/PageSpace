@@ -1,4 +1,5 @@
-import React, { useState, memo, useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
+import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import {
   FolderOpen,
   Plus,
@@ -20,20 +21,16 @@ import {
   MessageSquare
 } from 'lucide-react';
 
-import { PageTreeRenderer, type TreeItem } from './PageTreeRenderer';
-import { RichContentRenderer } from './RichContentRenderer';
-import { RichDiffRenderer } from './RichDiffRenderer';
+import { type TreeItem } from './PageTreeRenderer';
 import { TaskRenderer } from './TaskRenderer';
-import { ActionResultRenderer } from './ActionResultRenderer';
-import { DriveListRenderer } from './DriveListRenderer';
-import { SearchResultsRenderer, type SearchResult } from './SearchResultsRenderer';
-import { AgentListRenderer, type AgentInfo } from './AgentListRenderer';
-import { ActivityRenderer, type ActivityItem } from './ActivityRenderer';
-import { WebSearchRenderer, type WebSearchResult } from './WebSearchRenderer';
-import { parseIntegrationToolName, isIntegrationTool } from '@pagespace/lib/integrations/converter/ai-sdk';
-import { getBuiltinProvider } from '@pagespace/lib/integrations/providers/builtin-providers';
+import { GeneratedImageRenderer } from './GeneratedImageRenderer';
+import { TASK_TOOL_NAMES } from '../useAggregatedTasks';
+import { PageAgentConversationRenderer } from '@/components/ai/page-agents';
+import { AskUserQuestionCard } from '../ask-user/AskUserQuestionCard';
+import { renderToolContent } from './registry';
+import { dispatchToolCall, resolveIntegrationToolLabel } from './tool-call-dispatch';
 
-interface ToolPart {
+export interface ToolPart {
   type: string;
   toolName?: string;
   toolCallId?: string;
@@ -45,9 +42,11 @@ interface ToolPart {
 
 interface CompactToolCallRendererProps {
   part: ToolPart;
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
 }
 
-// Helper function to count pages in tree structure (moved outside component)
+// Count pages in a tree structure (used by the compact one-line summary)
 const countPages = (items: TreeItem[]): number => {
   return items.reduce((count, item) => {
     return count + 1 + (item.children ? countPages(item.children) : 0);
@@ -69,36 +68,7 @@ const safeJsonParse = (value: unknown): Record<string, unknown> | null => {
   return null;
 };
 
-const buildChannelTranscript = (channelMessages: unknown): string | null => {
-  if (!Array.isArray(channelMessages) || channelMessages.length === 0) {
-    return null;
-  }
-
-  const lines = channelMessages.flatMap((entry, index) => {
-    if (typeof entry !== 'object' || entry === null) {
-      return [];
-    }
-
-    const message = entry as Record<string, unknown>;
-    const lineNumber = typeof message.lineNumber === 'number' ? message.lineNumber : index + 1;
-    const createdAt = typeof message.createdAt === 'string' ? message.createdAt : '';
-    const senderName = typeof message.senderName === 'string' ? message.senderName : 'Unknown';
-    const senderType = typeof message.senderType === 'string' ? message.senderType : 'user';
-    const content = typeof message.content === 'string' ? message.content : '';
-
-    const senderPrefix = senderType === 'agent'
-      ? '[agent]'
-      : senderType === 'global_assistant'
-        ? '[assistant]'
-        : '[user]';
-
-    const timestamp = createdAt ? ` (${createdAt})` : '';
-    return [`${lineNumber}→${senderPrefix} ${senderName}${timestamp}: ${content}`];
-  });
-
-  return lines.length > 0 ? lines.join('\n') : null;
-};
-
+// Compact one-line preview for send_channel_message
 const getSendChannelMessagePreview = (
   parsedInput: Record<string, unknown> | null,
   parsedOutput: Record<string, unknown>
@@ -117,25 +87,35 @@ const getSendChannelMessagePreview = (
 };
 
 // Tool name mapping (moved outside component to avoid recreation)
-const TOOL_NAME_MAP: Record<string, string> = {
+export const TOOL_NAME_MAP: Record<string, string> = {
   'ask_agent': 'Ask Agent',
+  'ask_user': 'Question',
   'list_drives': 'List Drives',
   'list_pages': 'List Pages',
   'read_page': 'Read',
   'replace_lines': 'Replace',
+  'insert_content': 'Insert',
+  'copy_content': 'Copy',
   'create_page': 'Create',
   'rename_page': 'Rename',
   'send_channel_message': 'Send Message',
-  'trash': 'Trash',
-  'restore': 'Restore',
+  'trash_page': 'Trash',
+  'trash_drive': 'Trash Drive',
+  'restore_page': 'Restore',
+  'restore_drive': 'Restore Drive',
   'move_page': 'Move',
   'list_trash': 'List Trash'
 };
 
-// Internal renderer component with hooks
-const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string }> = memo(function CompactToolCallRendererInternal({ part, toolName }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-
+/**
+ * Computes everything CompactToolCallRendererInternal needs to render a
+ * tool call's icon/title/summary/expanded-content, extracted so
+ * CompactToolRunGroup can render a length-1 run identically to a standalone
+ * row without duplicating this logic. `isExpanded` is taken as an external
+ * parameter (rather than owned internally) so a run's own expand state can
+ * drive it directly.
+ */
+export function useCompactToolCallDisplay(part: ToolPart, toolName: string, isExpanded: boolean) {
   const state = part.state;
   const input = part.input;
   const output = part.output;
@@ -162,14 +142,18 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       case 'send_channel_message':
         return <MessageSquare className={iconClass} />;
       case 'replace_lines':
+      case 'insert_content':
+      case 'copy_content':
         return <Edit className={iconClass} />;
       case 'create_page':
         return <Plus className={iconClass} />;
       case 'rename_page':
         return <FilePlus className={iconClass} />;
-      case 'trash':
+      case 'trash_page':
+      case 'trash_drive':
         return <Trash className={iconClass} />;
-      case 'restore':
+      case 'restore_page':
+      case 'restore_drive':
         return <RotateCcw className={iconClass} />;
       case 'move_page':
         return <Move className={iconClass} />;
@@ -199,19 +183,11 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
 
   // Memoize formatted tool name
   const formattedToolName = useMemo(() => {
-    if (isIntegrationTool(toolName)) {
-      const parsed = parseIntegrationToolName(toolName);
-      if (parsed) {
-        const provider = getBuiltinProvider(parsed.providerSlug);
-        const tool = provider?.tools.find(t => t.id === parsed.toolId);
-        if (tool) return tool.name;
-        return parsed.toolId.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      }
-    }
-    return TOOL_NAME_MAP[toolName] || toolName
-      .split('_')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(' ');
+    return (
+      resolveIntegrationToolLabel(toolName) ||
+      TOOL_NAME_MAP[toolName] ||
+      toolName.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+    );
   }, [toolName]);
 
   // Memoize descriptive title
@@ -221,7 +197,7 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     const params = parsedInput;
 
     // File-based tools
-    if (['read_page', 'replace_lines', 'list_pages'].includes(toolName)) {
+    if (['read_page', 'replace_lines', 'insert_content', 'list_pages'].includes(toolName)) {
       if (params.title) return `${formattedToolName}: "${params.title}"`;
       if (params.dir) return `${formattedToolName}: ${params.dir}`;
     }
@@ -237,8 +213,8 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
       if (params.currentTitle) return `${formattedToolName}: "${params.currentTitle}"`;
     }
 
-    // Trash/Restore
-    if (['trash', 'restore'].includes(toolName)) {
+    // Trash/Restore (per-entity verb tools)
+    if (['trash_page', 'trash_drive', 'restore_page', 'restore_drive'].includes(toolName)) {
       if (params.title || params.name) return `${formattedToolName}: "${params.title || params.name}"`;
     }
 
@@ -290,9 +266,12 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         return `${(result.drives as unknown[]).length} drives`;
       }
 
-      if (toolName === 'list_pages' && result.tree) {
-        const pageCount = countPages((result.tree as TreeItem[]) || []);
-        return `${pageCount} pages`;
+      if (toolName === 'list_pages') {
+        if (result.count !== undefined) return `${result.count} pages`;
+        if (result.tree) {
+          const pageCount = countPages((result.tree as TreeItem[]) || []);
+          return `${pageCount} pages`;
+        }
       }
 
       if (toolName === 'read_page') {
@@ -327,468 +306,16 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
     return 'Pending';
   }, [error, state, parsedInput, parsedOutput, toolName]);
 
-  // Memoize rich content for expanded view
-  const richContent = useMemo((): React.ReactNode | null => {
-    if (!parsedOutput) return null;
-    const result = parsedOutput as Record<string, unknown>;
-
-    // === DRIVE TOOLS ===
-    if (toolName === 'list_drives' && result.drives) {
-      const drives = (result.drives as Array<{ id: string; slug: string; title?: string; name?: string; description?: string; isPersonal?: boolean; memberCount?: number }>).map(d => ({
-        id: d.id,
-        name: d.name || d.title || 'Untitled',
-        slug: d.slug,
-        description: d.description,
-        isPersonal: d.isPersonal,
-        memberCount: d.memberCount,
-      }));
-      return <DriveListRenderer drives={drives} />;
-    }
-
-    if (toolName === 'create_drive' || toolName === 'rename_drive') {
-      return (
-        <ActionResultRenderer
-          actionType={toolName === 'create_drive' ? 'create' : 'rename'}
-          success={result.success !== false}
-          title={(result.name || result.title) as string | undefined}
-          oldTitle={result.oldName as string | undefined}
-          message={result.message as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'update_drive_context') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={result.success !== false}
-          title="Workspace Context"
-          message={(result.message as string | undefined) || 'Context updated successfully'}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    // === PAGE READ TOOLS ===
-    if (toolName === 'list_pages' && result.tree) {
-      return (
-        <PageTreeRenderer
-          tree={result.tree as TreeItem[]}
-          driveName={result.driveName as string | undefined}
-          driveId={result.driveId as string | undefined}
-          maxHeight={200}
-        />
-      );
-    }
-
-    if (toolName === 'list_trash' && result.tree) {
-      return (
-        <PageTreeRenderer
-          tree={result.tree as TreeItem[]}
-          driveName={result.driveName as string | undefined}
-          driveId={result.driveId as string | undefined}
-          title="Trash"
-          maxHeight={200}
-        />
-      );
-    }
-
-    if (toolName === 'read_page') {
-      const directContentValue = result.rawContent ?? result.content;
-      const directContent = typeof directContentValue === 'string' && directContentValue.length > 0
-        ? directContentValue
-        : undefined;
-      const channelTranscript = buildChannelTranscript(result.channelMessages);
-      const hasChannelMessagesArray = Array.isArray(result.channelMessages);
-      const content = directContent ?? channelTranscript ?? (hasChannelMessagesArray ? 'Channel has no messages yet.' : undefined);
-
-      if (content !== undefined) {
-        return (
-          <RichContentRenderer
-            title={(result.title as string) || 'Document'}
-            content={content}
-            pageId={result.pageId as string | undefined}
-            pageType={result.type as string | undefined}
-            maxHeight={200}
-          />
-        );
-      }
-    }
-
-    if (toolName === 'list_conversations' && result.conversations != null) {
-      const conversations = result.conversations as Array<{ id: string; title?: string }>;
-      return (
-        <PageTreeRenderer
-          tree={conversations.map(c => ({
-            path: c.id,
-            title: c.title || `Conversation ${c.id.slice(0, 8)}`,
-            type: 'AI_CHAT',
-            pageId: c.id,
-            children: []
-          }))}
-          title="Conversations"
-          maxHeight={200}
-        />
-      );
-    }
-
-    if (toolName === 'read_conversation' && result.content != null) {
-      return (
-        <RichContentRenderer
-          title={(result.title as string | undefined) || 'Conversation'}
-          content={result.content as string}
-          pageId={result.pageId as string | undefined}
-          pageType="AI_CHAT"
-          maxHeight={200}
-        />
-      );
-    }
-
-    // === PAGE WRITE TOOLS ===
-    if (toolName === 'replace_lines') {
-      if (result.success && result.oldContent != null && result.newContent != null) {
-        return (
-          <RichDiffRenderer
-            title={(result.title as string) || 'Modified Document'}
-            oldContent={result.oldContent as string}
-            newContent={result.newContent as string}
-            pageId={result.pageId as string | undefined}
-            changeSummary={result.summary as string | undefined}
-            maxHeight={200}
-          />
-        );
-      }
-      if (result.success && result.newContent != null) {
-        return (
-          <RichContentRenderer
-            title={(result.title as string) || 'Modified Document'}
-            content={result.newContent as string}
-            pageId={result.pageId as string | undefined}
-            pageType={result.type as string | undefined}
-            maxHeight={200}
-          />
-        );
-      }
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={result.success !== false}
-          title={result.title as string | undefined}
-          pageId={result.pageId as string | undefined}
-          pageType={result.type as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'create_page') {
-      return (
-        <ActionResultRenderer
-          actionType="create"
-          success={result.success !== false}
-          title={result.title as string | undefined}
-          pageId={result.pageId as string | undefined}
-          driveId={result.driveId as string | undefined}
-          pageType={result.type as string | undefined}
-          message={result.message as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'rename_page') {
-      return (
-        <ActionResultRenderer
-          actionType="rename"
-          success={result.success !== false}
-          title={(result.newTitle || result.title) as string | undefined}
-          oldTitle={result.oldTitle as string | undefined}
-          pageId={result.pageId as string | undefined}
-          driveId={result.driveId as string | undefined}
-          pageType={result.type as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'trash') {
-      return (
-        <ActionResultRenderer
-          actionType="trash"
-          success={result.success !== false}
-          title={result.title as string | undefined}
-          pageType={result.type as string | undefined}
-          message={result.message as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'restore') {
-      return (
-        <ActionResultRenderer
-          actionType="restore"
-          success={result.success !== false}
-          title={result.title as string | undefined}
-          pageId={result.pageId as string | undefined}
-          driveId={result.driveId as string | undefined}
-          pageType={result.type as string | undefined}
-          message={result.message as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'move_page') {
-      return (
-        <ActionResultRenderer
-          actionType="move"
-          success={result.success !== false}
-          title={result.title as string | undefined}
-          pageId={result.pageId as string | undefined}
-          driveId={result.driveId as string | undefined}
-          pageType={result.type as string | undefined}
-          oldParent={result.oldParentTitle as string | undefined}
-          newParent={result.newParentTitle as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'edit_sheet_cells') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={result.success !== false}
-          title={(result.title as string | undefined) || 'Sheet'}
-          pageId={result.pageId as string | undefined}
-          driveId={result.driveId as string | undefined}
-          pageType="SHEET"
-          message={(result.summary as string | undefined) || `${(result.updatedCount as number | undefined) || 0} cells updated`}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    // === CHANNEL TOOLS ===
-    if (toolName === 'send_channel_message') {
-      const messagePreview = getSendChannelMessagePreview(parsedInput, result);
-      const channelTitle = result.channelTitle;
-      const previewTitle = typeof channelTitle === 'string' && channelTitle.length > 0
-        ? `Message Preview · #${channelTitle}`
-        : 'Message Preview';
-
-      return (
-        <div>
-          <ActionResultRenderer
-            actionType="update"
-            success={result.success !== false}
-            title={channelTitle as string | undefined}
-            pageId={result.channelId as string | undefined}
-            pageType="CHANNEL"
-            message={(result.summary || result.message) as string | undefined}
-            errorMessage={result.error as string | undefined}
-          />
-          {messagePreview && (
-            <RichContentRenderer
-              title={previewTitle}
-              content={messagePreview}
-              pageId={result.channelId as string | undefined}
-              pageType="CHANNEL"
-              maxHeight={160}
-            />
-          )}
-        </div>
-      );
-    }
-
-    // === SEARCH TOOLS ===
-    if (toolName === 'regex_search' && result.results) {
-      return (
-        <SearchResultsRenderer
-          results={result.results as SearchResult[]}
-          query={parsedInput?.pattern as string}
-          searchType="regex"
-          totalMatches={result.totalMatches as number | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'glob_search' && result.results) {
-      return (
-        <SearchResultsRenderer
-          results={result.results as SearchResult[]}
-          query={parsedInput?.pattern as string}
-          searchType="glob"
-        />
-      );
-    }
-
-    if (toolName === 'multi_drive_search' && result.results) {
-      return (
-        <SearchResultsRenderer
-          results={result.results as SearchResult[]}
-          query={(parsedInput?.pattern || parsedInput?.query) as string}
-          searchType="multi-drive"
-          totalMatches={result.totalMatches as number | undefined}
-        />
-      );
-    }
-
-    // === AGENT TOOLS ===
-    if (toolName === 'list_agents' && result.agents) {
-      return <AgentListRenderer agents={result.agents as AgentInfo[]} />;
-    }
-
-    if (toolName === 'multi_drive_list_agents' && result.agents) {
-      return <AgentListRenderer agents={result.agents as AgentInfo[]} isMultiDrive />;
-    }
-
-    if (toolName === 'update_agent_config') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={result.success !== false}
-          title={(result.agentTitle as string | undefined) || 'Agent Configuration'}
-          message={(result.message as string | undefined) || 'Configuration updated'}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    if (toolName === 'ask_agent' && result.response) {
-      return (
-        <RichContentRenderer
-          title="Agent Response"
-          content={String(result.response)}
-          maxHeight={200}
-        />
-      );
-    }
-
-    // === WEB SEARCH ===
-    if (toolName === 'web_search' && result.results) {
-      return (
-        <WebSearchRenderer
-          results={result.results as WebSearchResult[]}
-          query={parsedInput?.query as string}
-        />
-      );
-    }
-
-    // === ACTIVITY ===
-    if (toolName === 'get_activity') {
-      if (result.activities) {
-        return (
-          <ActivityRenderer
-            activities={result.activities as ActivityItem[]}
-            period={result.period as string | undefined}
-          />
-        );
-      }
-      if (result.drives && Array.isArray(result.drives)) {
-        const actors = (result.actors || []) as Array<{ email: string; name: string | null; isYou: boolean; count: number }>;
-        const driveGroups = result.drives as Array<{
-          drive: { id: string; name: string; slug: string };
-          activities: Array<{
-            id: string; ts: string; op: string; res: string;
-            title: string | null; pageId: string | null; actor: number; ai?: string;
-          }>;
-        }>;
-
-        const opToAction = (op: string): 'created' | 'updated' | 'deleted' | 'restored' | 'moved' | 'renamed' => {
-          switch (op) {
-            case 'create': return 'created';
-            case 'update': return 'updated';
-            case 'delete': case 'trash': return 'deleted';
-            case 'restore': return 'restored';
-            case 'move': case 'reorder': return 'moved';
-            case 'rename': return 'renamed';
-            default: return 'updated';
-          }
-        };
-
-        const flatActivities: ActivityItem[] = [];
-        for (const group of driveGroups) {
-          for (const activity of group.activities) {
-            const actor = actors[activity.actor];
-            flatActivities.push({
-              id: activity.id,
-              action: opToAction(activity.op),
-              pageId: activity.pageId || undefined,
-              pageTitle: activity.title || undefined,
-              pageType: activity.res === 'page' ? undefined : activity.res,
-              driveId: group.drive.id,
-              driveName: group.drive.name,
-              actorName: actor?.name || actor?.email || undefined,
-              timestamp: activity.ts,
-              summary: activity.ai ? `AI-generated (${activity.ai})` : undefined,
-            });
-          }
-        }
-
-        flatActivities.sort((a, b) => {
-          const timeA = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-          const timeB = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-          return timeB - timeA;
-        });
-
-        const meta = result.meta as { window?: string } | undefined;
-        const period = meta?.window ? `Last ${meta.window}` : undefined;
-
-        return <ActivityRenderer activities={flatActivities} period={period} />;
-      }
-    }
-
-    // === TASK TOOLS ===
-    if (toolName === 'get_assigned_tasks' && result.tasks) {
-      const tasks = result.tasks as Array<{ id: string; title: string; status?: string; pageId?: string }>;
-      return (
-        <PageTreeRenderer
-          tree={tasks.map(t => ({
-            path: t.id,
-            title: `${t.status === 'completed' ? '[Done] ' : ''}${t.title}`,
-            type: 'TASK_LIST',
-            pageId: t.pageId,
-            children: []
-          }))}
-          title="Assigned Tasks"
-          maxHeight={200}
-        />
-      );
-    }
-
-    // Default: show success/failure for any tool with success field
-    if (typeof result.success === 'boolean') {
-      return (
-        <ActionResultRenderer
-          actionType="update"
-          success={result.success}
-          title={(result.title || result.name) as string | undefined}
-          message={result.message as string | undefined}
-          errorMessage={result.error as string | undefined}
-        />
-      );
-    }
-
-    return null;
-  }, [toolName, parsedInput, parsedOutput]);
-
-  // Memoize expanded details content
+  // Expanded details — delegate the rich body to the shared tool renderer
+  // registry so compact has full parity with the main transcript.
   const expandedDetails = useMemo(() => {
     if (!isExpanded) return null;
 
+    const richContent = renderToolContent({ toolName, parsedInput, parsedOutput, output, error });
+
     return (
       <div className="mt-1 max-w-full break-words">
-        {error ? (
-          <ActionResultRenderer
-            actionType="update"
-            success={false}
-            errorMessage={error}
-            title={parsedInput?.title as string}
-          />
-        ) : richContent ? (
+        {richContent ? (
           <div className="text-[10px]">{richContent}</div>
         ) : (
           <div className="p-1.5 bg-gray-50 dark:bg-gray-800/50 rounded text-[10px]">
@@ -800,12 +327,35 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
         )}
       </div>
     );
-  }, [isExpanded, error, richContent, parsedInput, state]);
+  }, [isExpanded, toolName, parsedInput, parsedOutput, output, error, state]);
+
+  return { state, toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails };
+}
+
+// Internal renderer component with hooks
+const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: string; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }> = memo(function CompactToolCallRendererInternal({ part, toolName, expanded: expandedProp, onExpandedChange }) {
+  // Decide controlled-ness once, based on whether onExpandedChange is
+  // provided at all (not on expandedProp's value): useControllableState
+  // treats `prop === undefined` as "uncontrolled" and warns the moment it
+  // flips to a boolean for the same instance. When a caller opts into
+  // control, `prop` must be a boolean from the very first render — never
+  // undefined — so this instance never actually switches modes. See the
+  // identical fix in ToolCallRenderer.tsx's collapsibleProps.
+  const [isExpanded, setIsExpanded] = useControllableState({
+    prop: onExpandedChange ? (expandedProp ?? false) : undefined,
+    defaultProp: false,
+    onChange: onExpandedChange,
+  });
+  const toggleExpanded = () => setIsExpanded(!isExpanded);
+
+  const { toolIcon, statusIcon, descriptiveTitle, compactSummary, expandedDetails } = useCompactToolCallDisplay(part, toolName, Boolean(isExpanded));
 
   return (
     <div className="py-0.5 text-[11px] max-w-full">
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        type="button"
+        onClick={toggleExpanded}
+        aria-expanded={isExpanded}
         className="w-full flex items-center space-x-1.5 text-left hover:bg-muted/30 rounded py-0.5 px-1 transition-colors max-w-full"
       >
         {isExpanded ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
@@ -822,13 +372,28 @@ const CompactToolCallRendererInternal: React.FC<{ part: ToolPart; toolName: stri
   );
 });
 
-export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part }) {
-  const toolName = part.toolName || part.type?.replace('tool-', '') || '';
+export const CompactToolCallRenderer: React.FC<CompactToolCallRendererProps> = memo(function CompactToolCallRenderer({ part, expanded, onExpandedChange }) {
+  const dispatch = dispatchToolCall(part, TASK_TOOL_NAMES);
 
-  // Task management tools - render with TaskRenderer
-  if (toolName === 'update_task') {
-    return <TaskRenderer part={part} />;
+  switch (dispatch.kind) {
+    case 'hidden':
+      return null;
+    case 'task':
+      return <TaskRenderer part={dispatch.part} />;
+    case 'agent':
+      return <PageAgentConversationRenderer part={dispatch.part} />;
+    case 'question':
+      return <AskUserQuestionCard part={dispatch.part} />;
+    case 'image':
+      return <GeneratedImageRenderer part={dispatch.part} />;
+    case 'generic':
+      return (
+        <CompactToolCallRendererInternal
+          part={dispatch.part}
+          toolName={dispatch.toolName}
+          expanded={expanded}
+          onExpandedChange={onExpandedChange}
+        />
+      );
   }
-
-  return <CompactToolCallRendererInternal part={part} toolName={toolName} />;
 });

@@ -55,6 +55,7 @@ vi.mock('@/lib/auth', () => ({
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { sql } from '@pagespace/db/operators';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string, tokenVersion = 0): SessionAuthResult => ({
@@ -82,6 +83,16 @@ const mockDrive = (overrides: { id: string; name: string }) => ({
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 describe('GET /api/account/drives-status', () => {
@@ -154,6 +165,30 @@ describe('GET /api/account/drives-status', () => {
       memberCount: 1,
     });
     expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('D-OW-7 an org drive the person leads needs no action before account deletion and is not listed', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([
+      { ...mockDrive({ id: 'drive_product', name: 'Product' }), orgId: 'org-northwind' },
+    ]);
+    setupSelectMocks(9);
+
+    const response = await GET(new Request('https://example.com/api/account/drives-status'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.soloDrives).toEqual([]);
+    expect(body.multiMemberDrives).toEqual([]);
+  });
+
+  it('counts members without GUEST rows (redeemed page share links), as account deletion does', async () => {
+    vi.mocked(db.query.drives.findMany).mockResolvedValue([mockDrive({ id: 'drive_solo', name: 'My Solo Drive' })]);
+    setupSelectMocks(1);
+
+    await GET(new Request('https://example.com/api/account/drives-status'));
+
+    const countSql = vi.mocked(sql).mock.calls.map(([strings]) => strings.join('?'));
+    expect(countSql).toContain("count(*) filter (where ? <> 'GUEST')");
   });
 
   it('should categorize multi-member drive correctly', async () => {

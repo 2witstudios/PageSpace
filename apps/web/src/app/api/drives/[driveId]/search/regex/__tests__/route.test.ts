@@ -36,6 +36,11 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPDriveScope: vi.fn(() => null), // Allow all drives by default
+  isScopedMCPAuth: vi.fn(() => false), // Session/unscoped fixtures by default
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveAccessLevel: vi.fn(),
 }));
 
 import { checkDriveAccessForSearch, regexSearchPages } from '@pagespace/lib/services/drive-search-service';
@@ -197,7 +202,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/regex?pattern=test`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call regexSearchPages with correct parameters', async () => {
@@ -209,7 +214,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 25 }
@@ -225,7 +230,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
@@ -241,7 +246,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'Doc',
         'test-drive',
         { searchIn: 'title', maxResults: 50 }
@@ -257,7 +262,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'both', maxResults: 50 }
@@ -273,7 +278,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         'test',
         'test-drive',
         { searchIn: 'content', maxResults: 100 }
@@ -414,7 +419,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '\\btest\\b',
         'test-drive',
         { searchIn: 'content', maxResults: 50 }
@@ -431,7 +436,7 @@ describe('GET /api/drives/[driveId]/search/regex', () => {
 
       expect(regexSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         pattern,
         'test-drive',
         { searchIn: 'content', maxResults: 50 }

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
 import type { ActivityFilters } from './types';
+import { dayRangeParams } from './utils';
 
 interface ExportButtonProps {
   context: 'user' | 'drive';
@@ -28,11 +29,9 @@ export function ExportButton({ context, driveId, filters }: ExportButtonProps) {
       if (effectiveDriveId) {
         params.set('driveId', effectiveDriveId);
       }
-      if (filters.startDate) {
-        params.set('startDate', filters.startDate.toISOString());
-      }
-      if (filters.endDate) {
-        params.set('endDate', filters.endDate.toISOString());
+      // The picker selects DAYS; the API takes instants and endDate is exclusive.
+      for (const [key, value] of Object.entries(dayRangeParams(filters.startDate, filters.endDate))) {
+        params.set(key, value);
       }
       if (filters.actorId) {
         params.set('actorId', filters.actorId);

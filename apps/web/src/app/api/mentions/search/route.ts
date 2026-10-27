@@ -1,26 +1,27 @@
+import { getPrincipalAccessLevel, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
-import { getUserAccessLevel, getUserDriveAccess, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
+import { getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
-import { and, eq, ilike, inArray, desc, SQL } from '@pagespace/db/operators'
+import { and, eq, ilike, inArray, notInArray, desc, SQL } from '@pagespace/db/operators'
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives } from '@pagespace/db/schema/core';
+import { pages, drives, pageType, type PageTypeEnum } from '@pagespace/db/schema/core';
+import { driveRoles } from '@pagespace/db/schema/members';
 import { MentionSuggestion, MentionType } from '@/types/mentions';
+import { findGuestAgentMembers, guestAgentSuggestion, shouldOfferGuestAgents } from '@/lib/mentions/guest-agent-members';
 import { z } from 'zod';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
-/**
- * Escape LIKE pattern metacharacters (%, _) in user input
- * Prevents user input from being interpreted as wildcards
- */
-function escapeLikePattern(input: string): string {
-  return input
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/%/g, '\\%')    // Escape percent
-    .replace(/_/g, '\\_');   // Escape underscore
-}
+/** With no query: how many recent pages to answer with, read in windows of RECENT_WINDOW candidates, at most RECENT_SCAN_LIMIT of them. */
+const RECENT_LIMIT = 20;
+const RECENT_WINDOW = 50;
+const RECENT_SCAN_LIMIT = 200;
 
 /**
  * Build a multi-word search condition
@@ -133,6 +134,7 @@ export async function GET(request: Request) {
     loggers.api.debug('[API] Authentication failed', {});
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
 
   const userId = auth.userId;
 
@@ -141,8 +143,40 @@ export async function GET(request: Request) {
   const driveId = searchParams.get('driveId');
   const crossDrive = searchParams.get('crossDrive') === 'true'; // Flag for cross-drive search
   const typesParam = searchParams.get('types'); // Comma-separated types
-  
-  loggers.api.debug('[API] Search params', { query, driveId, crossDrive, types: typesParam });
+  // Narrow the 'page' results to a single pages.type value (e.g. 'CANVAS' for a
+  // 404-page picker, 'FILE' for an image picker). Optional — omitted entirely
+  // preserves today's all-types behavior for @mention autocomplete callers.
+  const rawPageType = searchParams.get('pageType');
+  const pageTypeParam: PageTypeEnum | null =
+    rawPageType && (pageType.enumValues as readonly string[]).includes(rawPageType) ? (rawPageType as PageTypeEnum) : null;
+  // Further restrict FILE results to image mime types — for image pickers
+  // (OG image, favicon) that only want to offer uploaded pictures.
+  const imageOnly = searchParams.get('imageOnly') === 'true';
+  // The inverse of pageType: drop specific types rather than narrow to one —
+  // for callers whose picker can't render several types at all (e.g. the
+  // agent-pane "Pages" search, which excludes FOLDER/AI_CHAT). Enforced in
+  // the SQL WHERE clause below (`notInArray`), NOT as an after-the-fetch
+  // in-memory skip — excluded types must never occupy a row of the DB's own
+  // `.limit(50)`/`.limit(20)` window in the first place, or the final
+  // `.slice(0, 10)` (and that window itself) could still silently shrink the
+  // visible list any time excluded types dominated the ranking, even when
+  // plenty of eligible pages exist further down it.
+  const rawExcludePageTypes = searchParams.get('excludePageTypes');
+  const excludePageTypesParam: Set<PageTypeEnum> = new Set(
+    (rawExcludePageTypes?.split(',') ?? []).filter((t): t is PageTypeEnum =>
+      (pageType.enumValues as readonly string[]).includes(t)
+    )
+  );
+
+  loggers.api.debug('[API] Search params', {
+    query,
+    driveId,
+    crossDrive,
+    types: typesParam,
+    pageType: pageTypeParam,
+    imageOnly,
+    excludePageTypes: [...excludePageTypesParam],
+  });
   
   // For within-drive searches, driveId is required
   // For cross-drive searches, driveId is optional (searches all accessible drives)
@@ -180,7 +214,7 @@ export async function GET(request: Request) {
 
     if (crossDrive) {
       // Cross-drive search: get all drives user has access to (owned, member, page permissions)
-      targetDriveIds = await getDriveIdsForUser(userId);
+      targetDriveIds = await getDriveIdsForUser(actor);
 
       // Build context map for drive disambiguation
       if (targetDriveIds.length > 0) {
@@ -200,14 +234,14 @@ export async function GET(request: Request) {
       loggers.api.debug('[API] Cross-drive search', { driveCount: targetDriveIds.length });
     } else {
       // Within-drive search: verify user has access to the specified drive
-      const hasAccess = await getUserDriveAccess(userId, driveId!);
+      const hasAccess = await getPrincipalDriveAccess(auth, driveId!);
 
       if (!hasAccess) {
         loggers.api.debug('[API] User does not have access to drive', { userId, driveId });
-        return NextResponse.json(
+        return deniedResponse(actor, driveId!, NextResponse.json(
           { error: 'Access denied to the specified drive' },
           { status: 403 }
-        );
+        ));
       }
 
       targetDriveIds = [driveId!];
@@ -219,7 +253,100 @@ export async function GET(request: Request) {
       return NextResponse.json([]);
     }
 
-    // Search pages (all page types)
+    // For within-drive searches, pre-fetch member list once so both the group-mention
+    // gate and the user-suggestion block can reuse it without a double query.
+    let withinDriveMemberIds: string[] | null = null;
+    if (!crossDrive && driveId) {
+      const ids = await getDriveRecipientUserIds(driveId);
+      withinDriveMemberIds = ids;
+      if (ids.length === 0) {
+        return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      }
+    }
+
+    // Drives (among the targets) where the requester is a member/owner — the
+    // only drives whose member lists (users AND guest agents) they may see.
+    // Fetched once, lazily, and shared by the user block and the guest-agent
+    // block below; within-drive reuses withinDriveMemberIds.
+    const memberIdsByDrive = new Map<string, string[]>();
+    let requesterMemberDriveIds: string[] | null = null;
+    const getRequesterMemberDriveIds = async (): Promise<string[]> => {
+      if (requesterMemberDriveIds !== null) return requesterMemberDriveIds;
+      const ids: string[] = [];
+      for (const targetDriveId of targetDriveIds) {
+        const memberIds = !crossDrive && targetDriveId === driveId && withinDriveMemberIds
+          ? withinDriveMemberIds
+          : await getDriveRecipientUserIds(targetDriveId);
+        memberIdsByDrive.set(targetDriveId, memberIds);
+        if (memberIds.includes(userId)) ids.push(targetDriveId);
+      }
+      requesterMemberDriveIds = ids;
+      return ids;
+    };
+
+    // Group mentions (@everyone, @role) — within-drive only, visible to members/owners only.
+    // Users with only page-level access must not see role membership metadata.
+    const wantsGroups =
+      !crossDrive &&
+      driveId &&
+      withinDriveMemberIds?.includes(userId) &&
+      (requestedTypes.includes('user') ||
+        requestedTypes.includes('everyone' as MentionType) ||
+        requestedTypes.includes('role' as MentionType));
+
+    if (wantsGroups) {
+      const q = query.trim().toLowerCase();
+
+      // @everyone
+      if (!q || 'everyone'.startsWith(q)) {
+        suggestions.push({
+          id: 'everyone',
+          label: 'everyone',
+          type: 'everyone',
+          data: { driveId: driveId! },
+          description: 'Notify all drive members',
+        });
+      }
+
+      // Standard roles
+      const standardRoles: { id: 'OWNER' | 'ADMIN' | 'MEMBER'; label: string }[] = [
+        { id: 'OWNER', label: 'Owner' },
+        { id: 'ADMIN', label: 'Admin' },
+        { id: 'MEMBER', label: 'Member' },
+      ];
+      for (const { id, label } of standardRoles) {
+        if (!q || label.toLowerCase().startsWith(q) || id.toLowerCase().startsWith(q)) {
+          suggestions.push({
+            id,
+            label,
+            type: 'role',
+            data: { driveId: driveId!, roleId: id },
+            description: `Notify all ${label.toLowerCase()}s`,
+          });
+        }
+      }
+
+      // Custom drive roles
+      const customRoles = await db
+        .select({ id: driveRoles.id, name: driveRoles.name, color: driveRoles.color })
+        .from(driveRoles)
+        .where(eq(driveRoles.driveId, driveId!))
+        .orderBy(driveRoles.position);
+
+      for (const cr of customRoles) {
+        if (!q || cr.name.toLowerCase().includes(q)) {
+          suggestions.push({
+            id: cr.id,
+            label: cr.name,
+            type: 'role',
+            data: { driveId: driveId!, roleId: cr.id, color: cr.color ?? undefined },
+            description: `Notify all ${cr.name} members`,
+          });
+        }
+      }
+    }
+
+    // Search pages (all page types, unless narrowed by pageType/imageOnly)
     if (requestedTypes.includes('page')) {
       const searchCondition = buildMultiWordSearchCondition(query);
 
@@ -229,31 +356,58 @@ export async function GET(request: Request) {
         title: pages.title,
         type: pages.type,
         driveId: pages.driveId,
+        mimeType: pages.mimeType,
       })
       .from(pages)
       .where(
         and(
           inArray(pages.driveId, targetDriveIds),
           searchCondition, // undefined when empty query = no filter = all pages
-          eq(pages.isTrashed, false)
+          eq(pages.isTrashed, false),
+          pageTypeParam ? eq(pages.type, pageTypeParam) : undefined,
+          excludePageTypesParam.size > 0 ? notInArray(pages.type, [...excludePageTypesParam]) : undefined,
+          imageOnly ? ilike(pages.mimeType, 'image/%') : undefined
         )
       );
 
-      // When query is empty, order by recently updated so user sees relevant pages
-      const pageResults = query.trim()
-        ? await pageQuery.limit(50)
-        : await pageQuery.orderBy(desc(pages.updatedAt)).limit(20);
+      const isViewable = async (page: { id: string }) => Boolean(await getPrincipalAccessLevel(auth, page.id));
+      const visiblePages: Awaited<typeof pageQuery>[number][] = [];
 
-      // Filter by permissions and requested types
-      for (const page of pageResults) {
-        const accessLevel = await getUserAccessLevel(userId, page.id);
-        if (!accessLevel) continue;
-
-        // All page types are now under 'page' mention type
-        if (!requestedTypes.includes('page')) {
-          continue; // Skip if page type not requested
+      if (query.trim()) {
+        for (const page of await pageQuery.limit(50)) {
+          if (await isViewable(page)) visiblePages.push(page);
         }
-        
+      } else {
+        // When query is empty, list the RECENT_LIMIT most recently updated
+        // pages the requester can view. The view check runs per page after
+        // the fetch, so one window of the drive's newest pages can hold none
+        // the requester may see (a guest whose only grant is an older page):
+        // read windows newest first until enough pass, up to
+        // RECENT_SCAN_LIMIT candidates.
+        for (let offset = 0; visiblePages.length < RECENT_LIMIT && offset < RECENT_SCAN_LIMIT; offset += RECENT_WINDOW) {
+          const batch = await pageQuery.orderBy(desc(pages.updatedAt)).offset(offset).limit(RECENT_WINDOW);
+          for (const page of batch) {
+            if (visiblePages.length < RECENT_LIMIT && (await isViewable(page))) visiblePages.push(page);
+          }
+          if (batch.length < RECENT_WINDOW) break;
+        }
+      }
+
+      for (const page of visiblePages) {
+        // The dead 'MACHINE' pg-enum value (kept because Postgres cannot DROP
+        // VALUE — see packages/db/src/schema/core.ts) can never be written by
+        // the app anymore and every MACHINE page was hard-deleted in the
+        // Phase 8 teardown, so this row can never actually occur — narrows
+        // `page.type` back to `PageMentionData['pageType']` for the type
+        // checker rather than widening that type to admit a value nothing
+        // can produce.
+        if (page.type === 'MACHINE') continue;
+        // excludePageTypesParam is enforced in the WHERE clause above (SQL,
+        // not here) — excluded types never occupy a row of a fetched window
+        // at all, so each window is composed entirely of eligible
+        // candidates, not just whatever's left of it after an after-the-fact
+        // skip.
+
         const mentionType: MentionType = 'page';
 
         // Include drive context for cross-drive searches and short ID for differentiation
@@ -273,11 +427,35 @@ export async function GET(request: Request) {
           label: page.title,
           type: mentionType,
           data: {
-            pageType: page.type as 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'SHEET',
+            pageType: page.type,
             driveId: page.driveId,
+            mimeType: page.mimeType,
           },
           description,
         });
+      }
+
+      // Guest agent members: agents that belong to a target drive through
+      // drive_agent_members but whose page lives elsewhere, so the query
+      // above can never return them. Offered only to members/owners of the
+      // drive holding the membership — that membership is the grant, not the
+      // requester's ACL on the agent's home page (see guest-agent-members.ts).
+      if (shouldOfferGuestAgents({ requestedTypes, pageTypeParam, imageOnly, excludePageTypes: excludePageTypesParam })) {
+        const memberDriveIds = await getRequesterMemberDriveIds();
+        if (memberDriveIds.length > 0) {
+          const guestAgents = await findGuestAgentMembers({ memberDriveIds, searchCondition });
+          const seen = new Set(suggestions.map((s) => s.id));
+          for (const guest of guestAgents) {
+            if (seen.has(guest.id)) continue;
+            seen.add(guest.id);
+            suggestions.push(
+              guestAgentSuggestion(guest, {
+                crossDrive,
+                driveName: crossDrive ? driveContextMap.get(guest.memberDriveId) : undefined,
+              }),
+            );
+          }
+        }
       }
     }
 
@@ -287,23 +465,15 @@ export async function GET(request: Request) {
       
       if (crossDrive) {
         // Cross-drive: only enumerate members of drives where requester is a member/owner
-        for (const targetDriveId of targetDriveIds) {
-          const memberIds = await getDriveRecipientUserIds(targetDriveId);
-          if (memberIds.includes(userId)) {
-            for (const id of memberIds) {
-              authorizedUserIds.add(id);
-            }
+        for (const targetDriveId of await getRequesterMemberDriveIds()) {
+          for (const id of memberIdsByDrive.get(targetDriveId) ?? []) {
+            authorizedUserIds.add(id);
           }
         }
       } else {
-        // Within-drive: surface members only to other drive members/owners
-        const memberIds = await getDriveRecipientUserIds(driveId!);
-        if (memberIds.length === 0) {
-          return NextResponse.json(
-            { error: 'Drive not found' },
-            { status: 404 }
-          );
-        }
+        // Within-drive: surface members only to other drive members/owners.
+        // Reuse the already-fetched withinDriveMemberIds to avoid a second DB query.
+        const memberIds = withinDriveMemberIds ?? [];
         if (memberIds.includes(userId)) {
           for (const id of memberIds) {
             authorizedUserIds.add(id);
@@ -311,33 +481,46 @@ export async function GET(request: Request) {
         }
       }
 
-      // Search for users only within the authorized set
+      // Search for users only within the authorized set.
+      //
+      // GDPR #965: `users.name` is AES-GCM ciphertext at rest, so a SQL
+      // `ilike(users.name, …)` substring match cannot work (ciphertext is
+      // opaque). The candidate set is already bounded to authorized members, so
+      // we fetch those rows, decrypt the names at the edge (legacy plaintext
+      // passes through), and filter by the query words in memory — preserving
+      // the multi-word substring-match behaviour for both plaintext and
+      // ciphertext rows.
       if (authorizedUserIds.size > 0) {
-        // Build multi-word search for users (escaped to prevent LIKE injection)
-        const userSearchConditions: SQL[] = [];
-        if (query.trim()) {
-          const words = query.trim().split(/\s+/).filter(Boolean);
-          for (const word of words) {
-            userSearchConditions.push(ilike(users.name, `%${escapeLikePattern(word)}%`));
-          }
-        }
+        const words = query.trim()
+          ? query.trim().split(/\s+/).filter(Boolean).map((w) => w.toLowerCase())
+          : [];
 
-        const userResults = await db.select({
+        const userRows = await db.select({
           id: users.id,
           name: users.name,
           image: users.image,
         })
         .from(users)
-        .where(
-          and(
-            inArray(users.id, Array.from(authorizedUserIds)),
-            userSearchConditions.length > 0 ? and(...userSearchConditions) : undefined
-          )
-        )
-        .limit(10);
+        .where(inArray(users.id, Array.from(authorizedUserIds)));
+
+        // Decryption runs scrypt per value, so avoid decrypting the whole
+        // authorized set when we don't have to. With no query, nothing is
+        // filtered by name and only the first 10 rows can ever be shown — so
+        // decrypt just those. With a query present we must decrypt every
+        // candidate (ciphertext can't be substring-matched in SQL); that scan
+        // is bounded to authorized drive members, and a name blind index is the
+        // follow-up that removes it (mirrors the deferred email blind-index work).
+        const rowsToDecrypt = words.length === 0 ? userRows.slice(0, 10) : userRows;
+        const decryptedUsers = await decryptUserRows(rowsToDecrypt);
+
+        const matches = decryptedUsers.filter((user) => {
+          if (words.length === 0) return true;
+          const name = (user.name ?? '').toLowerCase();
+          return words.every((word) => name.includes(word));
+        }).slice(0, 10);
 
         // Create suggestions without exposing email addresses or avatars
-        for (const user of userResults) {
+        for (const user of matches) {
           suggestions.push({
             id: user.id,
             label: user.name || 'Unnamed User',
@@ -350,24 +533,23 @@ export async function GET(request: Request) {
     }
 
 
-    // Sort by relevance when there's a query; preserve DB order (updatedAt) when empty
+    // Keep group mentions (everyone/role) at the top; sort page/user by relevance
+    const groupSuggestions = suggestions.filter(s => s.type === 'everyone' || s.type === 'role');
+    const otherSuggestions = suggestions.filter(s => s.type !== 'everyone' && s.type !== 'role');
+
     if (query.trim()) {
-      suggestions.sort((a, b) => {
+      otherSuggestions.sort((a, b) => {
         const aScore = calculateRelevanceScore(a.label, query);
         const bScore = calculateRelevanceScore(b.label, query);
-
-        if (aScore !== bScore) {
-          return bScore - aScore;
-        }
-
+        if (aScore !== bScore) return bScore - aScore;
         return a.label.localeCompare(b.label);
       });
     }
 
-    const finalSuggestions = suggestions.slice(0, 10);
+    const finalSuggestions = [...groupSuggestions, ...otherSuggestions].slice(0, 10);
     loggers.api.debug('[API] Returning suggestions', { count: finalSuggestions.length, suggestions: finalSuggestions });
 
-    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: { source: 'mentions', resultCount: finalSuggestions.length } });
+    auditRequest(request, { eventType: 'data.read', userId, resourceType: 'search', resourceId: driveId ?? '*', details: buildSearchAuditDetails({ resultCount: finalSuggestions.length, source: 'mentions' }) });
 
     return NextResponse.json(finalSuggestions);
   } catch (error) {

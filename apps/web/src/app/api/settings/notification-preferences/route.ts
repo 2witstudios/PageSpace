@@ -22,6 +22,10 @@ const NOTIFICATION_TYPES = [
   'CONNECTION_ACCEPTED',
   'CONNECTION_REJECTED',
   'NEW_DIRECT_MESSAGE',
+  // Product announcements (e.g. the SDK/CLI launch). Not an in-app notification —
+  // it exists here so a broadcast opt-out is visible and reversible from settings
+  // rather than being a one-way switch the user can never find again.
+  'PRODUCT_UPDATE',
 ] as const;
 
 // GET /api/settings/notification-preferences - Get user's email notification preferences

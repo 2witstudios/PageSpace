@@ -1,0 +1,1 @@
+ALTER TABLE "subscriptions" ADD COLUMN "gifted" boolean DEFAULT false NOT NULL;

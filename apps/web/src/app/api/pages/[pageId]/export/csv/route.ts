@@ -2,13 +2,14 @@ import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { generateCSV, sanitizeFilename } from '@pagespace/lib/content/export-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
 import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
+import { readSheetData } from '@pagespace/lib/sheets/store';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -32,9 +33,9 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
     if (scopeError) return scopeError;
 
     // Check user permissions
-    const canView = await canUserViewPage(userId, pageId);
+    const canView = await canPrincipalViewPage(auth, pageId);
     if (!canView) {
-      return new NextResponse("Forbidden", { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse("Forbidden", { status: 403 }));
     }
 
     // Fetch the page
@@ -54,8 +55,13 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       );
     }
 
-    // Parse and evaluate the sheet
-    const sheetData = sanitizeSheetData(parseSheetContent(page.content));
+    // Read the sheet from its rows, falling back to the document column.
+    //
+    // A sheet's cells live in `sheet_rows`; `pages.content` is empty once one
+    // has been materialised, so parsing the column would export a blank
+    // spreadsheet. The fallback covers a sheet nothing has touched yet.
+    const stored = await readSheetData({ pageId: page.id });
+    const sheetData = sanitizeSheetData(stored ?? parseSheetContent(page.content));
     const evaluation = evaluateSheet(sheetData, {
       pageId: page.id,
       pageTitle: page.title,

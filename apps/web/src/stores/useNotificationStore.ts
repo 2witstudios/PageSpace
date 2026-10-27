@@ -14,7 +14,9 @@ interface NotificationStore {
   unreadCount: number;
   isLoading: boolean;
   isDropdownOpen: boolean;
-  
+  /** True once unreadCount has been populated from the server at least once. Distinguishes "truth is 0" from "truth not yet loaded" for consumers (e.g. the iOS badge projection) that must not act on the default 0 before a real fetch resolves. */
+  hasHydrated: boolean;
+
   setNotifications: (notifications: Notification[]) => void;
   setUnreadCount: (count: number) => void;
   setIsLoading: (loading: boolean) => void;
@@ -40,7 +42,8 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   unreadCount: 0,
   isLoading: false,
   isDropdownOpen: false,
-  
+  hasHydrated: false,
+
   setNotifications: (notifications) => set({ notifications }),
   setUnreadCount: (count) => set({ unreadCount: count }),
   setIsLoading: (loading) => set({ isLoading: loading }),
@@ -91,12 +94,16 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     };
   }),
   
-  markAsRead: (notificationId) => set((state) => ({
-    notifications: state.notifications.map(n => 
-      n.id === notificationId ? { ...n, isRead: true, readAt: new Date() } : n
-    ),
-    unreadCount: Math.max(0, state.unreadCount - 1),
-  })),
+  markAsRead: (notificationId) => set((state) => {
+    const existing = state.notifications.find((n) => n.id === notificationId);
+    if (!existing || existing.isRead) return state;
+    return {
+      notifications: state.notifications.map(n =>
+        n.id === notificationId ? { ...n, isRead: true, readAt: new Date() } : n
+      ),
+      unreadCount: Math.max(0, state.unreadCount - 1),
+    };
+  }),
   
   markAllAsRead: () => set((state) => ({
     notifications: state.notifications.map(n => ({ ...n, isRead: true, readAt: new Date() })),
@@ -133,6 +140,7 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
         const data = await response.json();
         setNotifications(data.notifications || []);
         setUnreadCount(data.unreadCount || 0);
+        set({ hasHydrated: true });
       }
     } catch (error) {
       console.error('Failed to fetch notifications:', error);
@@ -190,7 +198,18 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
   cleanupSocketListeners: () => {
     const socket = useSocketStore.getState().getSocket();
     if (!socket) return;
-    
+
     socket.off('notification:new');
   },
 }));
+
+/**
+ * Refetches notifications when a "mark as read" API response (channel read,
+ * DM GET/PATCH) reports it actually cleared some — keeps the bell/dropdown in
+ * sync without every read-path re-deriving this same threshold check.
+ */
+export function refetchNotificationsIfMarkedRead(notificationsMarkedRead: number | undefined): void {
+  if (notificationsMarkedRead && notificationsMarkedRead > 0) {
+    void useNotificationStore.getState().fetchNotifications();
+  }
+}

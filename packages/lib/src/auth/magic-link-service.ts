@@ -36,6 +36,25 @@ export interface DesktopMagicLinkMetadata {
 }
 
 /**
+ * Metadata stored with a magic link requested from the iOS / Android shell.
+ * The emailed link is a universal link that opens the app, whose page redeems
+ * the token and — only when it presents this same `deviceId` — receives
+ * bearer tokens for the Keychain instead of relying on a cookie the WebView
+ * never sees.
+ */
+export interface NativeMagicLinkMetadata {
+  platform: 'ios' | 'android';
+  deviceId: string;
+  deviceName?: string;
+}
+
+/** Any device-bound magic link: the shell that requested it, and which device. */
+export type DeviceMagicLinkMetadata = DesktopMagicLinkMetadata | NativeMagicLinkMetadata;
+
+/** Every platform a device-bound magic link can be minted for. */
+export type MagicLinkDevicePlatform = DeviceMagicLinkMetadata['platform'];
+
+/**
  * Metadata stored with an invite-bound magic link. The verify route reads
  * `inviteToken` after authenticating and consumes the invite via the existing
  * acceptance pipe — atomic with session creation, no URL param round-trip.
@@ -44,7 +63,7 @@ export interface DesktopMagicLinkMetadata {
  * accepting an invite); they are separate fields under the same JSON envelope.
  */
 export interface MagicLinkMetadata {
-  platform?: 'desktop';
+  platform?: MagicLinkDevicePlatform;
   deviceId?: string;
   deviceName?: string;
   inviteToken?: string;

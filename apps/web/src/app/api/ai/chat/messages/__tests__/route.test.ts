@@ -9,11 +9,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NextResponse } from 'next/server';
 import { GET } from '../route';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
-import type { ChatMessage } from '@/lib/repositories/chat-message-repository';
+import type { UnifiedPageMessageWithAuthor } from '@/lib/repositories/message-repository';
 
 // Mock the repository seam (boundary)
-vi.mock('@/lib/repositories/chat-message-repository', () => ({
-  chatMessageRepository: {
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
     getMessagesForPage: vi.fn(),
   },
 }));
@@ -23,10 +23,15 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -41,19 +46,20 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 // Mock message converter (boundary)
-vi.mock('@/lib/ai/core', () => ({
-  convertDbMessageToUIMessage: vi.fn((msg: ChatMessage) => ({
+vi.mock('@/lib/ai/core/message-utils', () => ({
+  convertDbMessageToUIMessage: vi.fn((msg: UnifiedPageMessageWithAuthor) => ({
     id: msg.id,
     role: msg.role,
     content: msg.content,
   })),
 }));
 
-import { chatMessageRepository } from '@/lib/repositories/chat-message-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { convertDbMessageToUIMessage } from '@/lib/ai/core';
+import { convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -72,7 +78,7 @@ const mockAuthError = (status = 401): AuthError => ({
   error: NextResponse.json({ error: 'Unauthorized' }, { status }),
 });
 
-const mockChatMessage = (overrides: Partial<{
+const mockUnifiedPageMessageWithAuthor = (overrides: Partial<{
   id: string;
   pageId: string;
   conversationId: string;
@@ -80,6 +86,7 @@ const mockChatMessage = (overrides: Partial<{
   role: string;
   content: string;
   messageType: 'standard' | 'todo_list';
+  status: 'streaming' | 'complete' | 'interrupted';
 }> = {}) => ({
   id: overrides.id || 'msg_123',
   pageId: overrides.pageId || mockPageId,
@@ -93,13 +100,16 @@ const mockChatMessage = (overrides: Partial<{
   editedAt: null,
   toolCalls: null,
   toolResults: null,
+  source: null,
+  status: overrides.status || 'complete' as const,
 });
 
-const createRequest = (pageId?: string, conversationId?: string) => {
+const createRequest = (pageId?: string, conversationId?: string, includeStreaming?: string) => {
   let url = 'https://example.com/api/ai/chat/messages';
   const params = [];
   if (pageId) params.push(`pageId=${pageId}`);
   if (conversationId) params.push(`conversationId=${conversationId}`);
+  if (includeStreaming !== undefined) params.push(`includeStreaming=${includeStreaming}`);
   if (params.length) url += '?' + params.join('&');
 
   return new Request(url, { method: 'GET' });
@@ -117,7 +127,7 @@ describe('GET /api/ai/chat/messages', () => {
     vi.mocked(canUserViewPage).mockResolvedValue(true);
 
     // Default: empty messages
-    vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue([]);
+    vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue([]);
   });
 
   describe('authentication', () => {
@@ -163,17 +173,17 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(canUserViewPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
   });
 
   describe('successful message retrieval', () => {
     it('should return messages for a page', async () => {
       const messages = [
-        mockChatMessage({ id: 'msg_1', role: 'user', content: 'Hello' }),
-        mockChatMessage({ id: 'msg_2', role: 'assistant', content: 'Hi there!' }),
+        mockUnifiedPageMessageWithAuthor({ id: 'msg_1', role: 'user', content: 'Hello' }),
+        mockUnifiedPageMessageWithAuthor({ id: 'msg_2', role: 'assistant', content: 'Hi there!' }),
       ];
-      vi.mocked(chatMessageRepository.getMessagesForPage).mockResolvedValue(messages);
+      vi.mocked(messageRepository.getMessagesForPage).mockResolvedValue(messages);
 
       const request = createRequest(mockPageId);
 
@@ -202,9 +212,10 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
-        conversationId
+        conversationId,
+        false
       );
     });
 
@@ -213,16 +224,44 @@ describe('GET /api/ai/chat/messages', () => {
 
       await GET(request);
 
-      expect(chatMessageRepository.getMessagesForPage).toHaveBeenCalledWith(
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
         mockPageId,
-        undefined
+        undefined,
+        false
+      );
+    });
+
+    // Server Stream Durability epic PR 2: stale-tab rollout protection — a client must
+    // explicitly opt in with includeStreaming=1 before it is shown 'streaming' placeholder
+    // rows; anything else (absent, '0', 'true') stays excluded.
+    it('should pass includeStreaming=true to repository when ?includeStreaming=1 is set', async () => {
+      const request = createRequest(mockPageId, undefined, '1');
+
+      await GET(request);
+
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
+        mockPageId,
+        undefined,
+        true
+      );
+    });
+
+    it('should pass includeStreaming=false when the query param is anything other than "1"', async () => {
+      const request = createRequest(mockPageId, undefined, 'true');
+
+      await GET(request);
+
+      expect(messageRepository.getMessagesForPage).toHaveBeenCalledWith(
+        mockPageId,
+        undefined,
+        false
       );
     });
   });
 
   describe('error handling', () => {
     it('should return 500 when repository throws', async () => {
-      vi.mocked(chatMessageRepository.getMessagesForPage).mockRejectedValue(
+      vi.mocked(messageRepository.getMessagesForPage).mockRejectedValue(
         new Error('Database error')
       );
 

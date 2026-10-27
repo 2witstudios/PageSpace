@@ -25,12 +25,8 @@ const STATIC_ASSETS = ['/manifest.json', '/favicon.ico', '/favicon-32x32.png'];
 self.addEventListener('install', (event) => {
   event.waitUntil(
     Promise.all([
-      caches.open(STATIC_CACHE_NAME).then((cache) => {
-        return cache.addAll(STATIC_ASSETS);
-      }),
-      caches.open(CACHE_NAME).then((cache) => {
-        return cache.addAll(OFFLINE_URLS);
-      }),
+      caches.open(STATIC_CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS).catch(() => {})),
+      caches.open(CACHE_NAME).then((cache) => cache.addAll(OFFLINE_URLS).catch(() => {})),
     ])
   );
   // Activate immediately

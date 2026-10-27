@@ -1,0 +1,112 @@
+/**
+ * Pure resolver for a drive's "primary published host".
+ *
+ * Every custom-domain mirror carries the same page paths as the subdomain
+ * copy (no re-render of ordinary pages), EXCEPT the root (`/`) and 404.html,
+ * which a domain may override via `publishLandingPageId`/`publishNotFoundPageId`
+ * (see `custom-domain-mirror.ts`) to diverge from the drive-wide default. That
+ * per-domain divergence is orthogonal to primary-host selection below: SEO
+ * canonicalization still needs ONE host as canonical — the same value baked
+ * into `<link rel=canonical>`, `og:url`, `sitemap.xml <loc>`, and
+ * `robots.txt Sitemap:` across every copy. When multiple copies point at the
+ * same primary host, search engines consolidate ranking signals on that one URL.
+ *
+ * Primary-host selection rule (deterministic):
+ *   - If the drive has an active custom domain explicitly flagged `isPrimary`,
+ *     that domain is the PRIMARY (the user's chosen host). Ties between multiple
+ *     flagged domains are broken by earliest `createdAt` then hostname.
+ *   - Otherwise, if the drive has ≥1 active custom domain, the PRIMARY is the
+ *     active domain with the earliest `createdAt` (earliest-registered, not
+ *     earliest-activated, because the schema has no separate activation
+ *     timestamp). Ties (same timestamp) are broken by hostname lexicographic
+ *     order so the result is always predictable.
+ *   - Otherwise fall back to `<subdomain>.<publishHost>` (the pagespace.site
+ *     subdomain, which is always authoritative when no custom domain is active).
+ *
+ * Keeping this function pure (no I/O, no env reads) means the non-trivial part
+ * — sorting + fallback — is fully unit-testable without a DB or network call.
+ * The thin shell that fetches the active domains from the DB calls this.
+ */
+
+/**
+ * Minimal shape of an active custom domain needed for primary-host resolution.
+ * `createdAt` is the row creation timestamp (earliest-registered), used as a
+ * stable deterministic tie-breaker. There is no separate activation timestamp
+ * in the schema.
+ */
+export interface ActiveDomainRecord {
+  hostname: string;
+  createdAt: Date;
+  /** True when the user explicitly selected this domain as the drive's primary. */
+  isPrimary?: boolean;
+}
+
+/**
+ * Whether an ACTIVE domain may be considered for primary-host selection.
+ *
+ * A `platformOwned` row is normally an additional serving ALIAS, not the
+ * drive's identity — registering `pagespace.ai` to surface one page at a path
+ * must not retitle the drive's canonical URLs. The exception is a platform
+ * domain a platform admin explicitly flagged `isPrimary`, which means the
+ * opposite: this host IS the drive's public identity (how the platform docs
+ * and blog drives claim docs./blog.pagespace.ai).
+ *
+ * Lives here, shared, because BOTH the server resolver
+ * (`getActiveDomainRecords`) and the settings UI's "Primary" badge must admit
+ * exactly the same rows. Two hand-written filters drift, and the drift is
+ * invisible: the badge says one host while the published site canonicalizes
+ * another.
+ */
+export function isEligibleForPrimaryHost(domain: {
+  platformOwned?: boolean | null;
+  isPrimary?: boolean | null;
+}): boolean {
+  return !domain.platformOwned || Boolean(domain.isPrimary);
+}
+
+/**
+ * Select the drive's primary domain from its ACTIVE custom domains, applying the
+ * same precedence the published site uses: an explicitly-flagged domain wins,
+ * otherwise the earliest-created one (hostname lexicographic tie-break). Returns
+ * `null` when there are no active domains (caller falls back to the subdomain).
+ *
+ * Generic over the record shape so both the server resolver (which has
+ * `ActiveDomainRecord`) and the settings UI (which carries an `id`) can reuse the
+ * SAME selection — the badge/primary controls never drift from what is served.
+ */
+export function selectPrimaryActiveDomain<T extends ActiveDomainRecord>(activeDomains: T[]): T | null {
+  if (activeDomains.length === 0) return null;
+
+  const byCreatedThenHostname = (a: T, b: T) => {
+    const dt = a.createdAt.getTime() - b.createdAt.getTime();
+    if (dt !== 0) return dt;
+    return a.hostname < b.hostname ? -1 : a.hostname > b.hostname ? 1 : 0;
+  };
+
+  // An explicitly-selected primary wins over the earliest-created default.
+  const flagged = activeDomains.filter((d) => d.isPrimary);
+  const pool = flagged.length > 0 ? flagged : activeDomains;
+
+  return [...pool].sort(byCreatedThenHostname)[0];
+}
+
+/**
+ * Resolve the primary published host for a drive.
+ *
+ * @param subdomain    - Drive's allocated pagespace.site subdomain.
+ * @param publishHost  - The root publish hostname (e.g. `pagespace.site`).
+ * @param activeDomains - Active custom domains for the drive (any order).
+ * @returns The hostname that should be used for canonical/og:url/sitemap URLs.
+ */
+export function resolvePrimaryPublishedHost({
+  subdomain,
+  publishHost,
+  activeDomains,
+}: {
+  subdomain: string;
+  publishHost: string;
+  activeDomains: ActiveDomainRecord[];
+}): string {
+  const primary = selectPrimaryActiveDomain(activeDomains);
+  return primary ? primary.hostname : `${subdomain}.${publishHost}`;
+}

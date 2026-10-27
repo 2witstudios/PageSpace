@@ -49,6 +49,24 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
+  // No org drives here: every orphan's drive is personal (WAL-9 is covered in reap-orphaned-files.test.ts).
+  findDriveBillingFactsMap: async () => new Map<string, { ownerId: string; orgId: string | null }>(),
+  // Mirrors the pure impl so the reaper's credit rules are exercised, not stubbed.
+  computeStorageCreditOnUnlink: (input: {
+    createdBy: string | null;
+    drive: { ownerId: string; orgId: string | null } | null;
+    sizeBytes: number | string | null;
+    deletedByThisCall: boolean;
+    hadPhysicalBlob: boolean;
+  }) => {
+    if (!input.deletedByThisCall || !input.hadPhysicalBlob) return null;
+    if (input.drive?.orgId) return null;
+    const payer = input.drive ? input.drive.ownerId : input.createdBy;
+    if (!payer) return null;
+    const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return { userId: payer, deltaBytes: -Math.floor(n) };
+  },
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -105,7 +123,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockFindOrphans.mockResolvedValue([]);
     mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok', grantedScopes: ['files:delete'] });
-    mockDeleteRecords.mockResolvedValue(0);
+    mockDeleteRecords.mockResolvedValue([]);
     mockUpdateStorageUsage.mockResolvedValue(undefined);
   });
 
@@ -137,7 +155,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
   it('cron_nullDriveOrphan_isReclaimed_notDeferred', async () => {
     const orphan = nullDriveOrphan();
     mockFindOrphans.mockResolvedValue([orphan]);
-    mockDeleteRecords.mockResolvedValue(1);
+    mockDeleteRecords.mockResolvedValue([orphan.id]);
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -156,7 +174,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     // exact size of the reclaimed orphan, attributed to createdBy.
     const orphan = nullDriveOrphan({ sizeBytes: 4096, createdBy: 'user_dm_uploader' });
     mockFindOrphans.mockResolvedValue([orphan]);
-    mockDeleteRecords.mockResolvedValue(1);
+    mockDeleteRecords.mockResolvedValue([orphan.id]);
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -177,7 +195,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     // the same processor re-check.
     const orphan = driveOrphan({ sizeBytes: 1024, createdBy: 'user_drive_uploader' });
     mockFindOrphans.mockResolvedValue([orphan]);
-    mockDeleteRecords.mockResolvedValue(1);
+    mockDeleteRecords.mockResolvedValue([orphan.id]);
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -201,7 +219,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     // bytes were never persisted.
     const orphan = { ...nullDriveOrphan(), storagePath: null as string | null };
     mockFindOrphans.mockResolvedValue([orphan]);
-    mockDeleteRecords.mockResolvedValue(1);
+    mockDeleteRecords.mockResolvedValue([orphan.id]);
 
     await GET(makeRequest());
 
@@ -232,7 +250,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
     // which case there's nothing to credit. The blob must still be reclaimed.
     const orphan = { ...nullDriveOrphan(), createdBy: null as string | null };
     mockFindOrphans.mockResolvedValue([orphan]);
-    mockDeleteRecords.mockResolvedValue(1);
+    mockDeleteRecords.mockResolvedValue([orphan.id]);
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -247,7 +265,7 @@ describe('/api/cron/cleanup-orphaned-files', () => {
   it('cron_audit_includesPhysicalAndDbCounts_acrossMixedOrphanShapes', async () => {
     // Two orphans (one drive, one null-drive); both succeed → audit shows both.
     mockFindOrphans.mockResolvedValue([driveOrphan(), nullDriveOrphan()]);
-    mockDeleteRecords.mockResolvedValue(2);
+    mockDeleteRecords.mockResolvedValue(['f_drive', 'f_null']);
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 

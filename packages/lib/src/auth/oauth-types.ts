@@ -74,4 +74,6 @@ export interface OAuthVerificationResult {
   userInfo?: OAuthUserInfo;
   /** Error message if verification failed */
   error?: string;
+  /** The verified token's `aud` — the client it was issued to (Apple: bundle id or Services ID) */
+  audience?: string;
 }

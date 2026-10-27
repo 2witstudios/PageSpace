@@ -12,6 +12,8 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@/services/api', () => ({
@@ -20,6 +22,7 @@ vi.mock('@/services/api', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserViewPage: vi.fn().mockResolvedValue(true),
     isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));

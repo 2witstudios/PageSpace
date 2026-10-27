@@ -3,9 +3,12 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, authStoreHelpers } from '@/stores/useAuthStore';
+import { purgePendingSetups } from '@/lib/orgs/pending-setup';
 import { useTokenRefresh } from './useTokenRefresh';
 import { post, clearSessionCache } from '@/lib/auth/auth-fetch';
+import { setAppNavigator } from '@/lib/navigation/app-navigator';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 // Module-level flag to prevent concurrent lazy device registration attempts
 let deviceRegistrationInFlight = false;
@@ -16,6 +19,7 @@ interface User {
   email: string | null;
   image?: string | null;
   role?: 'user' | 'admin';
+  subscriptionTier?: SubscriptionTier;
 }
 
 interface AuthActions {
@@ -65,7 +69,26 @@ export function useAuth(): {
   // Logout function
   const logout = useCallback(async () => {
     try {
-      await post('/api/auth/logout');
+      // SECURITY (M9): send the device context so the server can revoke the
+      // long-lived (90-day) device token, not just the session. Otherwise
+      // device/refresh could silently re-mint sessions after "logout". We
+      // prefer the device token value (works on every platform via by-value
+      // revocation) and include deviceId+platform as a fallback. Reading
+      // device context must never block logout.
+      let logoutBody: Record<string, unknown> = {};
+      try {
+        const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+        const storage = getPlatformStorage();
+        const stored = await storage.getStoredSession();
+        logoutBody = {
+          deviceToken: stored?.deviceToken ?? undefined,
+          deviceId: stored?.deviceId ?? undefined,
+          platform: storage.platform,
+        };
+      } catch (err) {
+        console.error('Failed to read device context for logout', err);
+      }
+      await post('/api/auth/logout', logoutBody);
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -78,16 +101,27 @@ export function useAuth(): {
         clearSessionCache();
       }
 
-      // iOS: Clear session from Keychain
+      // Native shells: clear the secure-storage session through the platform
+      // adapter. Asking the capability, not the platform, is what makes this
+      // cover Android — which writes to the same `PageSpaceKeychain` under the
+      // same key as iOS, so an iOS-only branch would leave a revoked session on
+      // the device for `fetchWithAuth` to keep presenting until a 401.
+      //
+      // The capability lookup is inside the try, not before it: this runs in
+      // logout's `finally`, so anything that escapes here skips the rest of the
+      // cleanup — the localStorage token, the store reset, the redirect to
+      // sign-in. A dynamic import can reject on its own (a chunk that will not
+      // load), and no failure to *read* a capability is worth stranding a user
+      // in a half-logged-out shell.
       if (typeof window !== 'undefined') {
-        const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
-        if (isCapacitorApp() && getPlatform() === 'ios') {
-          try {
-            const { clearStoredSession } = await import('@/lib/ios-google-auth');
-            await clearStoredSession();
-          } catch (err) {
-            console.error('Failed to clear iOS Keychain session', err);
+        try {
+          const { hasNativeCapability } = await import('@/lib/capacitor-bridge');
+          if (hasNativeCapability('secureStore')) {
+            const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+            await getPlatformStorage().clearSession();
           }
+        } catch (err) {
+          console.error('Failed to clear native secure-storage session', err);
         }
       }
 
@@ -98,6 +132,8 @@ export function useAuth(): {
         } catch (err) {
           console.error('Failed to clear device token from localStorage', err);
         }
+        // The create-org setup plan is per person; the next account on this browser must not inherit it.
+        purgePendingSetups();
       }
 
       // Reset token refresh state
@@ -111,6 +147,31 @@ export function useAuth(): {
         useTabsStore.setState({ tabs: [], activeTabId: null });
       } catch {
         // Non-critical — tabs will just show dashboard on next login
+      }
+
+      try {
+        const { useDriveStore } = await import('@/hooks/useDrive');
+        useDriveStore.getState().reset();
+      } catch {
+        // Non-critical
+      }
+
+      // Hotkey overrides are per-user. Left in place, the next person to sign
+      // in through this same document gets the previous user's shortcuts —
+      // and, since the reset notice is derived from the cached payload, that
+      // user's notice too.
+      //
+      // The SWR entry has to go with the store: most sign-in paths replace the
+      // document, but native OAuth returns via `router.replace`, and there the
+      // dashboard remounts against a warm cache and feeds the old user's
+      // payload straight back in before the new fetch lands.
+      try {
+        const { useHotkeyStore } = await import('@/stores/useHotkeyStore');
+        useHotkeyStore.getState().reset();
+        const { mutate: globalMutate } = await import('swr');
+        await globalMutate('/api/settings/hotkey-preferences', undefined, { revalidate: false });
+      } catch {
+        // Non-critical
       }
 
       endSession();
@@ -260,6 +321,15 @@ export function useAuth(): {
     // This prevents duplicate event listeners when multiple components use useAuth
     authStoreHelpers.initializeEventListeners();
   }, []); // Empty dependency array ensures this runs only once
+
+  // Hand the client router to the store's global auth:expired listener, which
+  // has no React context of its own. It must route rather than hard-navigate,
+  // or the iOS shell punts the signin page to Safari and blanks the WebView.
+  // Not cleared on unmount: useAuth has many concurrent instances, and one of
+  // them unmounting must not strip the navigator out from under the others.
+  useEffect(() => {
+    setAppNavigator((path) => router.replace(path));
+  }, [router]);
 
   return {
     user,

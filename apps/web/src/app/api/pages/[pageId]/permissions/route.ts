@@ -10,11 +10,13 @@ import { createPermissionNotification } from '@pagespace/lib/notifications/notif
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
 import { grantPagePermission, revokePagePermission } from '@pagespace/lib/permissions/permission-mutations';
-import { permissionManagementService } from '@/services/api';
+import { permissionManagementService, rolePermissionService } from '@/services/api';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { kickUserFromPage, kickUserFromPageActivity } from '@/lib/websocket';
+import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -28,7 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   try {
     // Check authorization
-    const canView = await permissionManagementService.canUserViewPermissions(userId, pageId);
+    const canView = await permissionManagementService.canUserViewPermissions(actorFromAuth(auth), pageId);
     if (!canView) {
       loggers.api.warn('Unauthorized permission list access attempt', { userId, pageId });
       return NextResponse.json(
@@ -41,7 +43,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     }
 
     // Get permissions
-    const result = await permissionManagementService.getPagePermissions(pageId);
+    const [result, roles] = await Promise.all([
+      permissionManagementService.getPagePermissions(pageId),
+      rolePermissionService.getPageRoleGrants(pageId),
+    ]);
     if (!result.success) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
@@ -49,6 +54,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     return NextResponse.json({
       owner: result.owner,
       permissions: result.permissions,
+      roles,
     });
   } catch (error) {
     loggers.api.error('Error fetching permissions:', error as Error);
@@ -101,10 +107,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           return NextResponse.json({ error: result.error.reason }, { status: 400 });
         case 'PAGE_NOT_ACCESSIBLE':
           return NextResponse.json({ error: 'You do not have permission to share this page' }, { status: 403 });
+        case 'HOME_DRIVE':
+          return NextResponse.json({ error: result.error.message }, { status: 403 });
         case 'USER_NOT_FOUND':
           return NextResponse.json({ error: 'Target user not found' }, { status: 404 });
         case 'INSUFFICIENT_PERMISSION':
           return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        // POL-2: the org's guests policy decided the grant. Off refuses naming the policy; approve queued it and
+        // granted nothing (202), so no notification or broadcast follows.
+        case 'GUEST_POLICY_OFF':
+          return NextResponse.json({ error: result.error.message, code: 'org_policy', policy: 'guests' }, { status: 403 });
+        case 'GUEST_APPROVAL_PENDING':
+          return NextResponse.json({ kind: 'pending_approval', holdId: result.error.holdId, message: result.error.message }, { status: 202 });
+        // [D-OW-33] the drive's org is lapsed: the grant would give someone more.
+        case 'ORG_LAPSED':
+          return orgLapsedResponse(result.error.message);
         default:
           return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
       }
@@ -126,6 +143,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       where: eq(pages.id, pageId),
       columns: { driveId: true },
     });
+
+    if (page?.driveId) {
+      broadcastPageEvent(
+        createPageEventPayload(page.driveId, pageId, 'updated')
+      ).catch((err: Error) => {
+        loggers.api.error('Failed to broadcast page permission event:', err);
+      });
+    }
 
     return NextResponse.json({
       id: result.data.permissionId,
@@ -172,6 +197,12 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
           return NextResponse.json({ error: 'You do not have permission to manage this page' }, { status: 403 });
         case 'INSUFFICIENT_PERMISSION':
           return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        // POL-2: the org's guests policy decided the grant. Off refuses naming the policy; approve queued it and
+        // granted nothing (202), so no notification or broadcast follows.
+        case 'GUEST_POLICY_OFF':
+          return NextResponse.json({ error: result.error.message, code: 'org_policy', policy: 'guests' }, { status: 403 });
+        case 'GUEST_APPROVAL_PENDING':
+          return NextResponse.json({ kind: 'pending_approval', holdId: result.error.holdId, message: result.error.message }, { status: 202 });
         default:
           return NextResponse.json({ error: 'Permission operation failed' }, { status: 500 });
       }
@@ -190,11 +221,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
       auditRequest(req, { eventType: 'authz.permission.revoked', userId: ctx.userId, resourceType: 'page', resourceId: pageId, details: { targetUserId } });
 
-      // CRITICAL: Kick user from real-time rooms immediately (zero-trust revocation)
-      await Promise.all([
-        kickUserFromPage(pageId, targetUserId, 'permission_revoked'),
-        kickUserFromPageActivity(pageId, targetUserId, 'permission_revoked'),
-      ]);
+      // Kick from real-time rooms: revokePagePermission (#2158) already
+      // triggers this itself via kickForPagePermissionRevocation, centralized
+      // at the permission-mutation layer so no caller has to remember it.
     }
 
     return NextResponse.json({ success: true });

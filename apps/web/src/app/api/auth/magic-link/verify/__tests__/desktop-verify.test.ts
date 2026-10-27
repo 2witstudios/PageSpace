@@ -37,6 +37,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 86400000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
   },
 }));
 vi.mock('@pagespace/lib/auth/csrf-utils', () => ({
@@ -60,6 +62,9 @@ vi.mock('@pagespace/lib/auth/magic-link-service', () => ({
   verifyMagicLinkToken: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  resetFailedLoginAttempts: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@pagespace/lib/auth/verification-utils', () => ({
   markEmailVerified: vi.fn(),
 }));
@@ -82,14 +87,17 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue(null),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  // Shape matters: the route reads `.created`, so a bare null would make every
+  // test here take the provisioning catch instead of the real path.
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-drive', created: false }),
 }));
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
@@ -117,8 +125,9 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
+import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 const desktopMetadata = JSON.stringify({
   platform: 'desktop',
@@ -156,6 +165,14 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
     expect(appendSessionCookie).toHaveBeenCalled();
   });
 
+  it('mints the device token for desktop — the platform the link was bound to', async () => {
+    await GET(createVerifyRequest());
+
+    expect(validateOrCreateDeviceToken).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: 'desktop', deviceId: 'dev-123', deviceName: 'My Mac' }),
+    );
+  });
+
   it('creates exchange code with correct session token', async () => {
     await GET(createVerifyRequest());
 
@@ -174,13 +191,13 @@ describe('GET /api/auth/magic-link/verify - desktop platform', () => {
 
     await GET(createVerifyRequest());
 
-    expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
-  it('does not provision drive for existing desktop users', async () => {
+  it('provisions Home drive for existing desktop users (lazy idempotent)', async () => {
     await GET(createVerifyRequest());
 
-    expect(provisionGettingStartedDriveIfNeeded).not.toHaveBeenCalled();
+    expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
   });
 
   it('falls through to web flow when no desktop metadata', async () => {

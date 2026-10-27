@@ -1,33 +1,28 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env bun
 /**
  * Setup script to create the first admin user for on-premise PageSpace deployment.
  *
  * Usage:
- *   pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"
+ *   bun run setup:admin --email admin@clinic.local --name "Dr. Smith"
  *
  * This script:
- * 1. Creates a user with admin role and business-tier subscription
+ * 1. Creates an admin with a Free personal plan and deployment-derived capabilities
  * 2. Sets emailVerified (pre-verified for on-prem)
  * 3. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
 
-import { db } from '@pagespace/db/db';
+import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { eq } from '@pagespace/db/operators';
 import { createId } from '@paralleldrive/cuid2';
 import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
-import { createVerificationToken } from '@pagespace/lib/auth/verification-utils';
+import { generateOnPremSetupLink } from '@pagespace/lib/auth/onprem-setup-link';
+import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { parseArgs } from 'node:util';
 
-async function generateSetupLink(userId: string): Promise<string> {
-  const token = await createVerificationToken({
-    userId,
-    type: 'magic_link',
-    expiresInMinutes: 60,
-  });
-  const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || 'http://localhost:3000';
-  return `${baseUrl}/api/auth/magic-link/verify?token=${token}`;
-}
+// One-shot ops script — runs on the unthrottled migration pool, not the
+// app-throttled `db` (see getMigrationDb()'s doc comment in packages/db).
+const db = getMigrationDb();
 
 async function main() {
   const { values } = parseArgs({
@@ -38,10 +33,10 @@ async function main() {
   });
 
   if (!values.email || !values.name) {
-    console.error('Usage: pnpm setup:admin --email <email> --name <name>');
+    console.error('Usage: bun run setup:admin --email <email> --name <name>');
     console.error('');
     console.error('Example:');
-    console.error('  pnpm setup:admin --email admin@clinic.local --name "Dr. Smith"');
+    console.error('  bun run setup:admin --email admin@clinic.local --name "Dr. Smith"');
     process.exit(1);
   }
 
@@ -64,13 +59,13 @@ async function main() {
 
   // Check if user already exists
   const existing = await db.query.users.findFirst({
-    where: eq(users.email, email),
+    where: userEmailMatch(email),
     columns: { id: true, role: true },
   });
 
   if (existing) {
     if (existing.role === 'admin') {
-      const link = await generateSetupLink(existing.id);
+      const link = await generateOnPremSetupLink(existing.id);
       console.log(`Admin user ${email} already exists.`);
       console.log('');
       console.log('One-time sign-in link (expires in 60 minutes):');
@@ -81,8 +76,8 @@ async function main() {
         .set({ role: 'admin', ...getOnPremUserDefaults() })
         .where(eq(users.id, existing.id));
 
-      const link = await generateSetupLink(existing.id);
-      console.log(`Existing user ${email} promoted to admin with business tier.`);
+      const link = await generateOnPremSetupLink(existing.id);
+      console.log(`Existing user ${email} promoted to admin with a Free personal plan.`);
       console.log('');
       console.log('One-time sign-in link (expires in 60 minutes):');
       console.log(`  ${link}`);
@@ -92,23 +87,24 @@ async function main() {
 
   const userId = createId();
 
-  await db.insert(users).values({
+  await db.insert(users).values(await prepareUserWrite({
     id: userId,
     name,
     email,
     role: 'admin',
     emailVerified: new Date(),
     ...getOnPremUserDefaults(),
-  });
+  }));
 
-  const link = await generateSetupLink(userId);
+  const link = await generateOnPremSetupLink(userId);
 
   console.log('');
   console.log('Admin user created successfully!');
   console.log(`  Name:  ${name}`);
   console.log(`  Email: ${email}`);
   console.log(`  Role:  admin`);
-  console.log(`  Tier:  business`);
+  console.log('  Personal plan:  Free');
+  console.log('  Capabilities:   provided by this on-prem deployment');
   console.log('');
   console.log('One-time sign-in link (expires in 60 minutes):');
   console.log(`  ${link}`);

@@ -78,9 +78,10 @@ const driveRow = (overrides = {}) => ({
   email: 'invitee@example.com',
   driveId: 'drive_1',
   role: 'MEMBER' as const,
+  customRoleId: null as string | null,
   invitedBy: 'user_inviter',
-  expiresAt: new Date('2099-01-01'),
-  consumedAt: null,
+  expiresAt: new Date('2099-01-01') as Date | null,
+  consumedAt: null as Date | null,
   driveName: 'Acme',
   inviterName: 'Jane',
   ...overrides,
@@ -136,6 +137,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(driveInviteRepository.findPendingInviteByTokenHash).not.toHaveBeenCalled();
     expect(pageInviteRepository.findPendingInviteByTokenHash).not.toHaveBeenCalled();
@@ -169,6 +172,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: 'drive_1',
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(acceptForNewPipe).toHaveBeenCalledOnce();
     expect(acceptPageForNewPipe).not.toHaveBeenCalled();
@@ -206,6 +211,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: 'drive_1',
       invitedPageId: 'page_1',
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
     expect(acceptPageForNewPipe).toHaveBeenCalledOnce();
     expect(acceptForNewPipe).not.toHaveBeenCalled();
@@ -238,6 +245,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: 'conn_1',
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
   });
 
@@ -376,6 +385,8 @@ describe('consumeAnyInviteIfPresent', () => {
       invitedDriveId: null,
       invitedPageId: null,
       connectionId: null,
+      invitedOrgId: null,
+      orgLandingPath: null,
     });
   });
 });
@@ -446,7 +457,7 @@ describe('consumeAllInvitesForEmail', () => {
 
   it('accepts drive and page invites in the same call and returns correct per-kind counts', async () => {
     vi.mocked(driveInviteRepository.findUnconsumedActiveInvitesByEmail).mockResolvedValueOnce([
-      { id: 'drv_inv_1', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, invitedBy: 'user_inviter' },
+      { id: 'drv_inv_1', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, customRoleId: null, invitedBy: 'user_inviter' },
     ]);
     vi.mocked(driveInviteRepository.consumeInviteAndCreateMembership).mockResolvedValueOnce({
       ok: true,
@@ -482,8 +493,8 @@ describe('consumeAllInvitesForEmail', () => {
 
   it('continues processing remaining invites when one drive invite consumption fails', async () => {
     vi.mocked(driveInviteRepository.findUnconsumedActiveInvitesByEmail).mockResolvedValueOnce([
-      { id: 'drv_inv_fail', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, invitedBy: 'user_a' },
-      { id: 'drv_inv_ok', driveId: 'drive_2', driveName: 'Beta', role: 'MEMBER' as const, invitedBy: 'user_b' },
+      { id: 'drv_inv_fail', driveId: 'drive_1', driveName: 'Acme', role: 'MEMBER' as const, customRoleId: null, invitedBy: 'user_a' },
+      { id: 'drv_inv_ok', driveId: 'drive_2', driveName: 'Beta', role: 'MEMBER' as const, customRoleId: null, invitedBy: 'user_b' },
     ]);
     vi.mocked(driveInviteRepository.consumeInviteAndCreateMembership)
       .mockResolvedValueOnce({ ok: false, reason: 'TOKEN_CONSUMED' })

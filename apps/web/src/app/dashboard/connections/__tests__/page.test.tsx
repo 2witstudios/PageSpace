@@ -4,7 +4,12 @@ import userEvent from '@testing-library/user-event';
 
 // ============================================================================
 // Smoke tests for the connections "Add Connection" tab invite branch.
-// Focuses on: user-not-found → invite CTA surface, and invite POST payload.
+//
+// L2 hardening: /api/connections/search returns a generic `{ user: null }` for
+// every non-actionable outcome (no account / self / existing relationship), so
+// the UI must treat them identically — surface the same neutral CTA and, after
+// the follow-up invite, the same uniform confirmation — rather than echoing the
+// distinguishing state and letting a user recover what the search concealed.
 // ============================================================================
 
 vi.mock('@/hooks/useAuth', () => ({
@@ -56,15 +61,20 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     return discoverTab;
   }
 
-  it('given user search returns "no user found", surfaces the invite-to-PageSpace CTA', async () => {
-    const user = userEvent.setup();
-
+  // Helper: the search endpoint now always returns a generic { user: null }
+  // for non-actionable outcomes.
+  function mockGenericNullSearch() {
     vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null, error: 'No user found with this email address' }), {
+      new Response(JSON.stringify({ user: null }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
     );
+  }
+
+  it('given a generic { user: null } search result, surfaces the neutral send-request CTA', async () => {
+    const user = userEvent.setup();
+    mockGenericNullSearch();
 
     const discoverTab = renderAndGetTab();
     await user.click(discoverTab);
@@ -74,21 +84,17 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     await user.click(screen.getByRole('button', { name: /Find User/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('User not found')).toBeInTheDocument();
-      expect(screen.getByText(/unknown@example.com is not on PageSpace yet/i)).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Invite to PageSpace/i })).toBeInTheDocument();
+      expect(screen.getByText('Send a connection request')).toBeInTheDocument();
+      // Neutral copy: must NOT assert the account does/doesn't exist.
+      expect(screen.queryByText(/not on PageSpace yet/i)).not.toBeInTheDocument();
+      expect(screen.queryByText('User not found')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Send request/i })).toBeInTheDocument();
     });
   });
 
-  it('given user clicks the invite CTA, POSTs to /api/connections/invite with correct email', async () => {
+  it('given user clicks the CTA, POSTs to /api/connections/invite and shows the uniform confirmation', async () => {
     const user = userEvent.setup();
-
-    vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null, error: 'No user found with this email address' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
+    mockGenericNullSearch();
     vi.mocked(post).mockResolvedValueOnce({
       kind: 'invited',
       inviteId: 'invite_abc',
@@ -104,30 +110,25 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     await user.click(screen.getByRole('button', { name: /Find User/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Invite to PageSpace/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Send request/i })).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: /Invite to PageSpace/i }));
+    await user.click(screen.getByRole('button', { name: /Send request/i }));
 
     await waitFor(() => {
       expect(post).toHaveBeenCalledWith('/api/connections/invite', {
         email: 'unknown@example.com',
       });
       expect(toast.success).toHaveBeenCalledWith(
-        expect.stringContaining('unknown@example.com')
+        expect.stringMatching(/connection request is on its way/i)
       );
     });
   });
 
-  it('given user search returns "already connected", shows error toast (not invite CTA)', async () => {
+  it('treats an existing-relationship result identically: same neutral CTA, no distinguishing error (L2)', async () => {
     const user = userEvent.setup();
-
-    vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null, error: 'Already connected with this user' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
+    // Already-connected / pending / blocked all return the SAME generic shape.
+    mockGenericNullSearch();
 
     const discoverTab = renderAndGetTab();
     await user.click(discoverTab);
@@ -137,20 +138,16 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     await user.click(screen.getByRole('button', { name: /Find User/i }));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Already connected with this user');
-      expect(screen.queryByRole('button', { name: /Invite to PageSpace/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Send request/i })).toBeInTheDocument();
     });
+    // No state-revealing error toast is shown.
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
-  it('given invite returns 409 (already pending), shows appropriate error toast', async () => {
+  it('given the invite POST fails with a state-revealing error, still shows the uniform confirmation (does not leak)', async () => {
     const user = userEvent.setup();
-
-    vi.mocked(fetchWithAuth).mockResolvedValueOnce(
-      new Response(JSON.stringify({ user: null, error: 'No user found with this email address' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
+    mockGenericNullSearch();
+    // The invite endpoint returns a distinguishing 409; the UI must NOT surface it.
     vi.mocked(post).mockRejectedValueOnce(
       new Error('An invitation is already pending for this email.')
     );
@@ -163,15 +160,17 @@ describe('ConnectionsPage — Add Connection tab invite branch', () => {
     await user.click(screen.getByRole('button', { name: /Find User/i }));
 
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Invite to PageSpace/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Send request/i })).toBeInTheDocument()
     );
 
-    await user.click(screen.getByRole('button', { name: /Invite to PageSpace/i }));
+    await user.click(screen.getByRole('button', { name: /Send request/i }));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        expect.stringContaining('already have a pending connection invite')
+      expect(toast.success).toHaveBeenCalledWith(
+        expect.stringMatching(/connection request is on its way/i)
       );
     });
+    // The distinguishing "already pending" detail must never reach the user.
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

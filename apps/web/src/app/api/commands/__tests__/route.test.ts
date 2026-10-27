@@ -1,0 +1,494 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
+import type { SessionAuthResult, AuthError } from '@/lib/auth';
+import { encryptField } from '@pagespace/lib/encryption/field-crypto';
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    query: {
+      commands: { findFirst: vi.fn(), findMany: vi.fn() },
+      pages: { findFirst: vi.fn(), findMany: vi.fn() },
+      users: { findMany: vi.fn() },
+    },
+    select: vi.fn(),
+    insert: vi.fn(),
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((field: unknown, value: unknown) => ({ field, value })),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
+  inArray: vi.fn((field: unknown, values: unknown) => ({ field, values })),
+  isNotNull: vi.fn((field: unknown) => ({ isNotNull: field })),
+  ne: vi.fn((a: unknown, b: unknown) => ({ _ne: true, a, b })),
+}));
+vi.mock('@pagespace/db/schema/commands', () => ({
+  commands: { id: 'id', userId: 'userId', driveId: 'driveId', trigger: 'trigger', enabled: 'enabled' },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  drives: { id: 'id', ownerId: 'ownerId', isTrashed: 'isTrashed' },
+  pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveMembers: { driveId: 'driveId', userId: 'userId', acceptedAt: 'acceptedAt', role: 'role' },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'id', name: 'name' },
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({
+  audit: vi.fn(),
+  auditRequest: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  canUserViewPage: vi.fn(),
+  isDriveOwnerOrAdmin: vi.fn(),
+  isUserDriveMember: vi.fn(),
+}));
+// The one member-drive set (org-aware).
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(
+    (result: unknown) => !!result && typeof result === 'object' && 'error' in (result as object)
+  ),
+  canPrincipalViewPage: vi.fn(),
+  filterDrivesByMCPScope: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+}));
+
+// Wrap (not replace) the real decryptUsersByIdOnce so call counts can be
+// asserted at the route's call boundary — proves the route batches decryption
+// once per request instead of once per author. A bare `vi.spyOn` doesn't work
+// here because `@pagespace/lib` resolves to its built CJS dist output, and
+// the per-row-dedup internals (decryptUserRow -> decryptField) are a *nested*
+// require inside that compiled module, invisible to any mock declared at
+// this level.
+vi.mock('@pagespace/lib/auth/user-repository', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/user-repository')>();
+  return { ...actual, decryptUsersByIdOnce: vi.fn(actual.decryptUsersByIdOnce) };
+});
+
+import { GET, POST } from '../route';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { db } from '@pagespace/db/db';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, canPrincipalViewPage, filterDrivesByMCPScope, checkMCPDriveScope } from '@/lib/auth';
+import { decryptUsersByIdOnce } from '@pagespace/lib/auth/user-repository';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const mockedAuth = vi.mocked(authenticateRequestWithOptions);
+const mockedDb = vi.mocked(db, true);
+const mockedCanView = vi.mocked(canPrincipalViewPage);
+const mockedIsOwnerOrAdmin = vi.mocked(isDriveOwnerOrAdmin);
+
+const USER_ID = 'user_1';
+
+const webAuth = (userId = USER_ID): SessionAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess_1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const authError = (): AuthError => ({
+  error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+});
+
+const insertChain = (row: unknown) => ({
+  values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([row]) })),
+});
+
+const getRequest = () => new Request('http://localhost/api/commands');
+
+const postRequest = (body: unknown) =>
+  new Request('http://localhost/api/commands', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+const validBody = {
+  trigger: 'design-review',
+  description: 'Runs a design review. Use when reviewing UI changes.',
+  entryPageId: 'page_1',
+};
+
+const storedCommand = {
+  id: 'cmd_1',
+  userId: USER_ID,
+  driveId: null,
+  createdById: USER_ID,
+  trigger: 'design-review',
+  description: validBody.description,
+  entryPageId: 'page_1',
+  type: 'document',
+  enabled: true,
+  createdAt: new Date('2026-06-09T00:00:00Z'),
+  updatedAt: new Date('2026-06-09T00:00:00Z'),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockedAuth.mockResolvedValue(webAuth());
+  vi.mocked(filterDrivesByMCPScope).mockImplementation((_auth, ids) => ids as string[]);
+  vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+  // Default: page exists, untrashed, viewable, no duplicates
+  mockedDb.query.pages.findFirst.mockResolvedValue({
+    id: 'page_1',
+    driveId: 'drive_1',
+    isTrashed: false,
+  } as never);
+  mockedDb.query.commands.findFirst.mockResolvedValue(undefined as never);
+  mockedDb.query.commands.findMany.mockResolvedValue([] as never);
+  mockedDb.query.pages.findMany.mockResolvedValue([] as never);
+  mockedDb.query.users.findMany.mockResolvedValue([] as never);
+  mockedCanView.mockResolvedValue(true);
+  mockedIsOwnerOrAdmin.mockResolvedValue(true);
+  mockedDb.insert.mockReturnValue(insertChain(storedCommand) as never);
+  vi.mocked(getMemberDriveIds).mockResolvedValue([]);
+});
+
+describe('GET /api/commands', () => {
+  it('DRV-5 (partial) X-6 (partial) scopes drive commands to the org-aware member-drive set (non-trashed), never a drive_members read of its own', async () => {
+    // An implicit Open member's drive is in the set with no row; a stale org row's drive is not.
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_open_org']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, id: 'cmd_org', userId: null, driveId: 'drive_open_org', trigger: 'org-faq' },
+    ] as never);
+
+    const response = await GET(getRequest());
+
+    expect(response.status).toBe(200);
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
+    expect(mockedDb.select).not.toHaveBeenCalled();
+    expect((await response.json()).commands[0]).toMatchObject({ scope: 'drive', driveId: 'drive_open_org' });
+  });
+
+  it('returns 401 when authentication fails', async () => {
+    mockedAuth.mockResolvedValue(authError() as never);
+    const response = await GET(getRequest());
+    expect(response.status).toBe(401);
+  });
+
+  it('lists personal commands plus commands of drives the user belongs to', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_owned', 'drive_member']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      storedCommand,
+      { ...storedCommand, id: 'cmd_2', userId: null, driveId: 'drive_member', trigger: 'team-faq' },
+    ] as never);
+
+    const response = await GET(getRequest());
+    expect(response.status).toBe(200);
+    const json = await response.json();
+    expect(json.commands).toHaveLength(2);
+    expect(json.commands[0].scope).toBe('user');
+    expect(json.commands[1]).toMatchObject({ scope: 'drive', driveId: 'drive_member' });
+    // A GUEST row (redeemed page share link) does not make a drive's commands the caller's:
+    // the drive set is getMemberDriveIds, which reads a GUEST row as no membership
+    // (member-drives.integration.test.ts proves it on real Postgres).
+    expect(getMemberDriveIds).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), { includeTrashed: false });
+  });
+
+  it('enriches each command with entry page title, availability, and author name', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      storedCommand,
+      {
+        ...storedCommand,
+        id: 'cmd_2',
+        userId: null,
+        driveId: 'drive_member',
+        createdById: 'user_2',
+        trigger: 'team-faq',
+        entryPageId: 'page_2',
+      },
+    ] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Design Review', driveId: 'drive_member', isTrashed: false },
+      { id: 'page_2', title: 'Team FAQ', driveId: 'drive_member', isTrashed: true },
+    ] as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: USER_ID, name: 'Me' },
+      { id: 'user_2', name: 'Alice' },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: 'Design Review',
+      entryPageDriveId: 'drive_member',
+      entryPageAvailable: true,
+      authorName: 'Me',
+    });
+    // Trashed entry page → unavailable
+    expect(json.commands[1]).toMatchObject({
+      entryPageTitle: 'Team FAQ',
+      entryPageAvailable: false,
+      authorName: 'Alice',
+    });
+  });
+
+  it('decrypts ciphertext author names before responding', async () => {
+    const encryptedName = await encryptField('Real Author');
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: USER_ID, name: encryptedName },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0].authorName).toBe('Real Author');
+  });
+
+  it('decrypts one author shared across many commands only once (dedup)', async () => {
+    const encryptedName = await encryptField('Shared Author');
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
+    const manyCommands = Array.from({ length: 20 }, (_, i) => ({
+      ...storedCommand,
+      id: `cmd_${i}`,
+      trigger: `trigger-${i}`,
+      createdById: 'shared-author',
+    }));
+    mockedDb.query.commands.findMany.mockResolvedValue(manyCommands as never);
+    mockedDb.query.users.findMany.mockResolvedValue([
+      { id: 'shared-author', name: encryptedName },
+    ] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+
+    expect(json.commands).toHaveLength(20);
+    expect(json.commands.every((c: { authorName: string }) => c.authorName === 'Shared Author')).toBe(true);
+    // Decryption is batched once per request (dedup happens inside), not
+    // once per of the 20 commands.
+    expect(vi.mocked(decryptUsersByIdOnce)).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the entry page unavailable when it no longer exists', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValue([]);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([] as never);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: null,
+      entryPageAvailable: false,
+    });
+  });
+
+  it('checks per-page permission for every entry page (membership does not imply access)', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
+    mockedDb.query.commands.findMany.mockResolvedValue([storedCommand] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Secret Page', driveId: 'drive_member', isTrashed: false },
+    ] as never);
+    mockedCanView.mockResolvedValue(false);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(mockedCanView).toHaveBeenCalledWith(expect.anything(), 'page_1');
+    expect(json.commands[0].entryPageAvailable).toBe(false);
+  });
+
+  it('suppresses entry-page metadata the caller cannot view (no private-title leak)', async () => {
+    vi.mocked(getMemberDriveIds).mockResolvedValue(['drive_member']);
+    mockedDb.query.commands.findMany.mockResolvedValue([
+      { ...storedCommand, userId: null, driveId: 'drive_member' },
+    ] as never);
+    mockedDb.query.pages.findMany.mockResolvedValue([
+      { id: 'page_1', title: 'Private Roadmap', driveId: 'drive_member', isTrashed: false },
+    ] as never);
+    mockedCanView.mockResolvedValue(false);
+
+    const response = await GET(getRequest());
+    const json = await response.json();
+    expect(json.commands[0]).toMatchObject({
+      entryPageTitle: null,
+      entryPageDriveId: null,
+      entryPageAvailable: false,
+    });
+  });
+});
+
+describe('POST /api/commands', () => {
+  it('returns 401 when authentication fails', async () => {
+    mockedAuth.mockResolvedValue(authError() as never);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(401);
+  });
+
+  it.each(['Design-Review', '-design', 'design-', 'design--review', '', 'a'.repeat(65)])(
+    'rejects invalid trigger %j with 400',
+    async (trigger) => {
+      const response = await POST(postRequest({ ...validBody, trigger }));
+      expect(response.status).toBe(400);
+      expect(mockedDb.insert).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects the reserved trigger 'help' for personal scope with 400", async () => {
+    const response = await POST(postRequest({ ...validBody, trigger: 'help' }));
+    expect(response.status).toBe(400);
+    const json = await response.json();
+    expect(json.error).toMatch(/reserved/i);
+  });
+
+  it("rejects the reserved trigger 'help' for drive scope with 400", async () => {
+    const response = await POST(postRequest({ ...validBody, trigger: 'help', driveId: 'drive_1' }));
+    expect(response.status).toBe(400);
+    const json = await response.json();
+    expect(json.error).toMatch(/reserved/i);
+  });
+
+  it('rejects a missing description with 400', async () => {
+    const response = await POST(postRequest({ ...validBody, description: undefined }));
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a description over 1024 chars with 400', async () => {
+    const response = await POST(postRequest({ ...validBody, description: 'd'.repeat(1025) }));
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects a missing entryPageId with 400', async () => {
+    const response = await POST(postRequest({ ...validBody, entryPageId: undefined }));
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects types other than 'document' with 400", async () => {
+    const response = await POST(postRequest({ ...validBody, type: 'builtin' }));
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 403 when a plain member tries to create a drive command', async () => {
+    mockedIsOwnerOrAdmin.mockResolvedValue(false);
+    const response = await POST(postRequest({ ...validBody, driveId: 'drive_1' }));
+    expect(response.status).toBe(403);
+    expect(mockedDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the entry page does not exist', async () => {
+    mockedDb.query.pages.findFirst.mockResolvedValue(undefined as never);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(400);
+    expect(mockedDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the entry page is trashed', async () => {
+    mockedDb.query.pages.findFirst.mockResolvedValue({
+      id: 'page_1',
+      driveId: 'drive_1',
+      isTrashed: true,
+    } as never);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 403 when the caller cannot view the entry page', async () => {
+    mockedCanView.mockResolvedValue(false);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(403);
+    expect(mockedDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when a drive command entry page is in a different drive', async () => {
+    mockedDb.query.pages.findFirst.mockResolvedValue({
+      id: 'page_1',
+      driveId: 'other_drive',
+      isTrashed: false,
+    } as never);
+    const response = await POST(postRequest({ ...validBody, driveId: 'drive_1' }));
+    expect(response.status).toBe(400);
+    expect(mockedDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 when the trigger already exists in the same scope', async () => {
+    mockedDb.query.commands.findFirst.mockResolvedValue(storedCommand as never);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(409);
+    expect(mockedDb.insert).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 (not 500) when the unique index trips on a concurrent insert', async () => {
+    mockedDb.insert.mockReturnValue({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockRejectedValue(Object.assign(new Error('duplicate'), { code: '23505' })),
+      })),
+    } as never);
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(409);
+  });
+
+  it('creates a personal command and audits the write', async () => {
+    const response = await POST(postRequest(validBody));
+    expect(response.status).toBe(201);
+    const json = await response.json();
+    expect(json.command).toMatchObject({
+      id: 'cmd_1',
+      trigger: 'design-review',
+      scope: 'user',
+    });
+    expect(auditRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ eventType: 'data.write', userId: USER_ID })
+    );
+  });
+
+  it('creates a drive command when the caller is owner/admin', async () => {
+    mockedDb.insert.mockReturnValue(
+      insertChain({ ...storedCommand, userId: null, driveId: 'drive_1' }) as never
+    );
+    const response = await POST(postRequest({ ...validBody, driveId: 'drive_1' }));
+    expect(response.status).toBe(201);
+    const json = await response.json();
+    expect(json.command.scope).toBe('drive');
+    expect(mockedIsOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'drive_1');
+  });
+
+  it('stamps createdById with the caller on create', async () => {
+    const chain = insertChain(storedCommand);
+    mockedDb.insert.mockReturnValue(chain as never);
+    await POST(postRequest(validBody));
+    expect(chain.values).toHaveBeenCalledWith(
+      expect.objectContaining({ createdById: USER_ID })
+    );
+  });
+
+  it('requires CSRF on writes', async () => {
+    await POST(postRequest(validBody));
+    expect(mockedAuth).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requireCSRF: true })
+    );
+  });
+
+  it('rejects a non-object body with 400', async () => {
+    const response = await POST(postRequest([1, 2, 3]));
+    expect(response.status).toBe(400);
+  });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveMember: (auth: { userId: string }, resourceId: string) => permissions.isUserDriveMember(credentialActor(auth.userId, null), resourceId),
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
+});

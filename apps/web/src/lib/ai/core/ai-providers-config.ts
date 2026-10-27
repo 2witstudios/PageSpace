@@ -1,144 +1,283 @@
 /**
  * Centralized AI Provider Configuration
- * Single source of truth for all AI models across the application
- */
-
-/**
- * PageSpace Model Aliases
- * Allows agents to use friendly names (standard/pro) instead of underlying model IDs.
- * This abstraction lets agents update their model without knowing the specific backend model.
- */
-export const PAGESPACE_MODEL_ALIASES: Record<string, string> = {
-  standard: 'glm-4.7',
-  pro: 'glm-5',
-} as const;
-
-/**
- * Resolve a PageSpace model alias to the actual model ID
- * @param modelOrAlias - Either an alias ('standard', 'pro') or actual model ID
- * @returns The resolved model ID
- */
-export function resolvePageSpaceModel(modelOrAlias: string): string {
-  const lowercased = modelOrAlias.toLowerCase();
-  return PAGESPACE_MODEL_ALIASES[lowercased] || modelOrAlias;
-}
-
-/**
- * Check if a string is a PageSpace model alias
- */
-export function isPageSpaceModelAlias(model: string): boolean {
-  return model.toLowerCase() in PAGESPACE_MODEL_ALIASES;
-}
-
-/**
- * Get the PageSpace tier ('standard' or 'pro') for a given model
- * Returns null if the model is not a PageSpace tier model
+ * Single source of truth for all AI models across the application.
  *
- * This is the reverse lookup of PAGESPACE_MODEL_ALIASES - given a model ID,
- * find which tier it belongs to. Used for rate limiting and subscription checks.
+ * Architecture: every cloud model is served through OpenRouter. Providers are
+ * vendor *groupings* (OpenAI, Anthropic, Google, xAI, …) whose model keys are the
+ * full OpenRouter model IDs (`openai/…`, `anthropic/…`, `x-ai/…`). `getBackendProvider`
+ * maps all of them to the `openrouter` backend. Local providers (Ollama, LM Studio,
+ * Azure OpenAI) keep their own backends for on-prem deployments.
  */
-export function getPageSpaceModelTier(model: string): 'standard' | 'pro' | null {
-  const modelLower = model.toLowerCase();
-  for (const [tier, tierModel] of Object.entries(PAGESPACE_MODEL_ALIASES)) {
-    if (tierModel.toLowerCase() === modelLower) {
-      return tier as 'standard' | 'pro';
-    }
-  }
-  return null;
-}
 
 /**
- * Classify a (provider, model) pair into the daily-quota tier the call should
- * count against. Used by the rate-limit gate and subscription check so all
- * managed providers share the same per-tier quota.
- *
- * Pro tier covers frontier flagship models (Claude Opus, GPT-5, OpenAI o3,
- * GLM 5). Smaller variants (mini/nano/flash/haiku/lite/small) are always
- * demoted to standard regardless of family.
+ * OpenRouter response-cache TTL in seconds. Matches OpenRouter's default for the
+ * `X-OpenRouter-Cache` header, so we don't need to send an explicit TTL header.
  */
-export function getProviderTier(provider: string, model: string | undefined): 'standard' | 'pro' {
-  if (provider === 'pagespace' && model) {
-    return getPageSpaceModelTier(resolvePageSpaceModel(model)) === 'pro' ? 'pro' : 'standard';
-  }
-  if (!model) return 'standard';
+export const OPENROUTER_CACHE_TTL_SECONDS = 300;
 
-  const m = model.toLowerCase();
+/**
+ * Granularity (ms) the AI system-prompt timestamp is floored to. Derived from the
+ * cache TTL so the two can never drift: a repeat request inside one cache window
+ * produces a byte-identical request body, which is what lets the cache HIT.
+ */
+export const TIMESTAMP_BUCKET_MS = OPENROUTER_CACHE_TTL_SECONDS * 1000;
 
-  if (/\b(mini|nano|flash|haiku|lite|small)\b/.test(m)) return 'standard';
-  if (m.includes('opus')) return 'pro';
-  if (/\bgpt-?5(\.|-|$|\/)/.test(m)) return 'pro';
-  if (/\bo3([\s-]|$|\/)/.test(m)) return 'pro';
-  if (m === 'glm-5' || m.endsWith('/glm-5')) return 'pro';
+/**
+ * Default provider/model for new users and any unset fallback. OpenAI's GPT-6 Luna
+ * (via OpenRouter) is the product default and a member of the free allowlist.
+ * Sourced from @pagespace/lib so apps (e.g. admin onboarding seed data) that can't
+ * import this web module stay in lockstep with the web defaults.
+ */
+import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '@pagespace/lib/ai/model-defaults';
+export const DEFAULT_PROVIDER = DEFAULT_AI_PROVIDER;
+export const DEFAULT_MODEL = DEFAULT_AI_MODEL;
 
-  return 'standard';
+/**
+ * Server-side (provider, model) defaults for background AI jobs (pulse, memory,
+ * onboarding, workflows) that previously used the `standard`/`pro` PageSpace aliases.
+ * These are concrete OpenRouter IDs so the jobs no longer depend on the removed alias
+ * layer.
+ *
+ * Provider and model are an ATOMIC PAIR — always change both together, and always pass
+ * the paired provider constant at the call site rather than a hardcoded vendor string.
+ * `resolveProviderModel` substitutes the user-facing default for any pair that isn't in
+ * the catalog, so a mismatched pair doesn't error: the background job silently runs the
+ * (more expensive) default model instead. `background pairs are valid catalog entries`
+ * in the config test guards this.
+ */
+export const BACKGROUND_LIGHT_PROVIDER = 'google';
+export const BACKGROUND_LIGHT_MODEL = 'google/gemini-3.5-flash-lite';
+export const BACKGROUND_HEAVY_PROVIDER = 'anthropic';
+export const BACKGROUND_HEAVY_MODEL = 'anthropic/claude-sonnet-5';
+
+/**
+ * Providers restricted to admin users. These require a separate subscription
+ * (not on PageSpace's OpenRouter quota) and route directly to the provider's API.
+ * Non-admins receive a 403 "provider restricted" response rather than a subscription
+ * upgrade prompt.
+ */
+export const ADMIN_ONLY_PROVIDERS = new Set<string>(['glm']);
+
+/**
+ * Models available to the FREE subscription tier. Every paid tier
+ * (`pro`/`business`) gets the full catalog; free users are limited to
+ * this curated set of cheaper models. `DEFAULT_MODEL` must be a member.
+ */
+export const FREE_TIER_MODELS = new Set<string>([
+  'openai/gpt-6-luna',
+  'openai/gpt-5.6-luna',
+  'openai/gpt-5.4-nano',
+  'openai/gpt-5.4-mini',
+  'anthropic/claude-haiku-4.5',
+  'google/gemini-3.7-flash',
+  'google/gemini-3.5-flash-lite',
+  'google/gemini-3.5-flash',
+  'google/gemini-3.1-flash-lite',
+  'google/gemini-3-flash-preview',
+  'google/gemini-2.5-flash',
+  'google/gemini-2.5-flash-lite',
+  'inclusionai/ling-3.0-flash-fin:free',
+  'z-ai/glm-5.2:free',
+  'dots-studio/dots-3-note-preview:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-4-31b-it:free',
+  'liquid/lfm-2.5-2.6b:free',
+  'nvidia/nemotron-3.5-lightning:free',
+  'nvidia/nemotron-3-ultra-550b-a55b:free',
+  'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'thinkingmachines/inkling-small:free',
+  'thinkingmachines/inkling:free',
+  'poolside/laguna-s-2.1:free',
+  'poolside/laguna-xs-2.1:free',
+  'cohere/north-mini-code:free',
+  'minimax/minimax-m3:free',
+  'minimax/minimax-m2.7:free',
+  'z-ai/glm-5.3-flash',
+  'qwen/qwen3.8-27b:free',
+  'apodex/apodex-1.1-mini:free',
+  'inclusionai/ling-3.0-flash-sante:free',
+]);
+
+/**
+ * Whether a (subscription tier) may select the given model.
+ * Any paid tier → full catalog. Free / unknown / unset tier → free allowlist only.
+ */
+export function isModelAllowedForTier(model: string | undefined, tier: string | undefined): boolean {
+  if (tier && tier !== 'free') return true;
+  return !!model && FREE_TIER_MODELS.has(model);
 }
 
 export const AI_PROVIDERS = {
-  pagespace: {
-    name: 'PageSpace',
+  openai: {
+    name: 'OpenAI',
     models: {
-      'glm-4.7': 'Standard',
-      'glm-5': 'Pro (Pro/Business)',
-    },
-  },
-  openrouter: {
-    name: 'OpenRouter (Paid)',
-    models: {
-      // Anthropic Models (2026)
-      'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
-      'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
-
-      // Anthropic Models (2025)
-      'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
-      'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
-      'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
-      'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
-      'anthropic/claude-3-haiku': 'Claude 3 Haiku',
-
-      // OpenAI Models (2026)
+      // GPT-6 Luna listed first: getDefaultModel(provider) returns the first entry,
+      // and it's the product default (DEFAULT_MODEL in model-defaults.ts) — keep the
+      // two in agreement.
+      'openai/gpt-6-luna': 'GPT-6 Luna',
+      'openai/gpt-6-luna-pro': 'GPT-6 Luna Pro',
+      'openai/gpt-6-sol': 'GPT-6 Sol',
+      'openai/gpt-6-sol-pro': 'GPT-6 Sol Pro',
+      'openai/gpt-6.1-sol': 'GPT-6.1 Sol',
+      'openai/gpt-6.1-sol-pro': 'GPT-6.1 Sol Pro',
+      'openai/gpt-6-astra': 'GPT-6 Astra',
+      'openai/gpt-6-astra-pro': 'GPT-6 Astra Pro',
+      'openai/gpt-5.6-sol-pro': 'GPT-5.6 Sol Pro',
+      'openai/gpt-5.6-sol': 'GPT-5.6 Sol',
+      'openai/gpt-5.6-terra-pro': 'GPT-5.6 Terra Pro',
+      'openai/gpt-5.6-terra': 'GPT-5.6 Terra',
+      'openai/gpt-5.6-luna-pro': 'GPT-5.6 Luna Pro',
+      'openai/gpt-5.6-luna': 'GPT-5.6 Luna',
+      'openai/gpt-5.5-pro': 'GPT-5.5 Pro',
+      'openai/gpt-5.5': 'GPT-5.5',
       'openai/gpt-5.4-pro': 'GPT-5.4 Pro',
       'openai/gpt-5.4': 'GPT-5.4',
-      'openai/gpt-5.3-chat-latest': 'GPT-5.3 Chat',
+      'openai/gpt-5.4-mini': 'GPT-5.4 Mini',
+      'openai/gpt-5.4-nano': 'GPT-5.4 Nano',
       'openai/gpt-5.3-codex': 'GPT-5.3 Codex',
-
-      // OpenAI Models (2025)
+      'openai/gpt-5.2-pro': 'GPT-5.2 Pro',
+      'openai/gpt-5.2-chat': 'GPT-5.2 Chat',
       'openai/gpt-5.2': 'GPT-5.2',
       'openai/gpt-5.2-codex': 'GPT-5.2 Codex',
-      'openai/gpt-5.2-mini': 'GPT-5.2 Mini',
-      'openai/gpt-5.2-nano': 'GPT-5.2 Nano',
       'openai/gpt-5.1': 'GPT-5.1',
+      'openai/gpt-5.1-codex-max': 'GPT-5.1 Codex Max',
       'openai/gpt-5.1-codex': 'GPT-5.1 Codex',
       'openai/gpt-5.1-codex-mini': 'GPT-5.1 Codex Mini',
-      'openai/gpt-4o': 'GPT-4o',
-      'openai/gpt-4o-mini': 'GPT-4o Mini',
-      'openai/o3-deep-research': 'o3 Deep Research',
-      'openai/o4-mini-deep-research': 'o4 Mini Deep Research',
+      'openai/gpt-5-pro': 'GPT-5 Pro',
       'openai/gpt-5': 'GPT-5',
       'openai/gpt-5-mini': 'GPT-5 Mini',
       'openai/gpt-5-nano': 'GPT-5 Nano',
+      'openai/gpt-4o': 'GPT-4o',
+      'openai/gpt-4o-mini': 'GPT-4o Mini',
+      'openai/gpt-4.1': 'GPT-4.1',
+      'openai/gpt-4.1-mini': 'GPT-4.1 Mini',
+      'openai/o3': 'o3',
+      'openai/o3-pro': 'o3 Pro',
+      'openai/o4-mini': 'o4 Mini',
       'openai/gpt-oss-120b': 'GPT OSS 120B',
       'openai/gpt-oss-20b': 'GPT OSS 20B',
-
-      // Meta Models
-      'meta-llama/llama-3.1-405b-instruct': 'Llama 3.1 405B',
-
-      // Mistral Models
-      'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
-      'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
-      'mistralai/codestral-2508': 'Codestral 2508',
-      'mistralai/devstral-medium': 'Devstral Medium',
-      'mistralai/devstral-small': 'Devstral Small',
-
-      // Chinese/Asian Models (2025-2026)
-      'z-ai/glm-5': 'GLM 5',
-      'z-ai/glm-4.7': 'GLM 4.7',
-      'z-ai/glm-4.5v': 'GLM 4.5V',
-      'z-ai/glm-4.5': 'GLM 4.5',
-      'z-ai/glm-4.5-air': 'GLM 4.5 Air',
-      'z-ai/glm-4-32b': 'GLM 4 32B',
+      'openai/gpt-3.5-turbo': 'GPT-3.5 Turbo',
+      'openai/gpt-3.5-turbo-0613': 'GPT-3.5 Turbo (older v0613)',
+      'openai/gpt-3.5-turbo-16k': 'GPT-3.5 Turbo 16k',
+      'openai/gpt-4': 'GPT-4',
+      'openai/gpt-4-turbo': 'GPT-4 Turbo',
+      'openai/gpt-4-turbo-preview': 'GPT-4 Turbo Preview',
+      'openai/gpt-4.1-nano': 'GPT-4.1 Nano',
+      'openai/gpt-4o-2024-05-13': 'GPT-4o (2024-05-13)',
+      'openai/gpt-4o-2024-08-06': 'GPT-4o (2024-08-06)',
+      'openai/gpt-4o-2024-11-20': 'GPT-4o (2024-11-20)',
+      'openai/gpt-4o-mini-2024-07-18': 'GPT-4o-mini (2024-07-18)',
+      'openai/gpt-audio': 'GPT Audio',
+      'openai/gpt-audio-mini': 'GPT Audio Mini',
+      'openai/gpt-chat-latest': 'GPT Chat Latest',
+      'openai/gpt-oss-safeguard-20b': 'gpt-oss-safeguard-20b',
+      'openai/o1': 'o1',
+      'openai/o3-mini': 'o3 Mini',
+      'openai/o3-mini-high': 'o3 Mini High',
+      'openai/o4-mini-high': 'o4 Mini High',
+    },
+  },
+  anthropic: {
+    name: 'Anthropic',
+    models: {
+      'anthropic/claude-opus-5.5': 'Claude Opus 5.5',
+      'anthropic/claude-sonnet-5.5': 'Claude Sonnet 5.5',
+      'anthropic/claude-fable-5.1': 'Claude Fable 5.1',
+      'anthropic/claude-opus-5': 'Claude Opus 5',
+      'anthropic/claude-opus-5-fast': 'Claude Opus 5 Fast',
+      'anthropic/claude-sonnet-5': 'Claude Sonnet 5',
+      'anthropic/claude-fable-5': 'Claude Fable 5',
+      'anthropic/claude-opus-4.8': 'Claude Opus 4.8',
+      'anthropic/claude-opus-4.8-fast': 'Claude Opus 4.8 Fast',
+      'anthropic/claude-opus-4.7': 'Claude Opus 4.7',
+      'anthropic/claude-opus-4.7-fast': 'Claude Opus 4.7 Fast',
+      'anthropic/claude-opus-4.6': 'Claude Opus 4.6',
+      'anthropic/claude-sonnet-4.6': 'Claude Sonnet 4.6',
+      'anthropic/claude-opus-4.5': 'Claude Opus 4.5',
+      'anthropic/claude-sonnet-4.5': 'Claude Sonnet 4.5',
+      'anthropic/claude-haiku-4.5': 'Claude Haiku 4.5',
+      'anthropic/claude-opus-4.1': 'Claude Opus 4.1',
+      'anthropic/claude-opus-4': 'Claude Opus 4',
+      'anthropic/claude-sonnet-4': 'Claude Sonnet 4',
+      'anthropic/claude-3-haiku': 'Claude 3 Haiku',
+    },
+  },
+  google: {
+    name: 'Google',
+    models: {
+      'google/gemini-3.8-flash': 'Gemini 3.8 Flash',
+      'google/gemini-3.7-flash': 'Gemini 3.7 Flash',
+      'google/gemini-3.6-flash': 'Gemini 3.6 Flash',
+      'google/gemini-3.5-flash-lite': 'Gemini 3.5 Flash Lite',
+      'google/gemini-3.5-flash': 'Gemini 3.5 Flash',
+      'google/gemini-3-pro-image': 'Gemini 3 Pro Image',
+      'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
+      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
+      'google/gemini-3.1-flash-lite': 'Gemini 3.1 Flash Lite',
+      'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
+      'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
+      'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
+      'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
+      'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
+      'google/gemma-4-31b-it': 'Gemma 4 31B',
+      'google/gemma-4-26b-a4b-it': 'Gemma 4 26B A4B',
+      'google/gemini-2.5-pro-preview': 'Gemini 2.5 Pro Preview 06-05',
+      'google/gemini-2.5-pro-preview-05-06': 'Gemini 2.5 Pro Preview 05-06',
+      'google/gemma-3-12b-it': 'Gemma 3 12B',
+      'google/gemma-3-27b-it': 'Gemma 3 27B',
+      'google/gemma-4-26b-a4b-it:free': 'Gemma 4 26B A4B  (free)',
+      'google/gemma-4-31b-it:free': 'Gemma 4 31B (free)',
+    },
+  },
+  xai: {
+    name: 'xAI (Grok)',
+    models: {
+      'x-ai/grok-4.7': 'Grok 4.7',
+      'x-ai/grok-4.5': 'Grok 4.5',
+      'x-ai/grok-4.3': 'Grok 4.3',
+      'x-ai/grok-4.20': 'Grok 4.20',
+      'x-ai/grok-4.20-multi-agent': 'Grok 4.20 Multi-Agent',
+      'x-ai/grok-build-0.1': 'Grok Build 0.1',
+      'x-ai/grok-4.6': 'Grok 4.6',
+    },
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    models: {
+      'deepseek/deepseek-v4.1-flash': 'DeepSeek V4.1 Flash',
+      'deepseek/deepseek-v4-pro': 'DeepSeek V4 Pro',
+      'deepseek/deepseek-v4-flash': 'DeepSeek V4 Flash',
+      'deepseek/deepseek-v3.2': 'DeepSeek V3.2',
+      'deepseek/deepseek-v3.1-terminus': 'DeepSeek V3.1 Terminus',
+      'deepseek/deepseek-r1-0528': 'DeepSeek R1',
+      'deepseek/deepseek-chat': 'DeepSeek V3',
+      'deepseek/deepseek-chat-v3-0324': 'DeepSeek V3 0324',
+      'deepseek/deepseek-chat-v3.1': 'DeepSeek V3.1',
+      'deepseek/deepseek-r1': 'R1',
+      'deepseek/deepseek-v3.2-exp': 'DeepSeek V3.2 Exp',
+      'deepseek/deepseek-v4-flash-0731': 'DeepSeek V4 Flash 0731',
+      'deepseek/deepseek-v4-flash-vision-exp': 'DeepSeek V4 Flash Vision Exp',
+      'deepseek/deepseek-v4-pro-0813': 'DeepSeek V4 Pro 0813',
+    },
+  },
+  qwen: {
+    name: 'Qwen',
+    models: {
+      'qwen/qwen3.8-max-prime': 'Qwen3.8 Max Prime',
+      'qwen/qwen3.8-max-0902': 'Qwen3.8 Max (0902)',
+      'qwen/qwen3.8-omni-flash': 'Qwen3.8 Omni Flash',
+      'qwen/qwen3.8-27b:free': 'Qwen3.8 27B (free)',
+      'qwen/qwen3.7-plus': 'Qwen3.7 Plus',
+      'qwen/qwen3.7-max': 'Qwen3.7 Max',
+      'qwen/qwen3.6-max-preview': 'Qwen3.6 Max (Preview)',
+      'qwen/qwen3.6-plus': 'Qwen3.6 Plus',
+      'qwen/qwen3.6-flash': 'Qwen3.6 Flash',
+      'qwen/qwen3.6-35b-a3b': 'Qwen3.6 35B-A3B',
+      'qwen/qwen3.6-27b': 'Qwen3.6 27B',
+      'qwen/qwen3.5-plus-20260420': 'Qwen3.5 Plus',
+      'qwen/qwen3.5-flash-02-23': 'Qwen3.5 Flash',
       'qwen/qwen3.5-397b-a17b': 'Qwen3.5 397B-A17B',
-      'qwen/qwen3.5-plus-2026-02-15': 'Qwen3.5 Plus',
-      'qwen/qwen3.5-flash': 'Qwen3.5 Flash',
       'qwen/qwen3.5-122b-a10b': 'Qwen3.5 122B-A10B',
       'qwen/qwen3.5-35b-a3b': 'Qwen3.5 35B-A3B',
       'qwen/qwen3.5-27b': 'Qwen3.5 27B',
@@ -147,330 +286,430 @@ export const AI_PROVIDERS = {
       'qwen/qwen3-235b-a22b-thinking-2507': 'Qwen3 235B Thinking',
       'qwen/qwen3-235b-a22b-2507': 'Qwen3 235B 2507',
       'qwen/qwen3-coder': 'Qwen3 Coder',
+      'qwen/qwen-2.5-72b-instruct': 'Qwen2.5 72B Instruct',
+      'qwen/qwen-2.5-7b-instruct': 'Qwen2.5 7B Instruct',
+      'qwen/qwen-plus': 'Qwen-Plus',
+      'qwen/qwen-plus-2025-07-28': 'Qwen Plus 0728',
+      'qwen/qwen3-14b': 'Qwen3 14B',
+      'qwen/qwen3-235b-a22b': 'Qwen3 235B A22B',
+      'qwen/qwen3-30b-a3b': 'Qwen3 30B A3B',
+      'qwen/qwen3-30b-a3b-instruct-2507': 'Qwen3 30B A3B Instruct 2507',
+      'qwen/qwen3-30b-a3b-thinking-2507': 'Qwen3 30B A3B Thinking 2507',
+      'qwen/qwen3-32b': 'Qwen3 32B',
+      'qwen/qwen3-8b': 'Qwen3 8B',
+      'qwen/qwen3-coder-30b-a3b-instruct': 'Qwen3 Coder 30B A3B Instruct',
+      'qwen/qwen3-coder-flash': 'Qwen3 Coder Flash',
+      'qwen/qwen3-coder-next': 'Qwen3 Coder Next',
+      'qwen/qwen3-coder-plus': 'Qwen3 Coder Plus',
+      'qwen/qwen3-next-80b-a3b-instruct': 'Qwen3 Next 80B A3B Instruct',
+      'qwen/qwen3-next-80b-a3b-thinking': 'Qwen3 Next 80B A3B Thinking',
+      'qwen/qwen3-vl-235b-a22b-instruct': 'Qwen3 VL 235B A22B Instruct',
+      'qwen/qwen3-vl-235b-a22b-thinking': 'Qwen3 VL 235B A22B Thinking',
+      'qwen/qwen3-vl-30b-a3b-instruct': 'Qwen3 VL 30B A3B Instruct',
+      'qwen/qwen3-vl-30b-a3b-thinking': 'Qwen3 VL 30B A3B Thinking',
+      'qwen/qwen3-vl-32b-instruct': 'Qwen3 VL 32B Instruct',
+      'qwen/qwen3-vl-8b-instruct': 'Qwen3 VL 8B Instruct',
+      'qwen/qwen3-vl-8b-thinking': 'Qwen3 VL 8B Thinking',
+      'qwen/qwen3.5-9b': 'Qwen3.5-9B',
+      'qwen/qwen3.5-plus-02-15': 'Qwen3.5 Plus 2026-02-15',
+      'qwen/qwen3.7-flash': 'Qwen3.7 Flash',
+      'qwen/qwen3.8-2.4t-a95b': 'Qwen3.8 2.4T A95B',
+      'qwen/qwen3.8-27b': 'Qwen3.8 27B',
+      'qwen/qwen3.8-flash': 'Qwen3.8 Flash',
+      'qwen/qwen3.8-max': 'Qwen3.8 Max',
+    },
+  },
+  mistral: {
+    name: 'Mistral',
+    models: {
+      'mistralai/mistral-large-2512': 'Mistral Large 3',
+      'mistralai/mistral-medium-3-5': 'Mistral Medium 3.5',
+      'mistralai/mistral-small-2603': 'Mistral Small (2603)',
+      'mistralai/mistral-medium-3.1': 'Mistral Medium 3.1',
+      'mistralai/mistral-medium-3': 'Mistral Medium 3',
+      'mistralai/mistral-small-3.2-24b-instruct': 'Mistral Small 3.2 24B',
+      'mistralai/codestral-2508': 'Codestral 2508',
+      'mistralai/devstral-2512': 'Devstral 2',
+      'mistralai/ministral-14b-2512': 'Ministral 3 14B 2512',
+      'mistralai/ministral-3b-2512': 'Ministral 3 3B 2512',
+      'mistralai/ministral-8b-2512': 'Ministral 3 8B 2512',
+      'mistralai/mistral-large': 'Mistral Large',
+      'mistralai/mistral-large-2407': 'Mistral Large 2407',
+      'mistralai/mistral-nemo': 'Mistral Nemo',
+      'mistralai/mistral-saba': 'Saba',
+      'mistralai/mixtral-8x22b-instruct': 'Mixtral 8x22B Instruct',
+      'mistralai/voxtral-small-24b-2507': 'Voxtral Small 24B 2507',
+    },
+  },
+  moonshot: {
+    name: 'Moonshot AI',
+    models: {
+      'moonshotai/kimi-k3': 'Kimi K3',
+      'moonshotai/kimi-k2.7-code': 'Kimi K2.7 Code',
+      'moonshotai/kimi-k2.6': 'Kimi K2.6',
+      'moonshotai/kimi-k2-thinking': 'Kimi K2 Thinking',
       'moonshotai/kimi-k2': 'Kimi K2',
-      'minimax/minimax-m2.5': 'MiniMax M2.5',
-      'minimax/minimax-m1': 'MiniMax M1',
-
-      // DeepSeek Models (2025)
-      'deepseek/deepseek-v3.1-terminus': 'DeepSeek V3.1 Terminus',
-
-      // Google Models (via OpenRouter)
-      'google/gemini-3-pro-preview': 'Gemini 3 Pro',
-      'google/gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
-      'google/gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
-      'google/gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
-      'google/gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
-      'google/gemini-2.5-pro': 'Gemini 2.5 Pro',
-      'google/gemini-2.5-flash': 'Gemini 2.5 Flash',
-      'google/gemini-2.5-flash-lite': 'Gemini 2.5 Flash Lite',
-      'google/gemini-2.5-flash-lite-preview-06-17': 'Gemini 2.5 Flash Lite Preview',
-      'google/gemini-2.0-pro': 'Gemini 2.0 Pro',
-
-      // AI21 Models
-      'ai21/jamba-mini-1.7': 'Jamba Mini 1.7',
-      'ai21/jamba-large-1.7': 'Jamba Large 1.7',
-
-      // xAI Models (2025)
-      'x-ai/grok-4-fast': 'Grok 4 Fast (2M context)',
-      'x-ai/grok-4': 'Grok 4',
-
-      // Other Models
-      'inception/mercury-2': 'Mercury 2',
-      'inception/mercury': 'Mercury',
-      'writer/palmyra-x5': 'Palmyra X5',
-    },
-  },
-  openrouter_free: {
-    name: 'OpenRouter (Free)',
-    models: {
-      // Coding Models
-      'qwen/qwen3-coder:free': 'Qwen3 Coder',
-      'kwaipilot/kat-coder-pro:free': 'Kat Coder Pro',
-      'mistralai/devstral-small-2505:free': 'Devstral Small',
-      'mistralai/devstral-2512:free': 'Devstral 2512',
-
-      // Large Models (405B+)
-      'meta-llama/llama-3.1-405b-instruct:free': 'Llama 3.1 405B',
-      'nousresearch/hermes-3-llama-3.1-405b:free': 'Hermes 3 405B',
-
-      // Reasoning Models
-      'deepseek/deepseek-r1-0528:free': 'DeepSeek R1',
-      'tngtech/deepseek-r1t-chimera:free': 'DeepSeek R1T Chimera',
-      'tngtech/tng-r1t-chimera:free': 'TNG R1T Chimera',
-      'nex-agi/deepseek-v3.1-nex-n1:free': 'DeepSeek V3.1 Nex N1',
-      'allenai/olmo-3.1-32b-think:free': 'OLMo 3.1 32B Think',
-      'allenai/olmo-3-32b-think:free': 'OLMo 3 32B Think',
-
-      // Google Models
-      'google/gemini-2.0-flash-exp:free': 'Gemini 2.0 Flash',
-      'google/gemma-3-27b-it:free': 'Gemma 3 27B',
-      'google/gemma-3-12b-it:free': 'Gemma 3 12B',
-      'google/gemma-3-4b-it:free': 'Gemma 3 4B',
-
-      // Meta Llama Models
-      'meta-llama/llama-3.3-70b-instruct:free': 'Llama 3.3 70B',
-      'meta-llama/llama-3.2-3b-instruct:free': 'Llama 3.2 3B',
-
-      // Mistral Models
-      'mistralai/mistral-small-3.1-24b-instruct:free': 'Mistral Small 3.1 24B',
-      'mistralai/mistral-7b-instruct:free': 'Mistral 7B',
-      'cognitivecomputations/dolphin-mistral-24b-venice-edition:free': 'Dolphin Mistral 24B',
-
-      // Chinese/Asian Models
-      'z-ai/glm-4.5-air:free': 'GLM 4.5 Air',
-      'qwen/qwen3-4b:free': 'Qwen3 4B',
-      'qwen/qwen-2.5-vl-7b-instruct:free': 'Qwen 2.5 VL 7B',
-      'moonshotai/kimi-k2:free': 'Kimi K2',
-      'alibaba/tongyi-deepresearch-30b-a3b:free': 'Tongyi DeepResearch 30B',
-      'xiaomi/mimo-v2-flash:free': 'MiMo V2 Flash',
-
-      // OpenAI OSS Models
-      'openai/gpt-oss-120b:free': 'GPT OSS 120B',
-      'openai/gpt-oss-20b:free': 'GPT OSS 20B',
-
-      // Other Models
-      'nvidia/nemotron-nano-12b-v2-vl:free': 'Nemotron Nano 12B VL',
-      'nvidia/nemotron-3-nano-30b-a3b:free': 'Nemotron 3 Nano 30B',
-      'arcee-ai/trinity-mini:free': 'Trinity Mini',
-    },
-  },
-  google: {
-    name: 'Google AI',
-    models: {
-      // Gemini 3 Series (2025)
-      'gemini-3-pro': 'Gemini 3 Pro',
-      'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (Preview)',
-      'gemini-3.1-pro-preview-customtools': 'Gemini 3.1 Pro Custom Tools (Preview)',
-      'gemini-3.1-flash-lite-preview': 'Gemini 3.1 Flash Lite (Preview)',
-      'gemini-3-flash-preview': 'Gemini 3 Flash (Preview)',
-      // Gemini 2.5 Series (2025)
-      'gemini-2.5-pro': 'Gemini 2.5 Pro',
-      'gemini-2.5-flash': 'Gemini 2.5 Flash',
-      'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite',
-      // Gemini 2.0 Series (2025)
-      'gemini-2.0-pro-exp': 'Gemini 2.0 Pro (Experimental)',
-      'gemini-2.0-flash': 'Gemini 2.0 Flash',
-      'gemini-2.0-flash-exp': 'Gemini 2.0 Flash (Experimental)',
-      'gemini-2.0-flash-lite': 'Gemini 2.0 Flash-Lite',
-      // Gemini 1.5 Series
-      'gemini-1.5-pro': 'Gemini 1.5 Pro',
-      'gemini-1.5-flash': 'Gemini 1.5 Flash',
-      'gemini-1.5-flash-8b': 'Gemini 1.5 Flash 8B',
-    },
-  },
-  openai: {
-    name: 'OpenAI',
-    models: {
-      // GPT-5.4 Models (2026)
-      'gpt-5.4-pro': 'GPT-5.4 Pro',
-      'gpt-5.4': 'GPT-5.4',
-
-      // GPT-5.3 Models (2026)
-      'gpt-5.3-chat-latest': 'GPT-5.3 Chat',
-      'gpt-5.3-codex': 'GPT-5.3 Codex',
-
-      // GPT-5.2 Models (2025)
-      'gpt-5.2': 'GPT-5.2',
-      'gpt-5.2-codex': 'GPT-5.2 Codex',
-      'gpt-5.2-mini': 'GPT-5.2 Mini',
-      'gpt-5.2-nano': 'GPT-5.2 Nano',
-
-      // GPT-5.1 Models (2025)
-      'gpt-5.1': 'GPT-5.1',
-      'gpt-5.1-codex': 'GPT-5.1 Codex',
-
-      // GPT-5 Models (2025)
-      'gpt-5': 'GPT-5',
-      'gpt-5-mini': 'GPT-5 Mini',
-      'gpt-5-nano': 'GPT-5 Nano',
-
-      // GPT-4.1 Models (2025)
-      'gpt-4.1-2025-04-14': 'GPT-4.1',
-      'gpt-4.1-mini-2025-04-14': 'GPT-4.1 Mini',
-      'gpt-4.1-nano-2025-04-14': 'GPT-4.1 Nano',
-
-      // GPT-4o Models
-      'gpt-4o': 'GPT-4o',
-      'gpt-4o-mini': 'GPT-4o Mini',
-      'gpt-4o-audio-preview': 'GPT-4o Audio Preview',
-
-      // GPT-4 Models
-      'gpt-4-turbo': 'GPT-4 Turbo',
-      'gpt-4': 'GPT-4',
-
-      // GPT-3.5 Models
-      'gpt-3.5-turbo': 'GPT-3.5 Turbo',
-
-      // Reasoning Models
-      'o4-mini-2025-04-16': 'O4 Mini',
-      'o3': 'O3',
-      'o3-mini': 'O3 Mini',
-      'o1': 'O1',
-      'o1-mini': 'O1 Mini',
-      'o1-preview': 'O1 Preview',
-    },
-  },
-  anthropic: {
-    name: 'Anthropic',
-    models: {
-      // Claude 4.6 Models (2026)
-      'claude-opus-4-6-20260204': 'Claude Opus 4.6',
-      'claude-sonnet-4-6-20260217': 'Claude Sonnet 4.6',
-
-      // Claude 4.5 Models (2025)
-      'claude-opus-4-5-20251124': 'Claude Opus 4.5',
-      'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5',
-      'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
-
-      // Claude 4.1 Models
-      'claude-opus-4-1-20250805': 'Claude Opus 4.1',
-      'claude-sonnet-4-1-20250805': 'Claude Sonnet 4.1',
-
-      // Claude 3.7 Models
-      'claude-3-7-sonnet-20250219': 'Claude 3.7 Sonnet',
-
-      // Claude 3.5 Models
-      'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
-      'claude-3-5-sonnet-20240620': 'Claude 3.5 Sonnet (June)',
-      'claude-3-5-haiku-20241022': 'Claude 3.5 Haiku',
-
-      // Claude 3 Models
-      'claude-3-opus-20240229': 'Claude 3 Opus',
-      'claude-3-sonnet-20240229': 'Claude 3 Sonnet',
-      'claude-3-haiku-20240307': 'Claude 3 Haiku',
-    },
-  },
-  xai: {
-    name: 'xAI (Grok)',
-    models: {
-      // Grok 4 Models (2025)
-      'grok-4': 'Grok 4',
-      'grok-4-fast-reasoning': 'Grok 4 Fast (Reasoning)',
-      'grok-4-fast-non-reasoning': 'Grok 4 Fast (Non-Reasoning)',
-      'grok-code-fast-1': 'Grok Code Fast 1',
-
-      // Grok 3 Models
-      'grok-3': 'Grok 3',
-      'grok-3-latest': 'Grok 3 Latest',
-      'grok-3-fast': 'Grok 3 Fast',
-      'grok-3-fast-latest': 'Grok 3 Fast Latest',
-      'grok-3-mini': 'Grok 3 Mini',
-      'grok-3-mini-latest': 'Grok 3 Mini Latest',
-      'grok-3-mini-fast': 'Grok 3 Mini Fast',
-      'grok-3-mini-fast-latest': 'Grok 3 Mini Fast Latest',
-
-      // Grok 2 Models
-      'grok-2': 'Grok 2',
-      'grok-2-latest': 'Grok 2 Latest',
-      'grok-2-1212': 'Grok 2 (December)',
-      'grok-2-vision': 'Grok 2 Vision',
-      'grok-2-vision-latest': 'Grok 2 Vision Latest',
-      'grok-2-vision-1212': 'Grok 2 Vision (December)',
-
-      // Beta Models
-      'grok-beta': 'Grok Beta',
-      'grok-vision-beta': 'Grok Vision Beta',
-    },
-  },
-  ollama: {
-    name: 'Ollama (Local)',
-    models: {
-      // Note: Model list will be discovered dynamically from local Ollama instance
-      // No fallback models - requires Ollama server to be running
-    },
-  },
-  lmstudio: {
-    name: 'LM Studio (Local)',
-    models: {
-      // Note: Model list will be discovered dynamically from running LM Studio instance
-      // No fallback models - requires LM Studio server to be running
-    },
-  },
-  azure_openai: {
-    name: 'Azure OpenAI',
-    models: {
-      // Model list depends on the user's Azure deployment - discovered dynamically
-      // Users configure their deployment name as the model ID
-    },
-  },
-  glm: {
-    name: 'GLM Coder Plan',
-    models: {
-      'glm-5': 'GLM-5 (Pro)',
-      'glm-4.7': 'GLM-4.7 (Standard)',
-      'glm-4.6': 'GLM-4.6',
-      'glm-4.5-air': 'GLM-4.5 Air (Fast)',
+      'moonshotai/kimi-k2-0905': 'Kimi K2 0905',
+      'moonshotai/kimi-k2.5': 'Kimi K2.5',
     },
   },
   minimax: {
     name: 'MiniMax',
     models: {
-      'MiniMax-M2.5': 'MiniMax M2.5',
-      'MiniMax-M2.1': 'MiniMax M2.1',
-      'MiniMax-M2': 'MiniMax M2',
-      'MiniMax-M2-Stable': 'MiniMax M2 Stable',
+      'minimax/minimax-m3': 'MiniMax M3',
+      'minimax/minimax-m2.7': 'MiniMax M2.7',
+      'minimax/minimax-m2.5': 'MiniMax M2.5',
+      'minimax/minimax-m2.1': 'MiniMax M2.1',
+      'minimax/minimax-m1': 'MiniMax M1',
+      'minimax/minimax-m2': 'MiniMax M2',
+      'minimax/minimax-m2.7:free': 'MiniMax M2.7 (free)',
+      'minimax/minimax-m3:free': 'MiniMax M3 (free)',
+    },
+  },
+  meta: {
+    name: 'Meta',
+    models: {
+      'meta/muse-spark-1.3': 'Muse Spark 1.3',
+      'meta/muse-spark-1.3-contributor': 'Muse Spark 1.3 Contributor',
+      'meta/muse-spark-1.1': 'Muse Spark 1.1',
+      'meta-llama/llama-4-maverick': 'Llama 4 Maverick',
+      'meta-llama/llama-4-scout': 'Llama 4 Scout',
+      'meta-llama/llama-3.3-70b-instruct': 'Llama 3.3 70B',
+      'meta-llama/llama-3.1-70b-instruct': 'Llama 3.1 70B Instruct',
+      'meta-llama/llama-3.1-8b-instruct': 'Llama 3.1 8B Instruct',
+      'meta/muse-glimmer-30b': 'Muse Glimmer 30B',
+      'meta/muse-spark-1.2': 'Muse Spark 1.2',
+      'meta/muse-spark-1.2-contributor': 'Muse Spark 1.2 Contributor',
+    },
+  },
+  bytedance: {
+    name: 'ByteDance',
+    models: {
+      'bytedance-seed/seed-2.0-lite': 'Seed 2.0 Lite',
+      'bytedance-seed/seed-2.0-mini': 'Seed 2.0 Mini',
+      'bytedance-seed/seed-1.6': 'Seed 1.6',
+      'bytedance-seed/seed-1.6-flash': 'Seed 1.6 Flash',
+      'bytedance-seed/seed-2-1-turbo': 'Seed 2.1 Turbo',
+      'bytedance-seed/seed-2.0-code': 'Seed-2.0-Code',
+    },
+  },
+  inception: {
+    name: 'Inception',
+    models: {
+      'inception/mercury-2.5': 'Mercury 2.5',
+      'inception/mercury-2': 'Mercury 2',
+    },
+  },
+  writer: {
+    name: 'Writer',
+    models: {
+      'writer/palmyra-x5': 'Palmyra X5',
+    },
+  },
+  zai: {
+    name: 'Z.ai',
+    // Public GLM family, served through OpenRouter (`z-ai/*` model ids) and metered
+    // normally. Distinct from the admin-only `glm` provider below, which routes
+    // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
+    models: {
+      // GLM-5.3 Flash listed first so switching to this provider in the UI lands on
+      // the newest cheap model rather than an arbitrary older one.
+      'z-ai/glm-5.3-flash': 'GLM 5.3 Flash',
+      'z-ai/glm-5.3-prime': 'GLM 5.3 Prime',
+      'z-ai/glm-5.3-flashx': 'GLM 5.3 FlashX',
+      'z-ai/glm-5.2': 'GLM-5.2',
+      'z-ai/glm-5.1': 'GLM-5.1',
+      'z-ai/glm-5-turbo': 'GLM-5 Turbo',
+      'z-ai/glm-5': 'GLM-5',
+      'z-ai/glm-4.7': 'GLM-4.7',
+      'z-ai/glm-4.7-flash': 'GLM-4.7 Flash',
+      'z-ai/glm-4.6': 'GLM-4.6',
+      'z-ai/glm-4.5': 'GLM-4.5',
+      'z-ai/glm-4.5-air': 'GLM-4.5 Air',
+      'z-ai/glm-4.5v': 'GLM-4.5V',
+      'z-ai/glm-4.6v': 'GLM 4.6V',
+      'z-ai/glm-5.2:free': 'GLM 5.2 (free)',
+      'z-ai/glm-5.3': 'GLM 5.3',
+      'z-ai/glm-5v-turbo': 'GLM 5V Turbo',
+    },
+  },
+  'aion-labs': {
+    name: 'AionLabs',
+    models: {
+      'aion-labs/aion-2.0': 'Aion-2.0',
+      'aion-labs/aion-3.0': 'Aion-3.0',
+      'aion-labs/aion-3.0-mini': 'Aion-3.0-Mini',
+    },
+  },
+  amazon: {
+    name: 'Amazon',
+    models: {
+      'amazon/nova-2-lite-v1': 'Nova 2 Lite',
+      'amazon/nova-lite-v1': 'Nova Lite 1.0',
+      'amazon/nova-micro-v1': 'Nova Micro 1.0',
+      'amazon/nova-premier-v1': 'Nova Premier 1.0',
+      'amazon/nova-pro-v1': 'Nova Pro 1.0',
+    },
+  },
+  apodex: {
+    name: 'Apodex',
+    models: {
+      'apodex/apodex-1.1-mini:free': 'Apodex 1.1 Mini (free)',
+    },
+  },
+  'arcee-ai': {
+    name: 'Arcee AI',
+    models: {
+      'arcee-ai/trinity-large-thinking': 'Trinity Large Thinking',
+      'arcee-ai/virtuoso-large': 'Virtuoso Large',
+    },
+  },
+  cohere: {
+    name: 'Cohere',
+    models: {
+      'cohere/command-a-plus': 'Command A+',
+      'cohere/command-a': 'Command A',
+      'cohere/command-r-08-2024': 'Command R (08-2024)',
+      'cohere/command-r-plus-08-2024': 'Command R+ (08-2024)',
+      'cohere/north-mini-code:free': 'North Mini Code (free)',
+    },
+  },
+  'dots-studio': {
+    name: 'Dots Studio',
+    models: {
+      'dots-studio/dots-3-note-preview:free': 'Dots3-Note Preview (free)',
+    },
+  },
+  'ibm-granite': {
+    name: 'IBM',
+    models: {
+      'ibm-granite/granite-4.1-8b': 'Granite 4.1 8B',
+    },
+  },
+  inclusionai: {
+    name: 'InclusionAI',
+    models: {
+      'inclusionai/ling-3.0-flash': 'Ling-3.0-flash',
+      'inclusionai/ling-3.0-flash-fin:free': 'Ling 3.0 Flash Fin (free)',
+      'inclusionai/ling-3.0-flash-sante:free': 'Ling 3.0 Flash Sante (free)',
+    },
+  },
+  kwaipilot: {
+    name: 'Kwaipilot',
+    models: {
+      'kwaipilot/kat-coder-air-v2.5': 'KAT-Coder-Air V2.5',
+      'kwaipilot/kat-coder-pro-v2': 'KAT-Coder-Pro V2',
+      'kwaipilot/kat-coder-pro-v2.5': 'KAT-Coder-Pro V2.5',
+    },
+  },
+  liquid: {
+    name: 'LiquidAI',
+    models: {
+      'liquid/lfm-2.5-2.6b:free': 'LFM2.5-2.6B (free)',
+    },
+  },
+  meituan: {
+    name: 'Meituan',
+    models: {
+      'meituan/longcat-2.0': 'LongCat 2.0',
+    },
+  },
+  'nex-agi': {
+    name: 'Nex AGI',
+    models: {
+      'nex-agi/nex-n2-mini': 'Nex-N2-Mini',
+      'nex-agi/nex-n2-pro': 'Nex-N2-Pro',
+    },
+  },
+  nvidia: {
+    name: 'NVIDIA',
+    models: {
+      'nvidia/nemotron-3-nano-30b-a3b': 'Nemotron 3 Nano 30B A3B',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free': 'Nemotron 3 Nano Omni (free)',
+      'nvidia/nemotron-3-super-120b-a12b': 'Nemotron 3 Super',
+      'nvidia/nemotron-3-super-120b-a12b:free': 'Nemotron 3 Super (free)',
+      'nvidia/nemotron-3-ultra-550b-a55b': 'Nemotron 3 Ultra',
+      'nvidia/nemotron-3-ultra-550b-a55b:free': 'Nemotron 3 Ultra (free)',
+      'nvidia/nemotron-3.5-lightning': 'Nemotron 3.5 Lightning',
+      'nvidia/nemotron-3.5-lightning:free': 'Nemotron 3.5 Lightning (free)',
+    },
+  },
+  poolside: {
+    name: 'Poolside',
+    models: {
+      'poolside/laguna-s-2.1': 'Laguna S 2.1',
+      'poolside/laguna-s-2.1:free': 'Laguna S 2.1 (free)',
+      'poolside/laguna-xs-2.1': 'Laguna XS 2.1',
+      'poolside/laguna-xs-2.1:free': 'Laguna XS 2.1 (free)',
+    },
+  },
+  rekaai: {
+    name: 'Reka',
+    models: {
+      'rekaai/reka-edge': 'Reka Edge',
+    },
+  },
+  relace: {
+    name: 'Relace',
+    models: {
+      'relace/relace-search': 'Relace Search',
+    },
+  },
+  sakana: {
+    name: 'Sakana',
+    models: {
+      'sakana/fugu-ultra': 'Fugu Ultra',
+      'sakana/sakana-namazu': 'Sakana Namazu',
+    },
+  },
+  sao10k: {
+    name: 'Sao10K',
+    models: {
+      'sao10k/l3.1-euryale-70b': 'Llama 3.1 Euryale 70B v2.2',
+    },
+  },
+  stepfun: {
+    name: 'StepFun',
+    models: {
+      'stepfun/step-3.5-flash': 'Step 3.5 Flash',
+      'stepfun/step-3.7-flash': 'Step 3.7 Flash',
+    },
+  },
+  tencent: {
+    name: 'Tencent',
+    models: {
+      'tencent/hy3': 'Hy3',
+      'tencent/hy3-preview': 'Hy3 preview',
+    },
+  },
+  thedrummer: {
+    name: 'TheDrummer',
+    models: {
+      'thedrummer/unslopnemo-12b': 'UnslopNemo 12B',
+    },
+  },
+  thinkingmachines: {
+    name: 'Thinking Machines',
+    models: {
+      'thinkingmachines/inkling': 'Inkling',
+      'thinkingmachines/inkling-small': 'Inkling Small',
+      'thinkingmachines/inkling-small:free': 'Inkling Small (free)',
+      'thinkingmachines/inkling:free': 'Inkling (free)',
+    },
+  },
+  upstage: {
+    name: 'Upstage',
+    models: {
+      'upstage/solar-pro-3': 'Solar Pro 3',
+      'upstage/solar-pro4': 'Solar Pro 4',
+    },
+  },
+  xiaomi: {
+    name: 'Xiaomi',
+    models: {
+      'xiaomi/mimo-v2.6-pro': 'MiMo-V2.6-Pro',
+      'xiaomi/mimo-v2.6-flash': 'MiMo-V2.6-Flash',
+      'xiaomi/mimo-v2.5': 'MiMo-V2.5',
+      'xiaomi/mimo-v2.5-pro': 'MiMo-V2.5-Pro',
+    },
+  },
+  glm: {
+    name: 'Z.ai (Admin)',
+    // Admin-only direct connection to the Z.ai Coder Plan endpoint
+    // (api.z.ai/api/coding/paas/v4). Flat-rate subscription, so usage is logged but
+    // NOT billed against the shared credit pool (see METERING_EXEMPT_PROVIDERS).
+    // Models the Coding Plan offers; bare `glm-*` ids (no vendor prefix). Z.ai routes
+    // requests for GLM-5.2/5.1 to GLM-5.3 and GLM-4.7 to GLM-5.3 Flash, so only the
+    // two current models are listed. Older ids stay in AI_PRICING/MODEL_CONTEXT_WINDOWS
+    // so historical usage rows still price.
+    models: {
+      'glm-5.3':     'GLM-5.3',
+      'glm-5.3-flash': 'GLM-5.3 Flash',
+    },
+  },
+  ollama: {
+    name: 'Ollama (Local)',
+    models: {
+      // Discovered dynamically from the local Ollama instance.
+    },
+  },
+  lmstudio: {
+    name: 'LM Studio (Local)',
+    models: {
+      // Discovered dynamically from the running LM Studio instance.
+    },
+  },
+  azure_openai: {
+    name: 'Azure OpenAI',
+    models: {
+      // Deployment-name driven; discovered dynamically.
     },
   },
 } as const;
 
 /**
- * Map UI provider to backend provider
- * Both openrouter and openrouter_free use 'openrouter' backend
- * PageSpace uses 'glm' backend (OpenAI-compatible endpoints)
- * GLM uses 'openai' backend (OpenAI-compatible endpoints)
- * OpenAI, Anthropic, and xAI use their own backends
+ * Cloud vendor providers — every one is served through OpenRouter. The remainder
+ * (Ollama, LM Studio, Azure OpenAI) keep their own backends for on-prem.
+ */
+const CLOUD_VENDOR_PROVIDERS = new Set<string>([
+  'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
+  'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
+  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
+  'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
+  'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
+]);
+
+/**
+ * Map a UI provider to its backend. Every cloud vendor routes through OpenRouter;
+ * local providers use their own backend.
  */
 export function getBackendProvider(uiProvider: string): string {
-  if (uiProvider === 'pagespace') {
-    return 'glm';
-  }
-  if (uiProvider === 'openrouter_free') {
-    return 'openrouter';
-  }
-  if (uiProvider === 'glm') {
-    return 'openai';
-  }
+  if (CLOUD_VENDOR_PROVIDERS.has(uiProvider)) return 'openrouter';
   return uiProvider;
 }
 
 /**
- * Get default model for a provider
+ * Get default model for a provider (first model in its catalog).
  */
 export function getDefaultModel(provider: string): string {
-  // Always return glm-4.7 for PageSpace provider (Standard tier)
-  if (provider === 'pagespace') {
-    return 'glm-4.7';
-  }
-
-  // Always return gemini-2.5-flash for Google provider
-  if (provider === 'google') {
-    return 'gemini-2.5-flash';
-  }
-
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
-  if (!providerConfig) {
-    return 'glm-4.7';
-  }
-
+  if (!providerConfig) return DEFAULT_MODEL;
   const models = Object.keys(providerConfig.models);
   return models[0] ?? '';
 }
 
 /**
- * Check if a model is valid for a provider
+ * Get the default model for a provider that the given subscription tier may
+ * actually select. Free users land on the first free-tier model in the
+ * provider's catalog instead of the first model overall (which is typically a
+ * paid flagship and would be rejected by the tier gate on save). Paid tiers
+ * behave exactly like getDefaultModel. An unset/unknown tier follows the same
+ * semantics as isModelAllowedForTier (treated as free). Dynamic-catalog
+ * providers (Ollama, LM Studio, Azure) have no static models and return '' so
+ * callers skip sending a model, matching getDefaultModel.
+ */
+export function getDefaultModelForTier(provider: string, tier: string | undefined): string {
+  const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
+  if (!providerConfig) return DEFAULT_MODEL;
+  const models = Object.keys(providerConfig.models);
+  const fallback = models[0] ?? '';
+  if (!fallback) return '';
+  if (isModelAllowedForTier(fallback, tier)) return fallback;
+  return models.find((model) => isModelAllowedForTier(model, tier)) ?? fallback;
+}
+
+/**
+ * Check if a model is valid for a provider.
  */
 export function isValidModel(provider: string, model: string): boolean {
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
   if (!providerConfig) return false;
-  // For PageSpace, also accept aliases (standard, pro)
-  if (provider === 'pagespace' && isPageSpaceModelAlias(model)) {
-    return true;
-  }
   return model in providerConfig.models;
 }
 
 /**
- * Get display name for a model
+ * Get display name for a model.
  */
 export function getModelDisplayName(provider: string, model: string): string {
   const providerConfig = AI_PROVIDERS[provider as keyof typeof AI_PROVIDERS];
@@ -478,37 +717,17 @@ export function getModelDisplayName(provider: string, model: string): string {
   return providerConfig.models[model as keyof typeof providerConfig.models] || model;
 }
 
-export type AIProvider = keyof typeof AI_PROVIDERS;
-export type AIModel<T extends AIProvider> = keyof typeof AI_PROVIDERS[T]['models'];
-
 /**
- * Get user-facing display name for AI usage.
- * Hides underlying model details from users for privacy/branding.
- *
- * For PageSpace provider: Shows "PageSpace Standard" or "PageSpace Pro"
- * For all other providers: Shows "PageSpace AI" to abstract away the underlying model
- *
- * @param provider - The AI provider (e.g., 'pagespace', 'openrouter', 'google')
- * @param model - The model identifier (e.g., 'glm-4.5-air', 'glm-4.7', 'standard', 'pro')
- * @returns User-friendly display name
+ * User-facing display name for an AI (provider, model) pair. Returns the real
+ * model display name from the catalog, falling back to the raw model id.
  */
 export function getUserFacingModelName(provider: string | null | undefined, model: string | null | undefined): string {
-  // Default fallback
-  if (!model) {
-    return 'PageSpace AI';
+  if (!model) return 'AI';
+  if (provider) {
+    const name = getModelDisplayName(provider, model);
+    if (name) return name;
   }
-
-  // For PageSpace provider, show tier-based naming
-  if (provider === 'pagespace') {
-    const resolvedModel = resolvePageSpaceModel(model);
-    const tier = getPageSpaceModelTier(resolvedModel);
-    if (tier === 'pro') return 'PageSpace Pro';
-    return 'PageSpace Standard';
-  }
-
-  // For all other providers, abstract away the model details
-  // Users shouldn't see the underlying model names (GLM, Claude, GPT, etc.)
-  return 'PageSpace AI';
+  return model;
 }
 
 /**
@@ -517,9 +736,15 @@ export function getUserFacingModelName(provider: string | null | undefined, mode
 export const ONPREM_ALLOWED_PROVIDERS = new Set<string>(['ollama', 'lmstudio', 'azure_openai']);
 
 /**
+ * Providers whose model list is fetched dynamically at runtime. These are exempt
+ * from the "model is required" validation on provider switch because the client
+ * fetches the model list after selecting the provider.
+ */
+export const DYNAMIC_MODEL_PROVIDERS = new Set<string>(['ollama', 'lmstudio']);
+
+/**
  * Returns the provider entries visible in the current deployment mode.
- * On-prem: only local providers and Azure OpenAI.
- * Cloud: all providers.
+ * On-prem: only local providers and Azure OpenAI. Cloud: all providers.
  */
 export function getVisibleProviders(): Partial<typeof AI_PROVIDERS> {
   // Client-side check uses NEXT_PUBLIC_ prefix; server-side uses DEPLOYMENT_MODE
@@ -535,3 +760,92 @@ export function getVisibleProviders(): Partial<typeof AI_PROVIDERS> {
   ) as Partial<typeof AI_PROVIDERS>;
 }
 
+/**
+ * Providers whose model catalog is empty in `AI_PROVIDERS` because their models
+ * are discovered at runtime (local Ollama/LM Studio instances, Azure deployment
+ * names). Model-id validation must short-circuit to "allow" for these — there is
+ * no static list to check a selection against. Supersets `DYNAMIC_MODEL_PROVIDERS`
+ * with `azure_openai` (also deployment-name driven).
+ */
+const DYNAMIC_CATALOG_PROVIDERS = new Set<string>([...DYNAMIC_MODEL_PROVIDERS, 'azure_openai']);
+
+/**
+ * Whether the provider's models are discovered at runtime (so the static catalog
+ * has no entries to validate against).
+ */
+export function isDynamicModelProvider(provider: string): boolean {
+  return DYNAMIC_CATALOG_PROVIDERS.has(provider);
+}
+
+/**
+ * Validate an agent's (provider, model) selection against the real catalog so a
+ * hallucinated model id can never be stored. Returns `null` when the selection is
+ * acceptable, otherwise a human-readable reason string.
+ *
+ * This is the anti-hallucination gate, NOT a tier gate — subscription-tier access
+ * is enforced where the call is made (`isModelAllowedForTier`). Clearing the config
+ * (both unset) is allowed, dynamic/local providers are allowed (runtime-discovered
+ * models), and deployment-mode visibility is respected via `getVisibleProviders`.
+ */
+export function validateAgentModelSelection(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+): string | null {
+  if (!provider && !model) return null; // clearing/unset is fine
+  // A model can't be stored without a provider — the pair is what gets validated
+  // and routed. Without a provider there's nothing to check the model against, so
+  // a hallucinated id would otherwise slip through.
+  if (model && !provider) {
+    return `Set an AI provider alongside model "${model}".`;
+  }
+  const visible = getVisibleProviders();
+  if (provider && !(provider in visible)) {
+    return `Unknown or unavailable AI provider "${provider}".`;
+  }
+  if (isDynamicModelProvider(provider ?? '')) return null; // ollama/lmstudio/azure: runtime-discovered
+  if (model && provider && !isValidModel(provider, model)) {
+    return `Model "${model}" is not a valid model for provider "${provider}".`;
+  }
+  return null;
+}
+
+/**
+ * Resolve the (provider, model) pair that will ACTUALLY be used for a request,
+ * exactly as `createAIProvider` does. This is the single source of truth for that
+ * resolution so callers (e.g. the credit gate and admin-only checks) can key their
+ * decisions on what truly runs — never on the raw requested values, which the
+ * factory may substitute.
+ *
+ * Resolution, mirroring the factory:
+ *  1. Atomic pair: prefer the request pair (both present), else the stored pair
+ *     (both present), else the default pair. Never combine a provider from one
+ *     source with a model from another.
+ *  2. Catalog enforcement: a non-local (provider, model) that isn't in the catalog
+ *     is SUBSTITUTED with the default rather than forwarded — so e.g. `glm` + an
+ *     invalid model resolves to the metered default, NOT to `glm`. Local/dynamic
+ *     providers serve runtime-discovered models, so only their name is gated.
+ */
+export function resolveProviderModel(
+  selectedProvider: string | null | undefined,
+  selectedModel: string | null | undefined,
+  storedProvider?: string | null,
+  storedModel?: string | null,
+): { provider: string; model: string } {
+  let provider: string;
+  let model: string;
+  if (selectedProvider && selectedModel) {
+    provider = selectedProvider;
+    model = selectedModel;
+  } else if (storedProvider && storedModel) {
+    provider = storedProvider;
+    model = storedModel;
+  } else {
+    provider = DEFAULT_PROVIDER;
+    model = DEFAULT_MODEL;
+  }
+  if (!ONPREM_ALLOWED_PROVIDERS.has(provider) && !isValidModel(provider, model)) {
+    provider = DEFAULT_PROVIDER;
+    model = DEFAULT_MODEL;
+  }
+  return { provider, model };
+}

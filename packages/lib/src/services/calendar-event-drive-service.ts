@@ -1,0 +1,362 @@
+import { db } from '@pagespace/db/db';
+import { eq, and, inArray, isNotNull } from '@pagespace/db/operators';
+import { calendarEvents, calendarEventDrives } from '@pagespace/db/schema/calendar';
+import { drives } from '@pagespace/db/schema/core';
+import { isDriveOwnerOrAdmin, isUserDriveMember } from '../permissions/permissions';
+import { listDriveAudiences } from '../permissions/drive-audience';
+import { checkDriveMayLoosen } from '../permissions/org-lapse-guard';
+import type { AccessActor } from '../permissions/access-actor';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+/** `code` is set for a refusal the UI keys on: `org_lapsed` ([D-OW-33], 402). */
+export type ServiceFailure = { ok: false; status: number; error: string; code?: string };
+
+export interface EventDriveEntry {
+  driveId: string;
+  driveName: string;
+  driveSlug: string;
+  isHome: boolean;
+  sharedAt: Date | null;
+  sharedBy: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Pure validation functions — zero I/O, all context pre-fetched by caller
+// ---------------------------------------------------------------------------
+
+/**
+ * Pure guard for shareEventWithDrive.
+ * All permission data is passed in as plain values — no DB calls inside.
+ */
+export function validateShareEventInput(input: {
+  actingUserId: string;
+  event: { id: string; driveId: string | null; createdById: string; isTrashed: boolean };
+  targetDriveId: string;
+  actingUserIsHomeDriveAdmin: boolean;
+  actingUserIsTargetDriveMember: boolean;
+}): { ok: true } | ServiceFailure {
+  const { actingUserId, event, targetDriveId, actingUserIsHomeDriveAdmin, actingUserIsTargetDriveMember } = input;
+
+  if (event.isTrashed) {
+    return { ok: false, status: 404, error: 'Event not found' };
+  }
+  if (!event.driveId) {
+    return { ok: false, status: 400, error: 'Personal events cannot be shared with drives' };
+  }
+  if (targetDriveId === event.driveId) {
+    return { ok: false, status: 400, error: 'Cannot share event with its home drive' };
+  }
+  if (actingUserId !== event.createdById && !actingUserIsHomeDriveAdmin) {
+    return { ok: false, status: 403, error: 'You do not have permission to share this event' };
+  }
+  if (!actingUserIsTargetDriveMember) {
+    return { ok: false, status: 400, error: 'You are not a member of the target drive' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Pure guard for unshareEventFromDrive.
+ * All permission data is passed in as plain values — no DB calls inside.
+ */
+export function validateUnshareEventInput(input: {
+  actingUserId: string;
+  event: { id: string; driveId: string | null; createdById: string; isTrashed: boolean };
+  targetDriveId: string;
+  actingUserIsHomeDriveAdmin: boolean;
+  actingUserIsTargetDriveAdmin: boolean;
+  junctionRowExists: boolean;
+}): { ok: true } | ServiceFailure {
+  const { actingUserId, event, targetDriveId, actingUserIsHomeDriveAdmin, actingUserIsTargetDriveAdmin, junctionRowExists } = input;
+
+  if (event.isTrashed) {
+    return { ok: false, status: 404, error: 'Event not found' };
+  }
+  if (targetDriveId === event.driveId) {
+    return { ok: false, status: 400, error: 'Cannot remove the home drive from an event' };
+  }
+  if (!junctionRowExists) {
+    return { ok: false, status: 404, error: 'Event is not shared with this drive' };
+  }
+  const canManage =
+    actingUserId === event.createdById ||
+    actingUserIsHomeDriveAdmin ||
+    actingUserIsTargetDriveAdmin;
+  if (!canManage) {
+    return { ok: false, status: 403, error: 'You do not have permission to remove this drive share' };
+  }
+  return { ok: true };
+}
+
+/**
+ * Pure membership predicate.
+ * Short-circuits on home drive match — avoids iterating shared sets unnecessarily.
+ */
+export function isUserInAnyDriveSet(
+  userId: string,
+  homeDriveMembers: Set<string>,
+  sharedDriveMembers: Set<string>[],
+): boolean {
+  if (homeDriveMembers.has(userId)) return true;
+  return sharedDriveMembers.some((s) => s.has(userId));
+}
+
+// ---------------------------------------------------------------------------
+// DB effect: thin insert/delete wrappers — no validation logic
+// ---------------------------------------------------------------------------
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function insertCalendarEventDrive(
+  executor: Tx | typeof db,
+  input: { eventId: string; driveId: string; sharedBy: string },
+) {
+  const [row] = await executor
+    .insert(calendarEventDrives)
+    .values(input)
+    .returning();
+  return row;
+}
+
+// ---------------------------------------------------------------------------
+// Orchestrators: fetch context → pure validation → effect
+// ---------------------------------------------------------------------------
+
+/**
+ * Share a calendar event with an additional drive.
+ * Triggers on the event remain bound to the home drive (calendarEvents.driveId).
+ */
+export async function shareEventWithDrive(input: {
+  actor: AccessActor;
+  eventId: string;
+  driveId: string;
+}): Promise<{ ok: true; status: 201; row: typeof calendarEventDrives.$inferSelect } | ServiceFailure> {
+  const { actor, eventId, driveId } = input;
+  const actingUserId = actor.userId;
+
+  const [event] = await db
+    .select({ id: calendarEvents.id, driveId: calendarEvents.driveId, createdById: calendarEvents.createdById, isTrashed: calendarEvents.isTrashed })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.id, eventId))
+    .limit(1);
+
+  if (!event) return { ok: false, status: 404, error: 'Event not found' };
+  if (!event.driveId) return { ok: false, status: 400, error: 'Personal events cannot be shared with drives' };
+  if (driveId === event.driveId) return { ok: false, status: 400, error: 'Cannot share event with its home drive' };
+
+  const [actingUserIsHomeDriveAdmin, actingUserIsTargetDriveMember] = await Promise.all([
+    isDriveOwnerOrAdmin(actor, event.driveId),
+    isUserDriveMember(actor, driveId),
+  ]);
+
+  const validation = validateShareEventInput({
+    actingUserId,
+    event,
+    targetDriveId: driveId,
+    actingUserIsHomeDriveAdmin,
+    actingUserIsTargetDriveMember,
+  });
+  if (!validation.ok) return validation;
+
+  try {
+    // [D-OW-33] ruling: sharing an org-drive event into ANOTHER drive widens who reads org content (the calendar
+    // analog of copying pages out): refused while the event's home drive's org is lapsed, read in the insert's
+    // transaction. Unsharing still works.
+    const homeDriveId = event.driveId;
+    return await db.transaction(async (tx) => {
+      const lapsed = await checkDriveMayLoosen(tx, homeDriveId, true);
+      if (lapsed) return { ok: false as const, status: lapsed.status, error: lapsed.message, code: lapsed.code };
+      const row = await insertCalendarEventDrive(tx, { eventId, driveId, sharedBy: actingUserId });
+      return { ok: true as const, status: 201 as const, row };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code === '23505') {
+      return { ok: false, status: 409, error: 'Event is already shared with this drive' };
+    }
+    throw err;
+  }
+}
+
+/**
+ * Remove a drive from an event's shared-drive list.
+ * The home drive (calendarEvents.driveId) cannot be removed.
+ */
+export async function unshareEventFromDrive(input: {
+  actor: AccessActor;
+  eventId: string;
+  driveId: string;
+}): Promise<{ ok: true; status: 200 } | ServiceFailure> {
+  const { actor, eventId, driveId } = input;
+  const actingUserId = actor.userId;
+
+  const [event] = await db
+    .select({ id: calendarEvents.id, driveId: calendarEvents.driveId, createdById: calendarEvents.createdById, isTrashed: calendarEvents.isTrashed })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.id, eventId))
+    .limit(1);
+
+  if (!event) return { ok: false, status: 404, error: 'Event not found' };
+  if (driveId === event.driveId) return { ok: false, status: 400, error: 'Cannot remove the home drive from an event' };
+
+  const [actingUserIsHomeDriveAdmin, actingUserIsTargetDriveAdmin, [junctionRow]] = await Promise.all([
+    event.driveId ? isDriveOwnerOrAdmin(actor, event.driveId) : Promise.resolve(false),
+    isDriveOwnerOrAdmin(actor, driveId),
+    db.select({ id: calendarEventDrives.id })
+      .from(calendarEventDrives)
+      .where(and(eq(calendarEventDrives.eventId, eventId), eq(calendarEventDrives.driveId, driveId)))
+      .limit(1),
+  ]);
+
+  const validation = validateUnshareEventInput({
+    actingUserId,
+    event,
+    targetDriveId: driveId,
+    actingUserIsHomeDriveAdmin,
+    actingUserIsTargetDriveAdmin,
+    junctionRowExists: !!junctionRow,
+  });
+  if (!validation.ok) return validation;
+
+  await db.delete(calendarEventDrives).where(
+    and(eq(calendarEventDrives.eventId, eventId), eq(calendarEventDrives.driveId, driveId)),
+  );
+
+  return { ok: true, status: 200 };
+}
+
+/**
+ * List all drives an event is shared with.
+ * Home drive (isHome:true) is always first, synthesized from calendarEvents.driveId.
+ * Returns [] for personal events (driveId null).
+ */
+export async function listEventDrives(eventId: string): Promise<EventDriveEntry[]> {
+  const [event] = await db
+    .select({ driveId: calendarEvents.driveId })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.id, eventId))
+    .limit(1);
+
+  if (!event?.driveId) return [];
+
+  const [homeDrive, sharedRows] = await Promise.all([
+    db.select({ id: drives.id, name: drives.name, slug: drives.slug })
+      .from(drives)
+      .where(eq(drives.id, event.driveId))
+      .limit(1)
+      .then(([r]) => r ?? null),
+    db.select({
+      driveId: calendarEventDrives.driveId,
+      sharedBy: calendarEventDrives.sharedBy,
+      sharedAt: calendarEventDrives.sharedAt,
+      driveName: drives.name,
+      driveSlug: drives.slug,
+    })
+      .from(calendarEventDrives)
+      .innerJoin(drives, eq(calendarEventDrives.driveId, drives.id))
+      .where(eq(calendarEventDrives.eventId, eventId)),
+  ]);
+
+  const result: EventDriveEntry[] = [];
+
+  if (homeDrive) {
+    result.push({
+      driveId: homeDrive.id,
+      driveName: homeDrive.name,
+      driveSlug: homeDrive.slug,
+      isHome: true,
+      sharedAt: null,
+      sharedBy: null,
+    });
+  }
+
+  for (const row of sharedRows) {
+    result.push({
+      driveId: row.driveId,
+      driveName: row.driveName,
+      driveSlug: row.driveSlug,
+      isHome: false,
+      sharedAt: row.sharedAt,
+      sharedBy: row.sharedBy ?? null,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Check if a user is a member (or the lead) of the event's home drive OR any shared drive: the
+ * shared org-aware membership, drive by drive (an event is shared into a handful at most), home
+ * drive first so the junction is read only when it is needed.
+ */
+export async function isUserMemberOfAnyEventDrive(
+  actor: AccessActor,
+  event: { id: string; driveId: string | null },
+): Promise<boolean> {
+  if (!event.driveId) return false;
+
+  if (await isUserDriveMember(actor, event.driveId)) return true;
+  const shared = await db
+    .select({ driveId: calendarEventDrives.driveId })
+    .from(calendarEventDrives)
+    .where(eq(calendarEventDrives.eventId, event.id));
+  for (const { driveId } of shared) {
+    if (await isUserDriveMember(actor, driveId)) return true;
+  }
+  return false;
+}
+
+/**
+ * Return the union of the members (lead included) of the home drive and every shared drive, from
+ * the one org-aware membership enumeration (listDriveAudiences): pending invitations and stale org
+ * rows are no members. Constant queries however many drives.
+ */
+export async function getAllMemberUserIdsForEvent(
+  eventId: string,
+  homeDriveId: string | null,
+): Promise<Set<string>> {
+  if (!homeDriveId) return new Set();
+
+  const sharedRows = await db
+    .select({ driveId: calendarEventDrives.driveId })
+    .from(calendarEventDrives)
+    .where(eq(calendarEventDrives.eventId, eventId));
+
+  const audiences = await listDriveAudiences([homeDriveId, ...sharedRows.map((r) => r.driveId)]);
+  const result = new Set<string>();
+  for (const members of audiences.values()) {
+    for (const { userId } of members) result.add(userId);
+  }
+  return result;
+}
+
+/**
+ * Return [homeDriveId, ...sharedDriveIds] for broadcast fan-out.
+ * Home drive is always first. Deduplicates in case of accidental junction row for home drive.
+ */
+export async function getAllDriveIdsForEvent(eventId: string): Promise<string[]> {
+  const [event] = await db
+    .select({ driveId: calendarEvents.driveId })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.id, eventId))
+    .limit(1);
+
+  if (!event?.driveId) return [];
+
+  const sharedRows = await db
+    .select({ driveId: calendarEventDrives.driveId })
+    .from(calendarEventDrives)
+    .where(eq(calendarEventDrives.eventId, eventId));
+
+  const seen = new Set([event.driveId]);
+  const result = [event.driveId];
+  for (const { driveId } of sharedRows) {
+    if (!seen.has(driveId)) {
+      seen.add(driveId);
+      result.push(driveId);
+    }
+  }
+  return result;
+}

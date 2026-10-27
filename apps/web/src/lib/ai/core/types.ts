@@ -4,15 +4,27 @@
  */
 
 import { ModelCapabilities } from './model-capabilities';
+import type { CommandExecutionData } from './command-processor';
+import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface ToolExecutionContext {
   userId: string;
+  /**
+   * Who drives this turn, as the permission layer's actor (D-OW-45): the chat request's credential (with its
+   * ceremony evidence) or, for a workflow/trigger run, the automation running as its creator. Every tool access
+   * check asks the org sign-in policy (SEC-2/3) of it. Its userId is `userId`.
+   */
+  accessActor: AccessActor;
   conversationId?: string;
   // User's IANA timezone (e.g., "America/New_York") for timezone-aware tool operations
   timezone?: string;
   // AI attribution for activity logging
   aiProvider?: string;
   aiModel?: string;
+  // POL-8: this context belongs to a model run, whose tools are judged by the org allowlists against aiProvider/aiModel
+  // — set together with them by toolModelContext() (provider-factory.ts). A model run missing either is refused.
+  runsModel?: true;
   locationContext?: {
     currentPage?: {
       id: string;
@@ -37,10 +49,86 @@ export interface ToolExecutionContext {
   requestOrigin?: 'user' | 'agent'; // Whether request came from user or another agent
   agentCallDepth?: number;          // Depth of agent call chain (0 = direct user request)
 
+  // Allowlist of tool names this agent is permitted to execute (null = unrestricted)
+  enabledTools?: string[] | null;
+
+  // Image generation: whether the caller is an app admin (the rollout gate), the
+  // user's subscription tier (for the billing gate), and their chosen OpenRouter
+  // image model. Threaded by the chat/global routes so the generate_image tool can
+  // gate + pick a model without an extra DB read.
+  isAdmin?: boolean;
+  subscriptionTier?: string;
+  imageGenerationModel?: string | null;
+
+  // The wallet this turn spends (WAL-5, SPEND-1): the target its credit gate was given,
+  // naming the source the gate resolved, and the wallet the gate reserved on. A tool that
+  // gates its own model call (generate_image) names this same source, and a nested call
+  // that rides the turn's gate (an agent consulted inside it) settles on this wallet —
+  // never on a different one. Absent outside a gated turn: such a caller has no drive
+  // session and spends personal credits (SPEND-8).
+  // `userId` is the person that gate bound — the consumer whose caps the spend counts toward —
+  // when it is not this context's `userId`: a manual workflow Run is gated as the person who
+  // pressed it while the run reads content as the workflow's creator (review #2817 P2-3). Every
+  // model call riding this turn gates and records its usage as them; absent, the context's user.
+  // `automationRef` is the stored reference (automation-attribution's codec) of the automation a run
+  // with no person present spends for (SPEND-10, automationRefFor): every model call riding the run records it, so the drive lead sees
+  // that spend as the automation rather than merged into its creator.
+  //
+  // `reservedHoldId` is a hold the CALLER already took for exactly the one ask_agent call it is
+  // about to make (the channel mention responder's per-reply hold): that call settles on it
+  // instead of reserving a second time, and does not pass it on to anything nested inside it.
+  creditSpend?: { spend: SpendTarget; walletId?: string; userId?: string; automationRef?: string; reservedHoldId?: string };
+
+  // MCP token drive-scope restriction. Empty/undefined = full access (session auth
+  // or an unscoped MCP token); non-empty = tools may only touch these drive IDs.
+  // Enforced in actor-permissions so a scoped token cannot escalate through an
+  // agent whose own ACL spans drives outside the token scope.
+  mcpAllowedDriveIds?: string[];
+
+  // The MCP token id, set alongside mcpAllowedDriveIds. For scoped tokens this
+  // enables the app-member RBAC ceiling in actor-permissions: the token's own
+  // drive-membership role caps what tools may do, on top of the drive scope.
+  mcpTokenId?: string;
+
   // Chat source identification - determines sender identity for channel messages
   chatSource?: {
     type: 'global' | 'page';
     agentPageId?: string;   // For page agents: the AI_CHAT page ID
     agentTitle?: string;    // For page agents: the agent display name
   };
+
+  // Universal Commands execution feedback for the message this context posts
+  // (channel agent replies): carried into the reply's aiMeta so the channel
+  // renders one "Using /foo" / "Skipped /foo" indicator per resolved command
+  // (UX spec §7), in document order.
+  commandExecution?: CommandExecutionData[];
+
+  // The page the agent is currently focused on for THIS turn: seeded from the
+  // request's location/page context, then mutated in place by tools that
+  // represent the agent switching focus (e.g. create_page), so later page
+  // tool calls in the same turn default to wherever the agent's own actions
+  // left it, not just the page the user was on when the turn started. Used
+  // by resolveDefaultPageId (page-context-defaults.ts) to default an omitted
+  // `pageId` argument on read/write page tools.
+  currentWorkingPage?: { id: string; title: string; type: string };
+
+  // Drive-level twin of currentWorkingPage: mutated in place by create_page (and
+  // create_drive) so a later tool call in the SAME turn that omits `driveId`
+  // follows the agent's own action rather than snapping back to the turn-start
+  // location. Read by resolveDefaultDriveId (drive-context-defaults.ts). Not
+  // seeded at route level — the resolver already falls through to
+  // locationContext.currentDrive.
+  currentWorkingDrive?: { id: string; name?: string };
+
+  // Sprites Platform Alignment 5-2: a stable id for THIS agent turn (one
+  // streamText run), lazily stamped once by `resolveSandboxActorContext`
+  // (apps/web/src/lib/ai/tools/sandbox-tools-runtime.ts) the first time a
+  // sandbox tool call reads this context, then reused by every later bash
+  // call in the same run. Threads into `SandboxActorContext.turnId`, which
+  // gates the pre-batch checkpoint's "at most once per turn" throttle
+  // (`checkpoint-policy.ts`). Undefined until first stamped.
+  turnId?: string;
+  // The authenticated SESSION id of the person driving this run (session auth only). Agent-account
+  // tools treat its presence as a live human session; absent = unattended (ADR 0004 §4.4).
+  authSessionId?: string;
 }

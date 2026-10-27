@@ -5,11 +5,20 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { UserPlus } from 'lucide-react';
 import { MemberRow } from './MemberRow';
+import { AgentMemberRow, type AgentMember } from './AgentMemberRow';
+import { InviteAgentDialog } from './InviteAgentDialog';
+import { AppMemberRow, type AppMember } from './AppMemberRow';
 import { PendingInvitesSection } from './PendingInvitesSection';
+import { DriveShareLinkSection } from './DriveShareLinkSection';
 import type { PendingInvite } from './PendingInviteRow';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { useSocket } from '@/hooks/useSocket';
 import { del, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
+import { useDriveStore } from '@/hooks/useDrive';
+import { useMyOrganizations } from '@/hooks/useMyOrganizations';
+import { MemberSourceLegend, PageLinkGuestsSection, type PageLinkGuest } from './PageLinkGuestsSection';
 
 interface DriveMember {
   id: string;
@@ -37,10 +46,13 @@ interface DriveMember {
     edit: number;
     share: number;
   };
+  source?: 'invite' | 'org' | 'lead';
+  isGuest?: boolean;
 }
 
 interface DriveMembersProps {
   driveId: string;
+  driveKind?: string | null;
 }
 
 interface DriveMemberSocketEvent {
@@ -49,19 +61,37 @@ interface DriveMemberSocketEvent {
   operation?: string;
 }
 
+interface DriveRole {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
 const DRIVE_MEMBER_EVENTS = [
   'drive:member_added',
   'drive:member_removed',
   'drive:member_role_changed',
 ] as const;
 
-export function DriveMembers({ driveId }: DriveMembersProps) {
+export function DriveMembers({ driveId, driveKind }: DriveMembersProps) {
+  const isHome = isHomeDrive({ kind: driveKind });
   const [members, setMembers] = useState<DriveMember[]>([]);
+  const [agentMembers, setAgentMembers] = useState<AgentMember[]>([]);
+  const [appMembers, setAppMembers] = useState<AppMember[]>([]);
+  const [driveRoles, setDriveRoles] = useState<DriveRole[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [pageLinkGuests, setPageLinkGuests] = useState<PageLinkGuest[]>([]);
+  // UI-5 / DRV-8: an org drive labels each member's source and its guests.
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  // [D-OW-33] a lapsed org's drive may only restrict: inviting, new links and new agents wait until it pays.
+  const lapsed = useOrgLapsed(driveOrgId);
+  const { orgById } = useMyOrganizations();
+  const orgLabels = driveOrgId !== null;
+  const orgName = orgById(driveOrgId)?.name ?? null;
   const [currentUserRole, setCurrentUserRole] = useState<'OWNER' | 'ADMIN' | 'MEMBER'>('MEMBER');
   const [loading, setLoading] = useState(true);
+  const [inviteAgentOpen, setInviteAgentOpen] = useState(false);
   const router = useRouter();
-  const { toast } = useToast();
   const socket = useSocket();
   // Sequence guard: socket events can fire fetchMembers while a prior fetch is
   // in flight. Only the latest request commits state to avoid a stale response
@@ -71,25 +101,40 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
   const fetchMembers = useCallback(async () => {
     const currentSeq = ++requestSeqRef.current;
     try {
-      const response = await fetchWithAuth(`/api/drives/${driveId}/members`);
-      if (!response.ok) throw new Error('Failed to fetch members');
-      const data = await response.json();
+      const [membersRes, agentMembersRes, appMembersRes, rolesRes] = await Promise.all([
+        fetchWithAuth(`/api/drives/${driveId}/members`),
+        fetchWithAuth(`/api/drives/${driveId}/agents/members`),
+        fetchWithAuth(`/api/drives/${driveId}/apps/members`),
+        fetchWithAuth(`/api/drives/${driveId}/roles`),
+      ]);
+      if (!membersRes.ok) throw new Error('Failed to fetch members');
+      const data = await membersRes.json();
       if (currentSeq !== requestSeqRef.current) return;
       setMembers(data.members);
       setPendingInvites(data.pendingInvites ?? []);
+      setPageLinkGuests(data.guests ?? []);
       setCurrentUserRole(data.currentUserRole || 'MEMBER');
+
+      if (agentMembersRes.ok) {
+        const agentData = await agentMembersRes.json();
+        setAgentMembers(agentData.agentMembers ?? []);
+      }
+      if (appMembersRes.ok) {
+        const appData = await appMembersRes.json();
+        setAppMembers(appData.appMembers ?? []);
+      }
+      if (rolesRes.ok) {
+        const rolesData = await rolesRes.json();
+        setDriveRoles(rolesData.roles ?? []);
+      }
     } catch (error) {
       if (currentSeq !== requestSeqRef.current) return;
       console.error('Error fetching members:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load drive members',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load drive members');
     } finally {
       if (currentSeq === requestSeqRef.current) setLoading(false);
     }
-  }, [driveId, toast]);
+  }, [driveId]);
 
   useEffect(() => {
     fetchMembers();
@@ -122,35 +167,43 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
 
       setMembers((prev) => prev.filter((m) => m.userId !== userId));
 
-      toast({
-        title: 'Success',
-        description: 'Member removed successfully',
-      });
+      toast.success('Member removed successfully');
     } catch (error) {
       console.error('Error removing member:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to remove member',
-        variant: 'destructive',
-      });
+      toast.error('Failed to remove member');
     }
+  };
+
+  const handleAgentRoleChange = (agentPageId: string, updated: Partial<AgentMember>) => {
+    setAgentMembers((prev) =>
+      prev.map((a) => (a.agentPageId === agentPageId ? { ...a, ...updated } : a)),
+    );
+  };
+
+  const handleRemoveAgent = (agentPageId: string) => {
+    setAgentMembers((prev) => prev.filter((a) => a.agentPageId !== agentPageId));
+    toast.success('Agent member removed successfully');
+  };
+
+  const handleAppRoleChange = (tokenId: string, updated: Partial<AppMember>) => {
+    setAppMembers((prev) =>
+      prev.map((a) => (a.tokenId === tokenId ? { ...a, ...updated } : a)),
+    );
+  };
+
+  const handleRemoveApp = (tokenId: string) => {
+    setAppMembers((prev) => prev.filter((a) => a.tokenId !== tokenId));
+    toast.success('App member removed successfully');
   };
 
   const handleRevokeInvite = async (inviteId: string) => {
     try {
       await del(`/api/drives/${driveId}/pending-invites/${inviteId}`);
       setPendingInvites((prev) => prev.filter((inv) => inv.id !== inviteId));
-      toast({
-        title: 'Invitation revoked',
-        description: 'The invitation link no longer works.',
-      });
+      toast.success('The invitation link no longer works.');
     } catch (error) {
       console.error('Error revoking invite:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to revoke invitation',
-        variant: 'destructive',
-      });
+      toast.error('Failed to revoke invitation');
     }
   };
 
@@ -171,13 +224,29 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
             People with access to this drive
           </p>
         </div>
-        {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)}>
+        {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+          <Button onClick={() => router.push(`/dashboard/${driveId}/members/invite`)} disabled={lapsed}>
             <UserPlus className="w-4 h-4 mr-2" />
             Invite Member
           </Button>
         )}
       </div>
+
+      {lapsed && !isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        <p className="text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+          Inviting, new invite links and new agents are paused. {LAPSED_LOOSEN_NOTE}
+        </p>
+      )}
+
+      {isHome && (
+        <p className="text-sm text-muted-foreground">
+          Home is your private drive and can&apos;t be shared.
+        </p>
+      )}
+
+      {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+        <DriveShareLinkSection driveId={driveId} lapsed={lapsed} />
+      )}
 
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
         {members.length === 0 ? (
@@ -190,6 +259,7 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
               key={member.id}
               member={member}
               driveId={driveId}
+              orgLabels={orgLabels}
               currentUserRole={currentUserRole}
               onRemove={() => handleRemoveMember(member.userId)}
             />
@@ -197,10 +267,86 @@ export function DriveMembers({ driveId }: DriveMembersProps) {
         )}
       </div>
 
+      {orgLabels && members.length > 0 && <MemberSourceLegend orgName={orgName} />}
+
+      <PageLinkGuestsSection guests={pageLinkGuests} orgName={orgName} onChanged={() => void fetchMembers()} />
+
+      <div>
+        <div className="mb-3 flex items-start justify-between gap-2">
+          <div>
+            <h2 className="text-lg font-semibold">Agents ({agentMembers.length})</h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              AI agents with access to this drive
+            </p>
+          </div>
+          {!isHome && (currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+            <Button variant="outline" size="sm" onClick={() => setInviteAgentOpen(true)} disabled={lapsed}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Invite Agent
+            </Button>
+          )}
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+          {agentMembers.length === 0 ? (
+            <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+              No agents added. Agents can be given drive access to read and write pages.
+            </div>
+          ) : (
+            agentMembers.map((agent) => (
+              <AgentMemberRow
+                key={agent.id}
+                agent={agent}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                driveRoles={driveRoles}
+                onRoleChange={handleAgentRoleChange}
+                onRemove={handleRemoveAgent}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <div className="mb-3">
+          <h2 className="text-lg font-semibold">Apps ({appMembers.length})</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            MCP app tokens with access to this drive
+          </p>
+        </div>
+        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 divide-y divide-gray-200 dark:divide-gray-700">
+          {appMembers.length === 0 ? (
+            <div className="p-6 text-center text-gray-500 dark:text-gray-400 text-sm">
+              No apps added. MCP keys can be given drive access to read and write pages.
+            </div>
+          ) : (
+            appMembers.map((app) => (
+              <AppMemberRow
+                key={app.id}
+                app={app}
+                driveId={driveId}
+                currentUserRole={currentUserRole}
+                driveRoles={driveRoles}
+                onRoleChange={handleAppRoleChange}
+                onRemove={handleRemoveApp}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
       <PendingInvitesSection
         invites={pendingInvites}
         currentUserRole={currentUserRole}
         onRevoke={handleRevokeInvite}
+      />
+
+      <InviteAgentDialog
+        driveId={driveId}
+        open={inviteAgentOpen}
+        onOpenChange={setInviteAgentOpen}
+        existingAgentPageIds={agentMembers.map((a) => a.agentPageId)}
+        onInvited={fetchMembers}
       />
     </div>
   );

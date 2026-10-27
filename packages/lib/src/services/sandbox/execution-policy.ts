@@ -1,0 +1,62 @@
+export const SANDBOX_EGRESS_ALLOWLIST = Object.freeze([
+  // GitHub — git clone, API, releases, LFS, release asset CDN
+  'github.com', 'api.github.com', 'raw.githubusercontent.com',
+  'objects.githubusercontent.com', 'uploads.github.com', 'codeload.github.com',
+  'github-releases.githubusercontent.com', 'release-assets.githubusercontent.com',
+  // npm / bun
+  'registry.npmjs.org',
+  // PyPI
+  'pypi.org', 'files.pythonhosted.org',
+  // Cargo
+  'crates.io', 'static.crates.io', 'index.crates.io',
+  // Go modules
+  'proxy.golang.org', 'sum.golang.org',
+] as const);
+
+export const SANDBOX_TIMEOUT_MS = 120_000;
+// Opt-in ceiling for the `bash` tool's per-call `timeoutMs` override — long
+// installs/typechecks can ask for headroom above the default without lifting
+// the cap for every command. Kept well under the AI route's own budget
+// (runAgentWithRetry's maxDurationMs defaults to 285_000, itself under the
+// platform's hard maxDuration=300 route ceiling) — a single tool call must
+// leave room for the rest of the turn (model latency, other tool calls), not
+// consume the entire per-request budget by itself.
+export const SANDBOX_MAX_TIMEOUT_MS = 200_000;
+export const SANDBOX_MAX_OUTPUT_BYTES = 256 * 1024;
+
+/**
+ * How many LINES `readFile` returns when the caller names no `limit`.
+ *
+ * `readFile` is line-addressed (offset/limit) rather than byte-addressed, so an
+ * agent that hits the end of a window can ask for the next one. The byte cap
+ * above stays as a BACKSTOP for pathological input a line count cannot bound —
+ * a minified bundle is legitimately one line of several hundred KiB.
+ *
+ * This is a window, not a limit on what is knowable: every truncated read says
+ * how many lines exist and which `offset` returns the rest.
+ */
+export const DEFAULT_READ_LINES = 2000;
+
+/**
+ * Per-LINE byte cap for `readFile`.
+ *
+ * Without it, one pathological line (a minified bundle, an embedded data URI)
+ * either eats the whole window budget or, on its own, exceeds it — and since the
+ * window is addressed by line, there is then no offset that reaches past it: the
+ * rest of the file becomes unreachable through this tool. Capping each line
+ * keeps line numbering meaningful and every line addressable; the elided tail of
+ * an over-long line is recoverable with `bash` (cut/sed) when it is actually
+ * wanted, which is rare and explicit.
+ */
+export const MAX_LINE_BYTES = 2000;
+
+// Resource caps set explicitly per sandbox at creation, rather than relying on
+// the platform's quota defaults. Modest by design: enough for git clones + a
+// package install + a build, sized so a single runaway session can't consume an
+// oversized VM. `region` is intentionally omitted so the platform co-locates the
+// VM near the app. Mapped to the backing provider's config by the driver.
+export const SANDBOX_RESOURCE_CAPS = Object.freeze({
+  ramMB: 2048,
+  cpus: 2,
+  storageGB: 5,
+} as const);

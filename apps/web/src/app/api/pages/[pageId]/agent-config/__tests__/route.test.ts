@@ -22,9 +22,11 @@ const {
   mockIsAuthError,
   mockCheckMCPPageScope,
   mockCanUserEditPage,
+  mockGetUserAccessiblePagesInDrive,
   mockDbSelect,
   mockGetActorInfo,
   mockLoggers,
+  mockResolveEnvInDrive,
   MockPageRevisionMismatchError,
 } = vi.hoisted(() => {
   class _MockPageRevisionMismatchError extends Error {
@@ -43,6 +45,7 @@ const {
     mockIsAuthError: vi.fn((result: unknown) => result != null && typeof result === 'object' && 'error' in result),
     mockCheckMCPPageScope: vi.fn().mockResolvedValue(null),
     mockCanUserEditPage: vi.fn(),
+    mockGetUserAccessiblePagesInDrive: vi.fn().mockResolvedValue([]),
     mockDbSelect: vi.fn(),
     mockGetActorInfo: vi.fn().mockResolvedValue({
       actorEmail: 'test@example.com',
@@ -51,6 +54,7 @@ const {
     mockLoggers: {
       api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     },
+    mockResolveEnvInDrive: vi.fn(),
     MockPageRevisionMismatchError: _MockPageRevisionMismatchError,
   };
 });
@@ -60,15 +64,25 @@ const {
 vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: (...args: unknown[]) => mockApplyPageMutation(...args),
   PageRevisionMismatchError: MockPageRevisionMismatchError,
+  // POL-8: the real mapping's shape — an error carrying an org-policy refusal becomes its 403 body.
+  orgModelPolicyErrorResponse: (error: unknown) => {
+    const refusal = (error as { refusal?: { message: string; code: string; policy: string; status: 403 } } | null)?.refusal;
+    return refusal ? { body: { error: refusal.message, code: refusal.code, policy: refusal.policy }, status: refusal.status } : null;
+  },
 }));
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: (...args: unknown[]) => mockAuthenticateRequest(...args),
   isAuthError: (result: unknown) => mockIsAuthError(result),
   checkMCPPageScope: (...args: unknown[]) => mockCheckMCPPageScope(...args),
+  // The route authorizes via the principal dispatch (scoped tokens use their own
+  // role); tests drive it through the same mock as the old user-level check.
+  canPrincipalEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
 }));
 
-vi.mock('@/lib/ai/core', () => ({
+vi.mock('@/lib/ai/core/ai-tools', () => ({
   pageSpaceTools: {
     read_page: { description: 'Read a page' },
     write_page: { description: 'Write a page' },
@@ -83,14 +97,21 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  and: vi.fn(),
+  inArray: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
+  resolveEnvInDrive: (...args: unknown[]) => mockResolveEnvInDrive(...args),
+}));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
+    getUserAccessiblePagesInDrive: (...args: unknown[]) => mockGetUserAccessiblePagesInDrive(...args),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: mockLoggers,
@@ -149,12 +170,13 @@ const mockPage = {
   systemPrompt: 'You are helpful',
   enabledTools: ['read_page'],
   aiProvider: 'anthropic',
-  aiModel: 'claude-3',
+  aiModel: 'anthropic/claude-haiku-4.5',
   includeDrivePrompt: true,
   agentDefinition: 'Agent definition text',
   visibleToGlobalAssistant: true,
   includePageTree: false,
   pageTreeScope: 'children',
+  toolExposureMode: 'search',
   revision: 5,
 };
 
@@ -209,6 +231,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
     mockIsAuthError.mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     mockCheckMCPPageScope.mockResolvedValue(null);
     mockCanUserEditPage.mockResolvedValue(true);
+    mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
     mockGetActorInfo.mockResolvedValue({
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
@@ -272,13 +295,15 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.systemPrompt).toBe('You are helpful');
       expect(body.enabledTools).toEqual(['read_page']);
       expect(body.aiProvider).toBe('anthropic');
-      expect(body.aiModel).toBe('claude-3');
+      expect(body.aiModel).toBe('anthropic/claude-haiku-4.5');
       expect(body.includeDrivePrompt).toBe(true);
       expect(body.drivePrompt).toBe('Drive system prompt');
       expect(body.agentDefinition).toBe('Agent definition text');
       expect(body.visibleToGlobalAssistant).toBe(true);
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
+      expect(body.toolExposureMode).toBe('search');
+      expect(body.defaultEnvId).toBeNull();
     });
 
     it('returns available tools list', async () => {
@@ -369,6 +394,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     mockIsAuthError.mockImplementation((result: unknown) => result != null && typeof result === 'object' && 'error' in result);
     mockCheckMCPPageScope.mockResolvedValue(null);
     mockCanUserEditPage.mockResolvedValue(true);
+    mockGetUserAccessiblePagesInDrive.mockResolvedValue([]);
     mockGetActorInfo.mockResolvedValue({
       actorEmail: 'test@example.com',
       actorDisplayName: 'Test User',
@@ -531,25 +557,28 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       );
     });
 
-    it('nullifies empty aiProvider after trim', async () => {
-      await PATCH(createPatchRequest({ aiProvider: '' }), mockParams);
+    it('nullifies empty aiProvider after trim (provider+model cleared together)', async () => {
+      // A model can't be stored without a provider, so clearing the provider clears
+      // the model too — the UI always sends both fields together.
+      await PATCH(createPatchRequest({ aiProvider: '', aiModel: '' }), mockParams);
 
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           updates: expect.objectContaining({
             aiProvider: null,
+            aiModel: null,
           }),
         })
       );
     });
 
     it('updates aiModel (trims whitespace)', async () => {
-      await PATCH(createPatchRequest({ aiModel: '  claude-3  ' }), mockParams);
+      await PATCH(createPatchRequest({ aiModel: '  anthropic/claude-haiku-4.5  ' }), mockParams);
 
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           updates: expect.objectContaining({
-            aiModel: 'claude-3',
+            aiModel: 'anthropic/claude-haiku-4.5',
           }),
         })
       );
@@ -659,6 +688,37 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 
+    it('updates toolExposureMode with valid value "upfront"', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'upfront' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolExposureMode: 'upfront',
+          }),
+        })
+      );
+    });
+
+    it('updates toolExposureMode with valid value "search"', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'search' }), mockParams);
+
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({
+            toolExposureMode: 'search',
+          }),
+        })
+      );
+    });
+
+    it('ignores invalid toolExposureMode values', async () => {
+      await PATCH(createPatchRequest({ toolExposureMode: 'invalid' }), mockParams);
+
+      // Invalid value is not persisted, and with no other fields no mutation occurs
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
     it('passes expectedRevision when provided as number', async () => {
       await PATCH(
         createPatchRequest({ systemPrompt: 'test', expectedRevision: 5 }),
@@ -684,6 +744,56 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
         })
       );
     });
+
+  });
+
+  describe('model validation', () => {
+    it('returns 400 for a hallucinated model id', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-6-ultra' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not a valid model/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid catalog model id', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalled();
+    });
+
+    it('returns 400 when only a bad aiModel is sent (validated against stored provider)', async () => {
+      // mockPage.aiProvider is "anthropic"; the bad model resolves against it.
+      const response = await PATCH(
+        createPatchRequest({ aiModel: 'anthropic/not-real' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/not a valid model/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 400 for a model set without a provider (no provider to validate against)', async () => {
+      const response = await PATCH(
+        createPatchRequest({ aiProvider: '', aiModel: 'openai/gpt-6-ultra' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/provider/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
   });
 
   describe('no changes', () => {
@@ -697,6 +807,19 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the org model allowlists', () => {
+    it('POL-8 (partial) a model the drive\'s org does not allow is refused 403 naming the policy, not a 500', async () => {
+      mockApplyPageMutation.mockRejectedValueOnce(Object.assign(new Error('refused'), {
+        refusal: { message: "This organization doesn't allow that AI model.", code: 'org_policy', policy: 'modelAllowlist', status: 403 },
+      }));
+
+      const response = await PATCH(createPatchRequest({ systemPrompt: 'test' }), mockParams);
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
     });
   });
 
@@ -731,6 +854,136 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
       expect(response.status).toBe(428);
       expect(body.currentRevision).toBe(10);
+    });
+  });
+
+  describe('sandboxEnabled', () => {
+    it('rejects a non-boolean rather than coercing it — "false" must not enable the sandbox family', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: 'false' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('stores a real boolean', async () => {
+      setupPatchSelectChain([mockPage], [{ ...mockPage, sandboxEnabled: true }]);
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: true }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ sandboxEnabled: true }) })
+      );
+    });
+  });
+
+  describe('defaultEnvId', () => {
+    it('rejects a non-string, non-null value', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 42 }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty string rather than treating it as "None"', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: '' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when the env does not exist — same response as a cross-drive env, so neither reveals which case it was', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+      mockResolveEnvInDrive.mockResolvedValue(null);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_missing' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(404);
+      expect(mockResolveEnvInDrive).toHaveBeenCalledWith('env_missing', mockDriveId);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns the SAME 404 for an env that exists but belongs to a different drive — resolveEnvInDrive collapses both cases so this route cannot be used to enumerate env ids across drives', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+      // resolveEnvInDrive itself returns null for "wrong drive" (see its own
+      // doc comment) — the route never sees the env's real driveId.
+      mockResolveEnvInDrive.mockResolvedValue(null);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_1' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toMatch(/not found/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('accepts a same-drive env id', async () => {
+      setupPatchSelectChain([mockPage], [{ ...mockPage, defaultEnvId: 'env_1' }]);
+      mockResolveEnvInDrive.mockResolvedValue({ id: 'env_1', driveId: mockDriveId });
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_1' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: 'env_1' }) })
+      );
+    });
+
+    it('accepts null to clear a previously assigned env', async () => {
+      setupPatchSelectChain([{ ...mockPage, defaultEnvId: 'env_1' }], [{ ...mockPage, defaultEnvId: null }]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: null }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: null }) })
+      );
+      // Clearing never needs to resolve anything.
+      expect(mockResolveEnvInDrive).not.toHaveBeenCalled();
+    });
+
+    it('echoes sandboxEnabled and defaultEnvId back in the response', async () => {
+      setupPatchSelectChain([mockPage], [{ ...mockPage, sandboxEnabled: true, defaultEnvId: 'env_1' }]);
+      mockResolveEnvInDrive.mockResolvedValue({ id: 'env_1', driveId: mockDriveId });
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: true, defaultEnvId: 'env_1' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(body.sandboxEnabled).toBe(true);
+      expect(body.defaultEnvId).toBe('env_1');
     });
   });
 

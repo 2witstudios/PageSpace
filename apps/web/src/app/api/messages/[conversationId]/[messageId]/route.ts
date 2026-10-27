@@ -2,8 +2,25 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { dmMessageRepository } from '@pagespace/lib/services/dm-message-repository';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+
+const BROADCAST_TIMEOUT_MS = 1500;
+
+async function broadcastDmEvent(requestBody: string): Promise<void> {
+  if (!process.env.INTERNAL_REALTIME_URL) return;
+  const response = await fetch(`${process.env.INTERNAL_REALTIME_URL}/api/broadcast`, {
+    method: 'POST',
+    headers: createSignedBroadcastHeaders(requestBody),
+    body: requestBody,
+    signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Broadcast failed with status ${response.status}`);
+  }
+}
 
 type RouteParams = { params: Promise<{ conversationId: string; messageId: string }> };
 
@@ -57,6 +74,16 @@ export async function PATCH(req: Request, { params }: RouteParams) {
   // caller would see if the soft-delete had landed first.
   if (edited === 0) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
+  try {
+    await broadcastDmEvent(JSON.stringify({
+      channelId: `dm:${conversationId}`,
+      event: 'message_edited',
+      payload: { messageId, content: content.trim(), editedAt: editedAt.toISOString() },
+    }));
+  } catch (error) {
+    loggers.realtime.error('Failed to broadcast DM message_edited:', error as Error);
   }
 
   auditRequest(req, {
@@ -115,6 +142,16 @@ export async function DELETE(req: Request, { params }: RouteParams) {
   // rows. Surface the same 404 the second-DELETE caller would see.
   if (deleted === 0) {
     return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+  }
+
+  try {
+    await broadcastDmEvent(JSON.stringify({
+      channelId: `dm:${conversationId}`,
+      event: 'message_deleted',
+      payload: { messageId },
+    }));
+  } catch (error) {
+    loggers.realtime.error('Failed to broadcast DM message_deleted:', error as Error);
   }
 
   auditRequest(req, {

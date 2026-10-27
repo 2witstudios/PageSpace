@@ -4,10 +4,20 @@
 
 export { useMCPTools } from './useMCPTools';
 export { useConversations } from './useConversations';
+export { useConversationIdentity } from './useConversationIdentity';
+export type { ConversationIdentityResolveResult } from './useConversationIdentity';
 export { useMessageActions } from './useMessageActions';
+export { useCacheMessageActions } from './useCacheMessageActions';
 export { useProviderSettings } from './useProviderSettings';
-export { useChatTransport } from './useChatTransport';
 export { useStreamingRegistration } from './useStreamingRegistration';
-export { useChatStop } from './useChatStop';
 export { useSendHandoff } from './useSendHandoff';
-export { useStreamRecovery } from './useStreamRecovery';
+export { useQueuedSends } from './useQueuedSends';
+export { useResumeBootstrap } from './useResumeBootstrap';
+export { useAnswerAskUser } from './useAnswerAskUser';
+export { useChatErrorCause } from './useChatErrorCause';
+
+export { useChatSession } from './useChatSession';
+export type { ChatSessionStatus, UseChatSessionResult } from './useChatSession';
+
+// Pure functions (no hooks, no side effects)
+export { buildGlobalChatRequestBody } from '../global-chat-request-body';

@@ -1,0 +1,234 @@
+/**
+ * Regression test for #541: the durable account-erasure job's
+ * `anonymize-activity-logs` step must run after `log-account-deletion` and
+ * target the same userId, so the resourceTitle scrub in
+ * activityLogRepository.anonymizeForUser (packages/lib) actually reaches the
+ * account_delete row this worker just wrote. The hash-chain-safety of that
+ * scrub itself is proven against real logActivity/anonymizeForUser code in
+ * packages/lib/src/monitoring/__tests__/anonymize-resource-title.test.ts —
+ * this test only verifies the worker's step wiring (order + arguments), so
+ * every collaborator is mocked. (Vitest's mock registry can't intercept
+ * @pagespace/db/db from within @pagespace/lib's compiled dist output when
+ * imported cross-package like this, so partial-mocking real logActivity here
+ * would hit a live Postgres connection instead of a fake — hence the split.)
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { callOrder, mockLogActivity, mockGetActorInfo, mockAnonymizeForUser } = vi.hoisted(() => {
+  const callOrder: string[] = [];
+  const mockLogActivity = vi.fn().mockImplementation(async () => {
+    callOrder.push('logActivity');
+  });
+  const mockGetActorInfo = vi.fn().mockResolvedValue({ actorEmail: 'actor@test.com', actorDisplayName: 'Actor' });
+  const mockAnonymizeForUser = vi.fn().mockImplementation(async () => {
+    callOrder.push('anonymizeForUser');
+    return { success: true };
+  });
+  return { callOrder, mockLogActivity, mockGetActorInfo, mockAnonymizeForUser };
+});
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  logActivity: mockLogActivity,
+  getActorInfo: mockGetActorInfo,
+}));
+
+vi.mock('@pagespace/lib/repositories/activity-log-repository', () => ({
+  activityLogRepository: { anonymizeForUser: mockAnonymizeForUser },
+}));
+
+vi.mock('@pagespace/lib/repositories/account-repository', () => ({
+  accountRepository: {
+    findById: vi.fn().mockResolvedValue({ id: 'user-1', email: 'user@leaked.example', image: null }),
+    getOwnedDrives: vi.fn().mockResolvedValue([]),
+    getOwnedOrganizationNames: vi.fn().mockResolvedValue([]),
+    getDriveMemberCount: vi.fn().mockResolvedValue(0),
+    deleteDrive: vi.fn().mockResolvedValue(undefined),
+    deleteUser: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@pagespace/lib/organizations/leave', () => ({
+  LeaveOrganizationRefusedError: class LeaveOrganizationRefusedError extends Error {},
+}));
+
+vi.mock('@pagespace/lib/repositories/data-subject-request-repository', () => ({
+  dataSubjectRequestRepository: {
+    findById: vi.fn().mockResolvedValue({ status: 'pending', attempts: 0, forceDelete: false }),
+    claimErasure: vi.fn().mockResolvedValue(true),
+    incrementAttempts: vi.fn().mockResolvedValue(undefined),
+    appendStepResult: vi.fn().mockResolvedValue(undefined),
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('@pagespace/lib/logging/ai-usage-purge', () => ({
+  deleteAiUsageLogsForUser: vi.fn().mockResolvedValue(0),
+  getDistinctAiProvidersForUser: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('@pagespace/lib/logging/monitoring-purge', () => ({
+  deleteMonitoringDataForUser: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/revoke-integration-tokens', () => ({
+  revokeUserIntegrationTokens: vi.fn().mockResolvedValue({ revoked: 0, failed: 0 }),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/email-suppression', () => ({
+  syncEmailSuppression: vi.fn().mockResolvedValue({ skipped: true }),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/resend-suppression-client', () => ({
+  createResendSuppressionClient: vi.fn().mockReturnValue({}),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/purge-stream-state', () => ({
+  deleteStreamStateForUser: vi.fn().mockResolvedValue({ streamSessions: 0, streamFrames: 0, abortIntents: 0 }),
+}));
+
+vi.mock('@pagespace/lib/compliance/erasure/ai-provider-erasure', () => ({
+  eraseAiProviderData: vi.fn().mockResolvedValue({ evidence: [], forwarded: 0 }),
+}));
+
+vi.mock('@pagespace/lib/audit/security-audit', () => ({
+  securityAudit: { logEvent: vi.fn().mockResolvedValue(undefined) },
+}));
+
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: vi.fn().mockReturnValue(false),
+  isTenantMode: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('../../api/avatar', () => ({
+  deleteUserAvatars: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../api/subject-avatar', () => ({
+  deleteSubjectAvatars: vi.fn().mockResolvedValue(undefined),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
+import { runAccountErasureJob } from '../account-erasure-worker';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
+import { deleteUserAvatars } from '../../api/avatar';
+import { deleteSubjectAvatars } from '../../api/subject-avatar';
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
+
+describe('runAccountErasureJob — resourceTitle PII scrub wiring (#541)', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('logs the account_delete row with resourceTitle=email, then anonymizes the same user', async () => {
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        operation: 'account_delete',
+        resourceType: 'user',
+        resourceId: 'user-1',
+        resourceTitle: 'user@leaked.example',
+        driveId: null,
+      })
+    );
+
+    expect(mockAnonymizeForUser).toHaveBeenCalledWith('user-1', expect.any(String));
+
+    // The anonymize step must run AFTER the write step, or its WHERE userId
+    // clause can't reach the row the write step just created (#541's root cause).
+    expect(callOrder).toEqual(['logActivity', 'anonymizeForUser']);
+  });
+});
+
+describe('runAccountErasureJob — org Owner refusal', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('ORG-6 (partial) an unclaimable cancelled request never starts a destructive step', async () => {
+    vi.mocked(dataSubjectRequestRepository.claimErasure).mockResolvedValueOnce(false);
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+    expect(accountRepository.getOwnedDrives).not.toHaveBeenCalled();
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(deleteUserAvatars).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) an org Owner is blocked at the first step and nothing is destroyed', async () => {
+    vi.mocked(accountRepository.getOwnedOrganizationNames).mockResolvedValueOnce(['Northwind Labs']);
+
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' }).catch(() => undefined);
+
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith('dsr-1', 'blocked', expect.anything());
+    expect(accountRepository.getOwnedDrives).not.toHaveBeenCalled();
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(deleteUserAvatars).not.toHaveBeenCalled();
+    expect(mockAnonymizeForUser).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) a late org-Owner refusal at delete-user blocks the request instead of retrying it', async () => {
+    vi.mocked(accountRepository.deleteUser).mockRejectedValueOnce(
+      new LeaveOrganizationRefusedError('Cannot leave organization org-1: OWNER_MUST_TRANSFER'),
+    );
+
+    await expect(runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' })).resolves.toBeUndefined();
+
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith(
+      'dsr-1', 'blocked', expect.objectContaining({ blockedReason: expect.stringContaining('OWNER_MUST_TRANSFER') }),
+    );
+  });
+});
+
+describe('runAccountErasureJob — web-recorded steps', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('given the web already revoked Apple tokens at lodge time, should not run or re-record revoke-apple-tokens', async () => {
+    const { dataSubjectRequestRepository } = await import('@pagespace/lib/repositories/data-subject-request-repository');
+
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+
+    const recordedSteps = vi.mocked(dataSubjectRequestRepository.appendStepResult).mock.calls.map(([, result]) => result.step);
+    expect(recordedSteps).toContain('delete-user');
+    expect(recordedSteps).not.toContain('revoke-apple-tokens');
+    expect(recordedSteps).not.toContain('stripe-customer');
+  });
+});
+
+describe('runAccountErasureJob — drive image folders', () => {
+  beforeEach(() => {
+    callOrder.length = 0;
+    vi.clearAllMocks();
+  });
+
+  it('given a solo drive to delete, should empty its image folder before the drive row goes', async () => {
+    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValueOnce([{ id: 'drive-1', name: 'Work' }]);
+    await runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' });
+
+    expect(deleteSubjectAvatars).toHaveBeenCalledWith('drive', 'drive-1');
+    expect(accountRepository.deleteDrive).toHaveBeenCalledWith('drive-1');
+    expect(vi.mocked(deleteSubjectAvatars).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(accountRepository.deleteDrive).mock.invocationCallOrder[0]);
+  });
+
+  it('given storage that cannot empty the folder, should fail the request for a retry and keep the drive for it', async () => {
+    vi.mocked(accountRepository.getOwnedDrives).mockResolvedValueOnce([{ id: 'drive-1', name: 'Work' }]);
+    vi.mocked(deleteSubjectAvatars).mockRejectedValueOnce(new Error('storage down'));
+    await expect(runAccountErasureJob({ requestId: 'dsr-1', userId: 'user-1' }))
+      .rejects.toThrow('account-erasure failed at step drive-disposition: storage down');
+
+    expect(accountRepository.deleteDrive).not.toHaveBeenCalled();
+    expect(accountRepository.deleteUser).not.toHaveBeenCalled();
+    expect(dataSubjectRequestRepository.updateStatus).toHaveBeenCalledWith('dsr-1', 'failed', expect.anything());
+  });
+});

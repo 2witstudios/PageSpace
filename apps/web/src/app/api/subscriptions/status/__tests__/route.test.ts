@@ -47,11 +47,23 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
 }));
+// The App Store mirror read (lib billing/apple): none unless a test sets one.
+const mockHasRenewableStripeSubscription = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/wallet-funding-shell', () => ({ hasRenewableStripeSubscription: mockHasRenewableStripeSubscription }));
+const mockHasRenewableAppleSubscription = vi.hoisted(() => vi.fn());
+const mockAppleEntitledTier = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/apple/apple-entitlement', () => ({
+  appleEntitledTier: mockAppleEntitledTier,
+  hasRenewableAppleSubscription: mockHasRenewableAppleSubscription,
+}));
 
 // Import after mocks
 import { GET } from '../route';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+// Real, unmocked: money-model is pure (no IO), and mocking it would defeat the planCredits test.
+import { tierAllowanceCents } from '@pagespace/lib/billing/money-model';
+import { TIERS } from '@pagespace/lib/billing/subscription-tiers';
 
 // Helper to create mock SessionAuthResult
 const mockWebAuth = (userId: string): SessionAuthResult => ({
@@ -91,6 +103,7 @@ const mockSubscription = (overrides: Partial<{
   currentPeriodStart: overrides.currentPeriodStart ?? new Date('2024-01-01'),
   currentPeriodEnd: overrides.currentPeriodEnd ?? new Date('2024-02-01'),
   cancelAtPeriodEnd: overrides.cancelAtPeriodEnd ?? false,
+  stripePriceId: 'price_pro',
 });
 
 describe('GET /api/subscriptions/status', () => {
@@ -115,6 +128,62 @@ describe('GET /api/subscriptions/status', () => {
       orderBy: mockSelectOrderBy,
     }));
     mockSelectLimit.mockResolvedValue([]);
+    mockHasRenewableStripeSubscription.mockReset();
+    mockHasRenewableStripeSubscription.mockResolvedValue(false);
+    mockHasRenewableAppleSubscription.mockReset();
+    mockHasRenewableAppleSubscription.mockResolvedValue(false);
+    mockAppleEntitledTier.mockReset();
+    mockAppleEntitledTier.mockResolvedValue('free');
+  });
+
+  describe('which store sells the plan', () => {
+    const request = () => new Request('https://example.com/api/subscriptions/status', { method: 'GET' }) as unknown as import('next/server').NextRequest;
+
+    it('is null for a free user with no purchase anywhere', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBeNull();
+      expect(body).not.toHaveProperty('appStore');
+    });
+
+    it('is stripe while a personal Stripe subscription can still renew (any renewal-capable status, any price)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free', stripeCustomerId: 'cus_123' })]);
+      // e.g. an `unpaid` subscription: the display lookup leaves it out, but its invoices stay collectible.
+      mockHasRenewableStripeSubscription.mockResolvedValue(true);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBe('stripe');
+      expect(body.subscription).toBeNull();
+      expect(mockHasRenewableStripeSubscription).toHaveBeenCalledWith(expect.anything(), 'user_123');
+    });
+
+    it('is apple while Apple retries a failed renewal, though the plan no longer entitles', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'free' })]);
+      mockHasRenewableAppleSubscription.mockResolvedValue(true);
+      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
+    });
+
+    it('is apple for an entitled App Store subscription, read across every App Store row', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro' })]);
+      mockAppleEntitledTier.mockResolvedValue('pro');
+      expect((await (await GET(request())).json()).billingProvider).toBe('apple');
+      expect(mockAppleEntitledTier).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date));
+    });
+
+    it('reports an App Store subscription Apple will still charge, even when Stripe holds the plan', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser({ subscriptionTier: 'pro', stripeCustomerId: 'cus_123' })]);
+      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
+      mockHasRenewableStripeSubscription.mockResolvedValue(true);
+      mockHasRenewableAppleSubscription.mockResolvedValue(true);
+      const body = await (await GET(request())).json();
+      expect(body.billingProvider).toBe('stripe');
+      expect(body.appStoreRenews).toBe(true);
+      expect(mockHasRenewableAppleSubscription).toHaveBeenCalledWith(expect.anything(), 'user_123', expect.any(Date), { autoRenewing: true });
+    });
+
+    it('is null once neither store has a live contract (an ended App Store period, no Stripe plan)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+      expect((await (await GET(request())).json()).billingProvider).toBeNull();
+    });
   });
 
   describe('Free tier user', () => {
@@ -186,31 +255,10 @@ describe('GET /api/subscriptions/status', () => {
         cancelAtPeriodEnd: false,
       });
       expect(body.storage.tier).toBe('pro');
-      expect(body.storage.quota).toBe(2 * 1024 * 1024 * 1024); // 2GB
-    });
-
-    it('should return founder tier status with correct quota', async () => {
-      mockSelectWhere.mockResolvedValueOnce([mockUser({
-        subscriptionTier: 'founder',
-        stripeCustomerId: 'cus_123',
-      })]);
-
-      mockSelectLimit.mockResolvedValue([mockSubscription({ status: 'active' })]);
-
-      const request = new Request('https://example.com/api/subscriptions/status', {
-        method: 'GET',
-      }) as unknown as import('next/server').NextRequest;
-
-      const response = await GET(request);
-      const body = await response.json();
-
-      expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('founder');
-      expect(body.storage.tier).toBe('founder');
       expect(body.storage.quota).toBe(10 * 1024 * 1024 * 1024); // 10GB
     });
 
-    it('should return business tier status with correct quota', async () => {
+    it('A-9 refuses a retired personal Business tier and omits grandfathering', async () => {
       mockSelectWhere.mockResolvedValueOnce([mockUser({
         subscriptionTier: 'business',
         stripeCustomerId: 'cus_123',
@@ -226,9 +274,10 @@ describe('GET /api/subscriptions/status', () => {
       const body = await response.json();
 
       expect(response.status).toBe(200);
-      expect(body.subscriptionTier).toBe('business');
-      expect(body.storage.tier).toBe('business');
-      expect(body.storage.quota).toBe(50 * 1024 * 1024 * 1024); // 50GB
+      expect(body.subscriptionTier).toBe('free');
+      expect(body).not.toHaveProperty('subscriptionGrandfathered');
+      expect(body.storage.tier).toBe('free');
+      expect(body.storage.quota).toBe(500 * 1024 * 1024);
     });
 
     it('should include cancelAtPeriodEnd status', async () => {
@@ -251,6 +300,28 @@ describe('GET /api/subscriptions/status', () => {
 
       expect(body.subscription.cancelAtPeriodEnd).toBe(true);
     });
+  });
+
+  describe('Tier coercion', () => {
+    it.each([null, '', 'enterprise-legacy'])(
+      'should coerce a stored tier of %j to free instead of passing it through',
+      async (stored) => {
+        mockSelectWhere.mockResolvedValueOnce([
+          { ...mockUser(), subscriptionTier: stored as unknown as string },
+        ]);
+
+        const request = new Request('https://example.com/api/subscriptions/status', {
+          method: 'GET',
+        }) as unknown as import('next/server').NextRequest;
+
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.subscriptionTier).toBe('free');
+        expect(body.storage.tier).toBe('free');
+      },
+    );
   });
 
   describe('Error handling', () => {
@@ -323,12 +394,31 @@ describe('GET /api/subscriptions/status', () => {
     });
   });
 
+  describe('MON-2 planCredits', () => {
+    it('returns the server-derived included-credit figure per tier, matching tierAllowanceCents (Pro 1500)', async () => {
+      mockSelectWhere.mockResolvedValueOnce([mockUser()]);
+
+      const request = new Request('https://example.com/api/subscriptions/status', {
+        method: 'GET',
+      }) as unknown as import('next/server').NextRequest;
+
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.planCredits).toEqual(
+        Object.fromEntries(TIERS.map((tier) => [tier, tierAllowanceCents(tier)])),
+      );
+      // Pinned: 100% of list price (free = starter grant).
+      expect(body.planCredits).toEqual({ free: 500, pro: 1500, business: 5000 });
+    });
+  });
+
   describe('Storage quota by tier', () => {
     const tierQuotaTests = [
       { tier: 'free', expectedQuota: 500 * 1024 * 1024, description: '500MB' },
-      { tier: 'pro', expectedQuota: 2 * 1024 * 1024 * 1024, description: '2GB' },
-      { tier: 'founder', expectedQuota: 10 * 1024 * 1024 * 1024, description: '10GB' },
-      { tier: 'business', expectedQuota: 50 * 1024 * 1024 * 1024, description: '50GB' },
+      { tier: 'pro', expectedQuota: 10 * 1024 * 1024 * 1024, description: '10GB' },
+      { tier: 'business', expectedQuota: 500 * 1024 * 1024, description: 'Free fallback for retired personal Business' },
     ];
 
     for (const { tier, expectedQuota, description } of tierQuotaTests) {
@@ -351,7 +441,7 @@ describe('GET /api/subscriptions/status', () => {
 
         expect(response.status).toBe(200);
         expect(body.storage.quota).toBe(expectedQuota);
-        expect(body.storage.tier).toBe(tier);
+        expect(body.storage.tier).toBe(tier === 'business' ? 'free' : tier);
       });
     }
   });

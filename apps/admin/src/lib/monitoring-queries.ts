@@ -1,0 +1,1417 @@
+/**
+ * Database queries for monitoring dashboard
+ */
+
+import { db } from '@pagespace/db/db'
+import { sql, eq, and, or, gt, asc, gte, lte, lt, desc, count, inArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { users } from '@pagespace/db/schema/auth'
+import { apiMetrics, aiUsageLogs, systemLogs, errorLogs, activityLogs } from '@pagespace/db/schema/monitoring';
+import { sessions } from '@pagespace/db/schema/sessions';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { orgSubscriptions, orgSubscriptionFunding } from '@pagespace/db/schema/organizations';
+import type { SQL } from '@pagespace/db/operators';
+import { isNegativeMargin } from '@pagespace/lib/billing/credit-core';
+import { unattributedUsage, walletDriftAlerts, type DriftWalletKind, type UnattributedUsage } from '@pagespace/lib/billing/wallet-reconcile';
+import { BALANCE_DRIFT_TOLERANCE_CENTS, NEGATIVE_MARGIN_FLOOR_BPS } from '@pagespace/lib/billing/credit-pricing';
+import { CENTS_PER_DOLLAR } from '@pagespace/lib/billing/money-model';
+import { readCreditLiability } from '@pagespace/lib/billing/credit-liability-query';
+import { fundingWalletTier } from '@pagespace/lib/billing/credit-liability';
+import { getTierFromPrice } from './stripe/price-config';
+import { TIERS, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { decryptUserDisplayFields } from '@pagespace/lib/auth/user-repository';
+import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { getOrgAuditBacklog } from '@pagespace/lib/audit/org-audit';
+import { isClickHouseEnabled, getClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+import {
+  getLogsByLevel as chGetLogsByLevel,
+  getRecentErrors as chGetRecentErrors,
+  getVolumeOverTime as chGetVolumeOverTime,
+  getTopEndpoints as chGetTopEndpoints,
+  getRequestErrorCounts as chGetRequestErrorCounts,
+  getErrorTrends as chGetErrorTrends,
+  getErrorPatterns as chGetErrorPatterns,
+  getFailedLogins as chGetFailedLogins,
+} from '@pagespace/lib/observability/analytics-reads';
+import type { ClickHouseClient } from '@pagespace/lib/observability/clickhouse-client';
+
+/**
+ * Post-cutover (#890 Phase 3) new analytics rows land only in ClickHouse, so
+ * the readers over the 4 moved tables (apiMetrics, systemLogs,
+ * userActivities, errorLogs) query CH when the flag is on — server-side
+ * only, aggregations in CH SQL — and hit PG exactly as before when it is
+ * off. Returns null when the tier is off so callers fall through to PG.
+ * NOTE: getUserActivity is NOT gated — it reads activityLogs (Phase 5), not
+ * one of the moved tables; the sessions-based active-user count stays PG too.
+ */
+function clickHouseClientIfEnabled(): ClickHouseClient | null {
+  return isClickHouseEnabled() ? getClickHouseClient() : null;
+}
+
+/** Active users: distinct sessions touched in the last 15 minutes (main PG in both modes). */
+async function getActiveSessionUserCount(): Promise<number> {
+  const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+  const activeUsers = await db
+    .select({
+      count: sql<number>`COUNT(DISTINCT ${sessions.userId})::int`,
+    })
+    .from(sessions)
+    .where(and(gte(sessions.lastUsedAt, fifteenMinutesAgo), isNull(sessions.revokedAt)));
+  return activeUsers[0]?.count || 0;
+}
+
+/**
+ * Get system health overview
+ */
+export async function getSystemHealth(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [logsByLevel, recentErrors, activeUserCount, orgAuditBacklog] = await Promise.all([
+      chGetLogsByLevel(chClient, window),
+      chGetRecentErrors(chClient, window, 20),
+      getActiveSessionUserCount(),
+      getOrgAuditBacklog(),
+    ]);
+    return {
+      orgAuditBacklog,
+      logsByLevel,
+      recentErrors: recentErrors.map((entry) => ({
+        ...entry,
+        errorMessage: entry.errorMessage || entry.message,
+      })),
+      activeUserCount,
+    };
+  }
+
+  const logConditions: SQL[] = [];
+
+  if (startDate) {
+    logConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    logConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const logsByLevel = await db
+    .select({
+      level: systemLogs.level,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(systemLogs)
+    .where(logConditions.length > 0 ? and(...logConditions) : undefined)
+    .groupBy(systemLogs.level);
+
+  const errorConditions: SQL[] = [];
+  if (startDate) errorConditions.push(gte(errorLogs.timestamp, startDate));
+  if (endDate) errorConditions.push(lte(errorLogs.timestamp, endDate));
+
+  const recentErrors = await db
+    .select({
+      id: errorLogs.id,
+      timestamp: errorLogs.timestamp,
+      message: errorLogs.message,
+      errorName: errorLogs.name,
+      errorMessage: errorLogs.stack,
+      endpoint: errorLogs.endpoint,
+      userId: errorLogs.userId,
+    })
+    .from(errorLogs)
+    .where(errorConditions.length > 0 ? and(...errorConditions) : undefined)
+    .orderBy(desc(errorLogs.timestamp))
+    .limit(20);
+
+  // Active users: distinct sessions touched in last 15 minutes (sessions.lastUsedAt is
+  // updated non-blocking on every authenticated request — reliable signal)
+  const activeUserCount = await getActiveSessionUserCount();
+  const orgAuditBacklog = await getOrgAuditBacklog();
+
+  return {
+    orgAuditBacklog,
+    logsByLevel: logsByLevel.map((entry) => ({
+      level: entry.level,
+      count: entry.count,
+    })),
+    recentErrors: recentErrors.map((entry) => ({
+      ...entry,
+      errorMessage: entry.errorMessage || entry.message,
+    })),
+    activeUserCount,
+  };
+}
+
+/**
+ * Get API metrics
+ */
+export async function getApiMetrics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [volumeOverTime, topEndpoints, requestCounts] = await Promise.all([
+      chGetVolumeOverTime(chClient, window),
+      chGetTopEndpoints(chClient, window),
+      chGetRequestErrorCounts(chClient, window),
+    ]);
+    return {
+      volumeOverTime,
+      topEndpoints,
+      errorRate: requestCounts.total > 0 ? (requestCounts.errors / requestCounts.total) * 100 : 0,
+      totalRequests: requestCounts.total,
+    };
+  }
+
+  const conditions = [];
+
+  if (startDate) {
+    conditions.push(gte(apiMetrics.timestamp, startDate));
+  }
+  if (endDate) {
+    conditions.push(lte(apiMetrics.timestamp, endDate));
+  }
+
+  // Get request volume over time - using simpler Drizzle query instead of raw SQL
+  const volumeOverTime = await db
+    .select({
+      hour: sql<string>`DATE_TRUNC('hour', ${apiMetrics.timestamp})`,
+      count: count(),
+      avg_response_time: sql<number>`AVG(${apiMetrics.duration})`,
+    })
+    .from(apiMetrics)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .groupBy(sql`DATE_TRUNC('hour', ${apiMetrics.timestamp})`)
+    .orderBy(desc(sql`DATE_TRUNC('hour', ${apiMetrics.timestamp})`))
+    .limit(168);
+
+  // Get top endpoints
+  const topEndpoints = await db
+    .select({
+      endpoint: apiMetrics.endpoint,
+      count: count(),
+      avgResponseTime: sql<number>`AVG(${apiMetrics.duration})`,
+    })
+    .from(apiMetrics)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
+    .groupBy(apiMetrics.endpoint)
+    .orderBy(desc(count()))
+    .limit(10);
+
+  // Get error rate
+  const totalRequests = await db
+    .select({ count: count() })
+    .from(apiMetrics)
+    .where(conditions.length > 0 ? and(...conditions) : undefined);
+
+  const errorRequests = await db
+    .select({ count: count() })
+    .from(apiMetrics)
+    .where(and(
+      gte(apiMetrics.statusCode, 400),
+      ...(conditions.length > 0 ? conditions : [])
+    ));
+
+  const errorRate = totalRequests[0]?.count > 0 
+    ? (errorRequests[0]?.count / totalRequests[0]?.count) * 100 
+    : 0;
+
+  return {
+    volumeOverTime,
+    topEndpoints,
+    errorRate,
+    totalRequests: totalRequests[0]?.count || 0,
+  };
+}
+
+/**
+ * Get user activity data
+ * Uses activityLogs (comprehensive audit trail written on every page/drive/member operation)
+ * NOT userActivities (only written on conversation deletion — effectively empty)
+ */
+export async function getUserActivity(startDate?: Date, endDate?: Date) {
+  const conditions: SQL[] = [isNotNull(activityLogs.userId)];
+
+  if (startDate) {
+    conditions.push(gte(activityLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    conditions.push(lte(activityLogs.timestamp, endDate));
+  }
+
+  const heatmapData = await db
+    .select({
+      day_of_week: sql<number>`EXTRACT(DOW FROM ${activityLogs.timestamp})`,
+      hour_of_day: sql<number>`EXTRACT(HOUR FROM ${activityLogs.timestamp})`,
+      activity_count: count(),
+    })
+    .from(activityLogs)
+    .where(and(...conditions))
+    .groupBy(
+      sql`EXTRACT(DOW FROM ${activityLogs.timestamp})`,
+      sql`EXTRACT(HOUR FROM ${activityLogs.timestamp})`
+    );
+
+  const mostActiveUsers = await db
+    .select({
+      userId: activityLogs.userId,
+      userName: users.name,
+      actionCount: count(),
+    })
+    .from(activityLogs)
+    .innerJoin(users, eq(activityLogs.userId, users.id))
+    .where(and(...conditions))
+    .groupBy(activityLogs.userId, users.name)
+    .orderBy(desc(count()))
+    .limit(10);
+
+  // operation column stores the action type (create, update, delete, rename, etc.)
+  const featureUsage = await db
+    .select({
+      action: activityLogs.operation,
+      count: count(),
+    })
+    .from(activityLogs)
+    .where(and(...conditions))
+    .groupBy(activityLogs.operation)
+    .orderBy(desc(count()))
+    .limit(15);
+
+  return {
+    heatmapData,
+    mostActiveUsers: await decryptUserDisplayFields(mostActiveUsers),
+    featureUsage,
+  };
+}
+
+const EMAIL_PATTERN = /[^\s@"']+@[^\s@"']+\.[^\s@"',)\]}]+/g;
+
+function maskEmailsDeep(value: unknown): unknown {
+  if (typeof value === 'string') {
+    // Replace every email occurrence, including ones embedded in longer
+    // strings ("login failed for jane@example.com").
+    return value.replace(EMAIL_PATTERN, (match) => maskEmail(match));
+  }
+  if (Array.isArray(value)) return value.map(maskEmailsDeep);
+  if (value && typeof value === 'object') {
+    const masked: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      masked[key] = maskEmailsDeep(entry);
+    }
+    return masked;
+  }
+  return value;
+}
+
+/**
+ * Mask every email occurrence in log metadata — at any nesting depth and
+ * embedded anywhere inside strings — so raw PII never reaches the monitoring
+ * UI. Some writers (e.g. account-lockout) already mask before logging;
+ * maskEmail is idempotent on masked values.
+ */
+function maskEmailsInMetadata(metadata: unknown): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  return maskEmailsDeep(metadata) as Record<string, unknown>;
+}
+
+/**
+ * Get error analytics
+ */
+export async function getErrorAnalytics(startDate?: Date, endDate?: Date) {
+  const chClient = clickHouseClientIfEnabled();
+  if (chClient) {
+    const window = { startDate, endDate };
+    const [errorTrendsRaw, errorPatternsRaw, failedLogins] = await Promise.all([
+      chGetErrorTrends(chClient, window),
+      chGetErrorPatterns(chClient, window),
+      chGetFailedLogins(chClient, window),
+    ]);
+    return {
+      errorTrends: errorTrendsRaw.map((item) => ({
+        hour: item.hour,
+        category: item.category ?? 'other',
+        count: item.count.toString(),
+      })),
+      errorPatterns: errorPatternsRaw.map((pattern) => ({
+        name: pattern.name ?? 'Unknown Error',
+        category: pattern.endpoint ?? 'general',
+        count: pattern.count,
+      })),
+      failedLogins: failedLogins.map((login) => ({
+        timestamp: login.timestamp,
+        ip: login.ip,
+        metadata: maskEmailsInMetadata(login.metadata),
+      })),
+    };
+  }
+
+  const errorLevelConditions: SQL[] = [eq(systemLogs.level, 'error' as const)];
+
+  if (startDate) {
+    errorLevelConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    errorLevelConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const errorTrendsRaw = await db
+    .select({
+      hour: sql<string>`DATE_TRUNC('hour', ${systemLogs.timestamp})`,
+      category: systemLogs.category,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(systemLogs)
+    .where(and(...errorLevelConditions))
+    .groupBy(
+      sql`DATE_TRUNC('hour', ${systemLogs.timestamp})`,
+      systemLogs.category,
+    )
+    .orderBy(desc(sql`DATE_TRUNC('hour', ${systemLogs.timestamp})`))
+    .limit(168);
+
+  const errorLogConditions: SQL[] = [];
+
+  if (startDate) {
+    errorLogConditions.push(gte(errorLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    errorLogConditions.push(lte(errorLogs.timestamp, endDate));
+  }
+
+  const errorPatternsRaw = await db
+    .select({
+      name: errorLogs.name,
+      endpoint: errorLogs.endpoint,
+      count: sql<number>`COUNT(*)::int`,
+    })
+    .from(errorLogs)
+    .where(errorLogConditions.length > 0 ? and(...errorLogConditions) : undefined)
+    .groupBy(errorLogs.name, errorLogs.endpoint)
+    .orderBy(desc(sql`COUNT(*)`))
+    .limit(20);
+
+  const failedLoginConditions: SQL[] = [
+    eq(systemLogs.category, 'auth'),
+    or(eq(systemLogs.level, 'warn' as const), eq(systemLogs.level, 'error' as const))!,
+  ];
+
+  if (startDate) {
+    failedLoginConditions.push(gte(systemLogs.timestamp, startDate));
+  }
+  if (endDate) {
+    failedLoginConditions.push(lte(systemLogs.timestamp, endDate));
+  }
+
+  const failedLogins = await db
+    .select({
+      timestamp: systemLogs.timestamp,
+      ip: systemLogs.ip,
+      metadata: systemLogs.metadata,
+    })
+    .from(systemLogs)
+    .where(and(...failedLoginConditions))
+    .orderBy(desc(systemLogs.timestamp))
+    .limit(25);
+
+  return {
+    errorTrends: errorTrendsRaw.map((item) => ({
+      hour: item.hour,
+      category: item.category ?? 'other',
+      count: item.count.toString(),
+    })),
+    errorPatterns: errorPatternsRaw.map((pattern) => ({
+      name: pattern.name ?? 'Unknown Error',
+      category: pattern.endpoint ?? 'general',
+      count: pattern.count,
+    })),
+    failedLogins: failedLogins.map((login) => ({
+      timestamp: login.timestamp,
+      ip: login.ip,
+      metadata: maskEmailsInMetadata(login.metadata),
+    })),
+  };
+}
+
+/**
+ * Get date range for queries
+ */
+export function getDateRange(range: '24h' | '7d' | '30d' | 'all') {
+  const now = new Date();
+  let startDate: Date | undefined;
+  
+  switch (range) {
+    case '24h':
+      startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      break;
+    case '7d':
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      break;
+    case '30d':
+      startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      break;
+    case 'all':
+    default:
+      startDate = undefined;
+  }
+  
+  return { startDate, endDate: now };
+}
+
+// ── AI unit economics (real cost vs charged credits vs margin) ────────────────
+
+export type Granularity = 'day' | 'month';
+
+export interface UnitEconomicsSummary {
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  /**
+   * Total outstanding user debt as an ALL-TIME point-in-time snapshot of
+   * `wallets.debtCents (personal root wallets)`. Unlike the other fields, it is NOT scoped to
+   * the summary's start/end date range — debt has no time dimension.
+   */
+  debtCents: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface MarginByPeriodRow {
+  period: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface MarginByModelRow {
+  provider: string;
+  model: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface TopSpenderRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+export interface DebtByUserRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  debtCents: number;
+}
+
+export function computeMarginPct(realCostCents: number, chargedCents: number): number | null {
+  if (!realCostCents || realCostCents <= 0) return null;
+  return ((chargedCents - realCostCents) / realCostCents) * 100;
+}
+
+// Cloud vendors route through OpenRouter; local providers use their own backends.
+// Hand-kept in sync with CLOUD_VENDOR_PROVIDERS in
+// apps/web/src/lib/ai/core/ai-providers-config.ts (admin can't import the web
+// app's module) — a vendor added there without updating here miscounts real
+// OpenRouter cost as 'estimate' in margin/revenue analytics.
+const CLOUD_VENDOR_PROVIDERS = new Set<string>([
+  'openai', 'anthropic', 'google', 'xai', 'deepseek', 'qwen', 'mistral',
+  'moonshot', 'minimax', 'meta', 'bytedance', 'inception', 'writer', 'zai',
+  'aion-labs', 'amazon', 'apodex', 'arcee-ai', 'cohere', 'dots-studio', 'ibm-granite',
+  'inclusionai', 'kwaipilot', 'liquid', 'meituan', 'nex-agi', 'nvidia',
+  'poolside', 'rekaai', 'relace', 'sakana', 'sao10k', 'stepfun', 'tencent',
+  'thedrummer', 'thinkingmachines', 'upstage', 'xiaomi',
+]);
+
+function getBackendProvider(uiProvider: string): string {
+  return CLOUD_VENDOR_PROVIDERS.has(uiProvider) ? 'openrouter' : uiProvider;
+}
+
+const realCostSum = sql<number>`ROUND(COALESCE(SUM(
+  CASE
+    WHEN ${aiUsageLogs.cost} IS NOT NULL THEN ${aiUsageLogs.cost}::numeric * ${CENTS_PER_DOLLAR}
+    ELSE ${creditLedger.realCostCents}
+  END
+), 0))::int`;
+const chargedSum = sql<number>`ROUND(COALESCE(SUM(COALESCE(${creditLedger.chargeMillicents}, ABS(${creditLedger.amountCents}) * 1000)), 0) / 1000.0)::int`;
+const appliedSum = sql<number>`COALESCE(SUM(ABS(${creditLedger.appliedCents})), 0)::int`;
+
+function usageConditions(startDate?: Date, endDate?: Date): SQL[] {
+  const conditions: SQL[] = [eq(creditLedger.entryType, 'usage')];
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
+  return conditions;
+}
+
+export async function getUnitEconomicsSummary(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<UnitEconomicsSummary> {
+  const usage = await db
+    .select({
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)));
+
+  const debt = await db
+    .select({ debtCents: sql<number>`COALESCE(SUM(${wallets.debtCents}), 0)::int` })
+    .from(wallets)
+    .where(isPersonalRootWallet());
+
+  const realCostCents = usage[0]?.realCostCents ?? 0;
+  const chargedCents = usage[0]?.chargedCents ?? 0;
+  const appliedCents = usage[0]?.appliedCents ?? 0;
+  const requestCount = usage[0]?.requestCount ?? 0;
+  const debtCents = debt[0]?.debtCents ?? 0;
+
+  return {
+    realCostCents,
+    chargedCents,
+    appliedCents,
+    requestCount,
+    debtCents,
+    marginCents: chargedCents - realCostCents,
+    marginPct: computeMarginPct(realCostCents, chargedCents),
+  };
+}
+
+export async function getMarginByPeriod(
+  startDate?: Date,
+  endDate?: Date,
+  granularity: Granularity = 'day',
+): Promise<MarginByPeriodRow[]> {
+  if (granularity !== 'day' && granularity !== 'month') {
+    throw new Error(`Invalid granularity: ${granularity}`);
+  }
+  const periodExpr = sql<string>`DATE_TRUNC('${sql.raw(granularity)}', ${creditLedger.createdAt})`;
+
+  const rows = await db
+    .select({
+      period: periodExpr,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(periodExpr)
+    .orderBy(desc(periodExpr))
+    .limit(366);
+
+  return rows.map((r) => ({
+    ...r,
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+export async function getMarginByModel(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<MarginByModelRow[]> {
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
+    .orderBy(desc(realCostSum))
+    .limit(50);
+
+  return rows.map((r) => ({
+    ...r,
+    provider: r.provider ?? 'unknown',
+    model: r.model ?? 'unknown',
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+export async function getTopSpendersByMargin(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 10,
+): Promise<TopSpenderRow[]> {
+  const rows = await db
+    .select({
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
+      userName: users.name,
+      userEmail: users.email,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(users.id, users.name, users.email)
+    .orderBy(desc(chargedSum))
+    .limit(limit);
+
+  return (await decryptUserDisplayFields(rows)).map((r) => ({
+    ...r,
+    marginCents: r.chargedCents - r.realCostCents,
+    marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+  }));
+}
+
+export interface MarginByTierRow {
+  tier: string;
+  realCostCents: number;
+  chargedCents: number;
+  appliedCents: number;
+  requestCount: number;
+  marginCents: number;
+  marginPct: number | null;
+}
+
+/**
+ * MON-7: margin per PAYING tier. Usage is grouped by the wallet it was charged to and that
+ * wallet's owner (its funder), never by the spender's personal tier: org-pool and org-drive
+ * spend is Business however the member who spent is subscribed (fundingWalletTier, lib
+ * credit-liability). Groups sharing a tier are folded into one row.
+ */
+export async function getMarginByTier(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<MarginByTierRow[]> {
+  const groups = await db
+    .select({
+      ownerType: wallets.ownerType,
+      ownerTier: users.subscriptionTier,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      appliedCents: appliedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(wallets, eq(creditLedger.walletId, wallets.id))
+    .leftJoin(users, eq(wallets.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(wallets.ownerType, users.subscriptionTier);
+
+  const byTier = new Map<SubscriptionTier, { realCostCents: number; chargedCents: number; appliedCents: number; requestCount: number }>();
+  for (const g of groups) {
+    const tier = fundingWalletTier(g);
+    const acc = byTier.get(tier) ?? { realCostCents: 0, chargedCents: 0, appliedCents: 0, requestCount: 0 };
+    acc.realCostCents += g.realCostCents;
+    acc.chargedCents += g.chargedCents;
+    acc.appliedCents += g.appliedCents;
+    acc.requestCount += g.requestCount;
+    byTier.set(tier, acc);
+  }
+
+  return [...byTier.entries()]
+    .map(([tier, r]) => ({
+      tier,
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    }))
+    .sort((a, b) => b.realCostCents - a.realCostCents);
+}
+
+export async function getOutstandingDebtByUser(limit = 10): Promise<DebtByUserRow[]> {
+  const rows = await db
+    .select({
+      userId: users.id,
+      userName: users.name,
+      userEmail: users.email,
+      debtCents: wallets.debtCents,
+    })
+    .from(wallets)
+    .innerJoin(users, eq(wallets.userId, users.id))
+    .where(and(isPersonalRootWallet(), gt(wallets.debtCents, 0)))
+    .orderBy(desc(wallets.debtCents))
+    .limit(limit);
+
+  return (await decryptUserDisplayFields(rows)).map((r) => ({
+    userId: r.userId,
+    userName: r.userName,
+    userEmail: r.userEmail,
+    debtCents: r.debtCents,
+  }));
+}
+
+export interface BalanceDriftRow {
+  walletId: string;
+  /** A person's root, an org's pool, or a drive's wallet (WAL-5: reconciliation is keyed on wallet). */
+  walletKind: DriftWalletKind;
+  /** The person a personal wallet belongs to; null for an org's. */
+  userId: string | null;
+  userName: string | null;
+  userEmail: string | null;
+  orgId: string | null;
+  /** The drive a drive wallet funds; null for a root. */
+  subjectId: string | null;
+  expectedNetCents: number;
+  materializedNetCents: number;
+  driftCents: number;
+  debtCents: number;
+}
+
+/**
+ * Wallets whose net (monthly + top-up − debt) disagrees with their OWN ledger rows beyond tolerance
+ * (WAL-5): every personal root, org pool and drive wallet, every money-moving entry type counted,
+ * through the one lib reader (walletDriftAlerts). Every balance change is a row — forgiveness at a
+ * renewal (debt_forgiven), netting at an allocation reset (allocation_reset), the cutover's
+ * opening_balance — so any drift is a change that bypassed the ledger. Worst drift first.
+ */
+export async function getBalanceDriftAlerts(
+  toleranceCents: number = BALANCE_DRIFT_TOLERANCE_CENTS,
+  limit = 50,
+): Promise<BalanceDriftRow[]> {
+  const alerts = await walletDriftAlerts({ toleranceCents, limit });
+  const userIds = [...new Set(alerts.map((a) => a.userId).filter((id): id is string => id !== null))];
+  const people = userIds.length > 0
+    ? await decryptUserDisplayFields(await db.select({ userId: users.id, userName: users.name, userEmail: users.email }).from(users).where(inArray(users.id, userIds)))
+    : [];
+  const byId = new Map(people.map((p) => [p.userId, p]));
+  return alerts.map((a) => ({
+    walletId: a.walletId,
+    walletKind: a.kind,
+    userId: a.userId,
+    userName: a.userId ? byId.get(a.userId)?.userName ?? null : null,
+    userEmail: a.userId ? byId.get(a.userId)?.userEmail ?? null : null,
+    orgId: a.orgId,
+    subjectId: a.subjectId,
+    expectedNetCents: a.expectedNetCents,
+    materializedNetCents: a.materializedNetCents,
+    driftCents: a.driftCents,
+    debtCents: a.debtCents,
+  }));
+}
+
+/**
+ * Billable AI usage that names no wallet (WAL-6b fail closed): never charged, marked terminal when
+ * first found, and counted here so an operator reconciles it.
+ */
+export async function getUnattributedUsage(): Promise<UnattributedUsage> {
+  return unattributedUsage();
+}
+
+export interface NegativeMarginRow {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+  requestCount: number;
+}
+
+export async function getNegativeMarginAccounts(
+  startDate?: Date,
+  endDate?: Date,
+  marginFloorBps: number = NEGATIVE_MARGIN_FLOOR_BPS,
+  limit = 50,
+): Promise<NegativeMarginRow[]> {
+  const floorBps = Math.max(0, marginFloorBps);
+  const rows = await db
+    .select({
+      // The inner join to users: a former member's rows (D-OW-58, userId null) belong to no account here.
+      userId: users.id,
+      userName: users.name,
+      userEmail: users.email,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .innerJoin(users, eq(creditLedger.userId, users.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(users.id, users.name, users.email)
+    .having(sql`${realCostSum} > 0 AND ${chargedSum} < ${realCostSum} * (1 + ${floorBps}::numeric / 10000)`)
+    .orderBy(asc(sql`${chargedSum} - ${realCostSum}`))
+    .limit(limit);
+
+  return (await decryptUserDisplayFields(rows))
+    .filter((r) => isNegativeMargin(r.realCostCents, r.chargedCents, floorBps))
+    .map((r) => ({
+      ...r,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+    }));
+}
+
+// ── AI billing panel queries ──────────────────────────────────────────────────
+
+export interface TokenUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  requestCount: number;
+}
+
+export interface TokenUsageByModelRow extends TokenUsageTotals {
+  provider: string;
+  model: string;
+}
+
+export interface TokenUsageByPeriodRow extends TokenUsageTotals {
+  period: string;
+}
+
+export interface TokenUsageByUserRow extends TokenUsageTotals {
+  userId: string;
+  userName: string | null;
+  userEmail: string | null;
+}
+
+export type CostCoverage = 'real' | 'estimate' | 'list_price';
+
+export interface ProviderCostRow {
+  provider: string;
+  model: string;
+  coverage: CostCoverage;
+  realCostCents: number;
+  chargedCents: number;
+  marginCents: number;
+  marginPct: number | null;
+  requestCount: number;
+}
+
+/**
+ * Credit inflows split by kind. Deliberately has NO total: top-ups are real
+ * cash revenue while monthly grants are plan allowances (including gifted and
+ * free-tier users) — summing them overstates revenue.
+ */
+export interface CreditRevenue {
+  /** Real cash: credits purchased via top-up. */
+  topupCents: number;
+  topupCount: number;
+  /** Plan allowance grants — NOT cash revenue. */
+  monthlyGrantCents: number;
+  monthlyGrantCount: number;
+  /**
+   * Included-credit liability (Spec MON-7): grants still outstanding — the monthly
+   * bucket of every personal root wallet AND every org pool (credit-liability.ts says
+   * which wallet kinds count and why a drive wallet's allocation never does).
+   * Point-in-time, not range-scoped, and distinct from cash: a grant is a promise of
+   * credit value the platform still owes, never revenue. Top-up balances are NOT in
+   * this figure (see CreditLiability.topupRemainingCents).
+   */
+  includedCreditLiabilityCents: number;
+}
+
+export interface SubscriptionsByTierRow {
+  tier: SubscriptionTier;
+  count: number;
+}
+
+export interface CreditLiability {
+  /** Grants outstanding: personal roots' and org pools' monthly buckets. */
+  monthlyRemainingCents: number;
+  /** Of which org pools (MON-3 refills). */
+  orgPoolMonthlyRemainingCents: number;
+  /** Of which free-tier accounts: the unpaid starter grant, shown apart from paid grants. */
+  starterGrantRemainingCents: number;
+  /** Purchased or moved-in credit on every wallet: root top-ups and drive-wallet legs. */
+  topupRemainingCents: number;
+  totalLiabilityCents: number;
+  userCount: number;
+  orgPoolCount: number;
+}
+
+export interface LiveHolds {
+  holdCount: number;
+  heldCents: number;
+}
+
+const inputTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.inputTokens}), 0)::double precision`;
+const outputTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.outputTokens}), 0)::double precision`;
+const totalTokenSum = sql<number>`COALESCE(SUM(${aiUsageLogs.totalTokens}), 0)::double precision`;
+
+function tokenConditions(startDate?: Date, endDate?: Date): SQL[] {
+  const conditions: SQL[] = [];
+  if (startDate) conditions.push(gte(aiUsageLogs.timestamp, startDate));
+  if (endDate) conditions.push(lte(aiUsageLogs.timestamp, endDate));
+  return conditions;
+}
+
+function tokenWhere(startDate?: Date, endDate?: Date): SQL | undefined {
+  const conditions = tokenConditions(startDate, endDate);
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+export async function getTokenUsageSummary(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<TokenUsageTotals> {
+  const rows = await db
+    .select({
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate));
+
+  return {
+    inputTokens: rows[0]?.inputTokens ?? 0,
+    outputTokens: rows[0]?.outputTokens ?? 0,
+    totalTokens: rows[0]?.totalTokens ?? 0,
+    requestCount: rows[0]?.requestCount ?? 0,
+  };
+}
+
+export async function getTokenUsageByModel(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 50,
+): Promise<TokenUsageByModelRow[]> {
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model)
+    .orderBy(desc(totalTokenSum))
+    .limit(limit);
+
+  return rows.map((r) => ({
+    ...r,
+    provider: r.provider ?? 'unknown',
+    model: r.model ?? 'unknown',
+  }));
+}
+
+export async function getTokenUsageByPeriod(
+  startDate?: Date,
+  endDate?: Date,
+  granularity: Granularity = 'day',
+): Promise<TokenUsageByPeriodRow[]> {
+  if (granularity !== 'day' && granularity !== 'month') {
+    throw new Error(`Invalid granularity: ${granularity}`);
+  }
+  const periodExpr = sql<string>`DATE_TRUNC('${sql.raw(granularity)}', ${aiUsageLogs.timestamp})`;
+
+  return db
+    .select({
+      period: periodExpr,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(periodExpr)
+    .orderBy(desc(periodExpr))
+    .limit(366);
+}
+
+export async function getTokenUsageByUser(
+  startDate?: Date,
+  endDate?: Date,
+  limit = 10,
+): Promise<TokenUsageByUserRow[]> {
+  const rows = await db
+    .select({
+      userId: aiUsageLogs.userId,
+      userName: users.name,
+      userEmail: users.email,
+      inputTokens: inputTokenSum,
+      outputTokens: outputTokenSum,
+      totalTokens: totalTokenSum,
+      requestCount: count(),
+    })
+    .from(aiUsageLogs)
+    .innerJoin(users, eq(aiUsageLogs.userId, users.id))
+    .where(tokenWhere(startDate, endDate))
+    .groupBy(aiUsageLogs.userId, users.name, users.email)
+    .orderBy(desc(totalTokenSum))
+    .limit(limit);
+
+  return decryptUserDisplayFields(rows);
+}
+
+export async function getProviderCostRollup(
+  startDate?: Date,
+  endDate?: Date,
+): Promise<ProviderCostRow[]> {
+  const costSourceExpr = sql<string | null>`${aiUsageLogs.metadata} ->> 'costSource'`;
+
+  const rows = await db
+    .select({
+      provider: aiUsageLogs.provider,
+      model: aiUsageLogs.model,
+      costSource: costSourceExpr,
+      realCostCents: realCostSum,
+      chargedCents: chargedSum,
+      requestCount: count(),
+    })
+    .from(creditLedger)
+    .leftJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+    .where(and(...usageConditions(startDate, endDate)))
+    .groupBy(aiUsageLogs.provider, aiUsageLogs.model, costSourceExpr)
+    .orderBy(desc(realCostSum))
+    .limit(50);
+
+  return rows.map((r) => {
+    const provider = r.provider ?? 'unknown';
+    let coverage: CostCoverage;
+    if (r.costSource === 'openrouter') coverage = 'real';
+    else if (r.costSource === 'estimate') coverage = 'estimate';
+    else if (r.costSource === 'list_price') coverage = 'list_price';
+    else if (provider === 'openai_voice') coverage = 'list_price';
+    else coverage = getBackendProvider(provider) === 'openrouter' ? 'real' : 'estimate';
+    return {
+      provider,
+      model: r.model ?? 'unknown',
+      coverage,
+      realCostCents: r.realCostCents,
+      chargedCents: r.chargedCents,
+      marginCents: r.chargedCents - r.realCostCents,
+      marginPct: computeMarginPct(r.realCostCents, r.chargedCents),
+      requestCount: r.requestCount,
+    };
+  });
+}
+
+export async function getCreditRevenue(
+  startDate?: Date,
+  endDate?: Date,
+  liabilityWithin?: SQL,
+): Promise<CreditRevenue> {
+  const conditions: SQL[] = [inArray(creditLedger.entryType, ['topup_purchase', 'monthly_grant'])];
+  if (startDate) conditions.push(gte(creditLedger.createdAt, startDate));
+  if (endDate) conditions.push(lte(creditLedger.createdAt, endDate));
+
+  const rows = await db
+    .select({
+      entryType: creditLedger.entryType,
+      cents: sql<number>`COALESCE(SUM(${creditLedger.amountCents}), 0)::double precision`,
+      count: count(),
+    })
+    .from(creditLedger)
+    .where(and(...conditions))
+    .groupBy(creditLedger.entryType);
+
+  let topupCents = 0;
+  let topupCount = 0;
+  let monthlyGrantCents = 0;
+  let monthlyGrantCount = 0;
+  for (const r of rows) {
+    if (r.entryType === 'topup_purchase') {
+      topupCents = r.cents;
+      topupCount = r.count;
+    } else if (r.entryType === 'monthly_grant') {
+      monthlyGrantCents = r.cents;
+      monthlyGrantCount = r.count;
+    }
+  }
+
+  // MON-7: outstanding grants = unspent granted credit value on personal roots and org
+  // pools. Read from the wallets (the ledger nets grants against usage there), not from
+  // the range-scoped grant rows above, so it is a liability, not a flow.
+  const liability = await readCreditLiability(liabilityWithin);
+
+  return {
+    topupCents,
+    topupCount,
+    monthlyGrantCents,
+    monthlyGrantCount,
+    includedCreditLiabilityCents: liability.includedCreditLiabilityCents,
+  };
+}
+
+/** Paying, non-gifted active or trialing subscriptions grouped by configured price identity. */
+export async function getActiveSubscriptionsByTier(): Promise<SubscriptionsByTierRow[]> {
+  const [personalRows, orgRows] = await Promise.all([
+    db.select({ stripePriceId: subscriptions.stripePriceId }).from(subscriptions).where(and(
+      inArray(subscriptions.status, ['active', 'trialing']), eq(subscriptions.gifted, false),
+    )),
+    db.select({ stripePriceId: orgSubscriptions.stripeBasePriceId }).from(orgSubscriptions).where(and(
+      inArray(orgSubscriptions.status, ['active']), eq(orgSubscriptions.gifted, false),
+      // [D-OW-44]: send_invoice reads active before anything is collected; only automatic collection pays.
+      eq(orgSubscriptions.collectionMethod, 'charge_automatically'),
+      sql`exists (select 1 from ${orgSubscriptionFunding} where ${orgSubscriptionFunding.orgId} = ${orgSubscriptions.orgId} and ${orgSubscriptionFunding.stripeSubscriptionId} = ${orgSubscriptions.stripeSubscriptionId})`,
+    )),
+  ]);
+
+  const counts = Object.fromEntries(TIERS.map((t) => [t, 0])) as Record<SubscriptionTier, number>;
+  for (const row of personalRows) counts[getTierFromPrice(row.stripePriceId) === 'pro' ? 'pro' : 'free'] += 1;
+  for (const row of orgRows) counts[getTierFromPrice(row.stripePriceId) === 'business' ? 'business' : 'free'] += 1;
+
+  return (Object.keys(counts) as SubscriptionTier[]).map((tier) => ({ tier, count: counts[tier] }));
+}
+
+/** Outstanding credit liability across every wallet kind, point-in-time (MON-7). `within` scopes the read to an allowlisted set of wallets (integration tests in a shared database); production passes nothing. */
+export async function getCreditLiability(within?: SQL): Promise<CreditLiability> {
+  const r = await readCreditLiability(within);
+  return {
+    monthlyRemainingCents: r.includedCreditLiabilityCents,
+    orgPoolMonthlyRemainingCents: r.orgPoolIncludedCents,
+    starterGrantRemainingCents: r.starterGrantIncludedCents,
+    topupRemainingCents: r.topupRemainingCents,
+    totalLiabilityCents: r.totalLiabilityCents,
+    userCount: r.userCount,
+    orgPoolCount: r.orgPoolCount,
+  };
+}
+
+export async function getLiveHolds(): Promise<LiveHolds> {
+  const rows = await db
+    .select({
+      holdCount: count(),
+      heldCents: sql<number>`COALESCE(SUM(${creditHolds.estCents}), 0)::double precision`,
+    })
+    .from(creditHolds)
+    .where(sql`${creditHolds.expiresAt} > NOW()`);
+
+  return {
+    holdCount: rows[0]?.holdCount ?? 0,
+    heldCents: rows[0]?.heldCents ?? 0,
+  };
+}
+
+// ── Growth & MAU queries ──────────────────────────────────────────────────────
+
+export interface GrowthSummary {
+  totalUsers: number;
+  mau: number;
+  wau: number;
+  dau: number;
+  dauMauRatio: number;
+  newUsersThisMonth: number;
+  newUsersLastMonth: number;
+  momGrowthPct: number | null;
+  payingUsers: number;
+  payingUsersPct: number;
+}
+
+export interface MAUTrendRow {
+  period: string;
+  mau: number;
+  newUsers: number;
+}
+
+export interface DAUTrendRow {
+  day: string;
+  dau: number;
+  signups: number;
+}
+
+export interface TierBreakdownRow {
+  tier: string;
+  count: number;
+  pct: number;
+}
+
+export interface GrowthMetrics {
+  summary: GrowthSummary;
+  mauTrend: MAUTrendRow[];
+  dauTrend: DAUTrendRow[];
+  tierBreakdown: TierBreakdownRow[];
+}
+
+export async function getGrowthMetrics(): Promise<GrowthMetrics> {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  // Start of the month exactly 11 months ago → produces exactly 12 calendar months
+  const twelveMonthsAgo = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11, 1));
+
+  const [totalUsersResult] = await db.select({ count: count() }).from(users);
+  const totalUsers = totalUsersResult?.count ?? 0;
+
+  // Current MAU/WAU/DAU from activity_logs — the ONE active-user definition for
+  // all growth metrics (headline + trends). Sessions cannot serve any window
+  // beyond ~2 weeks: they expire after 7 days and expired rows are hard-deleted
+  // 7 days later (sessionService.cleanupExpiredSessions), so a sessions-based
+  // 30d MAU or 12-month trend silently undercounts. activity_logs is retained
+  // 365 days (activity-log-archival), covering every window used here.
+  const [mauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo));
+
+  const [wauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, sevenDaysAgo));
+
+  const [dauResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int` })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, oneDayAgo));
+
+  const mau = mauResult?.count ?? 0;
+  const wau = wauResult?.count ?? 0;
+  const dau = dauResult?.count ?? 0;
+
+  // Use rolling 30-day vs previous 30-day window to avoid partial-month bias.
+  // Calendar-month comparison (current partial month vs full last month) systematically
+  // shows negative growth before month-end — rolling windows are bias-free.
+  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+  const [newThisMonthResult] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(gte(users.createdAt, thirtyDaysAgo));
+
+  const [newLastMonthResult] = await db
+    .select({ count: count() })
+    .from(users)
+    .where(and(gte(users.createdAt, sixtyDaysAgo), lt(users.createdAt, thirtyDaysAgo)));
+
+  const newUsersThisMonth = newThisMonthResult?.count ?? 0;
+  const newUsersLastMonth = newLastMonthResult?.count ?? 0;
+  const momGrowthPct = newUsersLastMonth > 0
+    ? ((newUsersThisMonth - newUsersLastMonth) / newUsersLastMonth) * 100
+    : null;
+
+  const [payingResult] = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${users.id})::int` })
+    .from(users)
+    .innerJoin(subscriptions, eq(subscriptions.userId, users.id))
+    .where(and(
+      inArray(subscriptions.status, ['active', 'trialing']),
+      eq(subscriptions.gifted, false)
+    ));
+  const payingUsers = payingResult?.count ?? 0;
+
+  // MAU trend (12 months). Same active-user definition as the headline
+  // mau/wau/dau above: distinct activity_logs.userId bucketed by timestamp.
+  // Trend and headline must reconcile — one definition, one durable source.
+  const mauTrendRaw = await db
+    .select({
+      month: sql<string>`DATE_TRUNC('month', ${activityLogs.timestamp})`,
+      mau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
+    })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, twelveMonthsAgo))
+    .groupBy(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('month', ${activityLogs.timestamp})`));
+
+  const signupsByMonthRaw = await db
+    .select({
+      month: sql<string>`DATE_TRUNC('month', ${users.createdAt})`,
+      signups: count(),
+    })
+    .from(users)
+    .where(gte(users.createdAt, twelveMonthsAgo))
+    .groupBy(sql`DATE_TRUNC('month', ${users.createdAt})`)
+    .orderBy(asc(sql`DATE_TRUNC('month', ${users.createdAt})`));
+
+  // DATE_TRUNC returns Date objects from the node-postgres driver despite the sql<string>
+  // annotation — normalise to ISO strings so Map key equality works across queries.
+  const toKey = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
+
+  // Build exactly 12 fixed month buckets (UTC) ending at current month, ascending.
+  const monthBucketKeys: string[] = Array.from({ length: 12 }, (_, i) =>
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 11 + i, 1)).toISOString()
+  );
+  const mauByMonth = new Map(mauTrendRaw.map(r => [toKey(r.month), r.mau]));
+  const signupsByMonth = new Map(signupsByMonthRaw.map(r => [toKey(r.month), r.signups]));
+  const mauTrend: MAUTrendRow[] = monthBucketKeys.map(key => ({
+    period: key,
+    mau: mauByMonth.get(key) ?? 0,
+    newUsers: signupsByMonth.get(key) ?? 0,
+  }));
+
+  // DAU trend (last 30 days) — activity_logs, same definition as headline dau.
+  const dauTrendRaw = await db
+    .select({
+      day: sql<string>`DATE_TRUNC('day', ${activityLogs.timestamp})`,
+      dau: sql<number>`COUNT(DISTINCT ${activityLogs.userId})::int`,
+    })
+    .from(activityLogs)
+    .where(gte(activityLogs.timestamp, thirtyDaysAgo))
+    .groupBy(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`)
+    .orderBy(asc(sql`DATE_TRUNC('day', ${activityLogs.timestamp})`));
+
+  const signupsByDayRaw = await db
+    .select({
+      day: sql<string>`DATE_TRUNC('day', ${users.createdAt})`,
+      signups: count(),
+    })
+    .from(users)
+    .where(gte(users.createdAt, thirtyDaysAgo))
+    .groupBy(sql`DATE_TRUNC('day', ${users.createdAt})`)
+    .orderBy(asc(sql`DATE_TRUNC('day', ${users.createdAt})`));
+
+  // Build exactly 30 fixed day buckets (UTC) ending at yesterday, ascending.
+  const dayBucketKeys: string[] = Array.from({ length: 30 }, (_, i) => {
+    const msAgo = (29 - i) * 24 * 60 * 60 * 1000;
+    const d = new Date(now.getTime() - msAgo);
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+  });
+  const dauByDay = new Map(dauTrendRaw.map(r => [toKey(r.day), r.dau]));
+  const signupsByDay = new Map(signupsByDayRaw.map(r => [toKey(r.day), r.signups]));
+  const dauTrend: DAUTrendRow[] = dayBucketKeys.map(key => ({
+    day: key,
+    dau: dauByDay.get(key) ?? 0,
+    signups: signupsByDay.get(key) ?? 0,
+  }));
+
+  // Tier breakdown
+  const tierRaw = await db
+    .select({ tier: users.subscriptionTier, count: count() })
+    .from(users)
+    .groupBy(users.subscriptionTier)
+    .orderBy(desc(count()));
+
+  const tierBreakdown: TierBreakdownRow[] = tierRaw.map(r => ({
+    tier: r.tier,
+    count: r.count,
+    pct: totalUsers > 0 ? (r.count / totalUsers) * 100 : 0,
+  }));
+
+  return {
+    summary: {
+      totalUsers,
+      mau,
+      wau,
+      dau,
+      dauMauRatio: mau > 0 ? (dau / mau) * 100 : 0,
+      newUsersThisMonth,
+      newUsersLastMonth,
+      momGrowthPct,
+      payingUsers,
+      payingUsersPct: totalUsers > 0 ? (payingUsers / totalUsers) * 100 : 0,
+    },
+    mauTrend,
+    dauTrend,
+    tierBreakdown,
+  };
+}

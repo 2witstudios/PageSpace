@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 // Mock dependencies
 const mockAuthenticateMCPRequest = vi.fn();
 const mockGetUserAccessLevel = vi.fn();
+const mockGetAppAccessLevel = vi.fn();
 const mockApplyPageMutation = vi.fn();
 const mockBroadcastPageEvent = vi.fn();
 const mockCreatePageEventPayload = vi.fn();
@@ -26,29 +27,50 @@ vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: (...args: unknown[]) => mockAuthenticateMCPRequest(...args),
   isAuthError: (result: unknown) => 'error' in (result as object),
   isMCPAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'mcp',
+  isOAuthAuthResult: (result: unknown) => !('error' in (result as object)) && (result as { tokenType?: string }).tokenType === 'oauth',
+  isManageKeysOnly: (result: unknown) =>
+    !('error' in (result as object)) &&
+    (result as { tokenType?: string }).tokenType === 'oauth' &&
+    (result as { scopes?: { manageKeys?: boolean } }).scopes?.manageKeys === true,
+  // Delegate to the REAL principal dispatch (unit-tested in
+  // src/lib/auth/__tests__/principal-permissions.test.ts) so the security
+  // assertions below still verify that scoped tokens resolve app-level
+  // permissions and unscoped tokens fall back to user permissions.
+  getPrincipalAccessLevel: async (auth: unknown, pageId: string) => {
+    const { getPrincipalAccessLevel } = await import('@/lib/auth/principal-permissions');
+    return getPrincipalAccessLevel(auth as never, pageId);
+  },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserAccessLevel: (...args: unknown[]) => mockGetUserAccessLevel(...args),
+}));
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppAccessLevel: (...args: unknown[]) => mockGetAppAccessLevel(...args),
 }));
 vi.mock('@pagespace/lib/utils/enums', () => ({
   PageType: {},
 }));
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: vi.fn(() => false),
-  parseSheetContent: vi.fn(),
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
 }));
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    api: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
-    security: { warn: vi.fn() },
-  },
-
-  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
-}));
+vi.mock('@pagespace/lib/logging/logger-config', () => {
+  const childLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const namedLogger = { ...childLogger, child: vi.fn(() => childLogger) };
+  return {
+    loggers: {
+      api: namedLogger,
+      security: { warn: vi.fn() },
+      ai: namedLogger,
+    },
+    logger: { child: vi.fn(() => childLogger) },
+  };
+});
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: vi.fn(),
   auditRequest: vi.fn(),
@@ -65,6 +87,7 @@ vi.mock('@pagespace/db/db', () => ({
           type: 'DOCUMENT',
           revision: 1,
           parentId: null,
+          driveId: 'drive_123',
           drive: { id: 'drive_123', ownerId: 'owner_123' },
         }),
       },
@@ -73,9 +96,23 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  asc: vi.fn(),
+  and: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id' },
+}));
+vi.mock('@pagespace/db/schema/tasks', () => ({
+  taskLists: { pageId: 'taskLists.pageId' },
+  taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
+  DEFAULT_TASK_STATUSES: [],
+}));
+vi.mock('@/lib/ai/tools/task-helpers', () => ({
+  fetchEnrichedTasks: vi.fn().mockResolvedValue([]),
+  serializeTaskItem: vi.fn((t: unknown) => t),
+}));
+vi.mock('@/services/api/task-sync-service', () => ({
+  backfillMissingTaskItems: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -139,7 +176,7 @@ describe('MCP Documents API - Security Tests', () => {
       const response = await POST(request);
 
       expect(response.status).toBe(403);
-      expect(mockGetUserAccessLevel).toHaveBeenCalledWith('user_123', 'page_123');
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
     });
 
     it('should deny read access when user has canView=false', async () => {
@@ -269,7 +306,7 @@ describe('MCP Documents API - Security Tests', () => {
       await POST(request);
 
       // Verify the permission check was called with correct parameters
-      expect(mockGetUserAccessLevel).toHaveBeenCalledWith('user_123', 'page_123');
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
     });
 
     it('should log security events when access is denied', async () => {
@@ -377,6 +414,12 @@ describe('MCP Documents API - Security Tests', () => {
         const data = await response.json();
         expect(data.error).toBe('Write permission required');
         expect(data.details).toContain(operation);
+        // Issue #2470's actual complaint was not the refusal — that is correct
+        // for a view-only grant — but that it pointed nowhere, so the only way
+        // to learn the grant was one failed write at a time. `error` stays the
+        // stable string clients branch on; the pointer rides in `details`.
+        expect(data.details).toContain('tokens.describeSelf');
+        expect(data.details).toContain('pagespace keys describe --page');
       }
     });
   });
@@ -400,6 +443,82 @@ describe('MCP Documents API - Security Tests', () => {
 
       expect(response.status).toBe(401);
       // Permission check should not be called for unauthenticated requests
+      expect(mockGetUserAccessLevel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Scoped vs unscoped MCP token access', () => {
+    it('unscoped token (allowedDriveIds=[]) falls back to user permissions', async () => {
+      mockAuthenticateMCPRequest.mockResolvedValue({
+        userId: 'user_123',
+        tokenType: 'mcp',
+        tokenId: 'token_123',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        allowedDriveIds: [],
+      });
+      mockGetUserAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+      const { POST } = await import('../route');
+      const request = new NextRequest('http://localhost/api/mcp/documents', {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'read', pageId: 'page_123' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'page_123');
+      expect(mockGetAppAccessLevel).not.toHaveBeenCalled();
+    });
+
+    it('scoped token (allowedDriveIds non-empty) uses app-level permissions', async () => {
+      mockAuthenticateMCPRequest.mockResolvedValue({
+        userId: 'user_123',
+        tokenType: 'mcp',
+        tokenId: 'token_456',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        allowedDriveIds: ['drive_123'],
+      });
+      mockGetAppAccessLevel.mockResolvedValue({ canView: true, canEdit: false, canShare: false, canDelete: false });
+
+      const { POST } = await import('../route');
+      const request = new NextRequest('http://localhost/api/mcp/documents', {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'read', pageId: 'page_123' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(200);
+      expect(mockGetAppAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), 'token_456', 'page_123');
+      expect(mockGetUserAccessLevel).not.toHaveBeenCalled();
+    });
+
+    it('scoped token with no drive membership returns 403', async () => {
+      mockAuthenticateMCPRequest.mockResolvedValue({
+        userId: 'user_123',
+        tokenType: 'mcp',
+        tokenId: 'token_456',
+        role: 'user',
+        tokenVersion: 1,
+        adminRoleVersion: 0,
+        allowedDriveIds: ['drive_123'],
+      });
+      mockGetAppAccessLevel.mockResolvedValue(null);
+
+      const { POST } = await import('../route');
+      const request = new NextRequest('http://localhost/api/mcp/documents', {
+        method: 'POST',
+        body: JSON.stringify({ operation: 'read', pageId: 'page_123' }),
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(403);
       expect(mockGetUserAccessLevel).not.toHaveBeenCalled();
     });
   });

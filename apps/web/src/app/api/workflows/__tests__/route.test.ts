@@ -45,6 +45,8 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(),
+  checkMCPDriveScope: vi.fn(),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
@@ -91,7 +93,7 @@ vi.mock('@pagespace/db/schema/workflow-runs', () => ({
 
 import { GET, POST } from '../route';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 
 // ============================================================================
@@ -128,6 +130,16 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   isTrashed: false,
   trashedAt: null,
   drivePrompt: null,
+  kind: 'STANDARD' as const,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 // ============================================================================
@@ -142,6 +154,7 @@ describe('GET /api/workflows', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
     mockValues.mockReturnValue({ returning: mockReturning });
     mockInsert.mockReturnValue({ values: mockValues });
     mockSelect.mockReturnValue({ from: mockFrom });
@@ -172,6 +185,7 @@ describe('GET /api/workflows', () => {
 
   it('should return 404 when drive not found', async () => {
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
+    // isPrincipalDriveOwnerOrAdmin defaults to undefined (falsy) after resetAllMocks
 
     const request = new Request(`https://example.com/api/workflows?driveId=${mockDriveId}`);
     const response = await GET(request);
@@ -196,6 +210,7 @@ describe('GET /api/workflows', () => {
   });
 
   it('should return workflow list with denormalized lastRun on success', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     const startedAt = new Date('2026-04-01T09:00:00Z');
     const endedAt = new Date('2026-04-01T09:00:05Z');
     // Each row from the projection: { workflow, lastRunStatus, lastRunStartedAt, ... }
@@ -250,6 +265,7 @@ describe('GET /api/workflows', () => {
     // triggerType='cron' but have cronExpression=null. Without an
     // isNotNull(cronExpression) gate they'd leak into this list and be
     // editable/deletable from the cron management UI.
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
     mockOrderBy.mockResolvedValue([]);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isOwner: true,
@@ -291,6 +307,8 @@ describe('POST /api/workflows', () => {
     vi.resetAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(checkMCPDriveScope).mockReturnValue(null);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
 
     mockSelect.mockReturnValue({ from: mockFrom });
     mockFrom.mockReturnValue({ where: mockWhere });
@@ -346,6 +364,7 @@ describe('POST /api/workflows', () => {
   });
 
   it('should return 404 when drive not found', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({ drive: null }));
 
     const request = new Request('https://example.com/api/workflows', {
@@ -359,6 +378,7 @@ describe('POST /api/workflows', () => {
   });
 
   it('should return 403 when not owner or admin', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
     vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
       isMember: true,
       drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: 'other' }),
@@ -453,5 +473,149 @@ describe('POST /api/workflows', () => {
     const response = await POST(request);
 
     expect(response.status).toBe(201);
+  });
+
+  /**
+   * A cron schedule is wall-clock by nature, so an omitted timezone is the
+   * caller's zone, not UTC. The schema used to declare `.default('UTC')`, which
+   * both made "omitted" indistinguishable from "explicitly UTC" and ran
+   * "0 9 * * *" at 9am UTC — 3am for a US Central scheduler (#2404).
+   *
+   * The profile read is the SECOND db.select in the POST path; the first
+   * validates the agent page.
+   */
+  describe('timezone resolution', () => {
+    const bodyWithoutTimezone = {
+      driveId: mockDriveId,
+      name: 'Daily Report',
+      agentPageId: 'page_1',
+      prompt: 'Generate report',
+      cronExpression: '0 9 * * *',
+      isEnabled: true,
+    };
+
+    const postWorkflow = async (body: Record<string, unknown>, profileTimezone: string | null) => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+      vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+      mockWhere
+        .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }])
+        .mockResolvedValueOnce([{ timezone: profileTimezone }]);
+
+      const request = new Request('https://example.com/api/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const response = await POST(request);
+      expect(response.status).toBe(201);
+    };
+
+    it("schedules an omitted timezone in the caller's profile zone", async () => {
+      await postWorkflow(bodyWithoutTimezone, 'America/Chicago');
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'America/Chicago');
+    });
+
+    it('stores the resolved zone, so later edits and runs inherit it', async () => {
+      await postWorkflow(bodyWithoutTimezone, 'America/Chicago');
+
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'America/Chicago' }));
+    });
+
+    it('lets an explicit body timezone win over the profile', async () => {
+      await postWorkflow({ ...bodyWithoutTimezone, timezone: 'Asia/Tokyo' }, 'America/Chicago');
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'Asia/Tokyo');
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'Asia/Tokyo' }));
+    });
+
+    it('falls back to UTC when the profile has no timezone', async () => {
+      await postWorkflow(bodyWithoutTimezone, null);
+
+      expect(getNextRunDate).toHaveBeenCalledWith('0 9 * * *', 'UTC');
+      expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({ timezone: 'UTC' }));
+    });
+  });
+
+  // The DB column and internal create_workflow tool both support
+  // instructionPageId as an alternative to prompt (agentTriggerBaseSchema).
+  // The route's .strict() schema previously rejected it outright and
+  // required prompt unconditionally — any MCP/SDK client sending
+  // instructionPageId got a 400 despite the feature working end-to-end
+  // internally.
+  it('should return 400 when neither prompt nor instructionPageId is provided', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyWithoutPrompt),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Invalid input');
+  });
+
+  it('should return 400 when instructionPageId page is not found in the drive', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+    vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+    mockWhere
+      .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }]) // agent lookup
+      .mockResolvedValueOnce([]); // instruction page lookup
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bodyWithoutPrompt, instructionPageId: 'page_missing' }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error).toBe('Instruction page not found in this drive');
+  });
+
+  it('should create a workflow from instructionPageId alone, defaulting the prompt', async () => {
+    vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+      isOwner: true,
+      isMember: true,
+      drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+    }));
+    vi.mocked(validateCronExpression).mockReturnValue({ valid: true });
+    vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockWhere
+      .mockResolvedValueOnce([{ id: 'page_1', type: 'AI_CHAT', driveId: mockDriveId }]) // agent lookup
+      .mockResolvedValueOnce([{ id: 'page_instr', driveId: mockDriveId, isTrashed: false }]); // instruction page lookup
+
+    const { prompt: _prompt, ...bodyWithoutPrompt } = validBody;
+    const request = new Request('https://example.com/api/workflows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bodyWithoutPrompt, instructionPageId: 'page_instr' }),
+    });
+    const response = await POST(request);
+
+    expect(response.status).toBe(201);
+    expect(mockValues).toHaveBeenCalledWith(expect.objectContaining({
+      instructionPageId: 'page_instr',
+      prompt: 'Execute instructions from linked page.',
+    }));
   });
 });

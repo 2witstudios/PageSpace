@@ -5,6 +5,7 @@ import { users } from '@pagespace/db/schema/auth'
 import { subscriptions } from '@pagespace/db/schema/subscriptions';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { stripe, Stripe } from '@/lib/stripe';
+import { personalPlanItems } from '@/lib/stripe/price-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -66,7 +67,8 @@ export async function GET(request: NextRequest) {
       const subscription = await stripe.subscriptions.retrieve(
         currentSubscription.stripeSubscriptionId
       );
-      const currentItemId = subscription.items.data[0]?.id;
+      // The plan item, never items[0]: a storage add-on item may ride along.
+      const currentItemId = personalPlanItems(subscription.items)?.planItem.id;
 
       if (currentItemId) {
         params.subscription_details = {

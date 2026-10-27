@@ -1,0 +1,328 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+/**
+ * Realtime Voice Call API Route
+ *
+ * POST /api/voice/realtime/call
+ *
+ * The browser's front door to a live voice call. It sends an SDP offer and gets
+ * an SDP answer back; this route does the whole handshake with OpenAI on its
+ * behalf, so the page never contacts `api.openai.com` and never holds a
+ * credential. Our server keeps the call id and hands the call's ephemeral
+ * secret straight to the realtime server, which attaches for the duration.
+ *
+ * Auth, tier gate and managed-key lookup follow `../synthesize/route.ts`
+ * exactly — voice is one feature with one entitlement, and a second auth shape
+ * here would be a second thing to keep in step.
+ *
+ * NOT metered here. A realtime call's cost accrues per `response.done` over its
+ * whole lifetime, on the socket the realtime server holds; a credit hold taken
+ * at handshake time could only ever be a guess at a call that has not happened
+ * yet. Metering belongs to the process that sees the usage events. What this
+ * route does decide is WHERE the call spends (resolveVoiceSpend), before OpenAI
+ * is contacted, carried to the realtime server on the signed attach (SPEND-1).
+ */
+
+import { spendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
+import { NextResponse } from 'next/server';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { getManagedProviderKey } from '@/lib/ai/core/ai-utils';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
+import { isBillingEnabled } from '@pagespace/lib/deployment-mode';
+import { REALTIME_MAX_SESSION_SECONDS } from '@pagespace/lib/billing/credit-pricing';
+import { resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND, driveSpend } from '@pagespace/lib/billing/spend-target';
+import { VOICE_PLAN_REQUIRED, voiceEntitled } from '@/lib/ai/realtime/voice-entitlement';
+import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
+import { REALTIME_MODEL_VENDOR, VOICE_HISTORY_WITHHELD_MESSAGE, resolveRealtimeModel } from '@/lib/ai/realtime/session';
+import { orgModelRefusal } from '@/lib/ai/core/provider-factory';
+import { memberDrivesReadableByModel } from '@/lib/ai/core/org-model-policy';
+import { runCallHandshake } from '@/lib/ai/realtime/call-handshake';
+import { loadVoiceBinding } from '@/lib/ai/realtime/binding-loader';
+import { voiceBindingDeps, voiceSpendDeps } from '@/lib/ai/realtime/voice-runtime-deps';
+import { resolveVoiceSpend, voiceContextRef } from '@/lib/ai/realtime/voice-spend';
+import { voiceLocationContextSchema } from '@pagespace/lib/realtime/voice-bridge-contract';
+
+const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
+
+/**
+ * An SDP offer is a few kilobytes of text. The cap exists so an authenticated
+ * caller cannot make us relay an arbitrarily large body to OpenAI.
+ */
+const MAX_SDP_BYTES = 256 * 1024;
+
+export async function POST(request: Request) {
+  try {
+    const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+    if (isAuthError(auth)) return auth.error;
+    const actor = actorFromAuth(auth);
+    const userId = auth.userId;
+
+    // The caller's own tier: the credit gate the realtime server runs when it starts metering
+    // the call takes it as the consumer's. Still only read when billing is on — `canConsumeAI`
+    // short-circuits to unlimited otherwise, so a DB round trip for it on every onprem/tenant
+    // call would buy nothing. Whether voice is ALLOWED is judged on the FUNDER's tier below,
+    // once the call's source is known (WAL-8).
+    const tier: SubscriptionTier = isBillingEnabled()
+      ? toPersonalSubscriptionTier((await aiSettingsRepository.getUserSettings(userId))?.subscriptionTier)
+      : 'free';
+
+    const openAISettings = getManagedProviderKey('openai_voice');
+    if (!openAISettings?.apiKey) {
+      return NextResponse.json(
+        {
+          error: 'Voice mode unavailable',
+          message: 'Voice mode is not configured on this deployment.',
+        },
+        { status: 503 }
+      );
+    }
+
+    const body = await request.json().catch(() => undefined);
+    const sdp = (body as { sdp?: unknown } | undefined)?.sdp;
+    const conversationIdRaw = (body as { conversationId?: unknown } | undefined)?.conversationId;
+    const timezoneRaw = (body as { timezone?: unknown } | undefined)?.timezone;
+    // Parsed rather than trusted: it is forwarded into a `ToolExecutionContext`,
+    // and the tools read page/drive ids off it. Permissions still decide access
+    // — a location is a default, never an authorization — but a malformed one
+    // should be dropped at the edge rather than carried across two processes.
+    const locationContext = voiceLocationContextSchema.safeParse(
+      (body as { locationContext?: unknown } | undefined)?.locationContext,
+    );
+
+    if (typeof sdp !== 'string' || sdp.length === 0) {
+      return NextResponse.json(
+        { error: 'No SDP offer provided' },
+        { status: 400 }
+      );
+    }
+    if (sdp.length > MAX_SDP_BYTES) {
+      return NextResponse.json(
+        { error: 'SDP offer too large' },
+        { status: 400 }
+      );
+    }
+
+    const conversationId =
+      typeof conversationIdRaw === 'string' && conversationIdRaw.length > 0
+        ? conversationIdRaw
+        : undefined;
+    const agentPageIdRaw = (body as { agentPageId?: unknown } | undefined)?.agentPageId;
+    const agentPageId =
+      typeof agentPageIdRaw === 'string' && agentPageIdRaw.length > 0 ? agentPageIdRaw : undefined;
+
+    // Where the call spends, decided BEFORE OpenAI is contacted (SPEND-1): the drive of the
+    // conversation (a page agent's thread spends in its page's drive, as its typed turns do),
+    // or personal credits for a Global Assistant call (SPEND-8). The body's agentPageId only
+    // names the page of a fresh thread with no row yet, and only counts after the caller's
+    // own view check. A call that belongs to a drive it cannot resolve is refused by name —
+    // it never falls back to the caller's own credits (SPEND-4).
+    // A Global Assistant call (or an unbound one) spends in the drive the caller stands in, as
+    // its typed turn does — the drive the server resolves behind its own view check, never the
+    // id the client's location claims (SPEND-1).
+    const contextDriveId = (await resolveRequestContext(auth, voiceContextRef(locationContext.success ? locationContext.data : undefined)))?.currentDrive?.id;
+    const spend = await resolveVoiceSpend(voiceSpendDeps(auth), {
+      userId,
+      ...(conversationId === undefined ? {} : { conversationId }),
+      ...(agentPageId === undefined ? {} : { agentPageId }),
+      ...(contextDriveId === undefined ? {} : { contextDriveId }),
+    });
+    if (spend.kind === 'refused') {
+      loggers.ai.info('Realtime voice call refused: no spend source', { userId, reason: spend.reason });
+      return NextResponse.json(
+        {
+          error: 'Voice call refused',
+          code: spend.reason,
+          message: spend.reason === 'voice_conversation_forbidden'
+            ? 'You do not have access to this conversation.'
+            : 'This call could not tell which drive pays for it, so it was not started and nothing was charged.',
+        },
+        { status: spend.reason === 'voice_conversation_forbidden' ? 403 : 409 }
+      );
+    }
+
+    // POL-8, before OpenAI is contacted: the conversation's history and its agent's instructions go to the realtime
+    // model, so the org of the drive the call belongs to (the conversation's drive, which is also the drive it spends
+    // in — SPEND-1) must allow that model and its vendor (D-OW-65). Refused with the policy's own code; nothing is
+    // minted and nothing is charged.
+    const model = resolveRealtimeModel(process.env);
+    const policyRefusal = await orgModelRefusal(
+      [spend.kind === 'drive' ? spend.driveId : null],
+      [{ modelId: model, provider: REALTIME_MODEL_VENDOR }],
+    );
+    if (policyRefusal) {
+      loggers.ai.info('Realtime voice call refused by the org model policy', { userId, code: policyRefusal.code });
+      return NextResponse.json(
+        { error: policyRefusal.error, code: policyRefusal.code, ...(policyRefusal.policy ? { policy: policyRefusal.policy } : {}) },
+        { status: policyRefusal.status },
+      );
+    }
+    // Voice is a paid feature, and the tier that decides it is whoever FUNDS the call (WAL-8):
+    // the org inside an org drive, a personal drive wallet's owner, the caller on their own
+    // credits — the same resolution the meter's credit gate will reserve on.
+    if (isBillingEnabled()) {
+      const funderTier = await resolveEntitlementTier(userId, tier, spend.kind === 'drive' ? driveSpend(spend.driveId) : PERSONAL_SPEND);
+      if (!voiceEntitled(funderTier)) {
+        return NextResponse.json(VOICE_PLAN_REQUIRED, { status: 403 });
+      }
+    }
+
+    // Voice starts on a conversation that already exists, so the conversation is
+    // what says which assistant is being talked to, what it was told to be, and
+    // which tools its owner allowed it — as well as supplying the history
+    // replayed into the session as text before the model speaks.
+    //
+    // Read HERE, from the authorized conversation, and never from the request
+    // body: the browser names a conversation, and everything else about the
+    // binding is derived behind that conversation's own access check. An empty
+    // binding is a normal outcome (a fresh thread, or one this caller may not
+    // read) — never a reason to fail the call.
+    const binding = await loadVoiceBinding(voiceBindingDeps(auth), {
+      userId,
+      ...(conversationId === undefined ? {} : { conversationId }),
+    });
+
+    // POL-8 for a Global Assistant call (no drive): its replayed history carries no drive, so any org the person is in
+    // may have content in it. As memory discovery reads such conversations, the history reaches the realtime model
+    // only when every one of those orgs allows it; otherwise the call starts without it and says why.
+    const historyWithheld = spend.kind === 'personal' && binding.seed.length > 0
+      && !(await memberDrivesReadableByModel(actor, { provider: REALTIME_MODEL_VENDOR, modelId: model })).allReadable;
+    const seed = historyWithheld ? [] : binding.seed;
+
+    const result = await runCallHandshake(
+      {
+        fetch,
+        apiKey: openAISettings.apiKey,
+        // Resolved explicitly rather than left to buildSessionConfig's default:
+        // the env override is the entire per-deployment model escape hatch, and
+        // a default applied deeper down would silently swallow it.
+        model,
+        // Built with the instructions, from ONE exposure, and carried here on
+        // the binding. They are two projections of a single decision — what
+        // this agent may reach — and a session that advertises `tool_search`
+        // while its prompt never names it is exactly the bug this replaced.
+        // Building them separately here also meant a second full registry
+        // build on a handshake the caller is waiting on.
+        //
+        // Still built in this app rather than the realtime server: the registry
+        // lives here and has env-dependent branches (the code-execution kill
+        // switch), so the definitions ride the signed internal hop.
+        tools: binding.tools,
+        subscriptionTier: tier,
+        internalRealtimeUrl: process.env.INTERNAL_REALTIME_URL,
+        signHeaders: createSignedBroadcastHeaders,
+        logger: loggers.ai,
+      },
+      {
+        offerSdp: sdp,
+        userId,
+        // The call runs as THIS credential on every bridge hop (SEC-2/3).
+        authentication: auth.authentication ?? null,
+        ...(conversationId === undefined ? {} : { conversationId }),
+        seed,
+        instructions: binding.instructions,
+        ...(binding.assistant === undefined ? {} : { assistant: binding.assistant }),
+        // Where the call spends (resolved above), carried to the meter on the signed attach.
+        ...(spend.kind === 'drive' ? { spendDriveId: spend.driveId } : {}),
+        ...(typeof timezoneRaw === 'string' && timezoneRaw.length > 0
+          ? { timezone: timezoneRaw }
+          : {}),
+        ...(locationContext.success ? { locationContext: locationContext.data } : {}),
+      }
+    );
+
+    if (!result.ok) {
+      // An admission refusal is a POLICY outcome, not a malfunction: the credit
+      // gate or the concurrency cap answered, the just-created OpenAI call has
+      // been hung up, and the caller needs the refusal itself — 402 or 429 —
+      // rather than a 502 that reads as "try again, something broke".
+      if (result.code === 'admission_refused') {
+        loggers.ai.info('Realtime voice call refused at admission', {
+          userId,
+          upstreamStatus: result.upstreamStatus,
+        });
+        return NextResponse.json(
+          { error: 'Voice call refused', code: result.code, message: result.message },
+          { status: result.upstreamStatus ?? 429 }
+        );
+      }
+
+      loggers.ai.error(
+        'Realtime voice handshake failed',
+        new Error(result.message),
+        { userId, code: result.code, upstreamStatus: result.upstreamStatus }
+      );
+      // 502, not the upstream status: a bare 403 from OpenAI would be
+      // indistinguishable from THIS route's own 403 (free tier), and the two
+      // need entirely different fixes. The upstream status and body are
+      // reported as data instead — which is the only way a bad
+      // OPENAI_REALTIME_MODEL is ever visible, since the mint accepts it.
+      return NextResponse.json(
+        {
+          error: 'Voice call failed',
+          code: result.code,
+          message: result.message,
+          ...(result.upstreamStatus === undefined
+            ? {}
+            : { upstreamStatus: result.upstreamStatus }),
+          // ONLY the calls-endpoint body. That is the one that makes a bad
+          // OPENAI_REALTIME_MODEL visible, which is the entire reason this
+          // passthrough exists. A `mint_failed` body describes the managed API
+          // key request instead — it can name the organization, the quota
+          // state or a masked key — and no authenticated caller has any use
+          // for that.
+          ...(result.code === 'realtime_call_rejected' && result.upstream !== undefined
+            ? { upstream: result.upstream }
+            : {}),
+        },
+        { status: 502 }
+      );
+    }
+
+    auditRequest(request, {
+      eventType: 'data.read',
+      userId,
+      resourceType: 'voice',
+      resourceId: result.callId,
+      details: { operation: 'realtime_call_start', attached: result.attached },
+    });
+
+    // The ephemeral secret is deliberately absent: it never leaves the server.
+    //
+    // `maxDurationMs` is here because the CLIENT cannot derive it and needs it.
+    // A call is hung up by the realtime server once it passes
+    // REALTIME_MAX_SESSION_SECONDS — a per-deployment env value the browser has
+    // no access to — and the browser's job is to chain into a fresh call bound
+    // to the same conversation shortly BEFORE that lands, so a long
+    // conversation outlives the ceiling that bounds a single call. The
+    // alternative is a client-side copy of a server env var, which is a copy
+    // that drifts, and whose failure mode is a user cut off mid-sentence on the
+    // one deployment that tuned it.
+    //
+    // The realtime server also caps a socket at an hour, so the true ceiling is
+    // the smaller of the two. That constant lives in `apps/realtime` and is not
+    // importable here (there is no dependency edge, deliberately), so this
+    // reports the cap THIS tier owns — correct unless a deployment sets
+    // REALTIME_MAX_SESSION_SECONDS above 3600, at which point the socket's hour
+    // binds first and the chain lands late rather than early.
+    // SPEND-4: the call's opening gate fell back to another source; the caller shows it.
+    return NextResponse.json({
+      callId: result.callId,
+      answerSdp: result.answerSdp,
+      attached: result.attached,
+      maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
+      spendFallback: result.spendFallback,
+      historyWithheld: historyWithheld ? VOICE_HISTORY_WITHHELD_MESSAGE : null,
+    }, { headers: spendFallbackHeaders(result.spendFallback) });
+  } catch (error) {
+    loggers.ai.error('Realtime voice call error', error as Error);
+    return NextResponse.json(
+      { error: 'Failed to start voice call' },
+      { status: 500 }
+    );
+  }
+}

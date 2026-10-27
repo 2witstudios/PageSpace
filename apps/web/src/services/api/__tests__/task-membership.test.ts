@@ -1,0 +1,156 @@
+import { describe, it, expect } from 'vitest';
+import {
+  TASK_LIST_TYPE,
+  shouldHaveTaskItem,
+  resolveTaskItemSyncAction,
+  buildTaskItemInsert,
+  selectMissingTaskItemPageIds,
+} from '../task-membership';
+
+describe('shouldHaveTaskItem', () => {
+  it('is true only when a TASK_LIST page sits under a TASK_LIST parent', () => {
+    expect(shouldHaveTaskItem({ pageType: TASK_LIST_TYPE, parentType: TASK_LIST_TYPE })).toBe(true);
+  });
+
+  it('is false when the page itself is not a TASK_LIST', () => {
+    expect(shouldHaveTaskItem({ pageType: 'DOCUMENT', parentType: TASK_LIST_TYPE })).toBe(false);
+  });
+
+  it('is false when the parent is not a TASK_LIST', () => {
+    expect(shouldHaveTaskItem({ pageType: TASK_LIST_TYPE, parentType: 'FOLDER' })).toBe(false);
+  });
+
+  it('is false when the parent type is null or undefined (root / unknown)', () => {
+    expect(shouldHaveTaskItem({ pageType: TASK_LIST_TYPE, parentType: null })).toBe(false);
+    expect(shouldHaveTaskItem({ pageType: TASK_LIST_TYPE, parentType: undefined })).toBe(false);
+  });
+});
+
+describe('resolveTaskItemSyncAction', () => {
+  const base = {
+    movedPageType: TASK_LIST_TYPE,
+    oldParentId: 'old',
+    newParentId: 'new',
+    oldParentType: TASK_LIST_TYPE,
+    newParentType: TASK_LIST_TYPE,
+  };
+
+  it('no-ops for non TASK_LIST pages', () => {
+    expect(resolveTaskItemSyncAction({ ...base, movedPageType: 'DOCUMENT' })).toEqual({
+      shouldRemove: false,
+      shouldAdd: false,
+    });
+  });
+
+  it('no-ops when the parent did not change (pure reorder)', () => {
+    expect(
+      resolveTaskItemSyncAction({ ...base, oldParentId: 'same', newParentId: 'same' }),
+    ).toEqual({ shouldRemove: false, shouldAdd: false });
+  });
+
+  // Previously asserted { shouldRemove: true, shouldAdd: true }. That expectation
+  // encoded silent data loss: the remove cascades task_assignees away and the
+  // re-add inserts bare defaults, so dragging a task between two lists wiped its
+  // status, priority, due date, metadata and assignees. The row is keyed by pageId
+  // and carries no list pointer, so it was valid under the new parent all along.
+  it('preserves the existing row when moving between two TASK_LIST parents', () => {
+    expect(resolveTaskItemSyncAction(base)).toEqual({ shouldRemove: false, shouldAdd: true });
+  });
+
+  // shouldAdd stays true on that path so the destination still gets its task_lists
+  // row and default status configs seeded; addTaskItemUnderParent returns early when
+  // a row already exists, so nothing is overwritten.
+  it('still signals add on a list-to-list move, so the destination list is seeded', () => {
+    expect(resolveTaskItemSyncAction(base).shouldAdd).toBe(true);
+  });
+
+
+  it('only adds when moving from a non-TASK_LIST parent into a TASK_LIST parent', () => {
+    expect(
+      resolveTaskItemSyncAction({ ...base, oldParentType: 'FOLDER' }),
+    ).toEqual({ shouldRemove: false, shouldAdd: true });
+  });
+
+  it('only adds when moving from root (no old parent) into a TASK_LIST parent', () => {
+    expect(
+      resolveTaskItemSyncAction({ ...base, oldParentId: null, oldParentType: null }),
+    ).toEqual({ shouldRemove: false, shouldAdd: true });
+  });
+
+  it('only removes when moving out of a TASK_LIST parent into a non-TASK_LIST parent', () => {
+    expect(
+      resolveTaskItemSyncAction({ ...base, newParentType: 'FOLDER' }),
+    ).toEqual({ shouldRemove: true, shouldAdd: false });
+  });
+
+  it('only removes when moving out of a TASK_LIST parent to root', () => {
+    expect(
+      resolveTaskItemSyncAction({ ...base, newParentId: null, newParentType: null }),
+    ).toEqual({ shouldRemove: true, shouldAdd: false });
+  });
+});
+
+describe('buildTaskItemInsert', () => {
+  it('builds a pending/medium row', () => {
+    expect(
+      buildTaskItemInsert({ pageId: 'p1', userId: 'u1' }),
+    ).toEqual({
+      userId: 'u1',
+      pageId: 'p1',
+      status: 'pending',
+      priority: 'medium',
+      // Explicitly null rather than absent: a seeded done-group status has to
+      // be stampable, and leaving the column off would make every caller that
+      // resolves one silently write an unstamped complete row.
+      completedAt: null,
+    });
+  });
+
+  it('carries the completedAt a caller resolved for a done-group seed', () => {
+    const at = new Date('2026-01-02T03:04:05.000Z');
+    expect(
+      buildTaskItemInsert({ pageId: 'p1', userId: 'u1', status: 'shipped', completedAt: at }),
+    ).toEqual({
+      userId: 'u1', pageId: 'p1', status: 'shipped', priority: 'medium', completedAt: at,
+    });
+  });
+
+  it('carries no position — ordering lives on the linked page (#2143)', () => {
+    expect(buildTaskItemInsert({ pageId: 'p1', userId: 'u1' })).not.toHaveProperty('position');
+  });
+});
+
+describe('selectMissingTaskItemPageIds', () => {
+  it('returns child page ids that have no task item yet, order preserved', () => {
+    expect(
+      selectMissingTaskItemPageIds({
+        childPageIds: ['a', 'b', 'c'],
+        existingTaskItemPageIds: ['b'],
+      }),
+    ).toEqual(['a', 'c']);
+  });
+
+  it('returns an empty array when every child already has a task item', () => {
+    expect(
+      selectMissingTaskItemPageIds({
+        childPageIds: ['a', 'b'],
+        existingTaskItemPageIds: ['a', 'b'],
+      }),
+    ).toEqual([]);
+  });
+
+  it('dedupes repeated child ids', () => {
+    expect(
+      selectMissingTaskItemPageIds({
+        childPageIds: ['a', 'a', 'b'],
+        existingTaskItemPageIds: [],
+      }),
+    ).toEqual(['a', 'b']);
+  });
+
+  it('handles an empty child list', () => {
+    expect(
+      selectMissingTaskItemPageIds({ childPageIds: [], existingTaskItemPageIds: ['x'] }),
+    ).toEqual([]);
+  });
+});

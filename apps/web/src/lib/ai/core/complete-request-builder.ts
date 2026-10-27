@@ -5,14 +5,10 @@
  * Used by the admin global-prompt viewer to show the exact context window.
  */
 
-import { buildSystemPrompt } from './system-prompt';
-import { filterToolsForReadOnly, getToolsSummary } from './tool-filtering';
-import { buildTimestampSystemPrompt } from './timestamp-utils';
-import { buildMentionSystemPrompt } from './mention-processor';
-import {
-  buildInlineInstructions,
-  buildGlobalAssistantInstructions,
-} from './inline-instructions';
+import { buildNonCoreToolNamesPrompt, TOOL_DISCOVERY_PROMPT } from './system-prompt';
+import { filterToolsForReadOnly, isWriteTool } from './tool-filtering';
+import { CORE_TOOL_NAMES } from './stub-tools';
+import { buildBuiltinSkillCatalog } from './skill-catalog';
 import {
   extractToolSchemas,
   type ToolDefinitionForExtraction,
@@ -20,7 +16,13 @@ import {
   type JsonSchema,
 } from './schema-introspection';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import { pageSpaceTools } from './ai-tools';
+import { buildTimestampSystemPrompt } from './timestamp-utils';
+import { buildMentionSystemPrompt } from './mention-processor';
+import { buildAgentSystemPrompt, buildVolatileTurnContext } from './prompt-assembly';
+import { buildLocationTurnPrompt } from './location-prompt';
+import { EXECUTE_TOOL_DESCRIPTION } from '@/lib/ai/tools/execute-tool';
 
 export interface LocationContext {
   currentPage?: {
@@ -54,12 +56,21 @@ export interface CompleteAIRequest {
   }>;
   experimental_context: {
     userId: string;
+    timezone: string | undefined;
+    aiProvider: string;
+    aiModel: string;
+    conversationId: string;
     locationContext?: LocationContext;
     modelCapabilities: {
-      supportsStreaming: boolean;
-      supportsToolCalling: boolean;
       hasVision: boolean;
+      hasTools: boolean;
+      model: string;
+      provider: string;
     };
+    chatSource: {
+      type: 'global';
+    };
+    enabledTools: string[] | null;
   };
 }
 
@@ -70,12 +81,14 @@ export interface CompletePayloadResult {
     systemPrompt: number;
     tools: number;
     experimentalContext: number;
+    volatileTurnContext: number;
     total: number;
   };
   toolsSummary: {
     allowed: string[];
     denied: string[];
   };
+  nonCoreToolNames: string[];
 }
 
 interface BuildCompleteRequestConfig {
@@ -100,72 +113,126 @@ export function buildCompleteRequest(
     includeExampleMessage = true,
   } = config;
 
-  // Build the base system prompt
-  const baseSystemPrompt = buildSystemPrompt(
-    contextType,
-    locationContext?.currentDrive
+  const locationPrompt = buildLocationTurnPrompt(
+    locationContext
       ? {
-          driveName: locationContext.currentDrive.name,
-          driveSlug: locationContext.currentDrive.slug,
-          driveId: locationContext.currentDrive.id,
-          pagePath: locationContext.currentPage?.path,
-          pageType: locationContext.currentPage?.type,
+          currentPage: locationContext.currentPage,
+          currentDrive: locationContext.currentDrive,
           breadcrumbs: locationContext.breadcrumbs?.map((b) => b.title),
         }
-      : undefined,
-    isReadOnly
+      : undefined
   );
 
-  // Build additional prompt sections
-  const timestampSystemPrompt = buildTimestampSystemPrompt();
-  const mentionSystemPrompt = buildMentionSystemPrompt([
-    { id: 'example-page-id', label: 'Example Document', type: 'page' },
-  ]);
+  // Apply read-only filtering (same logic as real Global Assistant)
+  const allFilteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
 
-  // Build inline instructions based on context type
-  let inlineInstructions: string;
-  if (contextType === 'page' && locationContext?.currentPage) {
-    inlineInstructions = buildInlineInstructions({
-      pageTitle: locationContext.currentPage.title,
-      pageType: locationContext.currentPage.type,
-      isTaskLinked: locationContext.currentPage.isTaskLinked,
-      driveName: locationContext.currentDrive?.name,
-      pagePath: locationContext.currentPage.path,
-      driveSlug: locationContext.currentDrive?.slug,
-      driveId: locationContext.currentDrive?.id,
-    });
-  } else {
-    inlineInstructions = buildGlobalAssistantInstructions(
-      locationContext?.currentDrive
-        ? {
-            driveName: locationContext.currentDrive.name,
-            driveSlug: locationContext.currentDrive.slug,
-            driveId: locationContext.currentDrive.id,
-          }
-        : undefined
-    );
-  }
+  // Core tools get full schemas upfront; non-core tools are accessible via execute_tool
+  const coreFilteredTools = Object.fromEntries(
+    Object.entries(allFilteredTools).filter(([name]) => CORE_TOOL_NAMES.has(name))
+  );
+  const nonCoreToolNames = Object.keys(allFilteredTools).filter(n => !CORE_TOOL_NAMES.has(n));
+  const nonCoreNamesSection = buildNonCoreToolNamesPrompt(nonCoreToolNames);
 
-  // Complete system prompt
+  // Captured BEFORE the exposure split, like the production routes: the
+  // capability sections are gated on these names, and the post-split set holds
+  // only core tools plus the scaffolding.
+  const allowedToolNames = Object.keys(allFilteredTools);
+
+  // THE WHOLE POINT OF THIS VIEWER IS THAT IT SHOWS THE REAL THING, so it calls
+  // the same assembly the routes call rather than describing it a second time.
+  // The hand-rolled version this replaces had already drifted: it omitted the
+  // Global Assistant's exploration guidance entirely, applied the capability
+  // sections with no tool gating at all, and put them in an order no route
+  // used — while the page it renders is titled "the exact context window".
+  //
+  // Blocks this viewer genuinely cannot know are empty, and are empty for a
+  // stated reason rather than by omission: it previews a surface with no
+  // conversation (so no plan pointer and no agent memory), no bound agent (so
+  // no custom prompt), and no drive membership loaded.
   const systemPrompt =
-    baseSystemPrompt +
-    mentionSystemPrompt +
-    timestampSystemPrompt +
-    inlineInstructions;
+    contextType === 'page' && locationContext?.currentPage
+      ? buildAgentSystemPrompt({
+          surface: 'page',
+          readOnly: isReadOnly,
+          codeExecutionEnabled: isCodeExecutionEnabled(),
+          allowedToolNames,
+          skillCatalog: buildBuiltinSkillCatalog(allowedToolNames),
+          activePlan: '',
+          pageTree: '',
+          drivePromptPrefix: '',
+          memberDriveContextPrefix: '',
+          agentMemory: '',
+          toolDiscovery:
+            '\n\n' + TOOL_DISCOVERY_PROMPT +
+            (nonCoreNamesSection ? '\n\n' + nonCoreNamesSection : ''),
+        })
+      : buildAgentSystemPrompt({
+          surface: 'global',
+          readOnly: isReadOnly,
+          codeExecutionEnabled: isCodeExecutionEnabled(),
+          allowedToolNames,
+          skillCatalog: buildBuiltinSkillCatalog(allowedToolNames),
+          activePlan: '',
+          pageTree: '',
+          conversationType: 'global',
+          conversationContextId: null,
+          // The viewer has no authenticated principal to ask.
+          includeAskUser: false,
+          drivePromptSection: '',
+          agentAwareness: '',
+          nonCoreToolNames: nonCoreNamesSection,
+        });
 
-  // Get filtered tools based on read-only mode
-  const filteredTools = filterToolsForReadOnly(pageSpaceTools, isReadOnly);
-  const toolsSummary = getToolsSummary(isReadOnly);
-
-  // Convert tools to the format we display
-  const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
-  for (const [name, tool] of Object.entries(filteredTools)) {
-    toolsForExtraction[name] = {
+  // Build core tool schemas
+  const coreToolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
+  for (const [name, tool] of Object.entries(coreFilteredTools)) {
+    coreToolsForExtraction[name] = {
       description: tool.description,
       parameters: tool.inputSchema,
     };
   }
-  const toolSchemas = extractToolSchemas(toolsForExtraction);
+  const coreToolSchemas = extractToolSchemas(coreToolsForExtraction);
+
+  // tool_search and execute_tool are added dynamically at runtime; represent them with static schemas
+  const toolSearchJsonSchema = {
+    type: 'object' as const,
+    properties: {
+      query: {
+        type: 'string' as const,
+        description: 'Either "select:name1,name2" for specific tools or a search keyword',
+      },
+    },
+    required: ['query'],
+  };
+  const executeToolJsonSchema = {
+    type: 'object' as const,
+    properties: {
+      tool_name: { type: 'string' as const },
+      parameters: { type: 'object' as const, properties: {}, required: [] },
+    },
+    required: ['tool_name'],
+  };
+
+  const toolSchemas: ToolSchemaInfo[] = [
+    ...coreToolSchemas,
+    {
+      name: 'tool_search',
+      description:
+        'Get full parameter schemas for any PageSpace tool before calling it. Use "select:name1,name2" for specific tools by name, or a keyword like "calendar", "agent", "task", "channel", "drive" to find all tools in that area.',
+      parameters: toolSearchJsonSchema,
+      tokenEstimate: estimateSystemPromptTokens(
+        JSON.stringify({ name: 'tool_search', parameters: toolSearchJsonSchema })
+      ),
+    },
+    {
+      name: 'execute_tool',
+      description: EXECUTE_TOOL_DESCRIPTION,
+      parameters: executeToolJsonSchema,
+      tokenEstimate: estimateSystemPromptTokens(
+        JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })
+      ),
+    },
+  ];
 
   // Convert to ToolDefinition format
   const tools: ToolDefinition[] = toolSchemas.map(
@@ -176,20 +243,57 @@ export function buildCompleteRequest(
     })
   );
 
-  // Build experimental context
-  const experimental_context = {
-    userId: '[user-id]',
-    locationContext: locationContext || undefined,
-    modelCapabilities: {
-      supportsStreaming: true,
-      supportsToolCalling: true,
-      hasVision: false,
-    },
+  // Tool summary: upfront tools for this mode (core filtered by read-only + tool_search + execute_tool)
+  const coreAllowedNames = Object.keys(coreFilteredTools);
+  const toolsSummary = {
+    allowed: [...coreAllowedNames, 'tool_search', 'execute_tool'],
+    denied: isReadOnly ? Array.from(CORE_TOOL_NAMES).filter(n => isWriteTool(n)) : [],
   };
 
-  // Build example messages
+  // Build experimental context matching the real chat route shape
+  const experimental_context = {
+    userId: '[user-id]',
+    timezone: undefined as string | undefined,
+    aiProvider: '[varies by chat]',
+    aiModel: '[varies by chat]',
+    conversationId: '[generated per conversation]',
+    locationContext: locationContext || undefined,
+    modelCapabilities: {
+      hasVision: false,
+      hasTools: true,
+      model: '[varies by chat]',
+      provider: '[varies by chat]',
+    },
+    chatSource: {
+      type: 'global' as const,
+    },
+    enabledTools: null as string[] | null,
+  };
+
+  // Volatile per-turn context (timestamp + example mention prompt). Production
+  // appends this to the LAST user message via appendTurnContextToLastUserMessage
+  // so the system prefix stays cache-stable; mirror that here to keep the
+  // "exactly as it would be sent" contract of this viewer.
+  const volatileTurnContext = buildVolatileTurnContext({
+    timestampPrompt: buildTimestampSystemPrompt(),
+    locationPrompt,
+    mentionPrompt: buildMentionSystemPrompt([
+      { id: 'example-page-id', label: 'Example Document', type: 'page' },
+    ]),
+    commandPrompt: '',
+  });
+
+  // Build example messages (volatile block appended to the last user message,
+  // exactly like the production routes do)
   const messages: CompleteAIRequest['messages'] = includeExampleMessage
-    ? [{ role: 'user' as const, content: 'What documents are in this drive?' }]
+    ? [
+        {
+          role: 'user' as const,
+          content:
+            'What documents are in this drive?' +
+            (volatileTurnContext ? `\n\n${volatileTurnContext}` : ''),
+        },
+      ]
     : [];
 
   // Build the complete request object
@@ -210,12 +314,14 @@ export function buildCompleteRequest(
   const contextTokens = estimateSystemPromptTokens(
     JSON.stringify(experimental_context)
   );
+  const volatileTokens = estimateSystemPromptTokens(volatileTurnContext);
 
   const tokenEstimates = {
     systemPrompt: systemPromptTokens,
     tools: toolTokens,
     experimentalContext: contextTokens,
-    total: systemPromptTokens + toolTokens + contextTokens,
+    volatileTurnContext: volatileTokens,
+    total: systemPromptTokens + toolTokens + contextTokens + volatileTokens,
   };
 
   // Format as a human-readable string
@@ -230,6 +336,7 @@ export function buildCompleteRequest(
     formattedString,
     tokenEstimates,
     toolsSummary,
+    nonCoreToolNames,
   };
 }
 
@@ -242,6 +349,7 @@ function formatCompletePayload(
     systemPrompt: number;
     tools: number;
     experimentalContext: number;
+    volatileTurnContext: number;
     total: number;
   },
   isReadOnly: boolean
@@ -276,32 +384,11 @@ ${toolsJson}
 
 ${contextJson}
 
-─── MESSAGE FORMAT (Example) ${sectionDivider.slice(30)}
+─── MESSAGE FORMAT (Example, incl. volatile turn context ~${tokenEstimates.volatileTurnContext.toLocaleString()} tokens) ${sectionDivider.slice(30)}
 
 ${messagesJson}
 
 ${divider}
 END OF PAYLOAD
 ${divider}`;
-}
-
-/**
- * Build payload for both modes for comparison.
- */
-export function buildBothModePayloads(
-  contextType: 'dashboard' | 'drive' | 'page',
-  locationContext?: LocationContext
-): { fullAccess: CompletePayloadResult; readOnly: CompletePayloadResult } {
-  return {
-    fullAccess: buildCompleteRequest({
-      isReadOnly: false,
-      contextType,
-      locationContext,
-    }),
-    readOnly: buildCompleteRequest({
-      isReadOnly: true,
-      contextType,
-      locationContext,
-    }),
-  };
 }

@@ -1,14 +1,20 @@
 import { db } from '@pagespace/db/db'
-import { eq, inArray, desc } from '@pagespace/db/operators'
-import { pages } from '@pagespace/db/schema/core'
+import { eq, and, inArray, desc, sql } from '@pagespace/db/operators'
+import { drives, pages } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
 import { files } from '@pagespace/db/schema/storage'
 import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { getAdministeredDriveIds } from '@pagespace/lib/permissions/member-drives';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { computePageStateHash, createPageVersion } from '@pagespace/lib/services/page-version-service'
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { BACKUP_WITHHELD_METADATA_KEY, withheldBackupPages, type BackupWithheld } from './backup-sign-in-gate';
 
 export type DriveBackupSource = 'manual' | 'scheduled' | 'pre_restore' | 'system';
 
@@ -48,14 +54,88 @@ export interface CreateDriveBackupResult {
     roles: number;
     files: number;
   };
+  /** Pages the org sign-in policy withheld from the credential that took the backup (D-OW-62), by code. */
+  withheld?: BackupWithheld[];
+}
+
+export type DriveBackupWithDriveName = DriveBackupSummary & { driveName: string | null; driveSlug: string | null };
+
+export interface DriveBackupPage {
+  pageId: string;
+  title: string | null;
+  type: string | null;
+  parentId: string | null;
+  position: number | null;
+  isTrashed: boolean;
+}
+
+export interface DriveBackupDetail extends DriveBackupSummary {
+  driveName: string | null;
+  driveSlug: string | null;
+  pages: DriveBackupPage[];
+  members: { userId: string; role: string | null }[];
+  roles: { roleId: string; name: string | null }[];
+  files: { fileId: string; mimeType: string | null; sizeBytes: number | null }[];
+}
+
+
+export async function listAllUserBackups(
+  actor: AccessActor,
+  options?: { limit?: number; offset?: number }
+): Promise<{ success: boolean; backups: DriveBackupWithDriveName[]; total: number; error?: string }> {
+  // Drives the user leads or administers (org-aware: an org Owner/Admin administers every drive of
+  // the org, joined or not), not trashed.
+  const driveIds = await getAdministeredDriveIds(actor, { includeTrashed: false });
+
+  if (driveIds.length === 0) {
+    return { success: true, backups: [], total: 0 };
+  }
+
+  const limit = options?.limit ?? 50;
+  const offset = options?.offset ?? 0;
+
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({ backup: driveBackups, driveName: drives.name, driveSlug: drives.slug })
+      .from(driveBackups)
+      .innerJoin(drives, eq(driveBackups.driveId, drives.id))
+      .where(inArray(driveBackups.driveId, driveIds))
+      .orderBy(desc(driveBackups.createdAt))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(driveBackups)
+      .where(inArray(driveBackups.driveId, driveIds)),
+  ]);
+
+  return {
+    success: true,
+    total: countRows[0]?.count ?? 0,
+    backups: rows.map((r) => ({
+      id: r.backup.id,
+      driveId: r.backup.driveId,
+      createdAt: r.backup.createdAt,
+      createdBy: r.backup.createdBy,
+      source: r.backup.source as DriveBackupSource,
+      status: r.backup.status as DriveBackupSummary['status'],
+      label: r.backup.label,
+      reason: r.backup.reason,
+      completedAt: r.backup.completedAt,
+      failedAt: r.backup.failedAt,
+      failureReason: r.backup.failureReason,
+      driveName: r.driveName,
+      driveSlug: r.driveSlug,
+    })),
+  };
 }
 
 export async function listDriveBackups(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   options?: { limit?: number; offset?: number }
 ): Promise<{ success: boolean; backups: DriveBackupSummary[]; error?: string; status?: number }> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
   if (!canManage) {
     return { success: false, backups: [], error: 'Only drive owners and admins can view backups', status: 403 };
   }
@@ -91,10 +171,11 @@ export async function listDriveBackups(
 
 export async function createDriveBackup(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   input: CreateDriveBackupInput = {}
 ): Promise<CreateDriveBackupResult> {
-  const canManage = await isDriveOwnerOrAdmin(userId, driveId);
+  const userId = actor.userId;
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
   if (!canManage) {
     return { success: false, error: 'Only drive owners and admins can create backups' };
   }
@@ -104,11 +185,22 @@ export async function createDriveBackup(
   const changeGroupType = inferChangeGroupType({ isAiGenerated: false });
 
   return db.transaction(async (tx) => {
+    // [Spec X-3] The drive's org context at snapshot time: a backup says where
+    // the drive stood when it was taken. Snapshot values only — the restore
+    // never writes them back (a drive that moved orgs since the backup must
+    // not be pulled back by restoring).
+    const [drive] = await tx
+      .select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+      .from(drives)
+      .where(eq(drives.id, driveId));
+
     // Create backup record first to get the ID
     const [backup] = await tx
       .insert(driveBackups)
       .values({
         driveId,
+        orgId: drive?.orgId ?? null,
+        orgVisibility: drive?.orgVisibility ?? null,
         createdBy: userId,
         source: input.source ?? 'manual',
         status: 'pending',
@@ -126,13 +218,35 @@ export async function createDriveBackup(
       .from(pages)
       .where(eq(pages.driveId, driveId));
 
-    const pagesToBackup = includeTrashed
+    const listedPages = includeTrashed
       ? drivePages
       : drivePages.filter((page) => !page.isTrashed);
 
+    // SEC-2/3 (D-OW-62): a page restating org-derived content (a memory page) that a contributing org's sign-in
+    // policy withholds from this credential is left out of the snapshot, and the backup records which pages and why,
+    // so its export says so and a restore of it leaves those pages alone rather than trashing them.
+    const withheld = await withheldBackupPages(actor, listedPages.map((page) => page.id));
+    const pagesToBackup = listedPages.filter((page) => !withheld.pageIds.has(page.id));
+
+    // A sheet's content is its rows.
+    //
+    // `pages.content` is empty for a materialised sheet, so snapshotting the
+    // column stored a zero-byte version for every spreadsheet — a backup that
+    // silently contained none of them, and a restore that brought them back
+    // empty.
+    const sheetDocuments = new Map<string, string>();
+    for (const page of pagesToBackup) {
+      if (!isSheetType(page.type as PageType)) continue;
+      // Through `tx`: the projection issues its own queries, so running it on
+      // the pool would read outside the backup's snapshot and a concurrent cell
+      // write could tear a sheet across the document it produces.
+      const projected = await readSheetDocument(page.id, tx as never);
+      if (projected !== null) sheetDocuments.set(page.id, projected);
+    }
+
     // Prepare page data for version creation
     const pageVersionData = pagesToBackup.map((page) => {
-      const content = page.content ?? '';
+      const content = sheetDocuments.get(page.id) ?? page.content ?? '';
       const contentFormat = detectPageContentFormat(content);
       const contentRef = hashWithPrefix(contentFormat, content);
       const stateHash = page.stateHash ?? computePageStateHash({
@@ -266,6 +380,7 @@ export async function createDriveBackup(
           color: role.color,
           isDefault: role.isDefault,
           permissions: role.permissions,
+          driveWidePermissions: role.driveWidePermissions,
           position: role.position,
         }))
       );
@@ -299,6 +414,14 @@ export async function createDriveBackup(
       .set({
         status: 'ready',
         completedAt: new Date(),
+        ...(withheld.pageIds.size > 0
+          ? {
+              metadata: {
+                ...(input.metadata ?? {}),
+                [BACKUP_WITHHELD_METADATA_KEY]: { pageIds: [...withheld.pageIds].sort(), entries: withheld.entries },
+              },
+            }
+          : {}),
       })
       .where(eq(driveBackups.id, backup.id));
 
@@ -313,6 +436,7 @@ export async function createDriveBackup(
           roles: roles.length,
           files: driveFiles.length,
         },
+        withheld: withheld.entries,
       };
     } catch (error) {
       // Mark backup as failed and return error result (don't throw - that would rollback the transaction)
@@ -335,3 +459,62 @@ export async function createDriveBackup(
     }
   });
 }
+
+export async function getDriveBackupDetail(
+  backupId: string,
+  driveId: string,
+  actor: AccessActor,
+): Promise<{ success: boolean; detail?: DriveBackupDetail; error?: string; status?: number }> {
+  const canManage = await isDriveOwnerOrAdmin(actor, driveId);
+  if (!canManage) {
+    return { success: false, error: 'Only drive owners and admins can view backups', status: 403 };
+  }
+
+  const [backup] = await db
+    .select({ backup: driveBackups, driveName: drives.name, driveSlug: drives.slug })
+    .from(driveBackups)
+    .innerJoin(drives, eq(driveBackups.driveId, drives.id))
+    .where(and(eq(driveBackups.id, backupId), eq(driveBackups.driveId, driveId)));
+
+  if (!backup) {
+    return { success: false, error: 'Backup not found', status: 404 };
+  }
+
+  const [bPages, bMembers, bRoles, bFiles] = await Promise.all([
+    db.select().from(driveBackupPages).where(eq(driveBackupPages.backupId, backupId)),
+    db.select().from(driveBackupMembers).where(eq(driveBackupMembers.backupId, backupId)),
+    db.select().from(driveBackupRoles).where(eq(driveBackupRoles.backupId, backupId)),
+    db.select().from(driveBackupFiles).where(eq(driveBackupFiles.backupId, backupId)),
+  ]);
+
+  return {
+    success: true,
+    detail: {
+      id: backup.backup.id,
+      driveId: backup.backup.driveId,
+      createdAt: backup.backup.createdAt,
+      createdBy: backup.backup.createdBy,
+      source: backup.backup.source as DriveBackupSource,
+      status: backup.backup.status as DriveBackupSummary['status'],
+      label: backup.backup.label,
+      reason: backup.backup.reason,
+      completedAt: backup.backup.completedAt,
+      failedAt: backup.backup.failedAt,
+      failureReason: backup.backup.failureReason,
+      driveName: backup.driveName,
+      driveSlug: backup.driveSlug,
+      pages: bPages.map((p) => ({
+        pageId: p.pageId,
+        title: p.title,
+        type: p.type,
+        parentId: p.parentId,
+        position: p.position,
+        isTrashed: p.isTrashed,
+      })),
+      members: bMembers.map((m) => ({ userId: m.userId, role: m.role })),
+      roles: bRoles.map((r) => ({ roleId: r.roleId, name: r.name })),
+      files: bFiles.map((f) => ({ fileId: f.fileId, mimeType: f.mimeType, sizeBytes: f.sizeBytes })),
+    },
+  };
+}
+

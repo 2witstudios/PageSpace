@@ -8,12 +8,15 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { PermissionsGrid, PermissionsGridRef } from '@/components/members/PermissionsGrid';
 import { ChevronLeft, Save, X, Shield, RefreshCw } from 'lucide-react';
-import { useToast } from '@/hooks/useToast';
+import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { getRoleColorClasses } from '@/lib/utils';
+import { useDriveStore } from '@/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
+import { memberAccessWidens, pageFlagsWiden, type MemberAccess } from '@pagespace/lib/organizations/loosening-core';
 
 interface MemberDetails {
   id: string;
@@ -47,6 +50,7 @@ interface CustomRole {
   color?: string;
   isDefault: boolean;
   permissions: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>;
+  driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
 }
 
 // Unified role type: Admin or a custom role
@@ -55,7 +59,6 @@ type UnifiedRole = { type: 'admin' } | { type: 'custom'; roleId: string } | null
 export default function MemberSettingsPage() {
   const params = useParams();
   const router = useRouter();
-  const { toast } = useToast();
   const driveId = params.driveId as string;
   const userId = params.userId as string;
 
@@ -69,6 +72,9 @@ export default function MemberSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const permissionsGridRef = useRef<PermissionsGridRef>(null);
+  // [D-OW-33] while the drive's org is lapsed a change may only RESTRICT: the same rule the route applies.
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
 
   useEffect(() => {
     fetchMemberDetails();
@@ -110,10 +116,7 @@ export default function MemberSettingsPage() {
       const role = customRoles.find(r => r.id === selectedUnifiedRole.roleId);
       if (role && permissionsGridRef.current) {
         permissionsGridRef.current.applyRolePermissions(role.permissions);
-        toast({
-          title: 'Permissions synced',
-          description: `Permissions reset to "${role.name}" defaults`,
-        });
+        toast.success(`Permissions reset to "${role.name}" defaults`);
       }
     }
   };
@@ -146,11 +149,7 @@ export default function MemberSettingsPage() {
       const response = await fetchWithAuth(`/api/drives/${driveId}/members/${userId}`);
       if (!response.ok) {
         if (response.status === 403) {
-          toast({
-            title: 'Access Denied',
-            description: 'Only drive owners and admins can manage member settings',
-            variant: 'destructive',
-          });
+          toast.error('Only drive owners and admins can manage member settings');
           router.push(`/dashboard/${driveId}/members`);
           return;
         }
@@ -184,11 +183,7 @@ export default function MemberSettingsPage() {
       }
     } catch (error) {
       console.error('Error fetching member details:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to load member details',
-        variant: 'destructive',
-      });
+      toast.error('Failed to load member details');
     } finally {
       setLoading(false);
     }
@@ -222,21 +217,14 @@ export default function MemberSettingsPage() {
         permissions: permissionsArray
       });
 
-      toast({
-        title: 'Success',
-        description: 'Member settings updated successfully',
-      });
+      toast.success('Member settings updated successfully');
 
       setOriginalPermissions(new Map(permissions));
       setOriginalUnifiedRole(selectedUnifiedRole);
       setHasChanges(false);
     } catch (error) {
       console.error('Error saving changes:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to save changes',
-        variant: 'destructive',
-      });
+      toast.error('Failed to save changes');
     } finally {
       setSaving(false);
     }
@@ -275,6 +263,25 @@ export default function MemberSettingsPage() {
     .join('')
     .toUpperCase()
     .slice(0, 2);
+
+  /** What a unified role gives, for the loosening rule (a custom role resolved to its grants). */
+  const accessOf = (role: UnifiedRole): MemberAccess => {
+    if (role?.type === 'admin') return { role: 'ADMIN', customRole: null };
+    const custom = role?.type === 'custom' ? customRoles.find((r) => r.id === role.roleId) : undefined;
+    return {
+      role: 'MEMBER',
+      customRole: role?.type === 'custom'
+        ? { permissions: custom?.permissions ?? {}, driveWidePermissions: custom?.driveWidePermissions ?? null }
+        : null,
+    };
+  };
+  const changeLoosens =
+    memberAccessWidens(accessOf(originalUnifiedRole), accessOf(selectedUnifiedRole)) ||
+    Array.from(permissions.entries()).some(([pageId, flags]) => {
+      const before = originalPermissions.get(pageId);
+      return pageFlagsWiden(before ? { ...before, canDelete: false } : null, { ...flags, canDelete: false });
+    });
+  const lapsedBlocksSave = lapsed && hasChanges && changeLoosens;
 
   const getRoleBadgeColor = (role: string) => {
     switch (role) {
@@ -437,6 +444,7 @@ export default function MemberSettingsPage() {
                 userId={userId}
                 permissions={permissions}
                 onChange={handlePermissionChange}
+                readOnlyDriveRoot
               />
             </CardContent>
           </Card>
@@ -493,9 +501,14 @@ export default function MemberSettingsPage() {
               <X className="w-4 h-4 mr-2" />
               Cancel
             </Button>
+            {lapsedBlocksSave && (
+              <p className="mr-auto self-center text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+                Giving this member more is paused. {LAPSED_LOOSEN_NOTE}
+              </p>
+            )}
             <Button
               onClick={handleSave}
-              disabled={!hasChanges || saving}
+              disabled={!hasChanges || saving || lapsedBlocksSave}
             >
               <Save className="w-4 h-4 mr-2" />
               {saving ? 'Saving...' : 'Save Changes'}

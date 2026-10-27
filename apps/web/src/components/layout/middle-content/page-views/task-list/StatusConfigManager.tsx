@@ -166,7 +166,7 @@ export function StatusConfigManager({
       <DialogTrigger asChild disabled={disabled}>
         <Button variant="ghost" size="sm" className="h-8 gap-1">
           <Settings2 className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">Statuses</span>
+          <span>Statuses</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md">
@@ -234,7 +234,8 @@ export function StatusConfigManager({
                     ) : (
                       <>
                         <Badge className={cn('text-xs', config.color)}>{config.name}</Badge>
-                        <span className="text-xs text-muted-foreground ml-auto opacity-0 group-hover:opacity-100">
+                        {/* Metadata hint, not a control — keep it hover-only. */}
+                        <span data-hover-only="" className="text-xs text-muted-foreground ml-auto opacity-0 group-hover:opacity-100">
                           {config.slug}
                         </span>
                         <DropdownMenu>

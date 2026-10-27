@@ -20,6 +20,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  ne: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
   isNull: vi.fn(),

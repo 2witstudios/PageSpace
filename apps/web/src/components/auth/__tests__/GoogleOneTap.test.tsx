@@ -26,8 +26,24 @@ vi.mock('@/lib/analytics', () => ({
 }));
 
 import { GoogleOneTap } from '../GoogleOneTap';
+import {
+  CONSENT_COOKIE_NAME,
+  serializeConsentState,
+  acceptAll,
+  defaultConsentState,
+} from '@pagespace/lib/consent';
 
 const GSI_SRC = 'https://accounts.google.com/gsi/client';
+
+/**
+ * One Tap defers the Google Identity Services script behind third-party consent
+ * (ePrivacy Art 5(3)). Grant it so the prompt initializes for these contract tests.
+ */
+const grantThirdPartyConsent = () => {
+  document.cookie = `${CONSENT_COOKIE_NAME}=${encodeURIComponent(
+    serializeConsentState(acceptAll(defaultConsentState(), '2026-06-24T00:00:00.000Z')),
+  )}; path=/`;
+};
 
 interface OneTapMocks {
   fetchSpy: ReturnType<typeof vi.fn>;
@@ -138,10 +154,12 @@ const readOneTapBody = (fetchSpy: OneTapMocks['fetchSpy']): Record<string, unkno
 describe('GoogleOneTap — inviteToken forwarding', () => {
   beforeEach(() => {
     vi.stubEnv('NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID', 'mock-client-id.apps.googleusercontent.com');
+    grantThirdPartyConsent();
   });
 
   afterEach(() => {
     teardownOneTapMocks();
+    document.cookie = `${CONSENT_COOKIE_NAME}=; path=/; max-age=0`;
     vi.clearAllMocks();
   });
 

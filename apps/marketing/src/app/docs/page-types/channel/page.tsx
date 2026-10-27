@@ -19,6 +19,7 @@ A Channel is a page you can chat in. It sits in your drive's page tree alongside
 - Post messages with markdown formatting, emoji, and line breaks.
 - Attach a file to a message from the attach icon in the input. Images preview inline, other files show as a download card.
 - React to any message with an emoji. Click a reaction again to take yours back.
+- Reply in a thread off any message to keep a side conversation tidy, or quote a message to answer with its context inline.
 - Type @ to mention a person or an AI agent in your message — mentioning an agent pulls it into the conversation to reply.
 - See who else is reading the channel right now.
 - Scroll up to load older messages — channels keep full history.
@@ -26,7 +27,7 @@ A Channel is a page you can chat in. It sits in your drive's page tree alongside
 
 ## How it works
 
-A channel is just a page with the type "Channel." That means the people who can see the channel are exactly the people who can see the page — drive owners and admins automatically, plus anyone you grant per-page access to. View access lets someone read messages; edit access lets them post.
+A channel is just a page with the type "Channel." That means the people who can see the channel are exactly the people who can see the page — drive owners, admins, and members automatically, unless the channel is marked private, plus anyone you grant per-page access to. Members can post by default; a view-only collaborator can read messages but not post.
 
 When you send a message, it's saved to the channel and broadcast over a live connection to everyone currently looking at it. The same connection carries new reactions and the list of viewers at the top of the page. If the connection drops, messages still arrive the next time you open the channel — the saved record is the source of truth, the live stream is just the fast path.
 

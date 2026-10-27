@@ -1,0 +1,1 @@
+ALTER TABLE "zoom_connections" ADD COLUMN "scopeVersion" text;

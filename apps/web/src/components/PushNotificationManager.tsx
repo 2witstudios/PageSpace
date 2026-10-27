@@ -18,22 +18,24 @@ export function PushNotificationManager() {
 
   useEffect(() => {
     if (!isNative || !isSupported) return;
-
+    // Wait until native checkPermissions() has resolved — don't burn the guard on 'unknown'.
+    if (permissionStatus === 'unknown') return;
     // Prevent multiple attempts in strict mode dev
     if (attemptRef.current) return;
     attemptRef.current = true;
 
-    const initNotifications = async () => {
-      if (permissionStatus === 'prompt') {
-        await requestPermission();
-      } else if (permissionStatus === 'granted' && !isRegistered) {
-        await registerToken();
-      }
-    };
-
-    // Small delay to ensure Capacitor is fully ready
-    const timer = setTimeout(initNotifications, 1000);
-    return () => clearTimeout(timer);
+    if (permissionStatus === 'prompt') {
+      void requestPermission();
+    } else if (permissionStatus === 'granted' && !isRegistered) {
+      void registerToken();
+    }
+    // Every other state burns the attempt and does nothing:
+    // - 'denied': the OS will not ask again; the user must enable notifications
+    //   in system settings.
+    // - 'prompt-with-rationale' (Android only): the OS would still allow the
+    //   ask, but the user has already refused once. Re-prompting here is exactly
+    //   the every-launch nag the hook's recorded-denial guard exists to stop,
+    //   and requestPermission() would decline it anyway.
   }, [isNative, isSupported, permissionStatus, isRegistered, requestPermission, registerToken]);
 
   return null;

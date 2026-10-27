@@ -21,13 +21,21 @@ vi.mock('../../tools/page-read-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/copy-content-tools-runtime', () => ({
+  copyContentTools: {
+    copy_content: { name: 'copy_content', description: 'Copy content' },
+  },
+}));
+
 vi.mock('../../tools/page-write-tools', () => ({
   pageWriteTools: {
     replace_lines: { name: 'replace_lines', description: 'Replace lines' },
     create_page: { name: 'create_page', description: 'Create page' },
     rename_page: { name: 'rename_page', description: 'Rename page' },
-    trash: { name: 'trash', description: 'Trash page' },
-    restore: { name: 'restore', description: 'Restore page' },
+    trash_page: { name: 'trash_page', description: 'Trash page' },
+    trash_drive: { name: 'trash_drive', description: 'Trash drive' },
+    restore_page: { name: 'restore_page', description: 'Restore page' },
+    restore_drive: { name: 'restore_drive', description: 'Restore drive' },
     move_page: { name: 'move_page', description: 'Move page' },
     edit_sheet_cells: { name: 'edit_sheet_cells', description: 'Edit sheet cells' },
   },
@@ -44,6 +52,9 @@ vi.mock('../../tools/search-tools', () => ({
 vi.mock('../../tools/task-management-tools', () => ({
   taskManagementTools: {
     update_task: { name: 'update_task', description: 'Update task' },
+    create_task: { name: 'create_task', description: 'Create task' },
+    delete_task: { name: 'delete_task', description: 'Delete task' },
+    reorder_task: { name: 'reorder_task', description: 'Reorder task' },
   },
 }));
 
@@ -98,19 +109,105 @@ vi.mock('../../tools/channel-tools', () => ({
   },
 }));
 
-import { pageSpaceTools } from '../ai-tools';
+vi.mock('../../tools/workflow-tools', () => ({
+  workflowTools: {
+    create_workflow: { name: 'create_workflow', description: 'Create workflow' },
+    list_workflows: { name: 'list_workflows', description: 'List workflows' },
+    update_workflow: { name: 'update_workflow', description: 'Update workflow' },
+    delete_workflow: { name: 'delete_workflow', description: 'Delete workflow' },
+  },
+}));
+
+vi.mock('../../tools/member-tools', () => ({
+  memberTools: {
+    list_drive_members: { name: 'list_drive_members', description: 'List drive members' },
+    list_collaborators: { name: 'list_collaborators', description: 'List collaborators' },
+  },
+}));
+
+vi.mock('../../tools/trigger-tools', () => ({
+  triggerTools: {
+    set_calendar_trigger: { name: 'set_calendar_trigger', description: 'Set calendar trigger' },
+    delete_calendar_trigger: { name: 'delete_calendar_trigger', description: 'Delete calendar trigger' },
+    set_task_trigger: { name: 'set_task_trigger', description: 'Set task trigger' },
+    delete_task_trigger: { name: 'delete_task_trigger', description: 'Delete task trigger' },
+  },
+}));
+
+vi.mock('../../tools/role-management-tools', () => ({
+  roleManagementTools: {
+    list_drive_roles: { name: 'list_drive_roles', description: 'List drive roles' },
+    get_drive_role: { name: 'get_drive_role', description: 'Get drive role' },
+    create_drive_role: { name: 'create_drive_role', description: 'Create drive role' },
+    update_drive_role: { name: 'update_drive_role', description: 'Update drive role' },
+    delete_drive_role: { name: 'delete_drive_role', description: 'Delete drive role' },
+    set_role_page_permissions: { name: 'set_role_page_permissions', description: 'Set role page permissions' },
+    set_role_drive_wide_permissions: { name: 'set_role_drive_wide_permissions', description: 'Set role drive-wide permissions' },
+    remove_role_page_permissions: { name: 'remove_role_page_permissions', description: 'Remove role page permissions' },
+  },
+}));
+
+vi.mock('../../tools/command-tools', () => ({
+  commandTools: {
+    create_command: { name: 'create_command', description: 'Create command' },
+    update_command: { name: 'update_command', description: 'Update command' },
+    delete_command: { name: 'delete_command', description: 'Delete command' },
+    list_commands: { name: 'list_commands', description: 'List commands' },
+  },
+}));
+
+vi.mock('../../tools/form-tools', () => ({
+  formTools: {
+    provision_form_target: { name: 'provision_form_target', description: 'Provision form target' },
+    update_form_target_status: { name: 'update_form_target_status', description: 'Update form target status' },
+  },
+}));
+
+vi.mock('../../tools/image-generation-tools', () => ({
+  imageGenerationTools: {
+    generate_image: { name: 'generate_image', description: 'Generate an image' },
+  },
+}));
+
+// Stub the sandbox tools so the builder can be exercised without loading the DB
+// module graph or the real Fly Sprites driver.
+vi.mock('../../tools/sandbox-tools-runtime', () => ({
+  buildSandboxTools: () => ({
+    bash: { name: 'bash', description: 'Run a shell command' },
+    writeFile: { name: 'writeFile', description: 'Write a file' },
+    readFile: { name: 'readFile', description: 'Read a file' },
+  }),
+}));
+
+import { pageSpaceTools, corePageSpaceTools, buildPageSpaceTools, TOOL_REGISTRY } from '../ai-tools';
+import { CORE_TOOL_NAMES } from '../stub-tools';
+import { memberTools } from '../../tools/member-tools';
+import { roleManagementTools } from '../../tools/role-management-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
+import { copyContentTools } from '../../tools/copy-content-tools-runtime';
+import { sheetReadTools } from '../../tools/sheet-read-tools';
+import { sheetFormatTools } from '../../tools/sheet-format-tools';
 import { searchTools } from '../../tools/search-tools';
 import { taskManagementTools } from '../../tools/task-management-tools';
 import { agentTools } from '../../tools/agent-tools';
 import { agentCommunicationTools } from '../../tools/agent-communication-tools';
 import { webSearchTools } from '../../tools/web-search-tools';
+import { httpRequestTools } from '../../tools/http-request-tools';
 import { activityTools } from '../../tools/activity-tools';
 import { calendarReadTools } from '../../tools/calendar-read-tools';
 import { calendarWriteTools } from '../../tools/calendar-write-tools';
 import { channelTools } from '../../tools/channel-tools';
+import { workflowTools } from '../../tools/workflow-tools';
+import { triggerTools } from '../../tools/trigger-tools';
+import { modelTools } from '../../tools/model-tools';
+import { commandTools } from '../../tools/command-tools';
+import { skillTools } from '../../tools/skill-tools';
+import { formTools } from '../../tools/form-tools';
+import { imageGenerationTools } from '../../tools/image-generation-tools';
+import { pagePaneTools } from '../../tools/page-pane-tools-runtime';
+import { planTools } from '../../tools/plan-tools';
 
 describe('ai-tools', () => {
   describe('pageSpaceTools aggregation', () => {
@@ -118,38 +215,70 @@ describe('ai-tools', () => {
       expect(pageSpaceTools).not.toHaveProperty('import_from_github');
     });
 
-    it('equals the merged object of all tool modules', () => {
-      expect(pageSpaceTools).toEqual({
+    it('equals the merged object of all tool modules plus the chat-only session family', () => {
+      // Worker verbs plus the LAYOUT family (issue #2208) — both chat-only,
+      // both outside TOOL_MODULES, so neither counts as a workspace tool.
+      const chatOnlySessionToolNames = [
+        'list_sessions',
+        'spawn_session',
+        'send_session',
+        'read_session',
+        'kill_session',
+        // Relabels the WORKSPACE — chat-only and outside TOOL_MODULES like the
+        // rest of the family, so it is not a workspace tool and does not move
+        // WORKSPACE_TOOL_COUNT.
+        'rename_workspace',
+        'list_panes',
+        'resize_pane',
+        'move_pane',
+        'close_pane',
+        'arrange_panes',
+      ];
+      const workspaceOnly = Object.fromEntries(
+        Object.entries(pageSpaceTools).filter(([name]) => !chatOnlySessionToolNames.includes(name)),
+      );
+      for (const name of chatOnlySessionToolNames) {
+        expect(pageSpaceTools).toHaveProperty(name);
+      }
+      expect(workspaceOnly).toEqual({
+        ...memberTools,
+        ...roleManagementTools,
         ...driveTools,
         ...pageReadTools,
         ...pageWriteTools,
+        ...copyContentTools,
+        ...sheetReadTools,
+        ...sheetFormatTools,
         ...searchTools,
         ...taskManagementTools,
         ...agentTools,
         ...agentCommunicationTools,
         ...webSearchTools,
+        ...httpRequestTools,
         ...activityTools,
         ...calendarReadTools,
         ...calendarWriteTools,
         ...channelTools,
+        ...workflowTools,
+        ...triggerTools,
+        ...modelTools,
+        ...commandTools,
+        ...skillTools,
+        ...formTools,
+        ...imageGenerationTools,
+        ...pagePaneTools,
+        ...planTools,
       });
     });
 
     it('has no key collisions between tool modules', () => {
-      const moduleKeysets = [
-        Object.keys(driveTools),
-        Object.keys(pageReadTools),
-        Object.keys(pageWriteTools),
-        Object.keys(searchTools),
-        Object.keys(taskManagementTools),
-        Object.keys(agentTools),
-        Object.keys(agentCommunicationTools),
-        Object.keys(webSearchTools),
-        Object.keys(activityTools),
-        Object.keys(calendarReadTools),
-        Object.keys(calendarWriteTools),
-        Object.keys(channelTools),
-      ];
+      // Derived from the registry's own per-category projection rather than a
+      // second hand-written module list: the hand list had drifted (it omitted
+      // copyContent, sheetsRead and skills), so a collision involving those
+      // modules was invisible while this case stayed green.
+      const moduleKeysets = Object.values(TOOL_REGISTRY).map((names) => [...names]);
+      expect(moduleKeysets.length).toBe(Object.keys(TOOL_REGISTRY).length);
+      expect(moduleKeysets.flat()).toEqual(expect.arrayContaining(['read_sheet', 'format_sheet', 'copy_content', 'load_skill']));
 
       const allKeys = moduleKeysets.flat();
       const uniqueKeys = new Set(allKeys);
@@ -175,6 +304,153 @@ describe('ai-tools', () => {
         if (tool === undefined || tool === null) {
           throw new Error(`Tool "${name}" is ${tool}`);
         }
+      }
+    });
+
+    it('omits the code-execution tools by default (flag off)', () => {
+      expect(pageSpaceTools).not.toHaveProperty('bash');
+      expect(pageSpaceTools).not.toHaveProperty('writeFile');
+      expect(pageSpaceTools).not.toHaveProperty('readFile');
+    });
+
+    it('keeps the chat-only session family registered by default (flag off) — sessions are free on every deployment', () => {
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session']) {
+        expect(pageSpaceTools).toHaveProperty(name);
+      }
+      // The PTY shell subfamily is compute — the sandbox IS the shell — and
+      // stays behind the kill-switch with bash/git.
+      for (const name of ['spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(pageSpaceTools).not.toHaveProperty(name);
+      }
+    });
+  });
+
+  describe('buildPageSpaceTools code-execution gating', () => {
+    const stubSessionTools = () =>
+      ({
+        list_sessions: {},
+        spawn_session: {},
+        send_session: {},
+        read_session: {},
+        kill_session: {},
+        spawn_shell: {},
+        send_shell: {},
+        read_shell: {},
+        kill_shell: {},
+      }) as never;
+
+    it('given the flag disabled, should not build or register the browser tools (G6a)', () => {
+      let built = false;
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        browserToolsFactory: () => {
+          built = true;
+          return { browser_navigate: {} } as never;
+        },
+      });
+      expect(tools).not.toHaveProperty('browser_navigate');
+      expect(built).toBe(false);
+    });
+
+    it('given the flag enabled, should register whatever the browser factory builds — none when no substrate is configured', () => {
+      const configured = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        browserToolsFactory: () => ({ browser_navigate: { name: 'browser_navigate' }, browser_read: { name: 'browser_read' } }) as never,
+      });
+      const unconfigured = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        browserToolsFactory: () => ({}),
+      });
+      expect(Object.keys(configured).filter((name) => name.startsWith('browser_')).sort()).toEqual(['browser_navigate', 'browser_read']);
+      expect(Object.keys(unconfigured).filter((name) => name.startsWith('browser_'))).toEqual([]);
+    });
+
+    it('given the flag disabled, should not register bash/writeFile/readFile or call the factory', () => {
+      let built = false;
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        sandboxToolsFactory: () => {
+          built = true;
+          return { bash: {}, writeFile: {}, readFile: {} } as never;
+        },
+      });
+      expect(tools).not.toHaveProperty('bash');
+      expect(tools).not.toHaveProperty('writeFile');
+      expect(tools).not.toHaveProperty('readFile');
+      expect(built).toBe(false);
+    });
+
+    it('given the flag disabled, should register the chat-only session family and strip the shell subfamily (review #2326)', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: false,
+        sessionToolsFactory: stubSessionTools,
+      });
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session']) {
+        expect(tools).toHaveProperty(name);
+      }
+      for (const name of ['spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(tools).not.toHaveProperty(name);
+      }
+    });
+
+    it('given the flag enabled, should register the full session family, shells included', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () => ({}),
+        sandboxGitToolsFactory: () => ({}),
+        sessionToolsFactory: stubSessionTools,
+      });
+      for (const name of ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session', 'spawn_shell', 'send_shell', 'read_shell', 'kill_shell']) {
+        expect(tools).toHaveProperty(name);
+      }
+    });
+
+    it('given the flag enabled, should register bash/writeFile/readFile alongside the base tools', () => {
+      const tools = buildPageSpaceTools({
+        codeExecutionEnabled: true,
+        sandboxToolsFactory: () =>
+          ({
+            bash: { name: 'bash' },
+            writeFile: { name: 'writeFile' },
+            readFile: { name: 'readFile' },
+          }) as never,
+        sandboxGitToolsFactory: () => ({}),
+      });
+      expect(tools).toHaveProperty('bash');
+      expect(tools).toHaveProperty('writeFile');
+      expect(tools).toHaveProperty('readFile');
+      // Base tools remain present.
+      expect(tools).toHaveProperty('list_drives');
+    });
+  });
+
+  describe('corePageSpaceTools', () => {
+    it('is exported and defined', () => {
+      expect(corePageSpaceTools).toBeDefined();
+    });
+
+    it('contains only tools in CORE_TOOL_NAMES', () => {
+      const keys = Object.keys(corePageSpaceTools);
+      for (const key of keys) {
+        expect(CORE_TOOL_NAMES.has(key)).toBe(true);
+      }
+    });
+
+    it('contains all CORE_TOOL_NAMES tools that exist in pageSpaceTools', () => {
+      for (const name of CORE_TOOL_NAMES) {
+        if (name in pageSpaceTools) {
+          expect(corePageSpaceTools).toHaveProperty(name);
+        }
+      }
+    });
+
+    it('core tool objects are the same references as in pageSpaceTools', () => {
+      for (const [name, tool] of Object.entries(corePageSpaceTools)) {
+        expect(tool).toBe(pageSpaceTools[name as keyof typeof pageSpaceTools]);
       }
     });
   });

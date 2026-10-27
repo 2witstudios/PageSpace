@@ -1,11 +1,14 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { z } from 'zod';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getPrincipalDriveAccess, canPrincipalViewPage } from '@/lib/auth';
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { addAgentToDrive } from '@pagespace/lib/services/drive-agent-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 interface DriveAgentSummary {
   id: string;
@@ -49,12 +52,12 @@ export async function GET(
     const includeTools = searchParams.get('includeTools') !== 'false'; // Default true
 
     // Verify drive access
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
+    const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'You don\'t have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get drive information
@@ -96,7 +99,7 @@ export async function GET(
     // Filter agents by view permissions
     const accessibleAgents: DriveAgentSummary[] = [];
     for (const agent of allAgents) {
-      const canView = await canUserViewPage(userId, agent.id);
+      const canView = await canPrincipalViewPage(auth, agent.id);
       if (canView) {
         // Build agent info object
         const agentInfo: DriveAgentSummary = {
@@ -157,7 +160,7 @@ export async function GET(
       nextSteps: [
         accessibleAgents.length > 0 ? 'Use read_page to view full agent configurations' : 'No agents found - consider creating one',
         'Use update_agent_config to modify agent settings',
-        'Use ask_agent to consult with specific agents',
+        'Use spawn_session (with the agent id as `agent`) to delegate to specific agents',
         `Drive: ${drive.name} (${drive.id})`
       ]
     });
@@ -168,5 +171,75 @@ export async function GET(
       { error: `Failed to list agents: ${error instanceof Error ? error.message : String(error)}` },
       { status: 500 }
     );
+  }
+}
+
+const postBodySchema = z.object({
+  agentPageId: z.string().min(1),
+  role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
+  customRoleId: z.string().min(1).optional(),
+  includeContext: z.boolean().optional(),
+});
+
+/**
+ * POST /api/drives/{driveId}/agents
+ * Add an AI agent page as a drive member with RBAC role
+ */
+export async function POST(
+  request: Request,
+  context: { params: Promise<{ driveId: string }> },
+) {
+  try {
+    const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
+    if (isAuthError(auth)) return auth.error;
+    const userId = auth.userId;
+
+    const { driveId } = await context.params;
+
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
+    if (!access.drive) {
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
+    }
+    if (!access.isOwner && !access.isAdmin) {
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can add agent members' }, { status: 403 }));
+    }
+
+    const rawBody = await request.json();
+    const parsed = postBodySchema.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.flatten().fieldErrors }, { status: 400 });
+    }
+
+    const { agentPageId, role, customRoleId, includeContext } = parsed.data;
+
+    // The agent's home drive may differ from this drive. The service authorizes
+    // the caller against the agent + drive and caps the granted role at the
+    // caller's own access.
+    const result = await addAgentToDrive({
+      actor: actorFromAuth(auth),
+      agentPageId,
+      driveId,
+      requestedRole: role,
+      requestedCustomRoleId: customRoleId ?? null,
+      includeContext,
+    });
+
+    if (!result.ok) {
+      // `code` carries org_lapsed ([D-OW-33], 402) for the UI.
+      return NextResponse.json({ error: result.error, ...(result.code ? { code: result.code } : {}) }, { status: result.status });
+    }
+
+    auditRequest(request, {
+      eventType: 'authz.permission.granted',
+      userId,
+      resourceType: 'drive',
+      resourceId: driveId,
+      details: { agentPageId, role, customRoleId, includeContext },
+    });
+
+    return NextResponse.json({ success: true, member: result.member }, { status: 201 });
+  } catch (error) {
+    loggers.api.error('Error adding drive agent member:', error as Error);
+    return NextResponse.json({ error: 'Failed to add agent member' }, { status: 500 });
   }
 }

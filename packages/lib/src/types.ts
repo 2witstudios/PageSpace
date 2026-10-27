@@ -73,6 +73,7 @@ export interface Page {
   extractionMethod?: ExtractionMethod;
   extractionMetadata?: ExtractionMetadata;
   contentHash?: string;
+  isPrivate?: boolean;
 }
 
 export interface Drive {
@@ -80,6 +81,9 @@ export interface Drive {
   name: string;
   slug: string;
   ownerId: string;
+  // Optional on purpose: the zustand 'drive-storage' persist key serves stale
+  // cached drives without kind; consumers treat undefined as STANDARD.
+  kind?: 'STANDARD' | 'HOME';
   isTrashed: boolean;
   trashedAt: string | null; // ISO8601 date string from API
   createdAt: string; // ISO8601 date string from API
@@ -87,6 +91,29 @@ export interface Drive {
   isOwned: boolean;
   role?: 'OWNER' | 'ADMIN' | 'MEMBER';
   lastAccessedAt?: string | null; // ISO8601 date string from API
+  // Optional: zustand-persisted Drive objects in localStorage predate this field
+  homePageId?: string | null;
+  // Drive-wide default social share image for published pages lacking their own.
+  // Optional: predates the field on zustand-persisted Drive objects.
+  publishDefaultOgImageUrl?: string | null;
+  // Canvas page rendered as the published site's 404.html. Optional: predates
+  // the field on zustand-persisted Drive objects.
+  notFoundPageId?: string | null;
+  // Drive-wide favicon override for published pages lacking their own <link rel="icon">.
+  // Optional: predates the field on zustand-persisted Drive objects.
+  publishFaviconUrl?: string | null;
+  // The owning org, null for a personal drive (picker grouping, DRV-9). Optional: predates the
+  // field on zustand-persisted Drive objects; consumers treat undefined as personal.
+  orgId?: string | null;
+  orgVisibility?: 'OPEN' | 'RESTRICTED' | 'PRIVATE';
+  // The drive's mark: its PageSpace avatar route and the palette key its initial sits on (MARK_COLORS).
+  // Optional: predates the fields on zustand-persisted Drive objects; consumers treat undefined as none.
+  avatarUrl?: string | null;
+  color?: string | null;
+  // Server-computed effective permission for root-level page create (the
+  // drive-wide canEdit rule, custom-role bounded). Optional: zustand-persisted
+  // Drive objects predate this field; the UI fails closed when absent (#2627).
+  canCreatePages?: boolean;
 }
 
 // Inbox types for unified DM/Channel inbox

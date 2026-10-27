@@ -22,6 +22,7 @@ const defaultPushState = {
   isRegistered: false,
   isLoading: false,
   error: null,
+  hasPreviouslyDenied: false,
   requestPermission: vi.fn().mockResolvedValue(true),
   registerToken: vi.fn().mockResolvedValue(true),
   unregisterToken: vi.fn().mockResolvedValue(undefined),
@@ -29,7 +30,6 @@ const defaultPushState = {
 
 describe('PushNotificationManager', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     vi.clearAllMocks();
 
     mockUseCapacitor.mockReturnValue({ isNative: true });
@@ -37,14 +37,13 @@ describe('PushNotificationManager', () => {
   });
 
   afterEach(() => {
-    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('given non-native environment, should not call requestPermission or registerToken', async () => {
     mockUseCapacitor.mockReturnValue({ isNative: false });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
 
     expect(defaultPushState.requestPermission).not.toHaveBeenCalled();
     expect(defaultPushState.registerToken).not.toHaveBeenCalled();
@@ -57,13 +56,12 @@ describe('PushNotificationManager', () => {
     });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
 
     expect(defaultPushState.requestPermission).not.toHaveBeenCalled();
     expect(defaultPushState.registerToken).not.toHaveBeenCalled();
   });
 
-  it('given native + supported + permission prompt, should call requestPermission after delay', async () => {
+  it('given native + supported + permission prompt, should call requestPermission immediately', async () => {
     const requestPermission = vi.fn().mockResolvedValue(true);
     mockUsePushNotifications.mockReturnValue({
       ...defaultPushState,
@@ -72,12 +70,11 @@ describe('PushNotificationManager', () => {
     });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
 
     expect(requestPermission).toHaveBeenCalledOnce();
   });
 
-  it('given native + supported + permission granted + not registered, should call registerToken after delay', async () => {
+  it('given native + supported + permission granted + not registered, should call registerToken immediately', async () => {
     const registerToken = vi.fn().mockResolvedValue(true);
     mockUsePushNotifications.mockReturnValue({
       ...defaultPushState,
@@ -87,7 +84,6 @@ describe('PushNotificationManager', () => {
     });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
 
     expect(registerToken).toHaveBeenCalledOnce();
   });
@@ -102,7 +98,6 @@ describe('PushNotificationManager', () => {
     });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
 
     expect(registerToken).not.toHaveBeenCalled();
     expect(defaultPushState.requestPermission).not.toHaveBeenCalled();
@@ -119,7 +114,23 @@ describe('PushNotificationManager', () => {
     });
 
     render(<PushNotificationManager />);
-    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(registerToken).not.toHaveBeenCalled();
+  });
+
+  it("regression: Android's 'prompt-with-rationale' does not re-prompt — the OS would still allow the dialog, so only this branch stops the every-launch nag", async () => {
+    const requestPermission = vi.fn().mockResolvedValue(false);
+    const registerToken = vi.fn().mockResolvedValue(false);
+    mockUsePushNotifications.mockReturnValue({
+      ...defaultPushState,
+      permissionStatus: 'prompt-with-rationale',
+      hasPreviouslyDenied: true,
+      requestPermission,
+      registerToken,
+    });
+
+    render(<PushNotificationManager />);
 
     expect(requestPermission).not.toHaveBeenCalled();
     expect(registerToken).not.toHaveBeenCalled();
@@ -131,20 +142,52 @@ describe('PushNotificationManager', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('should clean up timer on unmount before it fires', async () => {
+  it('regression: does not burn the attempt guard while permissionStatus is unknown, then prompts exactly once when it resolves to prompt', () => {
     const requestPermission = vi.fn().mockResolvedValue(true);
+    mockUsePushNotifications.mockReturnValue({
+      ...defaultPushState,
+      permissionStatus: 'unknown',
+      requestPermission,
+    });
+
+    const { rerender } = render(<PushNotificationManager />);
+    expect(requestPermission).not.toHaveBeenCalled();
+
     mockUsePushNotifications.mockReturnValue({
       ...defaultPushState,
       permissionStatus: 'prompt',
       requestPermission,
     });
+    rerender(<PushNotificationManager />);
+    expect(requestPermission).toHaveBeenCalledOnce();
 
-    const { unmount } = render(<PushNotificationManager />);
+    // Further rerenders (e.g. unrelated state changes) must not re-trigger the prompt.
+    rerender(<PushNotificationManager />);
+    expect(requestPermission).toHaveBeenCalledOnce();
+  });
 
-    await vi.advanceTimersByTimeAsync(500);
-    unmount();
-    await vi.advanceTimersByTimeAsync(500);
+  it('regression: denied never calls requestPermission or registerToken, even after transitioning through unknown', () => {
+    const requestPermission = vi.fn().mockResolvedValue(false);
+    const registerToken = vi.fn().mockResolvedValue(false);
+    mockUsePushNotifications.mockReturnValue({
+      ...defaultPushState,
+      permissionStatus: 'unknown',
+      requestPermission,
+      registerToken,
+    });
+
+    const { rerender } = render(<PushNotificationManager />);
+    expect(requestPermission).not.toHaveBeenCalled();
+
+    mockUsePushNotifications.mockReturnValue({
+      ...defaultPushState,
+      permissionStatus: 'denied',
+      requestPermission,
+      registerToken,
+    });
+    rerender(<PushNotificationManager />);
 
     expect(requestPermission).not.toHaveBeenCalled();
+    expect(registerToken).not.toHaveBeenCalled();
   });
 });

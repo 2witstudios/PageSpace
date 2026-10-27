@@ -1,0 +1,586 @@
+/**
+ * Org invitations by email: create, resend, revoke, accept (Spec ORG-3).
+ *
+ * Only the SHA3 hash of the invite token is stored; the raw token travels in the
+ * email link. There is at most one OPEN invite per (org, lower(email)) — the B1
+ * partial unique index — so an expired open invite is ROTATED in place (new
+ * tokenHash, new expiresAt, same row) rather than blocking the address forever.
+ * Revoke deletes the open row. Acceptance works for any signed-in account whose
+ * email is the invited address, which covers a brand-new account (sign up, then
+ * accept) and an existing one alike.
+ */
+import { db } from '@pagespace/db/db';
+import { and, asc, eq, isNull, sql } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { organizations, orgInvitations, orgMembers, type OrgInvitation, type OrgRole } from '@pagespace/db/schema/organizations';
+import { generateToken, hashToken } from '../auth/token-utils';
+import { decryptUserRow } from '../auth/user-repository';
+import { normalizeEmail } from '../encryption/blind-index';
+import { isEmailAMember, isUniqueViolation, retryOnDeadlock } from './repository';
+import { getOrgPolicies } from './policy-reader';
+import { orgActorDecision } from './org-action-decisions';
+import { holdsOrgRole } from './authorize-core';
+import { policyRefusal, type PolicyRefusal } from './sharing-decisions';
+import { checkOrgActive, checkOrgMayLoosen, ORG_LAPSED_CODE, type OrgLapsedRefusal } from './status';
+import { admitSeat, seatAdmissionAuditEvents, type SeatAdmission, type SeatBillingPort } from './seat-service';
+import { discardStagedOrgAuditEvents, publishOrgAuditEvents, stageOrgAuditEvent, stageOrgAuditEvents, transactionWithOrgAudit, type StagedOrgAuditEvent } from '../audit/org-audit';
+import { decideOrgRole, type OrgAuthorization } from './authorize';
+import { isLiveInvite } from './invite-view-core';
+import {
+  publishOrgMembershipSyncEvents,
+  syncOrgMemberAccess,
+  type OrgMembershipSyncResult,
+} from '../services/org-membership-sync';
+
+export const INVITE_EXPIRY_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const ORG_INVITE_TOKEN_PREFIX = 'ps_orginv';
+
+export type InvitableRole = Exclude<OrgRole, 'OWNER'>;
+
+export const inviteExpiryFrom = (now: Date): Date => new Date(now.getTime() + INVITE_EXPIRY_DAYS * DAY_MS);
+
+export { isLiveInvite };
+
+export type InviteCreationDecision =
+  | { action: 'insert' }
+  | { action: 'rotate'; invitationId: string }
+  | { action: 'refuse'; reason: 'already_member' | 'already_invited' };
+
+export const decideInviteCreation = ({
+  isExistingMember,
+  openInvite,
+  now,
+}: {
+  isExistingMember: boolean;
+  openInvite: { id: string; acceptedAt: Date | null; expiresAt: Date } | null;
+  now: Date;
+}): InviteCreationDecision => {
+  if (isExistingMember) return { action: 'refuse', reason: 'already_member' };
+  if (openInvite === null) return { action: 'insert' };
+  if (isLiveInvite(openInvite, now)) return { action: 'refuse', reason: 'already_invited' };
+  return { action: 'rotate', invitationId: openInvite.id };
+};
+
+export type InviteAcceptanceDecision =
+  | { ok: true; action: 'join' | 'consume_only' }
+  | { ok: false; status: 404; reason: 'not_found' }
+  | { ok: false; status: 410; reason: 'expired' | 'already_accepted' }
+  | { ok: false; status: 403; reason: 'email_mismatch' };
+
+export const decideInviteAcceptance = ({
+  invite,
+  userEmail,
+  isExistingMember,
+  now,
+}: {
+  invite: { email: string; acceptedAt: Date | null; expiresAt: Date } | null;
+  userEmail: string;
+  isExistingMember: boolean;
+  now: Date;
+}): InviteAcceptanceDecision => {
+  if (invite === null) return { ok: false, status: 404, reason: 'not_found' };
+  if (invite.acceptedAt !== null) return { ok: false, status: 410, reason: 'already_accepted' };
+  if (!isLiveInvite(invite, now)) return { ok: false, status: 410, reason: 'expired' };
+  if (normalizeEmail(invite.email) !== normalizeEmail(userEmail)) {
+    return { ok: false, status: 403, reason: 'email_mismatch' };
+  }
+  return { ok: true, action: isExistingMember ? 'consume_only' : 'join' };
+};
+
+export type PublicOrgInvitation = Omit<OrgInvitation, 'tokenHash'>;
+
+const toPublic = ({ tokenHash: _tokenHash, ...rest }: OrgInvitation): PublicOrgInvitation => rest;
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Sends the invitation email. Called after the invite commits; a throw is compensated. */
+export type InviteDelivery = (invitation: PublicOrgInvitation, token: string) => Promise<void>;
+
+export type DeliveryFailed = { ok: false; status: 502; reason: 'delivery_failed'; cause: unknown };
+
+/**
+ * Serializes everything that decides whether (org, address) gets an invite or a
+ * membership: creation takes it before its member/open-invite checks, acceptance
+ * takes it before joining. Without it an acceptance can commit between creation's
+ * "is a member?" check and its insert, leaving a member with a fresh invite and a
+ * second seat. Always taken BEFORE any invitation row lock, so the order is fixed.
+ */
+export async function lockOrgInviteAddress(tx: Tx, orgId: string, email: string): Promise<void> {
+  const key = `org_invite:${orgId}:${normalizeEmail(email)}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
+
+/** SEAT-9: a lapsed org cannot invite (or re-send an invite); nothing already issued is touched. */
+export type OrgInviteLapsed = { ok: false; status: 402; reason: typeof ORG_LAPSED_CODE; message: string };
+
+function lapsedRefusal(check: OrgLapsedRefusal): OrgInviteLapsed {
+  return { ok: false, status: 402, reason: check.code, message: check.message };
+}
+
+/** The inviter is no longer a member: the route's gate ran before this transaction. */
+export type InviterNotMember = Extract<OrgAuthorization, { ok: false; status: 404 }>;
+
+/**
+ * The inviter's org role, read again under a share lock inside the invite transaction. The route
+ * authorized the caller before the transaction began, so an Admin demoted (or removed) in between
+ * is judged on what they are NOW, as role changes and removals re-check their actor. The share
+ * lock conflicts with changeMemberRole's row lock, so a concurrent demotion waits for this invite
+ * or this invite waits for it; never both judged on the old role.
+ */
+async function lockInviterRole(
+  tx: Tx,
+  orgId: string,
+  userId: string,
+): Promise<{ ok: true; role: OrgRole } | InviterNotMember> {
+  const [row] = await tx
+    .select({ role: orgMembers.role })
+    .from(orgMembers)
+    .where(and(eq(orgMembers.orgId, orgId), eq(orgMembers.userId, userId)))
+    .for('share');
+  const decision = decideOrgRole({ membershipRole: row?.role ?? null, minRole: 'MEMBER' });
+  if (decision.ok) return decision;
+  // minRole MEMBER refuses only a non-member.
+  return { ok: false, status: 404, reason: 'not_member' };
+}
+
+/**
+ * POL-5: may this person invite, under the org's who-can-invite policy (read now, inside the transaction)? Only an Owner
+ * or Admin may hand out the Admin role, whatever the policy says.
+ */
+async function inviterRefusal(tx: Tx, orgId: string, actorRole: OrgRole, role: OrgRole): Promise<PolicyRefusal | null> {
+  const policies = await getOrgPolicies(orgId, tx);
+  const who = orgActorDecision(policies.whoCanInvite, actorRole, 'invite');
+  if (!who.ok) return who;
+  // Nobody hands out a role above their own (ORG-5's one rank rule): only an Owner or Admin invites an Admin.
+  if (!holdsOrgRole(actorRole, role)) {
+    return policyRefusal('whoCanInvite', 'Only Owners and Admins can invite someone as an Admin.');
+  }
+  return null;
+}
+
+/** SEAT-4: no seat can be granted — auto-add is off and every purchased seat is taken. */
+export type OrgInviteSeatRefusal = Extract<SeatAdmission, { ok: false }>;
+
+export type IssueInvitationResult =
+  | { ok: true; invitation: PublicOrgInvitation; token: string; rotated: boolean }
+  | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | InviterNotMember
+  | OrgInviteLapsed
+  | PolicyRefusal
+  | OrgInviteSeatRefusal
+  | DeliveryFailed;
+
+type Issued =
+  | { ok: true; invitation: OrgInvitation; token: string; previous: OrgInvitation | null }
+  | { ok: false; status: 409; reason: 'already_member' | 'already_invited' }
+  | InviterNotMember
+  | OrgInviteLapsed
+  | PolicyRefusal
+  | OrgInviteSeatRefusal;
+
+/**
+ * Invite an address, rotating an expired open invite in place. If delivery fails the
+ * invite is put back exactly as it was: a new row is deleted (it never reached anyone
+ * and must not hold a seat), a rotated row gets its previous token and expiry back.
+ */
+export async function createOrRotateInvitation(input: {
+  orgId: string;
+  email: string;
+  role: InvitableRole;
+  /** The inviter. Their org role is read inside the transaction (lockInviterRole), never taken from the caller. */
+  invitedBy: string;
+  now: Date;
+  deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise (SEAT-4). Only a raise needs it. */
+  seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
+}): Promise<IssueInvitationResult> {
+  let issued: Issued;
+  // AUD-1: staged with the invite. The seat events are final at commit; the invite's own event only once its email
+  // went out (held back from the drainer until then, and discarded with the invite if the email fails).
+  let seatEvents: StagedOrgAuditEvent[] = [];
+  let inviteEvent = null as StagedOrgAuditEvent | null;
+  try {
+    issued = await db.transaction(async (tx): Promise<Issued> => {
+      seatEvents = [];
+      inviteEvent = null;
+      await lockOrgInviteAddress(tx, input.orgId, input.email);
+      const actor = await lockInviterRole(tx, input.orgId, input.invitedBy);
+      if (!actor.ok) return actor;
+      // SEAT-9: inviting is an org-only capability; a lapsed org is refused before any write.
+      const active = await checkOrgActive(input.orgId, { executor: tx });
+      if (!active.ok) return lapsedRefusal(active);
+      // POL-5: who may invite, read here in the same transaction and before anything is written.
+      const refusal = await inviterRefusal(tx, input.orgId, actor.role, input.role);
+      if (refusal) return refusal;
+      const isExistingMember = await isEmailAMember(input.orgId, input.email, tx);
+      const [openInvite] = await tx
+        .select()
+        .from(orgInvitations)
+        .where(
+          and(
+            eq(orgInvitations.orgId, input.orgId),
+            isNull(orgInvitations.acceptedAt),
+            // Case-insensitive, matching the lower(email) open-invite unique index.
+            sql`lower(${orgInvitations.email}) = lower(${input.email})`,
+          ),
+        )
+        .limit(1)
+        .for('update');
+      const decision = decideInviteCreation({ isExistingMember, openInvite: openInvite ?? null, now: input.now });
+      if (decision.action === 'refuse') return { ok: false, status: 409, reason: decision.reason };
+
+      // SEAT-3/4/5: a new or rotated invite holds a seat. Decided under the org's billing lock,
+      // after the address is known to need one and before anything is written; an auto-add
+      // raise and this invite commit or roll back together.
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role, credential: input.credential }, input.seatBilling);
+      seatEvents = await stageOrgAuditEvents(tx, seatAdmissionAuditEvents({ orgId: input.orgId, actorId: input.invitedBy, admission: seat, operation: 'invite' }));
+      if (!seat.ok) return seat;
+
+      const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
+      const expiresAt = inviteExpiryFrom(input.now);
+      const previous = decision.action === 'rotate' && openInvite ? openInvite : null;
+      const [invitation] = previous
+        ? await tx
+          .update(orgInvitations)
+          .set({ tokenHash: hash, expiresAt, role: input.role, invitedBy: input.invitedBy })
+          .where(eq(orgInvitations.id, previous.id))
+          .returning()
+        : await tx
+          .insert(orgInvitations)
+          .values({ orgId: input.orgId, email: input.email, role: input.role, tokenHash: hash, invitedBy: input.invitedBy, expiresAt })
+          .returning();
+      inviteEvent = await stageOrgAuditEvent(tx, {
+        orgId: input.orgId,
+        eventType: 'org.invite.created',
+        actorId: input.invitedBy,
+        resourceType: 'organization_invitation',
+        resourceId: invitation.id,
+        details: { role: invitation.role, rotated: previous !== null },
+      }, { held: true });
+      return { ok: true, invitation, token, previous };
+    });
+  } catch (error) {
+    // Defence in depth: the open-invite unique index still refuses a duplicate.
+    if (isUniqueViolation(error)) return { ok: false, status: 409, reason: 'already_invited' };
+    throw error;
+  }
+  // A raise is bought (and a refusal decided) whatever happens to the email below.
+  await publishOrgAuditEvents(seatEvents);
+  if (!issued.ok) return issued;
+
+  const { invitation, token, previous } = issued;
+  try {
+    await input.deliver(toPublic(invitation), token);
+  } catch (cause) {
+    // Only undo our own write: skip if it was accepted or rotated again meanwhile.
+    const stillOurs = and(
+      eq(orgInvitations.id, invitation.id),
+      eq(orgInvitations.tokenHash, invitation.tokenHash),
+      isNull(orgInvitations.acceptedAt),
+    );
+    const staged = inviteEvent;
+    await db.transaction(async (tx) => {
+      if (previous) {
+        await tx
+          .update(orgInvitations)
+          .set({ tokenHash: previous.tokenHash, expiresAt: previous.expiresAt, role: previous.role, invitedBy: previous.invitedBy })
+          .where(stillOurs);
+      } else {
+        await tx.delete(orgInvitations).where(stillOurs);
+      }
+      await discardStagedOrgAuditEvents(tx, staged ? [staged] : []);
+    });
+    return { ok: false, status: 502, reason: 'delivery_failed', cause };
+  }
+  await publishOrgAuditEvents(inviteEvent);
+  return { ok: true, invitation: toPublic(invitation), token, rotated: previous !== null };
+}
+
+/** An invitation found by its raw link token, with the org's name: what the accept page shows. */
+export type OrgInvitationByToken = PublicOrgInvitation & { orgName: string };
+
+/** Looks an invitation up by the raw token in its link (only the hash is stored). Null when no row holds it. */
+export async function findInvitationByToken(token: string): Promise<OrgInvitationByToken | null> {
+  const [row] = await db
+    .select({ invitation: orgInvitations, orgName: organizations.name })
+    .from(orgInvitations)
+    .innerJoin(organizations, eq(organizations.id, orgInvitations.orgId))
+    .where(eq(orgInvitations.tokenHash, hashToken(token)))
+    .limit(1);
+  return row ? { ...toPublic(row.invitation), orgName: row.orgName } : null;
+}
+
+export async function listOpenInvitations(orgId: string): Promise<PublicOrgInvitation[]> {
+  const rows = await db
+    .select()
+    .from(orgInvitations)
+    .where(and(eq(orgInvitations.orgId, orgId), isNull(orgInvitations.acceptedAt)))
+    .orderBy(asc(orgInvitations.createdAt))
+    .limit(5000);
+  return rows.map(toPublic);
+}
+
+export type ResendInvitationResult =
+  | { ok: true; invitation: PublicOrgInvitation; token: string }
+  | { ok: false; status: 404; reason: 'not_found' }
+  | InviterNotMember
+  | OrgInviteLapsed
+  | PolicyRefusal
+  | OrgInviteSeatRefusal
+  | DeliveryFailed;
+
+/**
+ * A resend of an EXPIRED invite gives it a fresh expiry, so it holds a seat again (an expired
+ * invite is not counted): it is admitted like a new invite, under the same locks in the same
+ * order (address, invite row, billing), and refused with `seats_full` when no seat can be
+ * granted. Resending a LIVE invite changes nothing about seats: it already holds one.
+ *
+ * Resend issues a new link with a fresh expiry, and the old link stops working, but
+ * only once the new one has been delivered: if delivery fails the previous token and
+ * expiry are restored, so the link the person already has keeps working.
+ */
+export async function resendInvitation(input: {
+  orgId: string;
+  invitationId: string;
+  /** Who resent it: the audit actor (AUD-1). Their org role is read inside the transaction, never taken from the caller. */
+  actorId: string;
+  now: Date;
+  deliver: InviteDelivery;
+  /** Stripe's seat item, for an auto-add raise when the resent invite was expired (SEAT-4). */
+  seatBilling?: SeatBillingPort;
+  /** How the inviter authenticated: a delegated key ('mcp') never buys a seat ([D-OW-26]). */
+  credential: 'session' | 'mcp';
+}): Promise<ResendInvitationResult> {
+  const { token, hash } = generateToken(ORG_INVITE_TOKEN_PREFIX);
+  // AUD-1: as for a new invite, the seat events are final at commit and the resend's own once its email went out.
+  let seatEvents: StagedOrgAuditEvent[] = [];
+  let resendEvent = null as StagedOrgAuditEvent | null;
+  const rotated = await db.transaction(async (tx) => {
+    seatEvents = [];
+    resendEvent = null;
+    // The address lock first, as creation and acceptance take it, so a resend and a fresh invite
+    // for the same address serialize (the billing lock below is always taken after it).
+    const [peek] = await tx
+      .select({ email: orgInvitations.email })
+      .from(orgInvitations)
+      .where(and(eq(orgInvitations.id, input.invitationId), eq(orgInvitations.orgId, input.orgId), isNull(orgInvitations.acceptedAt)))
+      .limit(1);
+    if (peek) await lockOrgInviteAddress(tx, input.orgId, peek.email);
+    const actor = await lockInviterRole(tx, input.orgId, input.actorId);
+    if (!actor.ok) return actor;
+    // SEAT-9: a re-sent invite is an invite; the pending one keeps its link and its seat.
+    const active = await checkOrgActive(input.orgId, { executor: tx });
+    if (!active.ok) return lapsedRefusal(active);
+    const [previous] = await tx
+      .select()
+      .from(orgInvitations)
+      .where(
+        and(
+          eq(orgInvitations.id, input.invitationId),
+          eq(orgInvitations.orgId, input.orgId),
+          isNull(orgInvitations.acceptedAt),
+        ),
+      )
+      .for('update');
+    if (!previous) return null;
+    // POL-5: a re-sent invite is an invite. Judged on the role the invitation carries.
+    const refusal = await inviterRefusal(tx, input.orgId, actor.role, previous.role);
+    if (refusal) return refusal;
+    if (!isLiveInvite(previous, input.now)) {
+      const seat = await admitSeat(tx, { orgId: input.orgId, actorRole: actor.role, credential: input.credential }, input.seatBilling);
+      seatEvents = await stageOrgAuditEvents(tx, seatAdmissionAuditEvents({ orgId: input.orgId, actorId: input.actorId, admission: seat, operation: 'resend' }));
+      if (!seat.ok) return seat;
+    }
+    const [invitation] = await tx
+      .update(orgInvitations)
+      .set({ tokenHash: hash, expiresAt: inviteExpiryFrom(input.now) })
+      .where(eq(orgInvitations.id, previous.id))
+      .returning();
+    resendEvent = await stageOrgAuditEvent(tx, {
+      orgId: input.orgId,
+      eventType: 'org.invite.resent',
+      actorId: input.actorId,
+      resourceType: 'organization_invitation',
+      resourceId: invitation.id,
+      details: { wasExpired: !isLiveInvite(previous, input.now) },
+    }, { held: true });
+    return { previous, invitation };
+  });
+  await publishOrgAuditEvents(seatEvents);
+  if (!rotated) return { ok: false, status: 404, reason: 'not_found' };
+  if ('ok' in rotated) return rotated;
+
+  try {
+    await input.deliver(toPublic(rotated.invitation), token);
+  } catch (cause) {
+    const staged = resendEvent;
+    await db.transaction(async (tx) => {
+      await tx
+        .update(orgInvitations)
+        .set({ tokenHash: rotated.previous.tokenHash, expiresAt: rotated.previous.expiresAt })
+        .where(
+          and(
+            eq(orgInvitations.id, rotated.previous.id),
+            eq(orgInvitations.tokenHash, hash),
+            isNull(orgInvitations.acceptedAt),
+          ),
+        );
+      await discardStagedOrgAuditEvents(tx, staged ? [staged] : []);
+    });
+    return { ok: false, status: 502, reason: 'delivery_failed', cause };
+  }
+  await publishOrgAuditEvents(resendEvent);
+  return { ok: true, invitation: toPublic(rotated.invitation), token };
+}
+
+export async function revokeInvitation(input: { orgId: string; invitationId: string; actorId?: string }): Promise<boolean> {
+  return transactionWithOrgAudit(async (tx, audit) => {
+    const deleted = await tx
+      .delete(orgInvitations)
+      .where(
+        and(
+          eq(orgInvitations.id, input.invitationId),
+          eq(orgInvitations.orgId, input.orgId),
+          isNull(orgInvitations.acceptedAt),
+        ),
+      )
+      .returning({ id: orgInvitations.id });
+    if (deleted.length === 0) return false;
+    await audit({
+      orgId: input.orgId,
+      eventType: 'org.invite.revoked',
+      actorId: input.actorId,
+      resourceType: 'organization_invitation',
+      resourceId: input.invitationId,
+    });
+    return true;
+  });
+}
+
+export type AcceptInvitationResult =
+  | { ok: true; orgId: string; role: OrgRole; joined: boolean }
+  | Extract<InviteAcceptanceDecision, { ok: false }>
+  // [D-OW-33] the org is lapsed: joining would add a member (and sync them into Open drives). The invite stays open.
+  | { ok: false; status: 402; reason: typeof ORG_LAPSED_CODE };
+
+export interface AcceptInvitationDeps {
+  /** Materializes the joiner on the org's Open drives inside the acceptance transaction (D-OW-6). */
+  syncMemberAccess: typeof syncOrgMemberAccess;
+  /** Runs only after the acceptance has committed. */
+  publishSyncEvents: (result: OrgMembershipSyncResult) => Promise<void>;
+}
+
+const acceptInvitationDeps: AcceptInvitationDeps = {
+  syncMemberAccess: syncOrgMemberAccess,
+  publishSyncEvents: (result) => publishOrgMembershipSyncEvents(result),
+};
+
+/**
+ * Accept by raw token. The invite row is locked so two tabs accepting the same
+ * link serialize; the membership insert and acceptedAt are one transaction, so a
+ * consumed invite always has its member row and a member never keeps a live
+ * invite (and a second seat).
+ *
+ * A join also materializes the new member on every Open drive of the org in the
+ * same transaction (DRV-5, D-OW-6), so row enumerators (drive recipients,
+ * notifications) see them; the realtime events go out only after commit.
+ */
+export async function acceptInvitation(
+  input: {
+    token: string;
+    userId: string;
+    now: Date;
+  },
+  deps: AcceptInvitationDeps = acceptInvitationDeps,
+): Promise<AcceptInvitationResult> {
+  const tokenHash = hashToken(input.token);
+  // A join locks the org row then its drives; a leave that reassigns a led drive locks drive and
+  // org rows in one statement, so the two can still deadlock. The acceptance rolls back whole.
+  const outcome = await retryOnDeadlock(() => transactionWithOrgAudit(async (tx, audit): Promise<{ result: AcceptInvitationResult; sync: OrgMembershipSyncResult | null }> => {
+    // Take the address lock (shared with invite creation) before the row lock.
+    const [peek] = await tx
+      .select({ orgId: orgInvitations.orgId, email: orgInvitations.email })
+      .from(orgInvitations)
+      .where(eq(orgInvitations.tokenHash, tokenHash))
+      .limit(1);
+    if (peek) {
+      await lockOrgInviteAddress(tx, peek.orgId, peek.email);
+      // The org row, before the invite row: org drive creation and moves share-lock it, so a join
+      // and a new drive serialize and the later one materializes the joiner there (D-OW-6); and
+      // deleting the org, which locks it first too, can no longer deadlock on the invite row.
+      await tx.select({ id: organizations.id }).from(organizations).where(eq(organizations.id, peek.orgId)).for('update');
+    }
+    const [invite] = await tx
+      .select()
+      .from(orgInvitations)
+      .where(eq(orgInvitations.tokenHash, tokenHash))
+      .for('update');
+    const [userRow] = await tx
+      .select({ email: users.email, name: users.name })
+      .from(users)
+      .where(eq(users.id, input.userId))
+      .limit(1);
+    if (!userRow) return { result: { ok: false, status: 404, reason: 'not_found' }, sync: null };
+    const { email: userEmail } = await decryptUserRow(userRow);
+
+    const [membership] = invite
+      ? await tx
+          .select({ role: orgMembers.role })
+          .from(orgMembers)
+          .where(and(eq(orgMembers.orgId, invite.orgId), eq(orgMembers.userId, input.userId)))
+          .limit(1)
+      : [];
+
+    const decision = decideInviteAcceptance({
+      invite: invite ?? null,
+      userEmail,
+      isExistingMember: membership !== undefined,
+      now: input.now,
+    });
+    if (!decision.ok) return { result: decision, sync: null };
+    // decideInviteAcceptance refuses a null invite, so it is present from here on.
+    if (!invite) return { result: { ok: false, status: 404, reason: 'not_found' }, sync: null };
+
+    let sync: OrgMembershipSyncResult | null = null;
+    if (decision.action === 'join') {
+      // [D-OW-33] a join adds access: refused while the org is lapsed, under the org row lock taken above. Nothing is
+      // written, so the invitation stays open and works once the org pays. (consume_only for an existing member
+      // grants nothing and still goes through.)
+      if (await checkOrgMayLoosen(tx, invite.orgId, true)) {
+        return { result: { ok: false, status: 402, reason: ORG_LAPSED_CODE }, sync: null };
+      }
+      await tx.insert(orgMembers).values({
+        orgId: invite.orgId,
+        userId: input.userId,
+        role: invite.role,
+        invitedBy: invite.invitedBy,
+      });
+      sync = await deps.syncMemberAccess(invite.orgId, input.userId, { tx });
+    }
+    await tx.update(orgInvitations).set({ acceptedAt: input.now }).where(eq(orgInvitations.id, invite.id));
+    if (decision.action === 'join') {
+      await audit({
+        orgId: invite.orgId,
+        eventType: 'org.member.joined',
+        actorId: input.userId,
+        resourceType: 'user',
+        resourceId: input.userId,
+        details: { role: invite.role, via: 'invitation' },
+      });
+    }
+    return {
+      result: {
+        ok: true,
+        orgId: invite.orgId,
+        role: membership?.role ?? invite.role,
+        joined: decision.action === 'join',
+      },
+      sync,
+    };
+  }));
+  if (outcome.sync) await deps.publishSyncEvents(outcome.sync);
+  return outcome.result;
+}

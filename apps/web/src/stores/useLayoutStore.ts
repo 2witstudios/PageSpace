@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { SidebarTab } from '@/stores/page-agents';
 
-type TaskListViewMode = 'table' | 'kanban';
+type TaskListViewMode = 'table' | 'kanban' | 'editor';
 export type TaskListPageFilter = 'all' | 'active' | 'completed';
 
 export interface StoredDashboardFilters {
@@ -24,13 +25,29 @@ interface LayoutState {
   tasksDashboardFilters: Record<string, StoredDashboardFilters>;
   driveFooterCollapsed: boolean;
   dashboardFooterCollapsed: boolean;
-  pulseCollapsed: boolean;
   favoritesCollapsed: boolean;
   recentsCollapsed: boolean;
+
+  /**
+   * Which tab the right sidebar shows on a PAGE route (the dashboard has its
+   * own, in `usePageAgentDashboardStore`, because it is synced with the centre
+   * panel there).
+   *
+   * Lifted out of `RightPanel`'s local state so it can be driven from outside
+   * the panel: the nav-bar voice trigger has to bring the chat tab to the front
+   * when it reveals a call, and a panel-local `useState` is unreachable from a
+   * button in the header. NOT persisted — it starts on 'chat' every load,
+   * exactly as the local state it replaced did, so nothing about the first
+   * render changed.
+   */
+  rightSidebarPageTab: SidebarTab;
 
   // Mobile sheet state (NOT persisted - sheets start closed on page load)
   leftSheetOpen: boolean;
   rightSheetOpen: boolean;
+
+  // Desktop overlay state (1024-1279px, NOT persisted - starts closed on page load)
+  leftOverlayOpen: boolean;
 
   // Hydration state
   rehydrated: boolean;
@@ -45,12 +62,13 @@ interface LayoutState {
   setRightSidebarOpen: (open: boolean) => void;
   setLeftSheetOpen: (open: boolean) => void;
   setRightSheetOpen: (open: boolean) => void;
+  setLeftOverlayOpen: (open: boolean) => void;
+  setRightSidebarPageTab: (tab: SidebarTab) => void;
   setTaskListViewMode: (mode: TaskListViewMode) => void;
   setTaskListPageFilter: (pageId: string, filter: TaskListPageFilter) => void;
   setTasksDashboardFilter: (scopeKey: string, filters: StoredDashboardFilters) => void;
   setDriveFooterCollapsed: (collapsed: boolean) => void;
   setDashboardFooterCollapsed: (collapsed: boolean) => void;
-  setPulseCollapsed: (collapsed: boolean) => void;
   setFavoritesCollapsed: (collapsed: boolean) => void;
   setRecentsCollapsed: (collapsed: boolean) => void;
 }
@@ -68,14 +86,18 @@ export const useLayoutStore = create<LayoutState>()(
       tasksDashboardFilters: {},
       driveFooterCollapsed: true,
       dashboardFooterCollapsed: true,
-      pulseCollapsed: false,
       favoritesCollapsed: false,
       recentsCollapsed: false,
       rehydrated: false,
 
+      rightSidebarPageTab: 'chat',
+
       // Mobile sheet state (NOT persisted)
       leftSheetOpen: false,
       rightSheetOpen: false,
+
+      // Desktop overlay state (NOT persisted - starts closed on page load)
+      leftOverlayOpen: false,
 
       setRehydrated: () => {
         set({ rehydrated: true });
@@ -124,16 +146,20 @@ export const useLayoutStore = create<LayoutState>()(
         set({ rightSheetOpen: open });
       },
 
+      setLeftOverlayOpen: (open: boolean) => {
+        set({ leftOverlayOpen: open });
+      },
+
+      setRightSidebarPageTab: (tab: SidebarTab) => {
+        set({ rightSidebarPageTab: tab });
+      },
+
       setDriveFooterCollapsed: (collapsed: boolean) => {
         set({ driveFooterCollapsed: collapsed });
       },
 
       setDashboardFooterCollapsed: (collapsed: boolean) => {
         set({ dashboardFooterCollapsed: collapsed });
-      },
-
-      setPulseCollapsed: (collapsed: boolean) => {
-        set({ pulseCollapsed: collapsed });
       },
 
       setFavoritesCollapsed: (collapsed: boolean) => {
@@ -156,7 +182,6 @@ export const useLayoutStore = create<LayoutState>()(
         tasksDashboardFilters: state.tasksDashboardFilters,
         driveFooterCollapsed: state.driveFooterCollapsed,
         dashboardFooterCollapsed: state.dashboardFooterCollapsed,
-        pulseCollapsed: state.pulseCollapsed,
         favoritesCollapsed: state.favoritesCollapsed,
         recentsCollapsed: state.recentsCollapsed,
       }),

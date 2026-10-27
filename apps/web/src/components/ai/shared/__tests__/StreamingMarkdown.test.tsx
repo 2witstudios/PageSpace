@@ -28,7 +28,7 @@ vi.mock('streamdown', () => ({
 }));
 
 // Import after mocking
-import { StreamingMarkdown } from '../chat/StreamingMarkdown';
+import { StreamingMarkdown, addHardLineBreaks } from '../chat/StreamingMarkdown';
 
 interface MarkdownNode {
   type: string;
@@ -106,7 +106,7 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="Hello @[User](user123:user) world" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('Hello [mention:User](mention://user123/user) world');
+    expect(streamdown.textContent).toBe('Hello [mention:User](/mention/user123/user) world');
   });
 
   it('should convert multiple mentions', () => {
@@ -116,7 +116,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      '[mention:Alice](mention://alice/user) and [mention:Bob](mention://bob/user) are here'
+      '[mention:Alice](/mention/alice/user) and [mention:Bob](/mention/bob/user) are here'
     );
   });
 
@@ -127,7 +127,7 @@ describe('preprocessMentions', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      'See [mention:Project](mention://proj123/page) and [mention:Team](mention://team456/agent)'
+      'See [mention:Project](/mention/proj123/page) and [mention:Team](/mention/team456/agent)'
     );
   });
 
@@ -149,24 +149,86 @@ describe('preprocessMentions', () => {
     render(<StreamingMarkdown content="@[SingleMention](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:SingleMention](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:SingleMention](/mention/id/type)');
   });
 
   it('should handle mentions with special characters in label', () => {
     render(<StreamingMarkdown content="@[User Name](id:type)" />);
 
     const streamdown = screen.getByTestId('streamdown');
-    expect(streamdown.textContent).toBe('[mention:User Name](mention://id/type)');
+    expect(streamdown.textContent).toBe('[mention:User Name](/mention/id/type)');
   });
 
   it('should handle consecutive calls correctly (regex state)', () => {
     // First render
     const { rerender } = render(<StreamingMarkdown content="@[First](id1:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](mention://id1/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:First](/mention/id1/type)');
 
     // Second render - regex lastIndex should be reset
     rerender(<StreamingMarkdown content="@[Second](id2:type)" />);
-    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](mention://id2/type)');
+    expect(screen.getByTestId('streamdown').textContent).toBe('[mention:Second](/mention/id2/type)');
+  });
+});
+
+describe('autoLinkUrls', () => {
+  it('should convert bare URL to markdown link', () => {
+    render(<StreamingMarkdown content="check out https://example.com today" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'check out [https://example.com](https://example.com) today'
+    );
+  });
+
+  it('should strip trailing punctuation from URL', () => {
+    render(<StreamingMarkdown content="see https://example.com." />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://example.com](https://example.com).'
+    );
+  });
+
+  it('should not double-wrap URLs already inside markdown links', () => {
+    render(<StreamingMarkdown content="[click here](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[click here](https://example.com)'
+    );
+  });
+
+  it('should not double-wrap URLs used as markdown link labels', () => {
+    render(<StreamingMarkdown content="[https://example.com](https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[https://example.com](https://example.com)'
+    );
+  });
+
+  it('should auto-link alongside mentions', () => {
+    render(
+      <StreamingMarkdown content="@[User](id:user) see https://example.com" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '[mention:User](/mention/id/user) see [https://example.com](https://example.com)'
+    );
+  });
+
+  it('should handle http:// URLs', () => {
+    render(<StreamingMarkdown content="visit http://example.com" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'visit [http://example.com](http://example.com)'
+    );
+  });
+
+  it('should preserve balanced parens in URL paths (Wikipedia-style)', () => {
+    render(
+      <StreamingMarkdown content="see https://en.wikipedia.org/wiki/Foo_(bar) for details" />
+    );
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      'see [https://en.wikipedia.org/wiki/Foo_(bar)](https://en.wikipedia.org/wiki/Foo_(bar)) for details'
+    );
+  });
+
+  it('should strip unbalanced trailing ) from URL', () => {
+    render(<StreamingMarkdown content="(see https://example.com)" />);
+    expect(screen.getByTestId('streamdown').textContent).toBe(
+      '(see [https://example.com](https://example.com))'
+    );
   });
 });
 
@@ -218,7 +280,7 @@ describe('raw HTML rendering', () => {
 
     const streamdown = screen.getByTestId('streamdown');
     expect(streamdown.textContent).toBe(
-      'See <style> and [mention:Project](mention://proj123/page)'
+      'See <style> and [mention:Project](/mention/proj123/page)'
     );
   });
 
@@ -261,6 +323,40 @@ describe('raw HTML rendering', () => {
       { type: 'text', value: ' ' },
       { type: 'text', value: '<style>' },
     ]);
+  });
+});
+
+describe('addHardLineBreaks', () => {
+  it('converts a single newline to a CommonMark hard line break', () => {
+    expect(addHardLineBreaks('line1\nline2')).toBe('line1  \nline2');
+  });
+
+  it('leaves paragraph breaks (double newline) untouched', () => {
+    expect(addHardLineBreaks('para1\n\npara2')).toBe('para1\n\npara2');
+  });
+
+  it('converts multiple single newlines independently', () => {
+    expect(addHardLineBreaks('a\nb\nc')).toBe('a  \nb  \nc');
+  });
+
+  it('handles mixed single and double newlines', () => {
+    expect(addHardLineBreaks('a\nb\n\nc')).toBe('a  \nb\n\nc');
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(addHardLineBreaks('')).toBe('');
+  });
+
+  it('returns a single-line string unchanged', () => {
+    expect(addHardLineBreaks('no newlines here')).toBe('no newlines here');
+  });
+
+  it('does not modify a leading newline', () => {
+    expect(addHardLineBreaks('\ntext')).toBe('\ntext');
+  });
+
+  it('does not modify a trailing newline', () => {
+    expect(addHardLineBreaks('text\n')).toBe('text\n');
   });
 });
 

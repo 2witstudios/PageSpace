@@ -13,8 +13,9 @@ import { useParams } from 'next/navigation';
 import { usePageStore } from '@/hooks/usePage';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
-import { isDocumentPage, isFilePage, isSheetPage, isCodePage } from '@pagespace/lib/content/page-types.config';
+import { isDocumentPage, isFilePage, isSheetPage, isCodePage, isPublishablePageType } from '@pagespace/lib/content/page-types.config';
 import { ExportDropdown } from './ExportDropdown';
+import PublishControls from './PublishControls';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useMobile } from '@/hooks/useMobile';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
@@ -54,6 +55,21 @@ const DocumentSaveStatus = memo(function DocumentSaveStatus({
   return <SaveStatusIndicator isDirty={isDirty} isSaving={isSaving} />;
 });
 
+const HeaderPublishControls = memo(function HeaderPublishControls({
+  pageId,
+}: {
+  pageId: string;
+}) {
+  const selectIsDirty = useCallback(
+    (state: ReturnType<typeof useDocumentManagerStore.getState>) =>
+      state.documents.get(pageId)?.isDirty ?? false,
+    [pageId]
+  );
+  const contentDirty = useDocumentManagerStore(selectIsDirty);
+
+  return <PublishControls pageId={pageId} contentDirty={contentDirty} />;
+});
+
 export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps = {}) {
   const params = useParams();
   const storePageId = usePageStore((state) => state.pageId);
@@ -85,12 +101,23 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
 
     setIsDownloading(true);
     try {
-      const response = await fetchWithAuth(`/api/files/${page.id}/download`);
+      // Two-step fetch: get the presigned URL as JSON, then fetch it without
+      // credentials. Letting fetchWithAuth follow the 307 into Tigris fails
+      // CORS — its credentialed mode needs Access-Control-Allow-Credentials,
+      // which the bucket never sends.
+      const response = await fetchWithAuth(`/api/files/${page.id}/download`, {
+        headers: { Accept: 'application/json' },
+      });
       if (!response.ok) {
         throw new Error('Failed to download file');
       }
+      const { url: presignedUrl } = await response.json() as { url: string };
 
-      const blob = await response.blob();
+      const fileRes = await fetch(presignedUrl);
+      if (!fileRes.ok) {
+        throw new Error(`Failed to download file bytes: ${fileRes.status}`);
+      }
+      const blob = await fileRes.blob();
       const url = window.URL.createObjectURL(blob);
       const a = window.document.createElement('a');
       a.href = url;
@@ -109,12 +136,22 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
   return (
     <div className="flex flex-col gap-1 @[400px]:gap-2 p-2 @[400px]:p-4 border-b border-[var(--separator)]">
       <Breadcrumbs pageId={pageId} />
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 min-w-0">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <EditableTitle pageId={pageId} />
           <DocumentSaveStatus pageId={page?.id ?? null} enabled={showSaveStatus} />
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-1 @[400px]:gap-2">
+        {/* One row that scrolls rather than wraps: wrapping cost the content
+            below a whole header row on a narrow pane. Not an overflow menu —
+            ShareDialog, ExportDropdown and PublishControls are dialog triggers,
+            and a DropdownMenu unmounts the dialog when it closes. And no
+            `justify-end`: end-aligning an overflow container pushes the excess
+            past the inline-start edge, where scrollLeft cannot reach it. The
+            `py-1 -my-1` is not spacing: `overflow-x-auto` makes overflow-y
+            compute to `auto` too, which would clip the buttons' 3px focus
+            rings — the padding gives them room, the margin takes the row's
+            height back. */}
+        <div className="flex items-center gap-1 @[400px]:gap-2 min-w-0 py-1 -my-1 overflow-x-auto scrollbar-none">
           {pageIsDocument && <EditorToggles />}
           {pageIsDocument && page && <PageSetupButton pageId={page.id} />}
           {(pageIsDocument || pageIsSheet) && page && (
@@ -130,6 +167,12 @@ export function ViewHeader({ children, pageId: propPageId }: ContentHeaderProps 
               <Download className={isMobile ? "h-4 w-4" : "mr-2 h-4 w-4"} />
               {!isMobile && (isDownloading ? 'Downloading...' : 'Download')}
             </Button>
+          )}
+          {page && isPublishablePageType(page.type) && (
+            // Keyed on pageId so navigating to a different page remounts the
+            // control instead of reusing local UI state (e.g. an open Publish
+            // Settings dialog) across pages.
+            <HeaderPublishControls key={page.id} pageId={page.id} />
           )}
           <PageViewers pageId={pageId} />
           <ShareDialog pageId={pageId} />

@@ -8,6 +8,15 @@
  * its DB calls even though the observable contract (returned drives) is unchanged.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // Mock the db module
 vi.mock('@pagespace/db/db', () => ({
@@ -17,16 +26,20 @@ vi.mock('@pagespace/db/db', () => ({
         findMany: vi.fn(),
         findFirst: vi.fn(),
       },
+      pages: {
+        findFirst: vi.fn(),
+      },
     },
     selectDistinct: vi.fn(),
     select: vi.fn(),
     insert: vi.fn(),
     update: vi.fn(),
+    transaction: vi.fn(),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', ownerId: 'drives.ownerId', isTrashed: 'drives.isTrashed' },
-  pages: { driveId: 'pages.driveId', id: 'pages.id' },
+  pages: { driveId: 'pages.driveId', id: 'pages.id', isTrashed: 'pages.isTrashed' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', role: 'driveMembers.role' },
@@ -34,13 +47,31 @@ vi.mock('@pagespace/db/schema/members', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
+  ne: vi.fn((a, b) => ({ op: 'ne', a, b })),
   and: vi.fn((...args) => ({ op: 'and', args })),
   not: vi.fn((a) => ({ op: 'not', a })),
+  or: vi.fn((...args) => ({ op: 'or', args })),
   inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
   isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+  isNull: vi.fn((a) => ({ op: 'isNull', a })),
+  like: vi.fn((a, b) => ({ op: 'like', a, b })),
+  gt: vi.fn((a, b) => ({ op: 'gt', a, b })),
+  asc: vi.fn(() => ({ op: 'asc' })),
+}));
+vi.mock('../../permissions/membership-queries', () => ({
+  customRoleBelongsToDrive: vi.fn().mockResolvedValue(true),
+  getMemberCustomRoleId: vi.fn().mockResolvedValue(null),
+  // Review #2849 P1: a role's grants, read to bound a key by its owner (null: no such role).
+  fetchCustomRolePermissions: vi.fn().mockResolvedValue(null),
+  resolveDriveWideCanEdit: vi.fn(),
 }));
 
 import { db } from '@pagespace/db/db';
+import { eq, and } from '@pagespace/db/operators';
+import { customRoleBelongsToDrive, fetchCustomRolePermissions, getMemberCustomRoleId, resolveDriveWideCanEdit } from '../../permissions/membership-queries';
+
+// Drizzle transaction callback receives a tx whose type is the inner parameter of db.transaction.
+type MockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 import {
   listAccessibleDrives,
   createDrive,
@@ -51,7 +82,10 @@ import {
   updateDrive,
   trashDrive,
   restoreDrive,
+  isValidDriveHomePage,
+  validateDriveScopeAccess,
 } from '../drive-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -62,11 +96,21 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
   name: overrides.name,
   slug: overrides.name.toLowerCase().replace(/\s+/g, '-'),
   ownerId: overrides.ownerId ?? 'owner_123',
+  kind: 'STANDARD' as const,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
   isTrashed: overrides.isTrashed ?? false,
   trashedAt: null,
   drivePrompt: null,
+  publishSubdomain: null,
+  homePageId: null,
+  publishDefaultOgImageUrl: null,
+  notFoundPageId: null,
+  publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
 });
 
 // ============================================================================
@@ -76,6 +120,8 @@ const createMockDrive = (overrides: { id: string; name: string; ownerId?: string
 describe('listAccessibleDrives', () => {
   beforeEach(() => {
     vi.resetAllMocks(); // Reset mock implementations including mockResolvedValueOnce queue
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   const setupMocks = (
@@ -90,7 +136,11 @@ describe('listAccessibleDrives', () => {
       .mockResolvedValueOnce(ownedDrives)
       .mockResolvedValueOnce(sharedDrivesData);
 
-    // Mock member drives selectDistinct - returns member list first, then permission list
+    // Page-only shares use a separate selectDistinct query.
+    // Accepted personal memberships and the always-on org membership lookup.
+    vi.mocked(db.select)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(memberDrives.map(row => ({ customRoleId: null, source: 'invite', ...row }))) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
     vi.mocked(db.selectDistinct).mockImplementation(() => ({
       from: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue(memberDrives),
@@ -104,7 +154,7 @@ describe('listAccessibleDrives', () => {
   it('should return empty array when user has no drives', async () => {
     setupMocks([], [], [], []);
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result).toEqual([]);
   });
@@ -113,7 +163,7 @@ describe('listAccessibleDrives', () => {
     const ownedDrive = createMockDrive({ id: 'drive_1', name: 'My Drive', ownerId: 'user_123' });
     setupMocks([ownedDrive], [], [], []);
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -133,7 +183,7 @@ describe('listAccessibleDrives', () => {
       [sharedDrive]
     );
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -152,7 +202,7 @@ describe('listAccessibleDrives', () => {
       [permDrive]
     );
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
@@ -171,7 +221,7 @@ describe('listAccessibleDrives', () => {
       [drive]
     );
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('ADMIN'); // Membership role takes precedence
@@ -186,7 +236,7 @@ describe('listAccessibleDrives', () => {
       [drive]
     );
 
-    const result = await listAccessibleDrives('user_123');
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
 
     // Should only return one instance of the drive
     expect(result).toHaveLength(1);
@@ -201,6 +251,8 @@ describe('listAccessibleDrives', () => {
 describe('createDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should create drive with generated slug', async () => {
@@ -208,6 +260,13 @@ describe('createDrive', () => {
     const returningMock = vi.fn().mockResolvedValue([newDrive]);
     const valuesMock = vi.fn().mockReturnValue({ returning: returningMock });
     vi.mocked(db.insert).mockReturnValue({ values: valuesMock } as unknown as ReturnType<typeof db.insert>);
+    // allocatePublishSubdomain early-return: the drive already has a subdomain after
+    // this select, so the retry/update path is not exercised here.
+    const limitMock = vi.fn().mockResolvedValue([{ subdomain: 'new-project' }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
+    // createDrive wraps insert + allocation in a transaction; proxy tx → db so existing mocks apply.
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: MockTx) => Promise<unknown>) => cb(db as unknown as MockTx));
 
     const result = await createDrive('user_123', { name: 'New Project' });
 
@@ -221,6 +280,10 @@ describe('createDrive', () => {
     const returningMock = vi.fn().mockResolvedValue([newDrive]);
     const valuesMock = vi.fn().mockReturnValue({ returning: returningMock });
     vi.mocked(db.insert).mockReturnValue({ values: valuesMock } as unknown as ReturnType<typeof db.insert>);
+    const limitMock = vi.fn().mockResolvedValue([{ subdomain: 'test' }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    vi.mocked(db.select).mockReturnValue({ from: vi.fn().mockReturnValue({ where: whereMock }) } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.transaction).mockImplementation(async (cb: (tx: MockTx) => Promise<unknown>) => cb(db as unknown as MockTx));
 
     const result = await createDrive('user_123', { name: 'Test' });
 
@@ -236,6 +299,8 @@ describe('createDrive', () => {
 describe('getDriveById', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive when found', async () => {
@@ -263,19 +328,22 @@ describe('getDriveById', () => {
 describe('getDriveAccess', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return owner access when user is drive owner', async () => {
     const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'user_123' });
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
 
-    const result = await getDriveAccess('drive_123', 'user_123');
+    const result = await getDriveAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toEqual({
       isOwner: true,
       isAdmin: true,
       isMember: true,
       role: 'OWNER',
+      customRoleId: null,
     });
   });
 
@@ -288,13 +356,14 @@ describe('getDriveAccess', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccess('drive_123', 'user_123');
+    const result = await getDriveAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toEqual({
       isOwner: false,
       isAdmin: true,
       isMember: true,
       role: 'ADMIN',
+      customRoleId: null,
     });
   });
 
@@ -307,13 +376,14 @@ describe('getDriveAccess', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccess('drive_123', 'user_123');
+    const result = await getDriveAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toEqual({
       isOwner: false,
       isAdmin: false,
       isMember: true,
       role: 'MEMBER',
+      customRoleId: null,
     });
   });
 
@@ -326,27 +396,160 @@ describe('getDriveAccess', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccess('drive_123', 'user_123');
+    const result = await getDriveAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toEqual({
       isOwner: false,
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
   });
 
   it('should return no access when drive not found', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
 
-    const result = await getDriveAccess('nonexistent', 'user_123');
+    const result = await getDriveAccess('nonexistent', credentialActor('user_123', null));
 
     expect(result).toEqual({
       isOwner: false,
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
+  });
+});
+
+// ============================================================================
+// validateDriveScopeAccess
+// ============================================================================
+
+describe('validateDriveScopeAccess', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(true);
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
+  });
+
+  const mockOwnerAccess = (driveId: string, userId: string) => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: userId })
+    );
+  };
+
+  const mockMemberAccess = (driveId: string, role: 'ADMIN' | 'MEMBER') => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: 'other_user' })
+    );
+    const limitMock = vi.fn().mockResolvedValue([{ role }]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  const mockNoAccess = (driveId: string) => {
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue(
+      createMockDrive({ id: driveId, name: 'Test', ownerId: 'other_user' })
+    );
+    const limitMock = vi.fn().mockResolvedValue([]);
+    const whereMock = vi.fn().mockReturnValue({ limit: limitMock });
+    const fromMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
+  };
+
+  it('returns all-empty for a valid owner-scoped drive', async () => {
+    mockOwnerAccess('drive_123', 'user_123');
+
+    const result = await validateDriveScopeAccess([{ id: 'drive_123', role: null }], credentialActor('user_123', null));
+
+    expect(result).toEqual({
+      invalidDriveIds: [],
+      unauthorizedRoles: [],
+      invalidCustomRoles: [],
+      unauthorizedCustomRoles: [],
+      explicitRoleWithoutMembership: [],
+    });
+  });
+
+  it('flags drives the user has no access to', async () => {
+    mockNoAccess('forbidden-drive');
+
+    const result = await validateDriveScopeAccess([{ id: 'forbidden-drive', role: null }], credentialActor('user_123', null));
+
+    expect(result.invalidDriveIds).toEqual(['forbidden-drive']);
+  });
+
+  it('flags a MEMBER attempting to grant ADMIN', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+
+    const result = await validateDriveScopeAccess([{ id: 'drive_123', role: 'ADMIN' }], credentialActor('user_123', null));
+
+    expect(result.unauthorizedRoles).toEqual(['drive_123']);
+  });
+
+  it('flags a custom role that does not belong to the drive', async () => {
+    mockOwnerAccess('drive_123', 'user_123');
+    vi.mocked(customRoleBelongsToDrive).mockResolvedValue(false);
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-other-drive' }],
+      credentialActor('user_123', null)
+    );
+
+    expect(result.invalidCustomRoles).toEqual(['drive_123']);
+  });
+
+  it('flags a MEMBER using a custom role not assigned to them', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-assigned');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-other' }],
+      credentialActor('user_123', null)
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual(['drive_123']);
+  });
+
+  it('allows a MEMBER to use their own assigned custom role', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-xyz');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-xyz' }],
+      credentialActor('user_123', null)
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual([]);
+  });
+
+  it('review #2849 P1: a MEMBER a custom role restricts cannot mint the plain MEMBER role (it would read more than they do); the same role passes', async () => {
+    mockMemberAccess('drive_123', 'MEMBER');
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-locked');
+    vi.mocked(fetchCustomRolePermissions).mockImplementation(async (roleId: string) =>
+      roleId === 'role-locked' ? { permissions: { secret: { canView: false, canEdit: false, canShare: false } }, driveWidePermissions: { canView: true, canEdit: false, canShare: false } } : null);
+
+    const plain = await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER' }], credentialActor('user_123', null));
+    expect(plain.unauthorizedCustomRoles).toEqual(['drive_123']);
+    const own = await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER', customRoleId: 'role-locked' }], credentialActor('user_123', null));
+    expect(own.unauthorizedCustomRoles).toEqual([]);
+    // A plain member (no custom role) may still mint the plain role.
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue(null);
+    expect((await validateDriveScopeAccess([{ id: 'drive_123', role: 'MEMBER' }], credentialActor('user_123', null))).unauthorizedCustomRoles).toEqual([]);
+  });
+
+  it('allows an ADMIN to use any custom role without checking assignment', async () => {
+    mockMemberAccess('drive_123', 'ADMIN');
+
+    const result = await validateDriveScopeAccess(
+      [{ id: 'drive_123', role: 'MEMBER', customRoleId: 'any-role' }],
+      credentialActor('user_123', null)
+    );
+
+    expect(result.unauthorizedCustomRoles).toEqual([]);
+    expect(getMemberCustomRoleId).not.toHaveBeenCalled();
   });
 });
 
@@ -357,13 +560,15 @@ describe('getDriveAccess', () => {
 describe('getDriveAccessWithDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive and owner access when user is drive owner', async () => {
     const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'user_123' });
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
 
-    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+    const result = await getDriveAccessWithDrive('drive_123', credentialActor('user_123', null));
 
     expect(result).not.toBeNull();
     expect(result?.drive).toEqual(drive);
@@ -372,6 +577,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: true,
       isMember: true,
       role: 'OWNER',
+      customRoleId: null,
     });
   });
 
@@ -384,7 +590,7 @@ describe('getDriveAccessWithDrive', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+    const result = await getDriveAccessWithDrive('drive_123', credentialActor('user_123', null));
 
     expect(result).not.toBeNull();
     expect(result?.drive).toEqual(drive);
@@ -393,6 +599,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: true,
       isMember: true,
       role: 'ADMIN',
+      customRoleId: null,
     });
   });
 
@@ -405,7 +612,7 @@ describe('getDriveAccessWithDrive', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+    const result = await getDriveAccessWithDrive('drive_123', credentialActor('user_123', null));
 
     expect(result).not.toBeNull();
     expect(result?.drive).toEqual(drive);
@@ -414,6 +621,7 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: false,
       isMember: true,
       role: 'MEMBER',
+      customRoleId: null,
     });
   });
 
@@ -426,7 +634,7 @@ describe('getDriveAccessWithDrive', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveAccessWithDrive('drive_123', 'user_123');
+    const result = await getDriveAccessWithDrive('drive_123', credentialActor('user_123', null));
 
     expect(result).not.toBeNull();
     expect(result?.drive).toEqual(drive);
@@ -435,13 +643,14 @@ describe('getDriveAccessWithDrive', () => {
       isAdmin: false,
       isMember: false,
       role: null,
+      customRoleId: null,
     });
   });
 
   it('should return null when drive not found', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
 
-    const result = await getDriveAccessWithDrive('nonexistent', 'user_123');
+    const result = await getDriveAccessWithDrive('nonexistent', credentialActor('user_123', null));
 
     expect(result).toBeNull();
   });
@@ -454,13 +663,15 @@ describe('getDriveAccessWithDrive', () => {
 describe('getDriveWithAccess', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should return drive with access info for owner', async () => {
     const drive = createMockDrive({ id: 'drive_123', name: 'Test', ownerId: 'user_123' });
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(drive);
 
-    const result = await getDriveWithAccess('drive_123', 'user_123');
+    const result = await getDriveWithAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toMatchObject({
       id: 'drive_123',
@@ -480,7 +691,7 @@ describe('getDriveWithAccess', () => {
     const fromMock = vi.fn().mockReturnValue({ where: whereMock });
     vi.mocked(db.select).mockReturnValue({ from: fromMock } as unknown as ReturnType<typeof db.select>);
 
-    const result = await getDriveWithAccess('drive_123', 'user_123');
+    const result = await getDriveWithAccess('drive_123', credentialActor('user_123', null));
 
     expect(result).toBeNull();
   });
@@ -488,7 +699,7 @@ describe('getDriveWithAccess', () => {
   it('should return null when drive not found', async () => {
     vi.mocked(db.query.drives.findFirst).mockResolvedValue(undefined);
 
-    const result = await getDriveWithAccess('nonexistent', 'user_123');
+    const result = await getDriveWithAccess('nonexistent', credentialActor('user_123', null));
 
     expect(result).toBeNull();
   });
@@ -501,6 +712,8 @@ describe('getDriveWithAccess', () => {
 describe('updateDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should update drive name and regenerate slug', async () => {
@@ -545,6 +758,90 @@ describe('updateDrive', () => {
 
     expect(result).toBeNull();
   });
+
+  it('should include homePageId in the set payload when setting', async () => {
+    const updatedDrive = { ...createMockDrive({ id: 'drive_123', name: 'Test' }), homePageId: 'page_1' };
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    const result = await updateDrive('drive_123', { homePageId: 'page_1' });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      homePageId: 'page_1',
+    }));
+    expect(result).toEqual(updatedDrive);
+  });
+
+  it('should include homePageId: null in the set payload when clearing', async () => {
+    const updatedDrive = createMockDrive({ id: 'drive_123', name: 'Test' });
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    await updateDrive('drive_123', { homePageId: null });
+
+    expect(setMock).toHaveBeenCalledWith(expect.objectContaining({
+      homePageId: null,
+    }));
+  });
+
+  it('should not include a homePageId key when the input omits it', async () => {
+    const updatedDrive = createMockDrive({ id: 'drive_123', name: 'X' });
+    const returningMock = vi.fn().mockResolvedValue([updatedDrive]);
+    const whereMock = vi.fn().mockReturnValue({ returning: returningMock });
+    const setMock = vi.fn().mockReturnValue({ where: whereMock });
+    vi.mocked(db.update).mockReturnValue({ set: setMock } as unknown as ReturnType<typeof db.update>);
+
+    await updateDrive('drive_123', { name: 'X' });
+
+    const setCallArg = setMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(setCallArg).not.toHaveProperty('homePageId');
+  });
+});
+
+// ============================================================================
+// isValidDriveHomePage
+// ============================================================================
+
+describe('isValidDriveHomePage', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // resetAllMocks clears the operator factory implementations; restore them
+    // so the where-clause composition is observable in the recorded call.
+    (eq as unknown as ReturnType<typeof vi.fn>).mockImplementation((a: unknown, b: unknown) => ({ op: 'eq', a, b }));
+    (and as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => ({ op: 'and', args }));
+  });
+
+  it('should return true when a non-trashed page exists in the drive', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ id: 'page_1' } as never);
+
+    const result = await isValidDriveHomePage('drive_123', 'page_1');
+
+    expect(result).toBe(true);
+    // The trash + drive-membership filtering must be enforced by the QUERY
+    // itself, not by JS filtering after the fact.
+    expect(db.query.pages.findFirst).toHaveBeenCalledWith({
+      where: {
+        op: 'and',
+        args: [
+          { op: 'eq', a: 'pages.id', b: 'page_1' },
+          { op: 'eq', a: 'pages.driveId', b: 'drive_123' },
+          { op: 'eq', a: 'pages.isTrashed', b: false },
+        ],
+      },
+    });
+  });
+
+  it('should return false when no matching page exists', async () => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(undefined as never);
+
+    const result = await isValidDriveHomePage('drive_123', 'page_gone');
+
+    expect(result).toBe(false);
+  });
 });
 
 // ============================================================================
@@ -554,6 +851,8 @@ describe('updateDrive', () => {
 describe('trashDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should set isTrashed=true and trashedAt', async () => {
@@ -579,6 +878,8 @@ describe('trashDrive', () => {
 describe('restoreDrive', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
   });
 
   it('should set isTrashed=false and trashedAt=null', async () => {
@@ -595,5 +896,98 @@ describe('restoreDrive', () => {
       trashedAt: null,
     }));
     expect(result?.isTrashed).toBe(false);
+  });
+});
+
+
+// ============================================================================
+// listAccessibleDrives — canCreatePages (#2627)
+// ============================================================================
+
+describe('listAccessibleDrives — canCreatePages', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    // resolveDriveWideCanEdit drives canCreatePages; default to fail-closed.
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
+  });
+
+  const setup = (
+    owned: ReturnType<typeof createMockDrive>[],
+    member: Array<{ driveId: string; role: string; customRoleId?: string | null }>,
+    permOnly: Array<{ driveId: string | null }>,
+    shared: ReturnType<typeof createMockDrive>[],
+  ) => {
+    vi.mocked(db.query.drives.findMany)
+      .mockResolvedValueOnce(owned)
+      .mockResolvedValueOnce(shared);
+    // Accepted personal memberships and the always-on org membership lookup.
+    vi.mocked(db.select)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue(member.map(row => ({ customRoleId: null, source: 'invite', ...row }))) }) } as unknown as ReturnType<typeof db.select>)
+      .mockReturnValueOnce({ from: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }) } as unknown as ReturnType<typeof db.select>);
+    vi.mocked(db.selectDistinct).mockImplementation(() => ({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockResolvedValue(member),
+        leftJoin: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue(permOnly),
+        }),
+      }),
+    } as unknown as ReturnType<typeof db.selectDistinct>));
+  };
+
+  it('given an owned drive, should retain OWNER access and canCreatePages without a shared-member role', async () => {
+    setup([createMockDrive({ id: 'drive_own', name: 'Mine', ownerId: 'user_123' })], [], [], []);
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_own', true]]));
+
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
+
+    expect(result[0].canCreatePages).toBe(true);
+    expect(result[0]).toMatchObject({ id: 'drive_own', role: 'OWNER', isOwned: true });
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([]);
+  });
+
+  it('given a shared plain-member drive, should resolve canCreatePages through the drive-wide rule', async () => {
+    setup(
+      [],
+      [{ driveId: 'drive_shared', role: 'MEMBER', customRoleId: null }],
+      [],
+      [createMockDrive({ id: 'drive_shared', name: 'Shared', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_shared', true]]));
+
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
+
+    expect(result[0].canCreatePages).toBe(true);
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([
+      { driveId: 'drive_shared', role: 'MEMBER', customRoleId: null, openDriveFloor: null },
+    ]);
+  });
+
+  it('given a view-only custom-role member, should set canCreatePages false', async () => {
+    setup(
+      [],
+      [{ driveId: 'drive_shared', role: 'MEMBER', customRoleId: 'role_view' }],
+      [],
+      [createMockDrive({ id: 'drive_shared', name: 'Shared', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map([['drive_shared', false]]));
+
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
+
+    expect(result[0].canCreatePages).toBe(false);
+  });
+
+  it('given a page-collaborator-only drive (no membership), should fail closed with canCreatePages false', async () => {
+    setup(
+      [],
+      [],
+      [{ driveId: 'drive_perm' }],
+      [createMockDrive({ id: 'drive_perm', name: 'Perm', ownerId: 'other_user' })],
+    );
+    vi.mocked(resolveDriveWideCanEdit).mockResolvedValue(new Map());
+
+    const result = await listAccessibleDrives(credentialActor('user_123', null));
+
+    expect(result[0].canCreatePages).toBe(false);
+    expect(resolveDriveWideCanEdit).toHaveBeenCalledWith([]);
   });
 });

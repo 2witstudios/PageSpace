@@ -18,6 +18,7 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
       resourceType: 'resourceType',
       resourceId: 'resourceId',
       ipAddress: 'ipAddress',
+      ipBidx: 'ipBidx',
       timestamp: 'timestamp',
     },
   };
@@ -26,19 +27,27 @@ const { mockDb, mockSecurityAuditLog } = vi.hoisted(() => {
 vi.mock('@pagespace/db/db', () => ({
   db: mockDb,
 }));
+// Default binding (#890 Phase 2, leaf 5): dedicated mode resolves the Admin
+// PG client. Point it at the same mockDb so the "default db" expectations
+// below exercise the post-cutover default.
+vi.mock('@pagespace/db/admin-db', () => ({
+  getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+  getAdminDb: vi.fn(() => mockDb),
+}));
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: mockSecurityAuditLog,
 }));
 vi.mock('@pagespace/db/operators', () => ({
   desc: vi.fn((col: string) => `desc(${col})`),
   and: vi.fn((...args: unknown[]) => ({ and: args })),
+  or: vi.fn((...args: unknown[]) => ({ or: args })),
   gte: vi.fn((col: string, val: unknown) => ({ gte: [col, val] })),
   lte: vi.fn((col: string, val: unknown) => ({ lte: [col, val] })),
   eq: vi.fn((col: string, val: unknown) => ({ eq: [col, val] })),
 }));
 
-import { queryAuditEvents } from '../audit-query';
-import { eq, gte, lte } from '@pagespace/db/operators';
+import { queryAuditEvents, type AuditQueryDeps } from '../audit-query';
+import { eq, or, gte, lte } from '@pagespace/db/operators';
 
 describe('queryAuditEvents()', () => {
   const mockEvents = [
@@ -106,10 +115,52 @@ describe('queryAuditEvents()', () => {
     expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.resourceId, 'page-1');
   });
 
-  it('given ipAddress filter, should apply eq condition on ipAddress', async () => {
-    await queryAuditEvents({ ipAddress: '10.0.0.1' });
+  it('given ipAddress filter with no ENCRYPTION_KEY, should apply a plain eq on ipAddress', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    delete process.env.ENCRYPTION_KEY;
+    try {
+      await queryAuditEvents({ ipAddress: '10.0.0.1' });
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+      expect(or).not.toHaveBeenCalled();
+    } finally {
+      if (prev !== undefined) process.env.ENCRYPTION_KEY = prev;
+    }
+  });
 
-    expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+  it('given ipAddress filter with a key, should match by blind index OR legacy plaintext', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = 'audit-query-test-master-key-at-least-32!!';
+    try {
+      await queryAuditEvents({ ipAddress: '10.0.0.1' });
+      // Dual filter: blind-index match for encrypted rows + plaintext for legacy.
+      expect(or).toHaveBeenCalled();
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipBidx, expect.stringMatching(/^[0-9a-f]{64}$/));
+      expect(eq).toHaveBeenCalledWith(mockSecurityAuditLog.ipAddress, '10.0.0.1');
+    } finally {
+      if (prev === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = prev;
+    }
+  });
+
+  it('given an undecryptable IP row, should not fail the whole query (per-row fallback)', async () => {
+    const prev = process.env.ENCRYPTION_KEY;
+    process.env.ENCRYPTION_KEY = 'audit-query-test-master-key-at-least-32!!';
+    // Ciphertext-shaped (passes looksEncrypted) but invalid → decrypt throws.
+    const bogus = `${'a'.repeat(64)}:${'a'.repeat(32)}:${'a'.repeat(32)}:abcd`;
+    const rows = [
+      { id: 'ok', ipAddress: '10.0.0.9' },
+      { id: 'bad', ipAddress: bogus },
+    ];
+    mockDb._chain.orderBy.mockResolvedValue(rows);
+    try {
+      const result = await queryAuditEvents({});
+      expect(result).toHaveLength(2);
+      // The bad row falls back to its stored value rather than throwing.
+      expect(result.find((r) => (r as { id: string }).id === 'bad')!.ipAddress).toBe(bogus);
+    } finally {
+      if (prev === undefined) delete process.env.ENCRYPTION_KEY;
+      else process.env.ENCRYPTION_KEY = prev;
+    }
   });
 
   it('given limit: 0, should apply limit(0) to query', async () => {
@@ -132,5 +183,53 @@ describe('queryAuditEvents()', () => {
     await expect(queryAuditEvents({ limit: 1.5 })).rejects.toThrow(
       'limit must be a non-negative integer'
     );
+  });
+
+  describe('given an injected db client', () => {
+    function createInjectedDb(rows: unknown[]) {
+      const limit = vi.fn().mockResolvedValue(rows);
+      const orderBy = vi.fn().mockReturnValue({ limit, then: (resolve: (v: unknown) => void) => resolve(rows) });
+      const where = vi.fn().mockReturnValue({ orderBy });
+      const from = vi.fn().mockReturnValue({ where });
+      const select = vi.fn().mockReturnValue({ from });
+      return { select, _chain: { select, from, where, orderBy, limit } };
+    }
+
+    it('should use the injected client exclusively, never the module-level singleton', async () => {
+      const injectedEvents = [{ id: 'injected-1', eventType: 'auth.logout', userId: 'user-9' }];
+      const injectedDb = createInjectedDb(injectedEvents);
+
+      const deps: AuditQueryDeps = { db: injectedDb as unknown as AuditQueryDeps['db'] };
+      const result = await queryAuditEvents({}, deps);
+
+      expect(injectedDb.select).toHaveBeenCalled();
+      expect(mockDb.select).not.toHaveBeenCalled();
+      expect(result).toEqual(injectedEvents);
+    });
+
+    it('given no injected client, should fall back to the resolved audit binding (Admin PG in dedicated mode)', async () => {
+      const result = await queryAuditEvents({});
+
+      expect(mockDb.select).toHaveBeenCalled();
+      expect(result).toEqual(mockEvents);
+    });
+
+    it('PARITY: identical filters against the injected admin client and the default binding produce identical results', async () => {
+      const rows = [
+        { id: 'evt-a', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+        { id: 'evt-b', eventType: 'auth.login.success', userId: 'user-1', ipAddress: null },
+      ];
+      const injectedAdminDb = createInjectedDb(rows);
+      mockDb._chain.orderBy.mockResolvedValue(rows);
+
+      const viaInjected = await queryAuditEvents(
+        { userId: 'user-1', eventType: 'auth.login.success' },
+        { db: injectedAdminDb as unknown as AuditQueryDeps['db'] },
+      );
+      const viaDefault = await queryAuditEvents({ userId: 'user-1', eventType: 'auth.login.success' });
+
+      expect(viaInjected).toEqual(viaDefault);
+      expect(viaInjected).toEqual(rows);
+    });
   });
 });

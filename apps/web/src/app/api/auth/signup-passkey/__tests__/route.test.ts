@@ -11,6 +11,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifySignupRegistration: vi.fn(),
 }));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({
+  markEmailVerified: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/lib/auth/send-verification-email', () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     createSession: vi.fn().mockResolvedValue('ps_sess_mock_session_token'),
@@ -72,8 +78,8 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-1', created: true }),
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
@@ -81,7 +87,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -93,6 +99,8 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
 import { POST } from '../route';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -101,7 +109,7 @@ import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 const validPayload = {
   email: 'user@example.com',
@@ -132,7 +140,7 @@ describe('POST /api/auth/signup-passkey', () => {
     vi.mocked(validateLoginCSRFToken).mockReturnValue(true);
     vi.mocked(verifySignupRegistration).mockResolvedValue({
       ok: true,
-      data: { userId: 'new-user-1', passkeyId: 'pk-1' },
+      data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified: true },
     });
   });
 
@@ -185,7 +193,7 @@ describe('POST /api/auth/signup-passkey', () => {
     it('provisions getting started drive', async () => {
       await POST(createRequest());
 
-      expect(provisionGettingStartedDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('new-user-1');
     });
 
     it('logs auth events', async () => {
@@ -237,8 +245,23 @@ describe('POST /api/auth/signup-passkey', () => {
       await POST(createRequest());
 
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
         createdByIp: '192.168.1.1',
       }));
+    });
+
+    it.each([
+      [true, 'user_verified_passkey'],
+      [false, 'single_factor'],
+    ] as const)('SEC-2 (partial) a signup passkey with userVerified=%s records %s on the new session (D-OW-45)', async (userVerified, assurance) => {
+      vi.mocked(verifySignupRegistration).mockResolvedValue({ ok: true, data: { userId: 'new-user-1', passkeyId: 'pk-1', userVerified } });
+      const before = Date.now();
+
+      await POST(createRequest());
+
+      const [options] = vi.mocked(sessionService.createSession).mock.calls[0];
+      expect(options.authentication).toEqual({ authenticatedAtMs: expect.any(Number), assurance });
+      expect(options.authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
     });
 
     it('passes undefined createdByIp when IP is unknown', async () => {
@@ -247,12 +270,13 @@ describe('POST /api/auth/signup-passkey', () => {
       await POST(createRequest());
 
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'user_verified_passkey' },
         createdByIp: undefined,
       }));
     });
 
     it('redirects to /dashboard when drive provisioning returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -285,7 +309,7 @@ describe('POST /api/auth/signup-passkey', () => {
 
   describe('graceful degradation', () => {
     it('continues when drive provisioning fails', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('Drive error'));
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -293,13 +317,13 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toBe('/dashboard?welcome=true');
-      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Getting Started drive', new Error('Drive error'), {
+      expect(loggers.auth.error).toHaveBeenCalledWith('Failed to provision Home drive', new Error('Drive error'), {
         userId: 'new-user-1',
       });
     });
 
     it('continues when getting started drive returns null', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValueOnce(null as never);
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValueOnce(null as never);
 
       const response = await POST(createRequest());
       const body = await response.json();
@@ -579,7 +603,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: 'drive',
         invitedDriveId: 'drive_invited',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -601,7 +625,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 
@@ -619,7 +643,7 @@ describe('POST /api/auth/signup-passkey', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_NOT_FOUND',
       });
 
@@ -629,6 +653,80 @@ describe('POST /api/auth/signup-passkey', () => {
       expect(response.status).toBe(200);
       expect(body.success).toBe(true);
       expect(body.redirectUrl).toContain('inviteError=TOKEN_NOT_FOUND');
+    });
+  });
+
+  describe('email verification', () => {
+    it('non-invited signup sends a verification email and does not mark verified', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalledWith({
+        userId: 'new-user-1',
+        email: 'user@example.com',
+        userName: 'Test User',
+      });
+    });
+
+    it('signup via a successfully consumed invite marks verified and sends no verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'drive',
+        invitedDriveId: 'drive_invited',
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('signup via a successfully consumed CONNECTION invite also marks verified (inbox ownership proven)', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: 'connection',
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_conn' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).toHaveBeenCalledWith('new-user-1');
+      expect(sendVerificationEmail).not.toHaveBeenCalled();
+    });
+
+    it('failed invite acceptance falls back to sending a verification email', async () => {
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
+        kind: null,
+        invitedDriveId: null,
+        invitedPageId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
+        inviteError: 'EMAIL_MISMATCH',
+      });
+
+      const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
+
+      expect(response.status).toBe(200);
+      expect(markEmailVerified).not.toHaveBeenCalled();
+      expect(sendVerificationEmail).toHaveBeenCalled();
+    });
+
+    it('a verification-email failure does not fail the signup', async () => {
+      vi.mocked(sendVerificationEmail).mockRejectedValueOnce(new Error('SMTP down'));
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.success).toBe(true);
+      expect(loggers.auth.warn).toHaveBeenCalledWith(
+        'Failed to send passkey-signup verification email',
+        expect.objectContaining({ userId: 'new-user-1' }),
+      );
     });
   });
 });

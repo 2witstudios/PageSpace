@@ -6,20 +6,598 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:db": "vitest run --config vitest.security.config.ts",
+    "credential-plane": "bun src/agent-accounts/executor/plane-main.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
     "lint": "eslint src"
   },
   "exports": {
+    "./api-contract-version": {
+      "types": "./dist/api-contract-version.d.ts",
+      "import": "./dist/api-contract-version.js",
+      "require": "./dist/api-contract-version.js"
+    },
     "./client-safe": {
       "types": "./dist/client-safe.d.ts",
       "import": "./dist/client-safe.js",
       "default": "./dist/client-safe.js"
     },
+    "./home-signals/types": {
+      "types": "./dist/home-signals/types.d.ts",
+      "import": "./dist/home-signals/types.js",
+      "require": "./dist/home-signals/types.js"
+    },
+    "./home-signals/composer": {
+      "types": "./dist/home-signals/composer.d.ts",
+      "import": "./dist/home-signals/composer.js",
+      "require": "./dist/home-signals/composer.js"
+    },
+    "./commands/command-core": {
+      "types": "./dist/commands/command-core.d.ts",
+      "import": "./dist/commands/command-core.js",
+      "require": "./dist/commands/command-core.js"
+    },
+    "./commands/starter-skills": {
+      "types": "./dist/commands/starter-skills.d.ts",
+      "import": "./dist/commands/starter-skills.js",
+      "require": "./dist/commands/starter-skills.js"
+    },
+    "./commands/starter-skill-installer": {
+      "types": "./dist/commands/starter-skill-installer.d.ts",
+      "import": "./dist/commands/starter-skill-installer.js",
+      "require": "./dist/commands/starter-skill-installer.js"
+    },
+    "./onboarding/home-drive": {
+      "types": "./dist/onboarding/home-drive.d.ts",
+      "import": "./dist/onboarding/home-drive.js",
+      "require": "./dist/onboarding/home-drive.js"
+    },
+    "./onboarding/onboarding-memory": {
+      "types": "./dist/onboarding/onboarding-memory.d.ts",
+      "import": "./dist/onboarding/onboarding-memory.js",
+      "require": "./dist/onboarding/onboarding-memory.js"
+    },
+    "./onboarding/onboarding-state": {
+      "types": "./dist/onboarding/onboarding-state.d.ts",
+      "import": "./dist/onboarding/onboarding-state.js",
+      "require": "./dist/onboarding/onboarding-state.js"
+    },
+    "./db/bounded-query": {
+      "types": "./dist/db/bounded-query.d.ts",
+      "import": "./dist/db/bounded-query.js",
+      "require": "./dist/db/bounded-query.js"
+    },
+    "./db/like-pattern": {
+      "types": "./dist/db/like-pattern.d.ts",
+      "import": "./dist/db/like-pattern.js",
+      "require": "./dist/db/like-pattern.js"
+    },
+    "./ai/normalize-parts": {
+      "types": "./dist/ai/normalize-parts.d.ts",
+      "import": "./dist/ai/normalize-parts.js",
+      "require": "./dist/ai/normalize-parts.js"
+    },
+    "./ai/context-window": {
+      "types": "./dist/ai/context-window.d.ts",
+      "import": "./dist/ai/context-window.js",
+      "require": "./dist/ai/context-window.js"
+    },
+    "./ai/summarization-prompt": {
+      "types": "./dist/ai/summarization-prompt.d.ts",
+      "import": "./dist/ai/summarization-prompt.js",
+      "require": "./dist/ai/summarization-prompt.js"
+    },
+    "./ai/tool-result-eliding": {
+      "types": "./dist/ai/tool-result-eliding.d.ts",
+      "import": "./dist/ai/tool-result-eliding.js",
+      "require": "./dist/ai/tool-result-eliding.js"
+    },
     "./ai/global-channel-id": {
       "types": "./dist/ai/global-channel-id.d.ts",
       "import": "./dist/ai/global-channel-id.js",
       "require": "./dist/ai/global-channel-id.js"
+    },
+    "./agents/builtin-agents": {
+      "types": "./dist/agents/builtin-agents.d.ts",
+      "import": "./dist/agents/builtin-agents.js",
+      "require": "./dist/agents/builtin-agents.js"
+    },
+    "./agents/imago-reach": {
+      "types": "./dist/agents/imago-reach.d.ts",
+      "import": "./dist/agents/imago-reach.js",
+      "require": "./dist/agents/imago-reach.js"
+    },
+    "./agents/imago-drive-access": {
+      "types": "./dist/agents/imago-drive-access.d.ts",
+      "import": "./dist/agents/imago-drive-access.js",
+      "require": "./dist/agents/imago-drive-access.js"
+    },
+    "./agents/provision-imago-agents": {
+      "types": "./dist/agents/provision-imago-agents.d.ts",
+      "import": "./dist/agents/provision-imago-agents.js",
+      "require": "./dist/agents/provision-imago-agents.js"
+    },
+    "./agent-workspaces/workspace-fractions": {
+      "types": "./dist/agent-workspaces/workspace-fractions.d.ts",
+      "import": "./dist/agent-workspaces/workspace-fractions.js",
+      "require": "./dist/agent-workspaces/workspace-fractions.js"
+    },
+    "./agent-workspaces/session-contract": {
+      "types": "./dist/agent-workspaces/session-contract.d.ts",
+      "import": "./dist/agent-workspaces/session-contract.js",
+      "require": "./dist/agent-workspaces/session-contract.js"
+    },
+    "./agent-workspaces/shells-contract": {
+      "types": "./dist/agent-workspaces/shells-contract.d.ts",
+      "import": "./dist/agent-workspaces/shells-contract.js",
+      "require": "./dist/agent-workspaces/shells-contract.js"
+    },
+    "./agent-workspaces/workspace-sprite-key": {
+      "types": "./dist/agent-workspaces/workspace-sprite-key.d.ts",
+      "import": "./dist/agent-workspaces/workspace-sprite-key.js",
+      "require": "./dist/agent-workspaces/workspace-sprite-key.js"
+    },
+    "./agent-workspaces/plan-workspace-lifecycle": {
+      "types": "./dist/agent-workspaces/plan-workspace-lifecycle.d.ts",
+      "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
+      "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
+    },
+    "./drive-envs/env-contract": {
+      "types": "./dist/drive-envs/env-contract.d.ts",
+      "import": "./dist/drive-envs/env-contract.js",
+      "require": "./dist/drive-envs/env-contract.js"
+    },
+    "./drive-envs/plan-env-delete": {
+      "types": "./dist/drive-envs/plan-env-delete.d.ts",
+      "import": "./dist/drive-envs/plan-env-delete.js",
+      "require": "./dist/drive-envs/plan-env-delete.js"
+    },
+    "./organizations/api-error-codes": {
+      "types": "./dist/organizations/api-error-codes.d.ts",
+      "import": "./dist/organizations/api-error-codes.js",
+      "require": "./dist/organizations/api-error-codes.js"
+    },
+    "./organizations/authorize": {
+      "types": "./dist/organizations/authorize.d.ts",
+      "import": "./dist/organizations/authorize.js",
+      "require": "./dist/organizations/authorize.js"
+    },
+    "./organizations/deletion": {
+      "types": "./dist/organizations/deletion.d.ts",
+      "import": "./dist/organizations/deletion.js",
+      "require": "./dist/organizations/deletion.js"
+    },
+    "./organizations/invitations": {
+      "types": "./dist/organizations/invitations.d.ts",
+      "import": "./dist/organizations/invitations.js",
+      "require": "./dist/organizations/invitations.js"
+    },
+    "./avatars/avatar-core": {
+      "types": "./dist/avatars/avatar-core.d.ts",
+      "import": "./dist/avatars/avatar-core.js",
+      "require": "./dist/avatars/avatar-core.js"
+    },
+    "./organizations/org-avatar-core": {
+      "types": "./dist/organizations/org-avatar-core.d.ts",
+      "import": "./dist/organizations/org-avatar-core.js",
+      "require": "./dist/organizations/org-avatar-core.js"
+    },
+    "./organizations/invite-view-core": {
+      "types": "./dist/organizations/invite-view-core.d.ts",
+      "import": "./dist/organizations/invite-view-core.js",
+      "require": "./dist/organizations/invite-view-core.js"
+    },
+    "./organizations/domains": {
+      "types": "./dist/organizations/domains.d.ts",
+      "import": "./dist/organizations/domains.js",
+      "require": "./dist/organizations/domains.js"
+    },
+    "./organizations/domains-core": {
+      "types": "./dist/organizations/domains-core.d.ts",
+      "import": "./dist/organizations/domains-core.js",
+      "require": "./dist/organizations/domains-core.js"
+    },
+    "./audit/org-audit-query": {
+      "types": "./dist/audit/org-audit-query.d.ts",
+      "import": "./dist/audit/org-audit-query.js",
+      "require": "./dist/audit/org-audit-query.js"
+    },
+    "./audit/org-audit-query-core": {
+      "types": "./dist/audit/org-audit-query-core.d.ts",
+      "import": "./dist/audit/org-audit-query-core.js",
+      "require": "./dist/audit/org-audit-query-core.js"
+    },
+    "./organizations/departure-suppression": {
+      "types": "./dist/organizations/departure-suppression.d.ts",
+      "import": "./dist/organizations/departure-suppression.js",
+      "require": "./dist/organizations/departure-suppression.js"
+    },
+    "./audit/audit-db-binding": {
+      "types": "./dist/audit/audit-db-binding.d.ts",
+      "import": "./dist/audit/audit-db-binding.js",
+      "require": "./dist/audit/audit-db-binding.js"
+    },
+    "./organizations/seats": {
+      "types": "./dist/organizations/seats.d.ts",
+      "import": "./dist/organizations/seats.js",
+      "require": "./dist/organizations/seats.js"
+    },
+    "./organizations/seat-service": {
+      "types": "./dist/organizations/seat-service.d.ts",
+      "import": "./dist/organizations/seat-service.js",
+      "require": "./dist/organizations/seat-service.js"
+    },
+    "./organizations/membership": {
+      "types": "./dist/organizations/membership.d.ts",
+      "import": "./dist/organizations/membership.js",
+      "require": "./dist/organizations/membership.js"
+    },
+    "./organizations/drive-picker-groups": {
+      "types": "./dist/organizations/drive-picker-groups.d.ts",
+      "import": "./dist/organizations/drive-picker-groups.js",
+      "require": "./dist/organizations/drive-picker-groups.js"
+    },
+    "./organizations/invite-choice": {
+      "types": "./dist/organizations/invite-choice.d.ts",
+      "import": "./dist/organizations/invite-choice.js",
+      "require": "./dist/organizations/invite-choice.js"
+    },
+    "./organizations/repository": {
+      "types": "./dist/organizations/repository.d.ts",
+      "import": "./dist/organizations/repository.js",
+      "require": "./dist/organizations/repository.js"
+    },
+    "./services/drive-envs/local-env-revoke": {
+      "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
+      "import": "./dist/services/drive-envs/local-env-revoke.js",
+      "require": "./dist/services/drive-envs/local-env-revoke.js"
+    },
+    "./services/drive-envs/env-provision-deps": {
+      "types": "./dist/services/drive-envs/env-provision-deps.d.ts",
+      "import": "./dist/services/drive-envs/env-provision-deps.js",
+      "require": "./dist/services/drive-envs/env-provision-deps.js"
+    },
+    "./services/drive-envs/local-env-gate": {
+      "types": "./dist/services/drive-envs/local-env-gate.d.ts",
+      "import": "./dist/services/drive-envs/local-env-gate.js",
+      "require": "./dist/services/drive-envs/local-env-gate.js"
+    },
+    "./services/drive-envs/drive-envs": {
+      "types": "./dist/services/drive-envs/drive-envs.d.ts",
+      "import": "./dist/services/drive-envs/drive-envs.js",
+      "require": "./dist/services/drive-envs/drive-envs.js"
+    },
+    "./services/drive-envs/local-envs-enabled": {
+      "types": "./dist/services/drive-envs/local-envs-enabled.d.ts",
+      "import": "./dist/services/drive-envs/local-envs-enabled.js",
+      "require": "./dist/services/drive-envs/local-envs-enabled.js"
+    },
+    "./services/drive-envs/drive-envs-store": {
+      "types": "./dist/services/drive-envs/drive-envs-store.d.ts",
+      "import": "./dist/services/drive-envs/drive-envs-store.js",
+      "require": "./dist/services/drive-envs/drive-envs-store.js"
+    },
+    "./drive-envs/env-sprite-key": {
+      "types": "./dist/drive-envs/env-sprite-key.d.ts",
+      "import": "./dist/drive-envs/env-sprite-key.js",
+      "require": "./dist/drive-envs/env-sprite-key.js"
+    },
+    "./env-bridge": {
+      "types": "./dist/env-bridge/index.d.ts",
+      "import": "./dist/env-bridge/index.js",
+      "require": "./dist/env-bridge/index.js"
+    },
+    "./env-bridge/grant": {
+      "types": "./dist/env-bridge/grant.d.ts",
+      "import": "./dist/env-bridge/grant.js",
+      "require": "./dist/env-bridge/grant.js"
+    },
+    "./agent-accounts/grant": {
+      "types": "./dist/agent-accounts/grant.d.ts",
+      "import": "./dist/agent-accounts/grant.js",
+      "require": "./dist/agent-accounts/grant.js"
+    },
+    "./agent-accounts/canonical-request": {
+      "types": "./dist/agent-accounts/canonical-request.d.ts",
+      "import": "./dist/agent-accounts/canonical-request.js",
+      "require": "./dist/agent-accounts/canonical-request.js"
+    },
+    "./agent-accounts/approval": {
+      "types": "./dist/agent-accounts/approval.d.ts",
+      "import": "./dist/agent-accounts/approval.js",
+      "require": "./dist/agent-accounts/approval.js"
+    },
+    "./agent-accounts/audit": {
+      "types": "./dist/agent-accounts/audit.d.ts",
+      "import": "./dist/agent-accounts/audit.js",
+      "require": "./dist/agent-accounts/audit.js"
+    },
+    "./agent-accounts/store/store-adapter": {
+      "types": "./dist/agent-accounts/store/store-adapter.d.ts",
+      "import": "./dist/agent-accounts/store/store-adapter.js",
+      "require": "./dist/agent-accounts/store/store-adapter.js"
+    },
+    "./agent-accounts/canonicalize-request": {
+      "types": "./dist/agent-accounts/canonicalize-request.d.ts",
+      "import": "./dist/agent-accounts/canonicalize-request.js",
+      "require": "./dist/agent-accounts/canonicalize-request.js"
+    },
+    "./agent-accounts/digest-request": {
+      "types": "./dist/agent-accounts/digest-request.d.ts",
+      "import": "./dist/agent-accounts/digest-request.js",
+      "require": "./dist/agent-accounts/digest-request.js"
+    },
+    "./agent-accounts/render-approval-subject": {
+      "types": "./dist/agent-accounts/render-approval-subject.d.ts",
+      "import": "./dist/agent-accounts/render-approval-subject.js",
+      "require": "./dist/agent-accounts/render-approval-subject.js"
+    },
+    "./agent-accounts/decide-replay": {
+      "types": "./dist/agent-accounts/decide-replay.d.ts",
+      "import": "./dist/agent-accounts/decide-replay.js",
+      "require": "./dist/agent-accounts/decide-replay.js"
+    },
+    "./agent-accounts/decide-retry": {
+      "types": "./dist/agent-accounts/decide-retry.d.ts",
+      "import": "./dist/agent-accounts/decide-retry.js",
+      "require": "./dist/agent-accounts/decide-retry.js"
+    },
+    "./agent-accounts/replay-store-repository": {
+      "types": "./dist/agent-accounts/replay-store-repository.d.ts",
+      "import": "./dist/agent-accounts/replay-store-repository.js",
+      "require": "./dist/agent-accounts/replay-store-repository.js"
+    },
+    "./agent-accounts/grant-constants": {
+      "types": "./dist/agent-accounts/grant-constants.d.ts",
+      "import": "./dist/agent-accounts/grant-constants.js",
+      "require": "./dist/agent-accounts/grant-constants.js"
+    },
+    "./agent-accounts/encode-grant": {
+      "types": "./dist/agent-accounts/encode-grant.d.ts",
+      "import": "./dist/agent-accounts/encode-grant.js",
+      "require": "./dist/agent-accounts/encode-grant.js"
+    },
+    "./agent-accounts/parse-grant": {
+      "types": "./dist/agent-accounts/parse-grant.d.ts",
+      "import": "./dist/agent-accounts/parse-grant.js",
+      "require": "./dist/agent-accounts/parse-grant.js"
+    },
+    "./agent-accounts/verify-grant": {
+      "types": "./dist/agent-accounts/verify-grant.d.ts",
+      "import": "./dist/agent-accounts/verify-grant.js",
+      "require": "./dist/agent-accounts/verify-grant.js"
+    },
+    "./agent-accounts/decide-sandbox-binding": {
+      "types": "./dist/agent-accounts/decide-sandbox-binding.d.ts",
+      "import": "./dist/agent-accounts/decide-sandbox-binding.js",
+      "require": "./dist/agent-accounts/decide-sandbox-binding.js"
+    },
+    "./agent-accounts/collapse-verdict": {
+      "types": "./dist/agent-accounts/collapse-verdict.d.ts",
+      "import": "./dist/agent-accounts/collapse-verdict.js",
+      "require": "./dist/agent-accounts/collapse-verdict.js"
+    },
+    "./agent-accounts/grant-gate-executor": {
+      "types": "./dist/agent-accounts/grant-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/grant-gate-executor.js",
+      "require": "./dist/agent-accounts/grant-gate-executor.js"
+    },
+    "./agent-accounts/decide-approval": {
+      "types": "./dist/agent-accounts/decide-approval.d.ts",
+      "import": "./dist/agent-accounts/decide-approval.js",
+      "require": "./dist/agent-accounts/decide-approval.js"
+    },
+    "./agent-accounts/bind-approval": {
+      "types": "./dist/agent-accounts/bind-approval.d.ts",
+      "import": "./dist/agent-accounts/bind-approval.js",
+      "require": "./dist/agent-accounts/bind-approval.js"
+    },
+    "./agent-accounts/build-audit-record": {
+      "types": "./dist/agent-accounts/build-audit-record.d.ts",
+      "import": "./dist/agent-accounts/build-audit-record.js",
+      "require": "./dist/agent-accounts/build-audit-record.js"
+    },
+    "./agent-accounts/decide-audit-gate": {
+      "types": "./dist/agent-accounts/decide-audit-gate.d.ts",
+      "import": "./dist/agent-accounts/decide-audit-gate.js",
+      "require": "./dist/agent-accounts/decide-audit-gate.js"
+    },
+    "./agent-accounts/redact-known-values": {
+      "types": "./dist/agent-accounts/redact-known-values.d.ts",
+      "import": "./dist/agent-accounts/redact-known-values.js",
+      "require": "./dist/agent-accounts/redact-known-values.js"
+    },
+    "./agent-accounts/audit-repository": {
+      "types": "./dist/agent-accounts/audit-repository.d.ts",
+      "import": "./dist/agent-accounts/audit-repository.js",
+      "require": "./dist/agent-accounts/audit-repository.js"
+    },
+    "./agent-accounts/lookup-operation": {
+      "types": "./dist/agent-accounts/lookup-operation.d.ts",
+      "import": "./dist/agent-accounts/lookup-operation.js",
+      "require": "./dist/agent-accounts/lookup-operation.js"
+    },
+    "./agent-accounts/find-operation-registry-conflicts": {
+      "types": "./dist/agent-accounts/find-operation-registry-conflicts.d.ts",
+      "import": "./dist/agent-accounts/find-operation-registry-conflicts.js",
+      "require": "./dist/agent-accounts/find-operation-registry-conflicts.js"
+    },
+    "./agent-accounts/find-duplicate-resource-slots": {
+      "types": "./dist/agent-accounts/find-duplicate-resource-slots.d.ts",
+      "import": "./dist/agent-accounts/find-duplicate-resource-slots.js",
+      "require": "./dist/agent-accounts/find-duplicate-resource-slots.js"
+    },
+    "./agent-accounts/denial-audit-record": {
+      "types": "./dist/agent-accounts/denial-audit-record.d.ts",
+      "import": "./dist/agent-accounts/denial-audit-record.js",
+      "require": "./dist/agent-accounts/denial-audit-record.js"
+    },
+    "./agent-accounts/build-denial-record": {
+      "types": "./dist/agent-accounts/build-denial-record.d.ts",
+      "import": "./dist/agent-accounts/build-denial-record.js",
+      "require": "./dist/agent-accounts/build-denial-record.js"
+    },
+    "./agent-accounts/audit-gate-executor": {
+      "types": "./dist/agent-accounts/audit-gate-executor.d.ts",
+      "import": "./dist/agent-accounts/audit-gate-executor.js",
+      "require": "./dist/agent-accounts/audit-gate-executor.js"
+    },
+    "./agent-accounts/account-authority-key": {
+      "types": "./dist/agent-accounts/account-authority-key.d.ts",
+      "import": "./dist/agent-accounts/account-authority-key.js",
+      "require": "./dist/agent-accounts/account-authority-key.js"
+    },
+    "./agent-accounts/sign-grant": {
+      "types": "./dist/agent-accounts/sign-grant.d.ts",
+      "import": "./dist/agent-accounts/sign-grant.js",
+      "require": "./dist/agent-accounts/sign-grant.js"
+    },
+    "./auth/account-authority-signing-key": {
+      "types": "./dist/auth/account-authority-signing-key.d.ts",
+      "import": "./dist/auth/account-authority-signing-key.js",
+      "require": "./dist/auth/account-authority-signing-key.js"
+    },
+    "./agent-accounts/always-allowed-by-class": {
+      "types": "./dist/agent-accounts/always-allowed-by-class.d.ts",
+      "import": "./dist/agent-accounts/always-allowed-by-class.js",
+      "require": "./dist/agent-accounts/always-allowed-by-class.js"
+    },
+    "./permissions/decide-account-access": {
+      "types": "./dist/permissions/decide-account-access.d.ts",
+      "import": "./dist/permissions/decide-account-access.js",
+      "require": "./dist/permissions/decide-account-access.js"
+    },
+    "./permissions/account-permissions": {
+      "types": "./dist/permissions/account-permissions.d.ts",
+      "import": "./dist/permissions/account-permissions.js",
+      "require": "./dist/permissions/account-permissions.js"
+    },
+    "./env-bridge/policy-types": {
+      "types": "./dist/env-bridge/policy-types.d.ts",
+      "import": "./dist/env-bridge/policy-types.js",
+      "require": "./dist/env-bridge/policy-types.js"
+    },
+    "./env-bridge/intersect-capabilities": {
+      "types": "./dist/env-bridge/intersect-capabilities.d.ts",
+      "import": "./dist/env-bridge/intersect-capabilities.js",
+      "require": "./dist/env-bridge/intersect-capabilities.js"
+    },
+    "./env-bridge/scrub-env": {
+      "types": "./dist/env-bridge/scrub-env.d.ts",
+      "import": "./dist/env-bridge/scrub-env.js",
+      "require": "./dist/env-bridge/scrub-env.js"
+    },
+    "./env-bridge/confine-path": {
+      "types": "./dist/env-bridge/confine-path.d.ts",
+      "import": "./dist/env-bridge/confine-path.js",
+      "require": "./dist/env-bridge/confine-path.js"
+    },
+    "./env-bridge/decide-execution": {
+      "types": "./dist/env-bridge/decide-execution.d.ts",
+      "import": "./dist/env-bridge/decide-execution.js",
+      "require": "./dist/env-bridge/decide-execution.js"
+    },
+    "./env-bridge/frame-codec": {
+      "types": "./dist/env-bridge/frame-codec.d.ts",
+      "import": "./dist/env-bridge/frame-codec.js",
+      "require": "./dist/env-bridge/frame-codec.js"
+    },
+    "./env-bridge/bridge-session": {
+      "types": "./dist/env-bridge/bridge-session.d.ts",
+      "import": "./dist/env-bridge/bridge-session.js",
+      "require": "./dist/env-bridge/bridge-session.js"
+    },
+    "./env-bridge/resolve-timeout": {
+      "types": "./dist/env-bridge/resolve-timeout.d.ts",
+      "import": "./dist/env-bridge/resolve-timeout.js",
+      "require": "./dist/env-bridge/resolve-timeout.js"
+    },
+    "./env-bridge/decide-bind": {
+      "types": "./dist/env-bridge/decide-bind.d.ts",
+      "import": "./dist/env-bridge/decide-bind.js",
+      "require": "./dist/env-bridge/decide-bind.js"
+    },
+    "./env-bridge/plan-local-provision": {
+      "types": "./dist/env-bridge/plan-local-provision.d.ts",
+      "import": "./dist/env-bridge/plan-local-provision.js",
+      "require": "./dist/env-bridge/plan-local-provision.js"
+    },
+    "./env-bridge/enrollment": {
+      "types": "./dist/env-bridge/enrollment.d.ts",
+      "import": "./dist/env-bridge/enrollment.js",
+      "require": "./dist/env-bridge/enrollment.js"
+    },
+    "./env-bridge/challenge": {
+      "types": "./dist/env-bridge/challenge.d.ts",
+      "import": "./dist/env-bridge/challenge.js",
+      "require": "./dist/env-bridge/challenge.js"
+    },
+    "./env-bridge/grant-args": {
+      "types": "./dist/env-bridge/grant-args.d.ts",
+      "import": "./dist/env-bridge/grant-args.js",
+      "require": "./dist/env-bridge/grant-args.js"
+    },
+    "./env-bridge/machine-signatures": {
+      "types": "./dist/env-bridge/machine-signatures.d.ts",
+      "import": "./dist/env-bridge/machine-signatures.js",
+      "require": "./dist/env-bridge/machine-signatures.js"
+    },
+    "./env-bridge/server-signing-key": {
+      "types": "./dist/env-bridge/server-signing-key.d.ts",
+      "import": "./dist/env-bridge/server-signing-key.js",
+      "require": "./dist/env-bridge/server-signing-key.js"
+    },
+    "./auth/env-bridge-signing-key": {
+      "types": "./dist/auth/env-bridge-signing-key.d.ts",
+      "import": "./dist/auth/env-bridge-signing-key.js",
+      "require": "./dist/auth/env-bridge-signing-key.js"
+    },
+    "./agent-workspaces/credential-scope": {
+      "types": "./dist/agent-workspaces/credential-scope.d.ts",
+      "import": "./dist/agent-workspaces/credential-scope.js",
+      "require": "./dist/agent-workspaces/credential-scope.js"
+    },
+    "./agent-workspaces/decide-workspace-access": {
+      "types": "./dist/agent-workspaces/decide-workspace-access.d.ts",
+      "import": "./dist/agent-workspaces/decide-workspace-access.js",
+      "require": "./dist/agent-workspaces/decide-workspace-access.js"
+    },
+    "./agent-workspaces/plan-spawn-worker": {
+      "types": "./dist/agent-workspaces/plan-spawn-worker.d.ts",
+      "import": "./dist/agent-workspaces/plan-spawn-worker.js",
+      "require": "./dist/agent-workspaces/plan-spawn-worker.js"
+    },
+    "./agent-workspaces/redact-conversation-listing": {
+      "types": "./dist/agent-workspaces/redact-conversation-listing.d.ts",
+      "import": "./dist/agent-workspaces/redact-conversation-listing.js",
+      "require": "./dist/agent-workspaces/redact-conversation-listing.js"
+    },
+    "./agent-workspaces/workspace-node": {
+      "types": "./dist/agent-workspaces/workspace-node.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node.js",
+      "require": "./dist/agent-workspaces/workspace-node.js"
+    },
+    "./agent-workspaces/workspace-membership": {
+      "types": "./dist/agent-workspaces/workspace-membership.d.ts",
+      "import": "./dist/agent-workspaces/workspace-membership.js",
+      "require": "./dist/agent-workspaces/workspace-membership.js"
+    },
+    "./agent-workspaces/workspace-node-validate": {
+      "types": "./dist/agent-workspaces/workspace-node-validate.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-validate.js",
+      "require": "./dist/agent-workspaces/workspace-node-validate.js"
+    },
+    "./ai/model-defaults": {
+      "types": "./dist/ai/model-defaults.d.ts",
+      "import": "./dist/ai/model-defaults.js",
+      "require": "./dist/ai/model-defaults.js"
+    },
+    "./links/page-url-parser": {
+      "types": "./dist/links/page-url-parser.d.ts",
+      "import": "./dist/links/page-url-parser.js",
+      "require": "./dist/links/page-url-parser.js"
     },
     "./logging/logger": {
       "types": "./dist/logging/logger.d.ts",
@@ -30,6 +608,11 @@
       "types": "./dist/logging/logger-config.d.ts",
       "import": "./dist/logging/logger-config.js",
       "require": "./dist/logging/logger-config.js"
+    },
+    "./logging/error-cause": {
+      "types": "./dist/logging/error-cause.d.ts",
+      "import": "./dist/logging/error-cause.js",
+      "require": "./dist/logging/error-cause.js"
     },
     "./logging/logger-database": {
       "types": "./dist/logging/logger-database.d.ts",
@@ -45,6 +628,346 @@
       "types": "./dist/logging/ai-usage-purge.d.ts",
       "import": "./dist/logging/ai-usage-purge.js",
       "require": "./dist/logging/ai-usage-purge.js"
+    },
+    "./memory/memory-pages": {
+      "types": "./dist/memory/memory-pages.d.ts",
+      "import": "./dist/memory/memory-pages.js",
+      "require": "./dist/memory/memory-pages.js"
+    },
+    "./observability/sentry-env": {
+      "types": "./dist/observability/sentry-env.d.ts",
+      "import": "./dist/observability/sentry-env.js",
+      "require": "./dist/observability/sentry-env.js"
+    },
+    "./observability/clickhouse-buffer": {
+      "types": "./dist/observability/clickhouse-buffer.d.ts",
+      "import": "./dist/observability/clickhouse-buffer.js",
+      "require": "./dist/observability/clickhouse-buffer.js"
+    },
+    "./observability/clickhouse-client": {
+      "types": "./dist/observability/clickhouse-client.d.ts",
+      "import": "./dist/observability/clickhouse-client.js",
+      "require": "./dist/observability/clickhouse-client.js"
+    },
+    "./observability/clickhouse-env": {
+      "types": "./dist/observability/clickhouse-env.d.ts",
+      "import": "./dist/observability/clickhouse-env.js",
+      "require": "./dist/observability/clickhouse-env.js"
+    },
+    "./observability/clickhouse-ddl": {
+      "types": "./dist/observability/clickhouse-ddl.d.ts",
+      "import": "./dist/observability/clickhouse-ddl.js",
+      "require": "./dist/observability/clickhouse-ddl.js"
+    },
+    "./observability/analytics-rows": {
+      "types": "./dist/observability/analytics-rows.d.ts",
+      "import": "./dist/observability/analytics-rows.js",
+      "require": "./dist/observability/analytics-rows.js"
+    },
+    "./observability/analytics-inserts": {
+      "types": "./dist/observability/analytics-inserts.d.ts",
+      "import": "./dist/observability/analytics-inserts.js",
+      "require": "./dist/observability/analytics-inserts.js"
+    },
+    "./observability/analytics-read-core": {
+      "types": "./dist/observability/analytics-read-core.d.ts",
+      "import": "./dist/observability/analytics-read-core.js",
+      "require": "./dist/observability/analytics-read-core.js"
+    },
+    "./observability/analytics-reads": {
+      "types": "./dist/observability/analytics-reads.d.ts",
+      "import": "./dist/observability/analytics-reads.js",
+      "require": "./dist/observability/analytics-reads.js"
+    },
+    "./observability/analytics-gdpr": {
+      "types": "./dist/observability/analytics-gdpr.d.ts",
+      "import": "./dist/observability/analytics-gdpr.js",
+      "require": "./dist/observability/analytics-gdpr.js"
+    },
+    "./observability/error-resolutions": {
+      "types": "./dist/observability/error-resolutions.d.ts",
+      "import": "./dist/observability/error-resolutions.js",
+      "require": "./dist/observability/error-resolutions.js"
+    },
+    "./billing/deployment-capability": {
+      "types": "./dist/billing/deployment-capability.d.ts",
+      "import": "./dist/billing/deployment-capability.js",
+      "require": "./dist/billing/deployment-capability.js"
+    },
+    "./billing/apple/apple-products": {
+      "types": "./dist/billing/apple/apple-products.d.ts",
+      "import": "./dist/billing/apple/apple-products.js",
+      "require": "./dist/billing/apple/apple-products.js"
+    },
+    "./billing/apple/apple-core": {
+      "types": "./dist/billing/apple/apple-core.d.ts",
+      "import": "./dist/billing/apple/apple-core.js",
+      "require": "./dist/billing/apple/apple-core.js"
+    },
+    "./billing/apple/apple-verify": {
+      "types": "./dist/billing/apple/apple-verify.d.ts",
+      "import": "./dist/billing/apple/apple-verify.js",
+      "require": "./dist/billing/apple/apple-verify.js"
+    },
+    "./billing/apple/apple-funding": {
+      "types": "./dist/billing/apple/apple-funding.d.ts",
+      "import": "./dist/billing/apple/apple-funding.js",
+      "require": "./dist/billing/apple/apple-funding.js"
+    },
+    "./billing/apple/apple-account": {
+      "types": "./dist/billing/apple/apple-account.d.ts",
+      "import": "./dist/billing/apple/apple-account.js",
+      "require": "./dist/billing/apple/apple-account.js"
+    },
+    "./billing/apple/apple-entitlement": {
+      "types": "./dist/billing/apple/apple-entitlement.d.ts",
+      "import": "./dist/billing/apple/apple-entitlement.js",
+      "require": "./dist/billing/apple/apple-entitlement.js"
+    },
+    "./billing/subscription-tiers": {
+      "types": "./dist/billing/subscription-tiers.d.ts",
+      "import": "./dist/billing/subscription-tiers.js",
+      "require": "./dist/billing/subscription-tiers.js"
+    },
+    "./billing/storage-addon": {
+      "types": "./dist/billing/storage-addon.d.ts",
+      "import": "./dist/billing/storage-addon.js",
+      "require": "./dist/billing/storage-addon.js"
+    },
+    "./billing/subscription-tier-sync": {
+      "types": "./dist/billing/subscription-tier-sync.d.ts",
+      "import": "./dist/billing/subscription-tier-sync.js",
+      "require": "./dist/billing/subscription-tier-sync.js"
+    },
+    "./billing/subscription-tier-reconcile": {
+      "types": "./dist/billing/subscription-tier-reconcile.d.ts",
+      "import": "./dist/billing/subscription-tier-reconcile.js",
+      "require": "./dist/billing/subscription-tier-reconcile.js"
+    },
+    "./billing/credit-pricing": {
+      "types": "./dist/billing/credit-pricing.d.ts",
+      "import": "./dist/billing/credit-pricing.js",
+      "require": "./dist/billing/credit-pricing.js"
+    },
+    "./billing/money-model": {
+      "types": "./dist/billing/money-model.d.ts",
+      "import": "./dist/billing/money-model.js",
+      "require": "./dist/billing/money-model.js"
+    },
+    "./billing/credit-liability": {
+      "types": "./dist/billing/credit-liability.d.ts",
+      "import": "./dist/billing/credit-liability.js",
+      "require": "./dist/billing/credit-liability.js"
+    },
+    "./billing/credit-liability-query": {
+      "types": "./dist/billing/credit-liability-query.d.ts",
+      "import": "./dist/billing/credit-liability-query.js",
+      "require": "./dist/billing/credit-liability-query.js"
+    },
+    "./billing/credit-copy": {
+      "types": "./dist/billing/credit-copy.d.ts",
+      "import": "./dist/billing/credit-copy.js",
+      "require": "./dist/billing/credit-copy.js"
+    },
+    "./billing/credit-gate": {
+      "types": "./dist/billing/credit-gate.d.ts",
+      "import": "./dist/billing/credit-gate.js",
+      "require": "./dist/billing/credit-gate.js"
+    },
+    "./billing/spend-fallback": {
+      "types": "./dist/billing/spend-fallback.d.ts",
+      "import": "./dist/billing/spend-fallback.js",
+      "require": "./dist/billing/spend-fallback.js"
+    },
+    "./billing/spend-refusal-copy": {
+      "types": "./dist/billing/spend-refusal-copy.d.ts",
+      "import": "./dist/billing/spend-refusal-copy.js",
+      "require": "./dist/billing/spend-refusal-copy.js"
+    },
+    "./billing/spend-surface": {
+      "types": "./dist/billing/spend-surface.d.ts",
+      "import": "./dist/billing/spend-surface.js",
+      "require": "./dist/billing/spend-surface.js"
+    },
+    "./billing/automation-run-record": {
+      "types": "./dist/billing/automation-run-record.d.ts",
+      "import": "./dist/billing/automation-run-record.js",
+      "require": "./dist/billing/automation-run-record.js"
+    },
+    "./billing/wallet-surface": {
+      "types": "./dist/billing/wallet-surface.d.ts",
+      "import": "./dist/billing/wallet-surface.js",
+      "require": "./dist/billing/wallet-surface.js"
+    },
+    "./billing/automation-attribution": {
+      "types": "./dist/billing/automation-attribution.d.ts",
+      "import": "./dist/billing/automation-attribution.js",
+      "require": "./dist/billing/automation-attribution.js"
+    },
+    "./billing/spend-target": {
+      "types": "./dist/billing/spend-target.d.ts",
+      "import": "./dist/billing/spend-target.js",
+      "require": "./dist/billing/spend-target.js"
+    },
+    "./billing/wallet-reconcile": {
+      "types": "./dist/billing/wallet-reconcile.d.ts",
+      "import": "./dist/billing/wallet-reconcile.js",
+      "require": "./dist/billing/wallet-reconcile.js"
+    },
+    "./billing/spend-resolution": {
+      "types": "./dist/billing/spend-resolution.d.ts",
+      "import": "./dist/billing/spend-resolution.js",
+      "require": "./dist/billing/spend-resolution.js"
+    },
+    "./billing/call-admission": {
+      "types": "./dist/billing/call-admission.d.ts",
+      "import": "./dist/billing/call-admission.js",
+      "require": "./dist/billing/call-admission.js"
+    },
+    "./billing/wallet-views": {
+      "types": "./dist/billing/wallet-views.d.ts",
+      "import": "./dist/billing/wallet-views.js",
+      "require": "./dist/billing/wallet-views.js"
+    },
+    "./billing/credit-backfill": {
+      "types": "./dist/billing/credit-backfill.d.ts",
+      "import": "./dist/billing/credit-backfill.js",
+      "require": "./dist/billing/credit-backfill.js"
+    },
+    "./billing/credit-funding": {
+      "types": "./dist/billing/credit-funding.d.ts",
+      "import": "./dist/billing/credit-funding.js",
+      "require": "./dist/billing/credit-funding.js"
+    },
+    "./billing/invoice-grant": {
+      "types": "./dist/billing/invoice-grant.d.ts",
+      "import": "./dist/billing/invoice-grant.js",
+      "require": "./dist/billing/invoice-grant.js"
+    },
+    "./billing/missed-grant-reconcile": {
+      "types": "./dist/billing/missed-grant-reconcile.d.ts",
+      "import": "./dist/billing/missed-grant-reconcile.js",
+      "require": "./dist/billing/missed-grant-reconcile.js"
+    },
+    "./billing/cost-reconcile": {
+      "types": "./dist/billing/cost-reconcile.d.ts",
+      "import": "./dist/billing/cost-reconcile.js",
+      "require": "./dist/billing/cost-reconcile.js"
+    },
+    "./billing/credit-core": {
+      "types": "./dist/billing/credit-core.d.ts",
+      "import": "./dist/billing/credit-core.js",
+      "require": "./dist/billing/credit-core.js"
+    },
+    "./billing/credit-consume": {
+      "types": "./dist/billing/credit-consume.d.ts",
+      "import": "./dist/billing/credit-consume.js",
+      "require": "./dist/billing/credit-consume.js"
+    },
+    "./billing/credit-balance": {
+      "types": "./dist/billing/credit-balance.d.ts",
+      "import": "./dist/billing/credit-balance.js",
+      "require": "./dist/billing/credit-balance.js"
+    },
+    "./billing/credit-emit": {
+      "types": "./dist/billing/credit-emit.d.ts",
+      "import": "./dist/billing/credit-emit.js",
+      "require": "./dist/billing/credit-emit.js"
+    },
+    "./billing/automation-preferences": {
+      "types": "./dist/billing/automation-preferences.d.ts",
+      "import": "./dist/billing/automation-preferences.js",
+      "require": "./dist/billing/automation-preferences.js"
+    },
+    "./billing/sandbox-payer": {
+      "types": "./dist/billing/sandbox-payer.d.ts",
+      "import": "./dist/billing/sandbox-payer.js",
+      "require": "./dist/billing/sandbox-payer.js"
+    },
+    "./billing/compute-charge": {
+      "types": "./dist/billing/compute-charge.d.ts",
+      "import": "./dist/billing/compute-charge.js",
+      "require": "./dist/billing/compute-charge.js"
+    },
+    "./billing/compute-gate": {
+      "types": "./dist/billing/compute-gate.d.ts",
+      "import": "./dist/billing/compute-gate.js",
+      "require": "./dist/billing/compute-gate.js"
+    },
+    "./billing/sandbox-eligibility": {
+      "types": "./dist/billing/sandbox-eligibility.d.ts",
+      "import": "./dist/billing/sandbox-eligibility.js",
+      "require": "./dist/billing/sandbox-eligibility.js"
+    },
+    "./billing/live-concurrency-query": {
+      "types": "./dist/billing/live-concurrency-query.d.ts",
+      "import": "./dist/billing/live-concurrency-query.js",
+      "require": "./dist/billing/live-concurrency-query.js"
+    },
+    "./billing/wallet-core": {
+      "types": "./dist/billing/wallet-core.d.ts",
+      "import": "./dist/billing/wallet-core.js",
+      "require": "./dist/billing/wallet-core.js"
+    },
+    "./billing/wallet-funding": {
+      "types": "./dist/billing/wallet-funding.d.ts",
+      "import": "./dist/billing/wallet-funding.js",
+      "require": "./dist/billing/wallet-funding.js"
+    },
+    "./billing/org-subscription-core": {
+      "types": "./dist/billing/org-subscription-core.d.ts",
+      "import": "./dist/billing/org-subscription-core.js",
+      "require": "./dist/billing/org-subscription-core.js"
+    },
+    "./billing/org-gift-core": {
+      "types": "./dist/billing/org-gift-core.d.ts",
+      "import": "./dist/billing/org-gift-core.js",
+      "require": "./dist/billing/org-gift-core.js"
+    },
+    "./billing/org-gift": {
+      "types": "./dist/billing/org-gift.d.ts",
+      "import": "./dist/billing/org-gift.js",
+      "require": "./dist/billing/org-gift.js"
+    },
+    "./billing/org-plan-quote": {
+      "types": "./dist/billing/org-plan-quote.d.ts",
+      "import": "./dist/billing/org-plan-quote.js",
+      "require": "./dist/billing/org-plan-quote.js"
+    },
+    "./billing/wallet-admin": {
+      "types": "./dist/billing/wallet-admin.d.ts",
+      "import": "./dist/billing/wallet-admin.js",
+      "require": "./dist/billing/wallet-admin.js"
+    },
+    "./test/wallet-leg-invariant": {
+      "types": "./dist/test/wallet-leg-invariant.d.ts",
+      "import": "./dist/test/wallet-leg-invariant.js",
+      "require": "./dist/test/wallet-leg-invariant.js"
+    },
+    "./organizations/status": {
+      "types": "./dist/organizations/status.d.ts",
+      "import": "./dist/organizations/status.js",
+      "require": "./dist/organizations/status.js"
+    },
+    "./organizations/status-core": {
+      "types": "./dist/organizations/status-core.d.ts",
+      "import": "./dist/organizations/status-core.js",
+      "require": "./dist/organizations/status-core.js"
+    },
+    "./organizations/loosening-core": {
+      "types": "./dist/organizations/loosening-core.d.ts",
+      "import": "./dist/organizations/loosening-core.js",
+      "require": "./dist/organizations/loosening-core.js"
+    },
+    "./billing/org-webhook-core": {
+      "types": "./dist/billing/org-webhook-core.d.ts",
+      "import": "./dist/billing/org-webhook-core.js",
+      "require": "./dist/billing/org-webhook-core.js"
+    },
+    "./billing/wallet-funding-shell": {
+      "types": "./dist/billing/wallet-funding-shell.d.ts",
+      "import": "./dist/billing/wallet-funding-shell.js",
+      "require": "./dist/billing/wallet-funding-shell.js"
     },
     "./logging/siem-error-hook": {
       "types": "./dist/logging/siem-error-hook.d.ts",
@@ -66,6 +989,26 @@
       "import": "./dist/monitoring/ai-monitoring.js",
       "require": "./dist/monitoring/ai-monitoring.js"
     },
+    "./monitoring/machine-pricing": {
+      "types": "./dist/monitoring/machine-pricing.d.ts",
+      "import": "./dist/monitoring/machine-pricing.js",
+      "require": "./dist/monitoring/machine-pricing.js"
+    },
+    "./monitoring/usage-source": {
+      "types": "./dist/monitoring/usage-source.d.ts",
+      "import": "./dist/monitoring/usage-source.js",
+      "require": "./dist/monitoring/usage-source.js"
+    },
+    "./monitoring/voice-pricing": {
+      "types": "./dist/monitoring/voice-pricing.d.ts",
+      "import": "./dist/monitoring/voice-pricing.js",
+      "require": "./dist/monitoring/voice-pricing.js"
+    },
+    "./monitoring/chat-pricing": {
+      "types": "./dist/monitoring/chat-pricing.d.ts",
+      "import": "./dist/monitoring/chat-pricing.js",
+      "require": "./dist/monitoring/chat-pricing.js"
+    },
     "./monitoring/ai-context-calculator": {
       "types": "./dist/monitoring/ai-context-calculator.d.ts",
       "import": "./dist/monitoring/ai-context-calculator.js",
@@ -86,10 +1029,50 @@
       "import": "./dist/encryption/encryption-utils.js",
       "require": "./dist/encryption/encryption-utils.js"
     },
+    "./encryption/blind-index": {
+      "types": "./dist/encryption/blind-index.d.ts",
+      "import": "./dist/encryption/blind-index.js",
+      "require": "./dist/encryption/blind-index.js"
+    },
+    "./encryption/field-crypto": {
+      "types": "./dist/encryption/field-crypto.d.ts",
+      "import": "./dist/encryption/field-crypto.js",
+      "require": "./dist/encryption/field-crypto.js"
+    },
+    "./encryption/user-crypto": {
+      "types": "./dist/encryption/user-crypto.d.ts",
+      "import": "./dist/encryption/user-crypto.js",
+      "require": "./dist/encryption/user-crypto.js"
+    },
+    "./encryption/user-pii-backfill": {
+      "types": "./dist/encryption/user-pii-backfill.d.ts",
+      "import": "./dist/encryption/user-pii-backfill.js",
+      "require": "./dist/encryption/user-pii-backfill.js"
+    },
+    "./encryption/legacy-ciphertext-reencrypt": {
+      "types": "./dist/encryption/legacy-ciphertext-reencrypt.d.ts",
+      "import": "./dist/encryption/legacy-ciphertext-reencrypt.js",
+      "require": "./dist/encryption/legacy-ciphertext-reencrypt.js"
+    },
     "./auth/device-auth-utils": {
       "types": "./dist/auth/device-auth-utils.d.ts",
       "import": "./dist/auth/device-auth-utils.js",
       "require": "./dist/auth/device-auth-utils.js"
+    },
+    "./auth/user-repository": {
+      "types": "./dist/auth/user-repository.d.ts",
+      "import": "./dist/auth/user-repository.js",
+      "require": "./dist/auth/user-repository.js"
+    },
+    "./auth/onprem-setup-link": {
+      "types": "./dist/auth/onprem-setup-link.d.ts",
+      "import": "./dist/auth/onprem-setup-link.js",
+      "require": "./dist/auth/onprem-setup-link.js"
+    },
+    "./auth/token-lifecycle-policy": {
+      "types": "./dist/auth/token-lifecycle-policy.d.ts",
+      "import": "./dist/auth/token-lifecycle-policy.js",
+      "require": "./dist/auth/token-lifecycle-policy.js"
     },
     "./auth/device-fingerprint-utils": {
       "types": "./dist/auth/device-fingerprint-utils.d.ts",
@@ -101,25 +1084,85 @@
       "import": "./dist/utils/api-utils.js",
       "require": "./dist/utils/api-utils.js"
     },
+    "./validators/custom-domain": {
+      "types": "./dist/validators/custom-domain.d.ts",
+      "import": "./dist/validators/custom-domain.js",
+      "require": "./dist/validators/custom-domain.js"
+    },
     "./audit/security-audit": {
       "types": "./dist/audit/security-audit.d.ts",
       "import": "./dist/audit/security-audit.js",
       "require": "./dist/audit/security-audit.js"
+    },
+    "./audit/emission-hash": {
+      "types": "./dist/audit/emission-hash.d.ts",
+      "import": "./dist/audit/emission-hash.js",
+      "require": "./dist/audit/emission-hash.js"
+    },
+    "./audit/chain-step": {
+      "types": "./dist/audit/chain-step.d.ts",
+      "import": "./dist/audit/chain-step.js",
+      "require": "./dist/audit/chain-step.js"
+    },
+    "./audit/anchor": {
+      "types": "./dist/audit/anchor.d.ts",
+      "import": "./dist/audit/anchor.js",
+      "require": "./dist/audit/anchor.js"
+    },
+    "./audit/audit-ingest-writer": {
+      "types": "./dist/audit/audit-ingest-writer.d.ts",
+      "import": "./dist/audit/audit-ingest-writer.js",
+      "require": "./dist/audit/audit-ingest-writer.js"
+    },
+    "./audit/co-stream": {
+      "types": "./dist/audit/co-stream.d.ts",
+      "import": "./dist/audit/co-stream.js",
+      "require": "./dist/audit/co-stream.js"
+    },
+    "./audit/co-stream-reconciliation": {
+      "types": "./dist/audit/co-stream-reconciliation.d.ts",
+      "import": "./dist/audit/co-stream-reconciliation.js",
+      "require": "./dist/audit/co-stream-reconciliation.js"
+    },
+    "./audit/full-audit-verification": {
+      "types": "./dist/audit/full-audit-verification.d.ts",
+      "import": "./dist/audit/full-audit-verification.js",
+      "require": "./dist/audit/full-audit-verification.js"
     },
     "./audit/mask-email": {
       "types": "./dist/audit/mask-email.d.ts",
       "import": "./dist/audit/mask-email.js",
       "require": "./dist/audit/mask-email.js"
     },
+    "./audit/sanitize-audit-details": {
+      "types": "./dist/audit/sanitize-audit-details.d.ts",
+      "import": "./dist/audit/sanitize-audit-details.js",
+      "require": "./dist/audit/sanitize-audit-details.js"
+    },
+    "./audit/admin-read-audit": {
+      "types": "./dist/audit/admin-read-audit.d.ts",
+      "import": "./dist/audit/admin-read-audit.js",
+      "require": "./dist/audit/admin-read-audit.js"
+    },
     "./auth/broadcast-auth": {
       "types": "./dist/auth/broadcast-auth.d.ts",
       "import": "./dist/auth/broadcast-auth.js",
       "require": "./dist/auth/broadcast-auth.js"
     },
+    "./auth/agent-dispatch-payload": {
+      "types": "./dist/auth/agent-dispatch-payload.d.ts",
+      "import": "./dist/auth/agent-dispatch-payload.js",
+      "require": "./dist/auth/agent-dispatch-payload.js"
+    },
     "./repositories/account-repository": {
       "types": "./dist/repositories/account-repository.d.ts",
       "import": "./dist/repositories/account-repository.js",
       "require": "./dist/repositories/account-repository.js"
+    },
+    "./repositories/conversation-cleanup": {
+      "types": "./dist/repositories/conversation-cleanup.d.ts",
+      "import": "./dist/repositories/conversation-cleanup.js",
+      "require": "./dist/repositories/conversation-cleanup.js"
     },
     "./repositories/activity-log-repository": {
       "types": "./dist/repositories/activity-log-repository.d.ts",
@@ -146,6 +1189,16 @@
       "import": "./dist/services/preview.js",
       "require": "./dist/services/preview.js"
     },
+    "./services/pending-uploads": {
+      "types": "./dist/services/pending-uploads.d.ts",
+      "import": "./dist/services/pending-uploads.js",
+      "require": "./dist/services/pending-uploads.js"
+    },
+    "./services/pending-uploads-core": {
+      "types": "./dist/services/pending-uploads-core.d.ts",
+      "import": "./dist/services/pending-uploads-core.js",
+      "require": "./dist/services/pending-uploads-core.js"
+    },
     "./services/quote-enrichment": {
       "types": "./dist/services/quote-enrichment.d.ts",
       "import": "./dist/services/quote-enrichment.js",
@@ -166,6 +1219,461 @@
       "import": "./dist/services/upload-semaphore.js",
       "require": "./dist/services/upload-semaphore.js"
     },
+    "./services/sandbox/can-run-code": {
+      "types": "./dist/services/sandbox/can-run-code.d.ts",
+      "import": "./dist/services/sandbox/can-run-code.js",
+      "require": "./dist/services/sandbox/can-run-code.js"
+    },
+    "./services/app-hosting/app-hosting-env": {
+      "types": "./dist/services/app-hosting/app-hosting-env.d.ts",
+      "import": "./dist/services/app-hosting/app-hosting-env.js",
+      "require": "./dist/services/app-hosting/app-hosting-env.js"
+    },
+    "./services/app-hosting/provisioner-core": {
+      "types": "./dist/services/app-hosting/provisioner-core.d.ts",
+      "import": "./dist/services/app-hosting/provisioner-core.js",
+      "require": "./dist/services/app-hosting/provisioner-core.js"
+    },
+    "./services/app-hosting/dedicated-tier": {
+      "types": "./dist/services/app-hosting/dedicated-tier.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier.js",
+      "require": "./dist/services/app-hosting/dedicated-tier.js"
+    },
+    "./services/app-hosting/dedicated-tier-service": {
+      "types": "./dist/services/app-hosting/dedicated-tier-service.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier-service.js",
+      "require": "./dist/services/app-hosting/dedicated-tier-service.js"
+    },
+    "./services/app-hosting/provisioner": {
+      "types": "./dist/services/app-hosting/provisioner.d.ts",
+      "import": "./dist/services/app-hosting/provisioner.js",
+      "require": "./dist/services/app-hosting/provisioner.js"
+    },
+    "./services/app-hosting/app-billing": {
+      "types": "./dist/services/app-hosting/app-billing.d.ts",
+      "import": "./dist/services/app-hosting/app-billing.js",
+      "require": "./dist/services/app-hosting/app-billing.js"
+    },
+    "./services/app-hosting/app-lifecycle-metering": {
+      "types": "./dist/services/app-hosting/app-lifecycle-metering.d.ts",
+      "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
+      "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
+    },
+    "./organizations/creator-reattribution": {
+      "types": "./dist/organizations/creator-reattribution.d.ts",
+      "import": "./dist/organizations/creator-reattribution.js",
+      "require": "./dist/organizations/creator-reattribution.js"
+    },
+    "./services/app-hosting/app-unpark": {
+      "types": "./dist/services/app-hosting/app-unpark.d.ts",
+      "import": "./dist/services/app-hosting/app-unpark.js",
+      "require": "./dist/services/app-hosting/app-unpark.js"
+    },
+    "./services/app-hosting/app-machine-events": {
+      "types": "./dist/services/app-hosting/app-machine-events.d.ts",
+      "import": "./dist/services/app-hosting/app-machine-events.js",
+      "require": "./dist/services/app-hosting/app-machine-events.js"
+    },
+    "./services/app-hosting/app-metering-core": {
+      "types": "./dist/services/app-hosting/app-metering-core.d.ts",
+      "import": "./dist/services/app-hosting/app-metering-core.js",
+      "require": "./dist/services/app-hosting/app-metering-core.js"
+    },
+    "./services/app-hosting/awake-meter": {
+      "types": "./dist/services/app-hosting/awake-meter.d.ts",
+      "import": "./dist/services/app-hosting/awake-meter.js",
+      "require": "./dist/services/app-hosting/awake-meter.js"
+    },
+    "./services/app-hosting/awake-reconcile": {
+      "types": "./dist/services/app-hosting/awake-reconcile.d.ts",
+      "import": "./dist/services/app-hosting/awake-reconcile.js",
+      "require": "./dist/services/app-hosting/awake-reconcile.js"
+    },
+    "./services/app-hosting/idle-reaper": {
+      "types": "./dist/services/app-hosting/idle-reaper.d.ts",
+      "import": "./dist/services/app-hosting/idle-reaper.js",
+      "require": "./dist/services/app-hosting/idle-reaper.js"
+    },
+    "./services/fly/prometheus-client": {
+      "types": "./dist/services/fly/prometheus-client.d.ts",
+      "import": "./dist/services/fly/prometheus-client.js",
+      "require": "./dist/services/fly/prometheus-client.js"
+    },
+    "./services/fly/flaps-retry": {
+      "types": "./dist/services/fly/flaps-retry.d.ts",
+      "import": "./dist/services/fly/flaps-retry.js",
+      "require": "./dist/services/fly/flaps-retry.js"
+    },
+    "./services/fly/flaps-client": {
+      "types": "./dist/services/fly/flaps-client.d.ts",
+      "import": "./dist/services/fly/flaps-client.js",
+      "require": "./dist/services/fly/flaps-client.js"
+    },
+    "./services/app-hosting/build-core": {
+      "types": "./dist/services/app-hosting/build-core.d.ts",
+      "import": "./dist/services/app-hosting/build-core.js",
+      "require": "./dist/services/app-hosting/build-core.js"
+    },
+    "./services/app-hosting/image-builder": {
+      "types": "./dist/services/app-hosting/image-builder.d.ts",
+      "import": "./dist/services/app-hosting/image-builder.js",
+      "require": "./dist/services/app-hosting/image-builder.js"
+    },
+    "./services/app-hosting/build-job": {
+      "types": "./dist/services/app-hosting/build-job.d.ts",
+      "import": "./dist/services/app-hosting/build-job.js",
+      "require": "./dist/services/app-hosting/build-job.js"
+    },
+    "./services/app-hosting/build-reconciler": {
+      "types": "./dist/services/app-hosting/build-reconciler.d.ts",
+      "import": "./dist/services/app-hosting/build-reconciler.js",
+      "require": "./dist/services/app-hosting/build-reconciler.js"
+    },
+    "./services/app-hosting/build-wiring": {
+      "types": "./dist/services/app-hosting/build-wiring.d.ts",
+      "import": "./dist/services/app-hosting/build-wiring.js",
+      "require": "./dist/services/app-hosting/build-wiring.js"
+    },
+    "./services/sandbox/checkpoint-policy": {
+      "types": "./dist/services/sandbox/checkpoint-policy.d.ts",
+      "import": "./dist/services/sandbox/checkpoint-policy.js",
+      "require": "./dist/services/sandbox/checkpoint-policy.js"
+    },
+    "./services/sandbox/execution-policy": {
+      "types": "./dist/services/sandbox/execution-policy.d.ts",
+      "import": "./dist/services/sandbox/execution-policy.js",
+      "require": "./dist/services/sandbox/execution-policy.js"
+    },
+    "./services/sandbox/sandbox-env": {
+      "types": "./dist/services/sandbox/sandbox-env.d.ts",
+      "import": "./dist/services/sandbox/sandbox-env.js",
+      "require": "./dist/services/sandbox/sandbox-env.js"
+    },
+    "./services/sandbox/quota": {
+      "types": "./dist/services/sandbox/quota.d.ts",
+      "import": "./dist/services/sandbox/quota.js",
+      "require": "./dist/services/sandbox/quota.js"
+    },
+    "./services/sandbox/audit": {
+      "types": "./dist/services/sandbox/audit.d.ts",
+      "import": "./dist/services/sandbox/audit.js",
+      "require": "./dist/services/sandbox/audit.js"
+    },
+    "./services/sandbox/sandbox-options": {
+      "types": "./dist/services/sandbox/sandbox-options.d.ts",
+      "import": "./dist/services/sandbox/sandbox-options.js",
+      "require": "./dist/services/sandbox/sandbox-options.js"
+    },
+    "./services/sandbox/containment": {
+      "types": "./dist/services/sandbox/containment.d.ts",
+      "import": "./dist/services/sandbox/containment.js",
+      "require": "./dist/services/sandbox/containment.js"
+    },
+    "./services/sandbox/network-options": {
+      "types": "./dist/services/sandbox/network-options.d.ts",
+      "import": "./dist/services/sandbox/network-options.js",
+      "require": "./dist/services/sandbox/network-options.js"
+    },
+    "./services/sandbox/injection-seam": {
+      "types": "./dist/services/sandbox/injection-seam.d.ts",
+      "import": "./dist/services/sandbox/injection-seam.js",
+      "require": "./dist/services/sandbox/injection-seam.js"
+    },
+    "./services/sandbox/outbound-throttle": {
+      "types": "./dist/services/sandbox/outbound-throttle.d.ts",
+      "import": "./dist/services/sandbox/outbound-throttle.js",
+      "require": "./dist/services/sandbox/outbound-throttle.js"
+    },
+    "./services/sandbox/egress-ip": {
+      "types": "./dist/services/sandbox/egress-ip.d.ts",
+      "import": "./dist/services/sandbox/egress-ip.js",
+      "require": "./dist/services/sandbox/egress-ip.js"
+    },
+    "./services/sandbox/machine-session-manager": {
+      "types": "./dist/services/sandbox/machine-session-manager.d.ts",
+      "import": "./dist/services/sandbox/machine-session-manager.js",
+      "require": "./dist/services/sandbox/machine-session-manager.js"
+    },
+    "./services/sandbox/sandbox-billing": {
+      "types": "./dist/services/sandbox/sandbox-billing.d.ts",
+      "import": "./dist/services/sandbox/sandbox-billing.js",
+      "require": "./dist/services/sandbox/sandbox-billing.js"
+    },
+    "./services/sandbox/sandbox-storage-measure": {
+      "types": "./dist/services/sandbox/sandbox-storage-measure.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-measure.js",
+      "require": "./dist/services/sandbox/sandbox-storage-measure.js"
+    },
+    "./services/sandbox/sandbox-storage-reconcile": {
+      "types": "./dist/services/sandbox/sandbox-storage-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-reconcile.js",
+      "require": "./dist/services/sandbox/sandbox-storage-reconcile.js"
+    },
+    "./services/sandbox/sandbox-storage-billing": {
+      "types": "./dist/services/sandbox/sandbox-storage-billing.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-billing.js",
+      "require": "./dist/services/sandbox/sandbox-storage-billing.js"
+    },
+    "./services/sandbox/sandbox-storage-attribution": {
+      "types": "./dist/services/sandbox/sandbox-storage-attribution.d.ts",
+      "import": "./dist/services/sandbox/sandbox-storage-attribution.js",
+      "require": "./dist/services/sandbox/sandbox-storage-attribution.js"
+    },
+    "./services/sandbox/command-policy": {
+      "types": "./dist/services/sandbox/command-policy.d.ts",
+      "import": "./dist/services/sandbox/command-policy.js",
+      "require": "./dist/services/sandbox/command-policy.js"
+    },
+    "./services/sandbox/output-limit": {
+      "types": "./dist/services/sandbox/output-limit.d.ts",
+      "import": "./dist/services/sandbox/output-limit.js",
+      "require": "./dist/services/sandbox/output-limit.js"
+    },
+    "./services/sandbox/egress": {
+      "types": "./dist/services/sandbox/egress.d.ts",
+      "import": "./dist/services/sandbox/egress.js",
+      "require": "./dist/services/sandbox/egress.js"
+    },
+    "./services/sandbox/egress-lockdown": {
+      "types": "./dist/services/sandbox/egress-lockdown.d.ts",
+      "import": "./dist/services/sandbox/egress-lockdown.js",
+      "require": "./dist/services/sandbox/egress-lockdown.js"
+    },
+    "./services/sandbox/preview/preview-relay": {
+      "types": "./dist/services/sandbox/preview/preview-relay.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-relay.js",
+      "require": "./dist/services/sandbox/preview/preview-relay.js"
+    },
+    "./services/sandbox/preview/dev-preview-core": {
+      "types": "./dist/services/sandbox/preview/dev-preview-core.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-core.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-core.js"
+    },
+    "./services/sandbox/preview/dev-preview-env": {
+      "types": "./dist/services/sandbox/preview/dev-preview-env.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-env.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-env.js"
+    },
+    "./services/sandbox/preview/preview-forward-gate": {
+      "types": "./dist/services/sandbox/preview/preview-forward-gate.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-forward-gate.js",
+      "require": "./dist/services/sandbox/preview/preview-forward-gate.js"
+    },
+    "./services/sandbox/preview/preview-proxy-policy": {
+      "types": "./dist/services/sandbox/preview/preview-proxy-policy.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-proxy-policy.js",
+      "require": "./dist/services/sandbox/preview/preview-proxy-policy.js"
+    },
+    "./services/sandbox/preview/dev-preview-effects": {
+      "types": "./dist/services/sandbox/preview/dev-preview-effects.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-effects.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-effects.js"
+    },
+    "./services/sandbox/preview/dev-preview-store": {
+      "types": "./dist/services/sandbox/preview/dev-preview-store.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-store.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-store.js"
+    },
+    "./services/sandbox/preview/preview-host": {
+      "types": "./dist/services/sandbox/preview/preview-host.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-host.js",
+      "require": "./dist/services/sandbox/preview/preview-host.js"
+    },
+    "./services/sandbox/preview/preview-access": {
+      "types": "./dist/services/sandbox/preview/preview-access.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-access.js",
+      "require": "./dist/services/sandbox/preview/preview-access.js"
+    },
+    "./services/sandbox/preview/preview-grant": {
+      "types": "./dist/services/sandbox/preview/preview-grant.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-grant.js",
+      "require": "./dist/services/sandbox/preview/preview-grant.js"
+    },
+    "./services/sandbox/preview/dev-preview-grants-store": {
+      "types": "./dist/services/sandbox/preview/dev-preview-grants-store.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-grants-store.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-grants-store.js"
+    },
+    "./services/sandbox/preview/ports-watch": {
+      "types": "./dist/services/sandbox/preview/ports-watch.d.ts",
+      "import": "./dist/services/sandbox/preview/ports-watch.js",
+      "require": "./dist/services/sandbox/preview/ports-watch.js"
+    },
+    "./services/sandbox/preview/dev-preview-detection": {
+      "types": "./dist/services/sandbox/preview/dev-preview-detection.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-detection.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-detection.js"
+    },
+    "./services/sandbox/preview/dev-preview-contract": {
+      "types": "./dist/services/sandbox/preview/dev-preview-contract.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-contract.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-contract.js"
+    },
+    "./services/sandbox/preview/dev-preview-lock": {
+      "types": "./dist/services/sandbox/preview/dev-preview-lock.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-lock.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-lock.js"
+    },
+    "./services/sandbox/preview/dev-preview-reconcile": {
+      "types": "./dist/services/sandbox/preview/dev-preview-reconcile.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-reconcile.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-reconcile.js"
+    },
+    "./services/sandbox/preview/dev-preview-status": {
+      "types": "./dist/services/sandbox/preview/dev-preview-status.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-status.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-status.js"
+    },
+    "./services/sandbox/preview/preview-ws-tunnel": {
+      "types": "./dist/services/sandbox/preview/preview-ws-tunnel.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-ws-tunnel.js",
+      "require": "./dist/services/sandbox/preview/preview-ws-tunnel.js"
+    },
+    "./services/sandbox/sandbox-paths": {
+      "types": "./dist/services/sandbox/sandbox-paths.d.ts",
+      "import": "./dist/services/sandbox/sandbox-paths.js",
+      "require": "./dist/services/sandbox/sandbox-paths.js"
+    },
+    "./services/sandbox/sandbox-client/types": {
+      "types": "./dist/services/sandbox/sandbox-client/types.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/types.js",
+      "require": "./dist/services/sandbox/sandbox-client/types.js"
+    },
+    "./services/sandbox/sandbox-client/sprites": {
+      "types": "./dist/services/sandbox/sandbox-client/sprites.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprites.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprites.js"
+    },
+    "./services/sandbox/sandbox-client/sprite-tasks": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-tasks.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-tasks.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-tasks.js"
+    },
+    "./services/sandbox/sandbox-client/sprite-sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js"
+    },
+    "./services/sandbox/sandbox-client/local-env-sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js"
+    },
+    "./services/sandbox/sandbox-client/sandbox-host-adapter": {
+      "types": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.js",
+      "require": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.js"
+    },
+    "./services/sandbox/sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-host.js"
+    },
+    "./services/sandbox/machine-fs": {
+      "types": "./dist/services/sandbox/machine-fs.d.ts",
+      "import": "./dist/services/sandbox/machine-fs.js",
+      "require": "./dist/services/sandbox/machine-fs.js"
+    },
+    "./services/sandbox/machine-git-blob": {
+      "types": "./dist/services/sandbox/machine-git-blob.d.ts",
+      "import": "./dist/services/sandbox/machine-git-blob.js",
+      "require": "./dist/services/sandbox/machine-git-blob.js"
+    },
+    "./services/sandbox/machine-diff-scope": {
+      "types": "./dist/services/sandbox/machine-diff-scope.d.ts",
+      "import": "./dist/services/sandbox/machine-diff-scope.js",
+      "require": "./dist/services/sandbox/machine-diff-scope.js"
+    },
+    "./services/sandbox/machine-diff": {
+      "types": "./dist/services/sandbox/machine-diff.d.ts",
+      "import": "./dist/services/sandbox/machine-diff.js",
+      "require": "./dist/services/sandbox/machine-diff.js"
+    },
+    "./services/sandbox/tool-runners": {
+      "types": "./dist/services/sandbox/tool-runners.d.ts",
+      "import": "./dist/services/sandbox/tool-runners.js",
+      "require": "./dist/services/sandbox/tool-runners.js"
+    },
+    "./services/sandbox/git-tool-runners": {
+      "types": "./dist/services/sandbox/git-tool-runners.d.ts",
+      "import": "./dist/services/sandbox/git-tool-runners.js",
+      "require": "./dist/services/sandbox/git-tool-runners.js"
+    },
+    "./services/sandbox/github-token": {
+      "types": "./dist/services/sandbox/github-token.d.ts",
+      "import": "./dist/services/sandbox/github-token.js",
+      "require": "./dist/services/sandbox/github-token.js"
+    },
+    "./services/agent-workspaces/agent-workspace-access": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-access.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-access.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-access.js"
+    },
+    "./services/agent-workspaces/agent-workspace-sprite": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-sprite.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-sprite.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-sprite.js"
+    },
+    "./services/agent-workspaces/agent-workspace-tenant": {
+      "types": "./dist/services/agent-workspaces/agent-workspace-tenant.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspace-tenant.js",
+      "require": "./dist/services/agent-workspaces/agent-workspace-tenant.js"
+    },
+    "./services/agent-workspaces/agent-workspaces": {
+      "types": "./dist/services/agent-workspaces/agent-workspaces.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspaces.js",
+      "require": "./dist/services/agent-workspaces/agent-workspaces.js"
+    },
+    "./services/agent-workspaces/agent-workspaces-store": {
+      "types": "./dist/services/agent-workspaces/agent-workspaces-store.d.ts",
+      "import": "./dist/services/agent-workspaces/agent-workspaces-store.js",
+      "require": "./dist/services/agent-workspaces/agent-workspaces-store.js"
+    },
+    "./services/agent-workspaces/shell-scrollback": {
+      "types": "./dist/services/agent-workspaces/shell-scrollback.d.ts",
+      "import": "./dist/services/agent-workspaces/shell-scrollback.js",
+      "require": "./dist/services/agent-workspaces/shell-scrollback.js"
+    },
+    "./services/agent-workspaces/workspace-shells": {
+      "types": "./dist/services/agent-workspaces/workspace-shells.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-shells.js",
+      "require": "./dist/services/agent-workspaces/workspace-shells.js"
+    },
+    "./services/agent-workspaces/workspace-lock": {
+      "types": "./dist/services/agent-workspaces/workspace-lock.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-lock.js",
+      "require": "./dist/services/agent-workspaces/workspace-lock.js"
+    },
+    "./services/agent-workspaces/workspace-shells-store": {
+      "types": "./dist/services/agent-workspaces/workspace-shells-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-shells-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-shells-store.js"
+    },
+    "./services/agent-workspaces/workspace-status": {
+      "types": "./dist/services/agent-workspaces/workspace-status.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-status.js",
+      "require": "./dist/services/agent-workspaces/workspace-status.js"
+    },
+    "./services/agent-workspaces/shell-types": {
+      "types": "./dist/services/agent-workspaces/shell-types.d.ts",
+      "import": "./dist/services/agent-workspaces/shell-types.js",
+      "require": "./dist/services/agent-workspaces/shell-types.js"
+    },
+    "./services/sandbox/sprite-orphan-reconcile": {
+      "types": "./dist/services/sandbox/sprite-orphan-reconcile.d.ts",
+      "import": "./dist/services/sandbox/sprite-orphan-reconcile.js",
+      "require": "./dist/services/sandbox/sprite-orphan-reconcile.js"
+    },
+    "./services/sandbox/tool-gate": {
+      "types": "./dist/services/sandbox/tool-gate.d.ts",
+      "import": "./dist/services/sandbox/tool-gate.js",
+      "require": "./dist/services/sandbox/tool-gate.js"
+    },
+    "./services/upload-validation": {
+      "types": "./dist/services/upload-validation.d.ts",
+      "import": "./dist/services/upload-validation.js",
+      "require": "./dist/services/upload-validation.js"
+    },
     "./services/memory-monitor": {
       "types": "./dist/services/memory-monitor.d.ts",
       "import": "./dist/services/memory-monitor.js",
@@ -176,10 +1684,70 @@
       "import": "./dist/services/drive-service.js",
       "require": "./dist/services/drive-service.js"
     },
+    "./services/subdomain-allocation": {
+      "types": "./dist/services/subdomain-allocation.d.ts",
+      "import": "./dist/services/subdomain-allocation.js",
+      "require": "./dist/services/subdomain-allocation.js"
+    },
+    "./services/org-drive-service": {
+      "types": "./dist/services/org-drive-service.d.ts",
+      "import": "./dist/services/org-drive-service.js",
+      "require": "./dist/services/org-drive-service.js"
+    },
+    "./services/drive-wallet-service": {
+      "types": "./dist/services/drive-wallet-service.d.ts",
+      "import": "./dist/services/drive-wallet-service.js",
+      "require": "./dist/services/drive-wallet-service.js"
+    },
+    "./services/drive-join-request-service": {
+      "types": "./dist/services/drive-join-request-service.d.ts",
+      "import": "./dist/services/drive-join-request-service.js",
+      "require": "./dist/services/drive-join-request-service.js"
+    },
+    "./services/org-drive-service-deps": {
+      "types": "./dist/services/org-drive-service-deps.d.ts",
+      "import": "./dist/services/org-drive-service-deps.js",
+      "require": "./dist/services/org-drive-service-deps.js"
+    },
+    "./organizations/org-drive-ownership": {
+      "types": "./dist/organizations/org-drive-ownership.d.ts",
+      "import": "./dist/organizations/org-drive-ownership.js",
+      "require": "./dist/organizations/org-drive-ownership.js"
+    },
+    "./services/drive-guards": {
+      "types": "./dist/services/drive-guards.d.ts",
+      "import": "./dist/services/drive-guards.js",
+      "require": "./dist/services/drive-guards.js"
+    },
     "./services/drive-member-service": {
       "types": "./dist/services/drive-member-service.d.ts",
       "import": "./dist/services/drive-member-service.js",
       "require": "./dist/services/drive-member-service.js"
+    },
+    "./services/org-membership-sync": {
+      "types": "./dist/services/org-membership-sync.d.ts",
+      "import": "./dist/services/org-membership-sync.js",
+      "require": "./dist/services/org-membership-sync.js"
+    },
+    "./services/drive-transition-invalidation": {
+      "types": "./dist/services/drive-transition-invalidation.d.ts",
+      "import": "./dist/services/drive-transition-invalidation.js",
+      "require": "./dist/services/drive-transition-invalidation.js"
+    },
+    "./services/org-membership-sync-core": {
+      "types": "./dist/services/org-membership-sync-core.d.ts",
+      "import": "./dist/services/org-membership-sync-core.js",
+      "require": "./dist/services/org-membership-sync-core.js"
+    },
+    "./services/calendar-event-drive-service": {
+      "types": "./dist/services/calendar-event-drive-service.d.ts",
+      "import": "./dist/services/calendar-event-drive-service.js",
+      "require": "./dist/services/calendar-event-drive-service.js"
+    },
+    "./services/drive-agent-service": {
+      "types": "./dist/services/drive-agent-service.d.ts",
+      "import": "./dist/services/drive-agent-service.js",
+      "require": "./dist/services/drive-agent-service.js"
     },
     "./services/validated-service-token": {
       "types": "./dist/services/validated-service-token.d.ts",
@@ -190,6 +1758,11 @@
       "types": "./dist/services/attachment-upload.d.ts",
       "import": "./dist/services/attachment-upload.js",
       "require": "./dist/services/attachment-upload.js"
+    },
+    "./services/attachment-upload-core": {
+      "types": "./dist/services/attachment-upload-core.d.ts",
+      "import": "./dist/services/attachment-upload-core.js",
+      "require": "./dist/services/attachment-upload-core.js"
     },
     "./services/attachment-upload-repository": {
       "types": "./dist/services/attachment-upload-repository.d.ts",
@@ -206,15 +1779,30 @@
       "import": "./dist/services/channel-message-repository.js",
       "require": "./dist/services/channel-message-repository.js"
     },
+    "./services/message-derived-state": {
+      "types": "./dist/services/message-derived-state.d.ts",
+      "import": "./dist/services/message-derived-state.js",
+      "require": "./dist/services/message-derived-state.js"
+    },
+    "./services/page-webhook-service": {
+      "types": "./dist/services/page-webhook-service.d.ts",
+      "import": "./dist/services/page-webhook-service.js",
+      "require": "./dist/services/page-webhook-service.js"
+    },
+    "./services/page-webhook-core": {
+      "types": "./dist/services/page-webhook-core.d.ts",
+      "import": "./dist/services/page-webhook-core.js",
+      "require": "./dist/services/page-webhook-core.js"
+    },
+    "./services/page-webhook-dispatch": {
+      "types": "./dist/services/page-webhook-dispatch.d.ts",
+      "import": "./dist/services/page-webhook-dispatch.js",
+      "require": "./dist/services/page-webhook-dispatch.js"
+    },
     "./services/date-utils": {
       "types": "./dist/services/date-utils.d.ts",
       "import": "./dist/services/date-utils.js",
       "require": "./dist/services/date-utils.js"
-    },
-    "./services/rate-limit-cache": {
-      "types": "./dist/services/rate-limit-cache.d.ts",
-      "import": "./dist/services/rate-limit-cache.js",
-      "require": "./dist/services/rate-limit-cache.js"
     },
     "./deployment-mode": {
       "types": "./dist/deployment-mode.d.ts",
@@ -235,6 +1823,36 @@
       "types": "./dist/sheets/sheet.d.ts",
       "import": "./dist/sheets/sheet.js",
       "require": "./dist/sheets/sheet.js"
+    },
+    "./sheets/store": {
+      "types": "./dist/sheets/store.d.ts",
+      "import": "./dist/sheets/store.js",
+      "require": "./dist/sheets/store.js"
+    },
+    "./sheets/query": {
+      "types": "./dist/sheets/query.d.ts",
+      "import": "./dist/sheets/query.js",
+      "require": "./dist/sheets/query.js"
+    },
+    "./sheets/search-sql": {
+      "types": "./dist/sheets/search-sql.d.ts",
+      "import": "./dist/sheets/search-sql.js",
+      "require": "./dist/sheets/search-sql.js"
+    },
+    "./sheets/projection": {
+      "types": "./dist/sheets/projection.d.ts",
+      "import": "./dist/sheets/projection.js",
+      "require": "./dist/sheets/projection.js"
+    },
+    "./tags/tag-core": {
+      "types": "./dist/tags/tag-core.d.ts",
+      "import": "./dist/tags/tag-core.js",
+      "require": "./dist/tags/tag-core.js"
+    },
+    "./tags/tag-service": {
+      "types": "./dist/tags/tag-service.d.ts",
+      "import": "./dist/tags/tag-service.js",
+      "require": "./dist/tags/tag-service.js"
     },
     "./utils/environment": {
       "types": "./dist/utils/environment.d.ts",
@@ -271,6 +1889,46 @@
       "import": "./dist/services/email-service.js",
       "require": "./dist/services/email-service.js"
     },
+    "./services/broadcast/core": {
+      "types": "./dist/services/broadcast/core.d.ts",
+      "import": "./dist/services/broadcast/core.js",
+      "require": "./dist/services/broadcast/core.js"
+    },
+    "./services/broadcast/audience": {
+      "types": "./dist/services/broadcast/audience.d.ts",
+      "import": "./dist/services/broadcast/audience.js",
+      "require": "./dist/services/broadcast/audience.js"
+    },
+    "./services/broadcast/content": {
+      "types": "./dist/services/broadcast/content.d.ts",
+      "import": "./dist/services/broadcast/content.js",
+      "require": "./dist/services/broadcast/content.js"
+    },
+    "./services/broadcast/record-adapter": {
+      "types": "./dist/services/broadcast/record-adapter.d.ts",
+      "import": "./dist/services/broadcast/record-adapter.js",
+      "require": "./dist/services/broadcast/record-adapter.js"
+    },
+    "./services/broadcast/engine": {
+      "types": "./dist/services/broadcast/engine.d.ts",
+      "import": "./dist/services/broadcast/engine.js",
+      "require": "./dist/services/broadcast/engine.js"
+    },
+    "./services/broadcast/transactional-engine": {
+      "types": "./dist/services/broadcast/transactional-engine.d.ts",
+      "import": "./dist/services/broadcast/transactional-engine.js",
+      "require": "./dist/services/broadcast/transactional-engine.js"
+    },
+    "./repositories/broadcast-repository": {
+      "types": "./dist/repositories/broadcast-repository.d.ts",
+      "import": "./dist/repositories/broadcast-repository.js",
+      "require": "./dist/repositories/broadcast-repository.js"
+    },
+    "./email-templates/BroadcastEmail": {
+      "types": "./dist/email-templates/BroadcastEmail.d.ts",
+      "import": "./dist/email-templates/BroadcastEmail.js",
+      "require": "./dist/email-templates/BroadcastEmail.js"
+    },
     "./services/notification-email-service": {
       "types": "./dist/services/notification-email-service.d.ts",
       "import": "./dist/services/notification-email-service.js",
@@ -291,10 +1949,45 @@
       "import": "./dist/email-templates/FeedbackNotificationEmail.js",
       "require": "./dist/email-templates/FeedbackNotificationEmail.js"
     },
+    "./email-templates/SdkCliLaunchEmail": {
+      "types": "./dist/email-templates/SdkCliLaunchEmail.d.ts",
+      "import": "./dist/email-templates/SdkCliLaunchEmail.js",
+      "require": "./dist/email-templates/SdkCliLaunchEmail.js"
+    },
+    "./email-templates/AgentSandboxLaunchEmail": {
+      "types": "./dist/email-templates/AgentSandboxLaunchEmail.d.ts",
+      "import": "./dist/email-templates/AgentSandboxLaunchEmail.js",
+      "require": "./dist/email-templates/AgentSandboxLaunchEmail.js"
+    },
+    "./email-templates/FreeCreditsChangeEmail": {
+      "types": "./dist/email-templates/FreeCreditsChangeEmail.d.ts",
+      "import": "./dist/email-templates/FreeCreditsChangeEmail.js",
+      "require": "./dist/email-templates/FreeCreditsChangeEmail.js"
+    },
+    "./email-templates/render-email": {
+      "types": "./dist/email-templates/render-email.d.ts",
+      "import": "./dist/email-templates/render-email.js",
+      "require": "./dist/email-templates/render-email.js"
+    },
+    "./email-templates/PaymentReceiptEmail": {
+      "types": "./dist/email-templates/PaymentReceiptEmail.d.ts",
+      "import": "./dist/email-templates/PaymentReceiptEmail.js",
+      "require": "./dist/email-templates/PaymentReceiptEmail.js"
+    },
+    "./email-templates/FormSubmissionNotificationEmail": {
+      "types": "./dist/email-templates/FormSubmissionNotificationEmail.d.ts",
+      "import": "./dist/email-templates/FormSubmissionNotificationEmail.js",
+      "require": "./dist/email-templates/FormSubmissionNotificationEmail.js"
+    },
     "./auth/secure-compare": {
       "types": "./dist/auth/secure-compare.d.ts",
       "import": "./dist/auth/secure-compare.js",
       "require": "./dist/auth/secure-compare.js"
+    },
+    "./auth/oauth-account-match": {
+      "types": "./dist/auth/oauth-account-match.d.ts",
+      "import": "./dist/auth/oauth-account-match.js",
+      "require": "./dist/auth/oauth-account-match.js"
     },
     "./auth/magic-link-service": {
       "types": "./dist/auth/magic-link-service.d.ts",
@@ -351,6 +2044,11 @@
       "import": "./dist/services/invites/index.js",
       "require": "./dist/services/invites/index.js"
     },
+    "./services/reorder": {
+      "types": "./dist/services/reorder/index.d.ts",
+      "import": "./dist/services/reorder/index.js",
+      "require": "./dist/services/reorder/index.js"
+    },
     "./validators/id-validators": {
       "types": "./dist/validators/id-validators.d.ts",
       "import": "./dist/validators/id-validators.js",
@@ -361,10 +2059,130 @@
       "import": "./dist/validators/email.js",
       "require": "./dist/validators/email.js"
     },
+    "./validators/subdomain": {
+      "types": "./dist/validators/subdomain.d.ts",
+      "import": "./dist/validators/subdomain.js",
+      "require": "./dist/validators/subdomain.js"
+    },
+    "./canvas/sanitize-css": {
+      "types": "./dist/canvas/sanitize-css.d.ts",
+      "import": "./dist/canvas/sanitize-css.js",
+      "require": "./dist/canvas/sanitize-css.js"
+    },
+    "./canvas/render-document": {
+      "types": "./dist/canvas/render-document.d.ts",
+      "import": "./dist/canvas/render-document.js",
+      "require": "./dist/canvas/render-document.js"
+    },
+    "./canvas/preview-headers": {
+      "types": "./dist/canvas/preview-headers.d.ts",
+      "import": "./dist/canvas/preview-headers.js",
+      "require": "./dist/canvas/preview-headers.js"
+    },
+    "./canvas/csp": {
+      "types": "./dist/canvas/csp.d.ts",
+      "import": "./dist/canvas/csp.js",
+      "require": "./dist/canvas/csp.js"
+    },
+    "./forms/submission-schema": {
+      "types": "./dist/forms/submission-schema.d.ts",
+      "import": "./dist/forms/submission-schema.js",
+      "require": "./dist/forms/submission-schema.js"
+    },
+    "./forms/cell-mapping": {
+      "types": "./dist/forms/cell-mapping.d.ts",
+      "import": "./dist/forms/cell-mapping.js",
+      "require": "./dist/forms/cell-mapping.js"
+    },
+    "./forms/honeypot": {
+      "types": "./dist/forms/honeypot.d.ts",
+      "import": "./dist/forms/honeypot.js",
+      "require": "./dist/forms/honeypot.js"
+    },
+    "./forms/form-html": {
+      "types": "./dist/forms/form-html.d.ts",
+      "import": "./dist/forms/form-html.js",
+      "require": "./dist/forms/form-html.js"
+    },
+    "./forms/field-schema": {
+      "types": "./dist/forms/field-schema.d.ts",
+      "import": "./dist/forms/field-schema.js",
+      "require": "./dist/forms/field-schema.js"
+    },
+    "./forms/embed-html": {
+      "types": "./dist/forms/embed-html.d.ts",
+      "import": "./dist/forms/embed-html.js",
+      "require": "./dist/forms/embed-html.js"
+    },
+    "./canvas/resolve-published-meta": {
+      "types": "./dist/canvas/resolve-published-meta.d.ts",
+      "import": "./dist/canvas/resolve-published-meta.js",
+      "require": "./dist/canvas/resolve-published-meta.js"
+    },
+    "./canvas/site-files": {
+      "types": "./dist/canvas/site-files.d.ts",
+      "import": "./dist/canvas/site-files.js",
+      "require": "./dist/canvas/site-files.js"
+    },
+    "./canvas/custom-domain-mirror": {
+      "types": "./dist/canvas/custom-domain-mirror.d.ts",
+      "import": "./dist/canvas/custom-domain-mirror.js",
+      "require": "./dist/canvas/custom-domain-mirror.js"
+    },
+    "./canvas/primary-host": {
+      "types": "./dist/canvas/primary-host.d.ts",
+      "import": "./dist/canvas/primary-host.js",
+      "require": "./dist/canvas/primary-host.js"
+    },
+    "./publish/neutralize-dashboard-links": {
+      "types": "./dist/publish/neutralize-dashboard-links.d.ts",
+      "import": "./dist/publish/neutralize-dashboard-links.js",
+      "require": "./dist/publish/neutralize-dashboard-links.js"
+    },
+    "./publish/sanitize-document-html": {
+      "types": "./dist/publish/sanitize-document-html.d.ts",
+      "import": "./dist/publish/sanitize-document-html.js",
+      "require": "./dist/publish/sanitize-document-html.js"
+    },
+    "./publish/document-shell": {
+      "types": "./dist/publish/document-shell.d.ts",
+      "import": "./dist/publish/document-shell.js",
+      "require": "./dist/publish/document-shell.js"
+    },
+    "./publish/render-document-page": {
+      "types": "./dist/publish/render-document-page.d.ts",
+      "import": "./dist/publish/render-document-page.js",
+      "require": "./dist/publish/render-document-page.js"
+    },
+    "./publish/render-code-page": {
+      "types": "./dist/publish/render-code-page.d.ts",
+      "import": "./dist/publish/render-code-page.js",
+      "require": "./dist/publish/render-code-page.js"
+    },
+    "./publish/render-sheet-page": {
+      "types": "./dist/publish/render-sheet-page.d.ts",
+      "import": "./dist/publish/render-sheet-page.js",
+      "require": "./dist/publish/render-sheet-page.js"
+    },
+    "./organizations/automation-ownership": {
+      "types": "./dist/organizations/automation-ownership.d.ts",
+      "import": "./dist/organizations/automation-ownership.js",
+      "require": "./dist/organizations/automation-ownership.js"
+    },
+    "./organizations/leave": {
+      "types": "./dist/organizations/leave.d.ts",
+      "import": "./dist/organizations/leave.js",
+      "require": "./dist/organizations/leave.js"
+    },
     "./notifications/types": {
       "types": "./dist/notifications/types.d.ts",
       "import": "./dist/notifications/types.js",
       "require": "./dist/notifications/types.js"
+    },
+    "./notifications/derive-badge-count": {
+      "types": "./dist/notifications/derive-badge-count.d.ts",
+      "import": "./dist/notifications/derive-badge-count.js",
+      "require": "./dist/notifications/derive-badge-count.js"
     },
     "./notifications/guards": {
       "types": "./dist/notifications/guards.d.ts",
@@ -426,20 +2244,65 @@
       "import": "./dist/content/tree-utils.js",
       "require": "./dist/content/tree-utils.js"
     },
+    "./content/anchoring/types": {
+      "types": "./dist/content/anchoring/types.d.ts",
+      "import": "./dist/content/anchoring/types.js",
+      "require": "./dist/content/anchoring/types.js"
+    },
+    "./content/anchoring/text-projection": {
+      "types": "./dist/content/anchoring/text-projection.d.ts",
+      "import": "./dist/content/anchoring/text-projection.js",
+      "require": "./dist/content/anchoring/text-projection.js"
+    },
+    "./content/anchoring/anchor": {
+      "types": "./dist/content/anchoring/anchor.d.ts",
+      "import": "./dist/content/anchoring/anchor.js",
+      "require": "./dist/content/anchoring/anchor.js"
+    },
+    "./content/anchoring/reanchor": {
+      "types": "./dist/content/anchoring/reanchor.d.ts",
+      "import": "./dist/content/anchoring/reanchor.js",
+      "require": "./dist/content/anchoring/reanchor.js"
+    },
+    "./content/anchoring/resolve": {
+      "types": "./dist/content/anchoring/resolve.d.ts",
+      "import": "./dist/content/anchoring/resolve.js",
+      "require": "./dist/content/anchoring/resolve.js"
+    },
     "./audit/audit-log": {
       "types": "./dist/audit/audit-log.d.ts",
       "import": "./dist/audit/audit-log.js",
       "require": "./dist/audit/audit-log.js"
+    },
+    "./audit/search-audit-details": {
+      "types": "./dist/audit/search-audit-details.d.ts",
+      "import": "./dist/audit/search-audit-details.js",
+      "require": "./dist/audit/search-audit-details.js"
     },
     "./audit/audit-query": {
       "types": "./dist/audit/audit-query.d.ts",
       "import": "./dist/audit/audit-query.js",
       "require": "./dist/audit/audit-query.js"
     },
+    "./audit/chain-alert-payload": {
+      "types": "./dist/audit/chain-alert-payload.d.ts",
+      "import": "./dist/audit/chain-alert-payload.js",
+      "require": "./dist/audit/chain-alert-payload.js"
+    },
     "./audit/security-audit-alerting": {
       "types": "./dist/audit/security-audit-alerting.d.ts",
       "import": "./dist/audit/security-audit-alerting.js",
       "require": "./dist/audit/security-audit-alerting.js"
+    },
+    "./incidents/breach-assessment": {
+      "types": "./dist/incidents/breach-assessment.d.ts",
+      "import": "./dist/incidents/breach-assessment.js",
+      "require": "./dist/incidents/breach-assessment.js"
+    },
+    "./incidents/incident-service": {
+      "types": "./dist/incidents/incident-service.d.ts",
+      "import": "./dist/incidents/incident-service.js",
+      "require": "./dist/incidents/incident-service.js"
     },
     "./monitoring/change-group": {
       "types": "./dist/monitoring/change-group.d.ts",
@@ -486,10 +2349,20 @@
       "import": "./dist/integrations/converter/ai-sdk.js",
       "require": "./dist/integrations/converter/ai-sdk.js"
     },
+    "./integrations/validation/validate-base-url": {
+      "types": "./dist/integrations/validation/validate-base-url.d.ts",
+      "import": "./dist/integrations/validation/validate-base-url.js",
+      "require": "./dist/integrations/validation/validate-base-url.js"
+    },
     "./integrations/saga/execute-tool": {
       "types": "./dist/integrations/saga/execute-tool.d.ts",
       "import": "./dist/integrations/saga/execute-tool.js",
       "require": "./dist/integrations/saga/execute-tool.js"
+    },
+    "./integrations/saga/create-configured-executor": {
+      "types": "./dist/integrations/saga/create-configured-executor.d.ts",
+      "import": "./dist/integrations/saga/create-configured-executor.js",
+      "require": "./dist/integrations/saga/create-configured-executor.js"
     },
     "./integrations/repositories/provider-repository": {
       "types": "./dist/integrations/repositories/provider-repository.d.ts",
@@ -516,6 +2389,16 @@
       "import": "./dist/integrations/converter/openapi.js",
       "require": "./dist/integrations/converter/openapi.js"
     },
+    "./security/auth-anomaly": {
+      "types": "./dist/security/auth-anomaly.d.ts",
+      "import": "./dist/security/auth-anomaly.js",
+      "require": "./dist/security/auth-anomaly.js"
+    },
+    "./security/auth-anomaly-reporter": {
+      "types": "./dist/security/auth-anomaly-reporter.d.ts",
+      "import": "./dist/security/auth-anomaly-reporter.js",
+      "require": "./dist/security/auth-anomaly-reporter.js"
+    },
     "./security/jti-revocation": {
       "types": "./dist/security/jti-revocation.d.ts",
       "import": "./dist/security/jti-revocation.js",
@@ -526,10 +2409,20 @@
       "import": "./dist/security/distributed-rate-limit.js",
       "require": "./dist/security/distributed-rate-limit.js"
     },
+    "./security/client-ip": {
+      "types": "./dist/security/client-ip.d.ts",
+      "import": "./dist/security/client-ip.js",
+      "require": "./dist/security/client-ip.js"
+    },
     "./security/auth-handoff-sweep": {
       "types": "./dist/security/auth-handoff-sweep.d.ts",
       "import": "./dist/security/auth-handoff-sweep.js",
       "require": "./dist/security/auth-handoff-sweep.js"
+    },
+    "./security/web-fetch-ssrf": {
+      "types": "./dist/security/web-fetch-ssrf.d.ts",
+      "import": "./dist/security/web-fetch-ssrf.js",
+      "require": "./dist/security/web-fetch-ssrf.js"
     },
     "./security/url-validator": {
       "types": "./dist/security/url-validator.d.ts",
@@ -541,10 +2434,75 @@
       "import": "./dist/security/path-validator.js",
       "require": "./dist/security/path-validator.js"
     },
+    "./security/webhook-signature": {
+      "types": "./dist/security/webhook-signature.d.ts",
+      "import": "./dist/security/webhook-signature.js",
+      "require": "./dist/security/webhook-signature.js"
+    },
+    "./security/webhook-delivery-idempotency": {
+      "types": "./dist/security/webhook-delivery-idempotency.d.ts",
+      "import": "./dist/security/webhook-delivery-idempotency.js",
+      "require": "./dist/security/webhook-delivery-idempotency.js"
+    },
     "./auth/constants": {
       "types": "./dist/auth/constants.d.ts",
       "import": "./dist/auth/constants.js",
       "require": "./dist/auth/constants.js"
+    },
+    "./auth/oauth/scopes": {
+      "types": "./dist/auth/oauth/scopes.d.ts",
+      "import": "./dist/auth/oauth/scopes.js",
+      "require": "./dist/auth/oauth/scopes.js"
+    },
+    "./auth/oauth/metadata": {
+      "types": "./dist/auth/oauth/metadata.d.ts",
+      "import": "./dist/auth/oauth/metadata.js",
+      "require": "./dist/auth/oauth/metadata.js"
+    },
+    "./auth/oauth/clients": {
+      "types": "./dist/auth/oauth/clients.d.ts",
+      "import": "./dist/auth/oauth/clients.js",
+      "require": "./dist/auth/oauth/clients.js"
+    },
+    "./auth/oauth/authorize-request": {
+      "types": "./dist/auth/oauth/authorize-request.d.ts",
+      "import": "./dist/auth/oauth/authorize-request.js",
+      "require": "./dist/auth/oauth/authorize-request.js"
+    },
+    "./auth/oauth/consent": {
+      "types": "./dist/auth/oauth/consent.d.ts",
+      "import": "./dist/auth/oauth/consent.js",
+      "require": "./dist/auth/oauth/consent.js"
+    },
+    "./auth/oauth/grant-ownership": {
+      "types": "./dist/auth/oauth/grant-ownership.d.ts",
+      "import": "./dist/auth/oauth/grant-ownership.js",
+      "require": "./dist/auth/oauth/grant-ownership.js"
+    },
+    "./auth/oauth/grant-scope-summary": {
+      "types": "./dist/auth/oauth/grant-scope-summary.d.ts",
+      "import": "./dist/auth/oauth/grant-scope-summary.js",
+      "require": "./dist/auth/oauth/grant-scope-summary.js"
+    },
+    "./auth/oauth/code-lifecycle": {
+      "types": "./dist/auth/oauth/code-lifecycle.d.ts",
+      "import": "./dist/auth/oauth/code-lifecycle.js",
+      "require": "./dist/auth/oauth/code-lifecycle.js"
+    },
+    "./auth/oauth/issue-tokens": {
+      "types": "./dist/auth/oauth/issue-tokens.d.ts",
+      "import": "./dist/auth/oauth/issue-tokens.js",
+      "require": "./dist/auth/oauth/issue-tokens.js"
+    },
+    "./auth/oauth/refresh-rotation": {
+      "types": "./dist/auth/oauth/refresh-rotation.d.ts",
+      "import": "./dist/auth/oauth/refresh-rotation.js",
+      "require": "./dist/auth/oauth/refresh-rotation.js"
+    },
+    "./auth/oauth/user-code": {
+      "types": "./dist/auth/oauth/user-code.d.ts",
+      "import": "./dist/auth/oauth/user-code.js",
+      "require": "./dist/auth/oauth/user-code.js"
     },
     "./auth/account-lockout": {
       "types": "./dist/auth/account-lockout.d.ts",
@@ -566,6 +2524,46 @@
       "import": "./dist/auth/oauth-utils.js",
       "require": "./dist/auth/oauth-utils.js"
     },
+    "./auth/apple/apple-client-secret": {
+      "types": "./dist/auth/apple/apple-client-secret.d.ts",
+      "import": "./dist/auth/apple/apple-client-secret.js",
+      "require": "./dist/auth/apple/apple-client-secret.js"
+    },
+    "./auth/apple/apple-jwks": {
+      "types": "./dist/auth/apple/apple-jwks.d.ts",
+      "import": "./dist/auth/apple/apple-jwks.js",
+      "require": "./dist/auth/apple/apple-jwks.js"
+    },
+    "./auth/apple/apple-jwt": {
+      "types": "./dist/auth/apple/apple-jwt.d.ts",
+      "import": "./dist/auth/apple/apple-jwt.js",
+      "require": "./dist/auth/apple/apple-jwt.js"
+    },
+    "./auth/apple/apple-token-api": {
+      "types": "./dist/auth/apple/apple-token-api.d.ts",
+      "import": "./dist/auth/apple/apple-token-api.js",
+      "require": "./dist/auth/apple/apple-token-api.js"
+    },
+    "./auth/apple/apple-token-store": {
+      "types": "./dist/auth/apple/apple-token-store.d.ts",
+      "import": "./dist/auth/apple/apple-token-store.js",
+      "require": "./dist/auth/apple/apple-token-store.js"
+    },
+    "./auth/apple/apple-notifications": {
+      "types": "./dist/auth/apple/apple-notifications.d.ts",
+      "import": "./dist/auth/apple/apple-notifications.js",
+      "require": "./dist/auth/apple/apple-notifications.js"
+    },
+    "./auth/apple/capture-apple-refresh-token": {
+      "types": "./dist/auth/apple/capture-apple-refresh-token.d.ts",
+      "import": "./dist/auth/apple/capture-apple-refresh-token.js",
+      "require": "./dist/auth/apple/capture-apple-refresh-token.js"
+    },
+    "./auth/apple/revoke-apple-tokens": {
+      "types": "./dist/auth/apple/revoke-apple-tokens.d.ts",
+      "import": "./dist/auth/apple/revoke-apple-tokens.js",
+      "require": "./dist/auth/apple/revoke-apple-tokens.js"
+    },
     "./auth/opaque-tokens": {
       "types": "./dist/auth/opaque-tokens.d.ts",
       "import": "./dist/auth/opaque-tokens.js",
@@ -575,6 +2573,16 @@
       "types": "./dist/auth/rate-limit-utils.d.ts",
       "import": "./dist/auth/rate-limit-utils.js",
       "require": "./dist/auth/rate-limit-utils.js"
+    },
+    "./auth/authentication-evidence": {
+      "types": "./dist/auth/authentication-evidence.d.ts",
+      "import": "./dist/auth/authentication-evidence.js",
+      "require": "./dist/auth/authentication-evidence.js"
+    },
+    "./auth/reauthentication": {
+      "types": "./dist/auth/reauthentication.d.ts",
+      "import": "./dist/auth/reauthentication.js",
+      "require": "./dist/auth/reauthentication.js"
     },
     "./auth/session-service": {
       "types": "./dist/auth/session-service.d.ts",
@@ -590,6 +2598,11 @@
       "types": "./dist/auth/token-utils.d.ts",
       "import": "./dist/auth/token-utils.js",
       "require": "./dist/auth/token-utils.js"
+    },
+    "./auth/mcp-token-scopes": {
+      "types": "./dist/auth/mcp-token-scopes.d.ts",
+      "import": "./dist/auth/mcp-token-scopes.js",
+      "require": "./dist/auth/mcp-token-scopes.js"
     },
     "./auth/exchange-codes": {
       "types": "./dist/auth/exchange-codes.d.ts",
@@ -611,6 +2624,11 @@
       "import": "./dist/auth/pkce.js",
       "require": "./dist/auth/pkce.js"
     },
+    "./auth/oauth/pkce": {
+      "types": "./dist/auth/oauth/pkce.d.ts",
+      "import": "./dist/auth/oauth/pkce.js",
+      "require": "./dist/auth/oauth/pkce.js"
+    },
     "./auth/passkey-service": {
       "types": "./dist/auth/passkey-service.d.ts",
       "import": "./dist/auth/passkey-service.js",
@@ -621,15 +2639,75 @@
       "import": "./dist/auth/passkey-client-constants.js",
       "default": "./dist/auth/passkey-client-constants.js"
     },
+    "./auth/step-up-service": {
+      "types": "./dist/auth/step-up-service.d.ts",
+      "import": "./dist/auth/step-up-service.js",
+      "require": "./dist/auth/step-up-service.js"
+    },
+    "./auth/step-up-decisions": {
+      "types": "./dist/auth/step-up-decisions.d.ts",
+      "import": "./dist/auth/step-up-decisions.js",
+      "require": "./dist/auth/step-up-decisions.js"
+    },
+    "./auth/step-up-constants": {
+      "types": "./dist/auth/step-up-constants.d.ts",
+      "import": "./dist/auth/step-up-constants.js",
+      "default": "./dist/auth/step-up-constants.js"
+    },
     "./permissions/permissions": {
       "types": "./dist/permissions/permissions.d.ts",
       "import": "./dist/permissions/permissions.js",
       "require": "./dist/permissions/permissions.js"
     },
+    "./permissions/open-drive-floor": {
+      "types": "./dist/permissions/open-drive-floor.d.ts",
+      "import": "./dist/permissions/open-drive-floor.js",
+      "require": "./dist/permissions/open-drive-floor.js"
+    },
+    "./permissions/app-unpark-authority": {
+      "types": "./dist/permissions/app-unpark-authority.d.ts",
+      "import": "./dist/permissions/app-unpark-authority.js",
+      "require": "./dist/permissions/app-unpark-authority.js"
+    },
+    "./permissions/drive-relationship": {
+      "types": "./dist/permissions/drive-relationship.d.ts",
+      "import": "./dist/permissions/drive-relationship.js",
+      "require": "./dist/permissions/drive-relationship.js"
+    },
+    "./permissions/drive-relationship-loader": {
+      "types": "./dist/permissions/drive-relationship-loader.d.ts",
+      "import": "./dist/permissions/drive-relationship-loader.js",
+      "require": "./dist/permissions/drive-relationship-loader.js"
+    },
+    "./permissions/org-drive-directory": {
+      "types": "./dist/permissions/org-drive-directory.d.ts",
+      "import": "./dist/permissions/org-drive-directory.js",
+      "require": "./dist/permissions/org-drive-directory.js"
+    },
+    "./permissions/org-read-models": {
+      "types": "./dist/permissions/org-read-models.d.ts",
+      "import": "./dist/permissions/org-read-models.js",
+      "require": "./dist/permissions/org-read-models.js"
+    },
+    "./permissions/member-drives": {
+      "types": "./dist/permissions/member-drives.d.ts",
+      "import": "./dist/permissions/member-drives.js",
+      "require": "./dist/permissions/member-drives.js"
+    },
     "./permissions/rollback-permissions": {
       "types": "./dist/permissions/rollback-permissions.d.ts",
       "import": "./dist/permissions/rollback-permissions.js",
       "require": "./dist/permissions/rollback-permissions.js"
+    },
+    "./permissions/conversation-access": {
+      "types": "./dist/permissions/conversation-access.d.ts",
+      "import": "./dist/permissions/conversation-access.js",
+      "require": "./dist/permissions/conversation-access.js"
+    },
+    "./conversations/conversation-page": {
+      "types": "./dist/conversations/conversation-page.d.ts",
+      "import": "./dist/conversations/conversation-page.js",
+      "require": "./dist/conversations/conversation-page.js"
     },
     "./permissions/enforced-context": {
       "types": "./dist/permissions/enforced-context.d.ts",
@@ -646,6 +2724,41 @@
       "import": "./dist/permissions/permission-mutations.js",
       "require": "./dist/permissions/permission-mutations.js"
     },
+    "./permissions/revocation-kick": {
+      "types": "./dist/permissions/revocation-kick.d.ts",
+      "import": "./dist/permissions/revocation-kick.js",
+      "require": "./dist/permissions/revocation-kick.js"
+    },
+    "./realtime/rooms": {
+      "types": "./dist/realtime/rooms.d.ts",
+      "import": "./dist/realtime/rooms.js",
+      "require": "./dist/realtime/rooms.js"
+    },
+    "./realtime/conversation-event-names": {
+      "types": "./dist/realtime/conversation-event-names.d.ts",
+      "import": "./dist/realtime/conversation-event-names.js",
+      "require": "./dist/realtime/conversation-event-names.js"
+    },
+    "./realtime/kick-client": {
+      "types": "./dist/realtime/kick-client.d.ts",
+      "import": "./dist/realtime/kick-client.js",
+      "require": "./dist/realtime/kick-client.js"
+    },
+    "./realtime/voice-bridge-contract": {
+      "types": "./dist/realtime/voice-bridge-contract.d.ts",
+      "import": "./dist/realtime/voice-bridge-contract.js",
+      "require": "./dist/realtime/voice-bridge-contract.js"
+    },
+    "./realtime/voice-events": {
+      "types": "./dist/realtime/voice-events.d.ts",
+      "import": "./dist/realtime/voice-events.js",
+      "require": "./dist/realtime/voice-events.js"
+    },
+    "./permissions/share-link-service": {
+      "types": "./dist/permissions/share-link-service.d.ts",
+      "import": "./dist/permissions/share-link-service.js",
+      "require": "./dist/permissions/share-link-service.js"
+    },
     "./permissions/schemas": {
       "types": "./dist/permissions/schemas.d.ts",
       "import": "./dist/permissions/schemas.js",
@@ -655,6 +2768,56 @@
       "types": "./dist/permissions/accessible-page-ids.d.ts",
       "import": "./dist/permissions/accessible-page-ids.js",
       "require": "./dist/permissions/accessible-page-ids.js"
+    },
+    "./permissions/agent-permissions": {
+      "types": "./dist/permissions/agent-permissions.d.ts",
+      "import": "./dist/permissions/agent-permissions.js",
+      "require": "./dist/permissions/agent-permissions.js"
+    },
+    "./permissions/app-permissions": {
+      "types": "./dist/permissions/app-permissions.d.ts",
+      "import": "./dist/permissions/app-permissions.js",
+      "require": "./dist/permissions/app-permissions.js"
+    },
+    "./permissions/guest-role": {
+      "types": "./dist/permissions/guest-role.d.ts",
+      "import": "./dist/permissions/guest-role.js",
+      "require": "./dist/permissions/guest-role.js"
+    },
+    "./permissions/membership-queries": {
+      "types": "./dist/permissions/membership-queries.d.ts",
+      "import": "./dist/permissions/membership-queries.js",
+      "require": "./dist/permissions/membership-queries.js"
+    },
+    "./permissions/resolve-role-permissions": {
+      "types": "./dist/permissions/resolve-role-permissions.d.ts",
+      "import": "./dist/permissions/resolve-role-permissions.js",
+      "require": "./dist/permissions/resolve-role-permissions.js"
+    },
+    "./permissions/org-access": {
+      "types": "./dist/permissions/org-access.d.ts",
+      "import": "./dist/permissions/org-access.js",
+      "require": "./dist/permissions/org-access.js"
+    },
+    "./permissions/drive-member-labels": {
+      "types": "./dist/permissions/drive-member-labels.d.ts",
+      "import": "./dist/permissions/drive-member-labels.js",
+      "require": "./dist/permissions/drive-member-labels.js"
+    },
+    "./permissions/automation-ownership": {
+      "types": "./dist/permissions/automation-ownership.d.ts",
+      "import": "./dist/permissions/automation-ownership.js",
+      "require": "./dist/permissions/automation-ownership.js"
+    },
+    "./permissions/spend-standing": {
+      "types": "./dist/permissions/spend-standing.d.ts",
+      "import": "./dist/permissions/spend-standing.js",
+      "require": "./dist/permissions/spend-standing.js"
+    },
+    "./permissions/wallet-access": {
+      "types": "./dist/permissions/wallet-access.d.ts",
+      "import": "./dist/permissions/wallet-access.js",
+      "require": "./dist/permissions/wallet-access.js"
     },
     "./compliance/retention/retention-engine": {
       "types": "./dist/compliance/retention/retention-engine.d.ts",
@@ -666,6 +2829,11 @@
       "import": "./dist/compliance/retention/monitoring-retention.js",
       "require": "./dist/compliance/retention/monitoring-retention.js"
     },
+    "./compliance/retention/activity-log-archival": {
+      "types": "./dist/compliance/retention/activity-log-archival.d.ts",
+      "import": "./dist/compliance/retention/activity-log-archival.js",
+      "require": "./dist/compliance/retention/activity-log-archival.js"
+    },
     "./compliance/file-cleanup/orphan-detector": {
       "types": "./dist/compliance/file-cleanup/orphan-detector.d.ts",
       "import": "./dist/compliance/file-cleanup/orphan-detector.js",
@@ -676,6 +2844,16 @@
       "import": "./dist/compliance/export/gdpr-export.js",
       "require": "./dist/compliance/export/gdpr-export.js"
     },
+    "./compliance/export/export-sign-in-gate": {
+      "types": "./dist/compliance/export/export-sign-in-gate.d.ts",
+      "import": "./dist/compliance/export/export-sign-in-gate.js",
+      "require": "./dist/compliance/export/export-sign-in-gate.js"
+    },
+    "./compliance/export/export-format": {
+      "types": "./dist/compliance/export/export-format.d.ts",
+      "import": "./dist/compliance/export/export-format.js",
+      "require": "./dist/compliance/export/export-format.js"
+    },
     "./compliance/anonymize": {
       "types": "./dist/compliance/anonymize.d.ts",
       "import": "./dist/compliance/anonymize.js",
@@ -685,21 +2863,370 @@
       "types": "./dist/compliance/erasure/revoke-integration-tokens.d.ts",
       "import": "./dist/compliance/erasure/revoke-integration-tokens.js",
       "require": "./dist/compliance/erasure/revoke-integration-tokens.js"
+    },
+    "./canvas/cert-action": {
+      "types": "./dist/canvas/cert-action.d.ts",
+      "import": "./dist/canvas/cert-action.js",
+      "require": "./dist/canvas/cert-action.js"
+    },
+    "./consent": {
+      "types": "./dist/consent/index.d.ts",
+      "import": "./dist/consent/index.js",
+      "require": "./dist/consent/index.js"
+    },
+    "./compliance/dsr/sla": {
+      "types": "./dist/compliance/dsr/sla.d.ts",
+      "import": "./dist/compliance/dsr/sla.js",
+      "require": "./dist/compliance/dsr/sla.js"
+    },
+    "./compliance/dsr/status-machine": {
+      "types": "./dist/compliance/dsr/status-machine.d.ts",
+      "import": "./dist/compliance/dsr/status-machine.js",
+      "require": "./dist/compliance/dsr/status-machine.js"
+    },
+    "./compliance/erasure/drive-disposition": {
+      "types": "./dist/compliance/erasure/drive-disposition.d.ts",
+      "import": "./dist/compliance/erasure/drive-disposition.js",
+      "require": "./dist/compliance/erasure/drive-disposition.js"
+    },
+    "./compliance/erasure/erasure-plan": {
+      "types": "./dist/compliance/erasure/erasure-plan.d.ts",
+      "import": "./dist/compliance/erasure/erasure-plan.js",
+      "require": "./dist/compliance/erasure/erasure-plan.js"
+    },
+    "./compliance/erasure/run-erasure": {
+      "types": "./dist/compliance/erasure/run-erasure.d.ts",
+      "import": "./dist/compliance/erasure/run-erasure.js",
+      "require": "./dist/compliance/erasure/run-erasure.js"
+    },
+    "./compliance/erasure/email-suppression": {
+      "types": "./dist/compliance/erasure/email-suppression.d.ts",
+      "import": "./dist/compliance/erasure/email-suppression.js",
+      "require": "./dist/compliance/erasure/email-suppression.js"
+    },
+    "./compliance/erasure/resend-suppression-client": {
+      "types": "./dist/compliance/erasure/resend-suppression-client.d.ts",
+      "import": "./dist/compliance/erasure/resend-suppression-client.js",
+      "require": "./dist/compliance/erasure/resend-suppression-client.js"
+    },
+    "./compliance/erasure/ai-provider-erasure": {
+      "types": "./dist/compliance/erasure/ai-provider-erasure.d.ts",
+      "import": "./dist/compliance/erasure/ai-provider-erasure.js",
+      "require": "./dist/compliance/erasure/ai-provider-erasure.js"
+    },
+    "./compliance/erasure/purge-stream-state": {
+      "types": "./dist/compliance/erasure/purge-stream-state.d.ts",
+      "import": "./dist/compliance/erasure/purge-stream-state.js",
+      "require": "./dist/compliance/erasure/purge-stream-state.js"
+    },
+    "./compliance/erasure/pseudonymize": {
+      "types": "./dist/compliance/erasure/pseudonymize.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize.js",
+      "require": "./dist/compliance/erasure/pseudonymize.js"
+    },
+    "./compliance/erasure/pseudonymize-targets": {
+      "types": "./dist/compliance/erasure/pseudonymize-targets.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-targets.js",
+      "require": "./dist/compliance/erasure/pseudonymize-targets.js"
+    },
+    "./compliance/erasure/pseudonymize-repository": {
+      "types": "./dist/compliance/erasure/pseudonymize-repository.d.ts",
+      "import": "./dist/compliance/erasure/pseudonymize-repository.js",
+      "require": "./dist/compliance/erasure/pseudonymize-repository.js"
+    },
+    "./repositories/data-subject-request-repository": {
+      "types": "./dist/repositories/data-subject-request-repository.d.ts",
+      "import": "./dist/repositories/data-subject-request-repository.js",
+      "require": "./dist/repositories/data-subject-request-repository.js"
+    },
+    "./audit/security-audit-chain-verifier": {
+      "types": "./dist/audit/security-audit-chain-verifier.d.ts",
+      "import": "./dist/audit/security-audit-chain-verifier.js",
+      "require": "./dist/audit/security-audit-chain-verifier.js"
+    },
+    "./agent-workspaces/workspace-node-rows": {
+      "types": "./dist/agent-workspaces/workspace-node-rows.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-rows.js",
+      "require": "./dist/agent-workspaces/workspace-node-rows.js"
+    },
+    "./agent-workspaces/workspace-node-algebra": {
+      "types": "./dist/agent-workspaces/workspace-node-algebra.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-algebra.js",
+      "require": "./dist/agent-workspaces/workspace-node-algebra.js"
+    },
+    "./agent-workspaces/workspace-node-commands": {
+      "types": "./dist/agent-workspaces/workspace-node-commands.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-commands.js",
+      "require": "./dist/agent-workspaces/workspace-node-commands.js"
+    },
+    "./agent-workspaces/workspace-node-wire": {
+      "types": "./dist/agent-workspaces/workspace-node-wire.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-wire.js",
+      "require": "./dist/agent-workspaces/workspace-node-wire.js"
+    },
+    "./agent-workspaces/workspace-node-write": {
+      "types": "./dist/agent-workspaces/workspace-node-write.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-write.js",
+      "require": "./dist/agent-workspaces/workspace-node-write.js"
+    },
+    "./agent-workspaces/workspace-node-membership-diff": {
+      "types": "./dist/agent-workspaces/workspace-node-membership-diff.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-membership-diff.js",
+      "require": "./dist/agent-workspaces/workspace-node-membership-diff.js"
+    },
+    "./agent-workspaces/workspace-node-chat-binding": {
+      "types": "./dist/agent-workspaces/workspace-node-chat-binding.d.ts",
+      "import": "./dist/agent-workspaces/workspace-node-chat-binding.js",
+      "require": "./dist/agent-workspaces/workspace-node-chat-binding.js"
+    },
+    "./services/agent-workspaces/workspace-node-store": {
+      "types": "./dist/services/agent-workspaces/workspace-node-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-node-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-node-store.js"
+    },
+    "./services/agent-workspaces/workspace-membership-store": {
+      "types": "./dist/services/agent-workspaces/workspace-membership-store.d.ts",
+      "import": "./dist/services/agent-workspaces/workspace-membership-store.js",
+      "require": "./dist/services/agent-workspaces/workspace-membership-store.js"
+    },
+    "./services/app-hosting/routing-env": {
+      "types": "./dist/services/app-hosting/routing-env.d.ts",
+      "import": "./dist/services/app-hosting/routing-env.js",
+      "require": "./dist/services/app-hosting/routing-env.js"
+    },
+    "./services/app-hosting/router-core": {
+      "types": "./dist/services/app-hosting/router-core.d.ts",
+      "import": "./dist/services/app-hosting/router-core.js",
+      "require": "./dist/services/app-hosting/router-core.js"
+    },
+    "./services/app-hosting/router": {
+      "types": "./dist/services/app-hosting/router.d.ts",
+      "import": "./dist/services/app-hosting/router.js",
+      "require": "./dist/services/app-hosting/router.js"
+    },
+    "./services/app-hosting/app-replay-key": {
+      "types": "./dist/services/app-hosting/app-replay-key.d.ts",
+      "import": "./dist/services/app-hosting/app-replay-key.js",
+      "require": "./dist/services/app-hosting/app-replay-key.js"
+    },
+    "./services/app-hosting/parked-page": {
+      "types": "./dist/services/app-hosting/parked-page.d.ts",
+      "import": "./dist/services/app-hosting/parked-page.js",
+      "require": "./dist/services/app-hosting/parked-page.js"
+    },
+    "./services/app-hosting/app-logs-env": {
+      "types": "./dist/services/app-hosting/app-logs-env.d.ts",
+      "import": "./dist/services/app-hosting/app-logs-env.js",
+      "require": "./dist/services/app-hosting/app-logs-env.js"
+    },
+    "./services/app-hosting/dockerfile-synthesis-core": {
+      "types": "./dist/services/app-hosting/dockerfile-synthesis-core.d.ts",
+      "import": "./dist/services/app-hosting/dockerfile-synthesis-core.js",
+      "require": "./dist/services/app-hosting/dockerfile-synthesis-core.js"
+    },
+    "./services/app-hosting/build-source-retention-core": {
+      "types": "./dist/services/app-hosting/build-source-retention-core.d.ts",
+      "import": "./dist/services/app-hosting/build-source-retention-core.js",
+      "require": "./dist/services/app-hosting/build-source-retention-core.js"
+    },
+    "./validators/fly-ownership": {
+      "types": "./dist/validators/fly-ownership.d.ts",
+      "import": "./dist/validators/fly-ownership.js",
+      "require": "./dist/validators/fly-ownership.js"
+    },
+    "./agent-accounts/account-authority-executor": {
+      "types": "./dist/agent-accounts/account-authority-executor.d.ts",
+      "import": "./dist/agent-accounts/account-authority-executor.js",
+      "require": "./dist/agent-accounts/account-authority-executor.js"
+    },
+    "./agent-accounts/account-facts-repository": {
+      "types": "./dist/agent-accounts/account-facts-repository.d.ts",
+      "import": "./dist/agent-accounts/account-facts-repository.js",
+      "require": "./dist/agent-accounts/account-facts-repository.js"
+    },
+    "./agent-accounts/agent-account-repository": {
+      "types": "./dist/agent-accounts/agent-account-repository.d.ts",
+      "import": "./dist/agent-accounts/agent-account-repository.js",
+      "require": "./dist/agent-accounts/agent-account-repository.js"
+    },
+    "./agent-accounts/plane-client": {
+      "types": "./dist/agent-accounts/plane-client.d.ts",
+      "import": "./dist/agent-accounts/plane-client.js",
+      "require": "./dist/agent-accounts/plane-client.js"
+    },
+    "./agent-accounts/to-safe-account": {
+      "types": "./dist/agent-accounts/to-safe-account.d.ts",
+      "import": "./dist/agent-accounts/to-safe-account.js",
+      "require": "./dist/agent-accounts/to-safe-account.js"
+    },
+    "./agent-accounts/decide-account-creation": {
+      "types": "./dist/agent-accounts/decide-account-creation.d.ts",
+      "import": "./dist/agent-accounts/decide-account-creation.js",
+      "require": "./dist/agent-accounts/decide-account-creation.js"
+    },
+    "./agent-accounts/decide-acknowledgment": {
+      "types": "./dist/agent-accounts/decide-acknowledgment.d.ts",
+      "import": "./dist/agent-accounts/decide-acknowledgment.js",
+      "require": "./dist/agent-accounts/decide-acknowledgment.js"
+    },
+    "./agent-accounts/to-http-request-tool-result": {
+      "types": "./dist/agent-accounts/to-http-request-tool-result.d.ts",
+      "import": "./dist/agent-accounts/to-http-request-tool-result.js",
+      "require": "./dist/agent-accounts/to-http-request-tool-result.js"
+    },
+    "./organizations/policies": {
+      "types": "./dist/organizations/policies.d.ts",
+      "import": "./dist/organizations/policies.js",
+      "require": "./dist/organizations/policies.js"
+    },
+    "./organizations/policies-core": {
+      "types": "./dist/organizations/policies-core.d.ts",
+      "import": "./dist/organizations/policies-core.js",
+      "require": "./dist/organizations/policies-core.js"
+    },
+    "./organizations/org-change-events": {
+      "types": "./dist/organizations/org-change-events.d.ts",
+      "import": "./dist/organizations/org-change-events.js",
+      "require": "./dist/organizations/org-change-events.js"
+    },
+    "./realtime/org-wallet-events": {
+      "types": "./dist/realtime/org-wallet-events.d.ts",
+      "import": "./dist/realtime/org-wallet-events.js",
+      "require": "./dist/realtime/org-wallet-events.js"
+    },
+    "./organizations/policy-suspension-names": {
+      "types": "./dist/organizations/policy-suspension-names.d.ts",
+      "import": "./dist/organizations/policy-suspension-names.js",
+      "require": "./dist/organizations/policy-suspension-names.js"
+    },
+    "./organizations/policy-suspension": {
+      "types": "./dist/organizations/policy-suspension.d.ts",
+      "import": "./dist/organizations/policy-suspension.js",
+      "require": "./dist/organizations/policy-suspension.js"
+    },
+    "./audit/org-audit": {
+      "types": "./dist/audit/org-audit.d.ts",
+      "import": "./dist/audit/org-audit.js",
+      "require": "./dist/audit/org-audit.js"
+    },
+    "./organizations/org-action-decisions": {
+      "types": "./dist/organizations/org-action-decisions.d.ts",
+      "import": "./dist/organizations/org-action-decisions.js",
+      "require": "./dist/organizations/org-action-decisions.js"
+    },
+    "./organizations/org-roles": {
+      "types": "./dist/organizations/org-roles.d.ts",
+      "import": "./dist/organizations/org-roles.js",
+      "require": "./dist/organizations/org-roles.js"
+    },
+    "./organizations/sharing-decisions": {
+      "types": "./dist/organizations/sharing-decisions.d.ts",
+      "import": "./dist/organizations/sharing-decisions.js",
+      "require": "./dist/organizations/sharing-decisions.js"
+    },
+    "./permissions/access-actor": {
+      "types": "./dist/permissions/access-actor.d.ts",
+      "import": "./dist/permissions/access-actor.js",
+      "require": "./dist/permissions/access-actor.js"
+    },
+    "./permissions/actor-authentication": {
+      "types": "./dist/permissions/actor-authentication.d.ts",
+      "import": "./dist/permissions/actor-authentication.js",
+      "require": "./dist/permissions/actor-authentication.js"
+    },
+    "./permissions/org-derived-content": {
+      "types": "./dist/permissions/org-derived-content.d.ts",
+      "import": "./dist/permissions/org-derived-content.js",
+      "require": "./dist/permissions/org-derived-content.js"
+    },
+    "./organizations/authentication-policy-core": {
+      "types": "./dist/organizations/authentication-policy-core.d.ts",
+      "import": "./dist/organizations/authentication-policy-core.js",
+      "require": "./dist/organizations/authentication-policy-core.js"
+    },
+    "./organizations/sign-in-blocked": {
+      "types": "./dist/organizations/sign-in-blocked.d.ts",
+      "import": "./dist/organizations/sign-in-blocked.js",
+      "require": "./dist/organizations/sign-in-blocked.js"
+    },
+    "./organizations/policy-reader": {
+      "types": "./dist/organizations/policy-reader.d.ts",
+      "import": "./dist/organizations/policy-reader.js",
+      "require": "./dist/organizations/policy-reader.js"
+    },
+    "./organizations/published-visibility": {
+      "types": "./dist/organizations/published-visibility.d.ts",
+      "import": "./dist/organizations/published-visibility.js",
+      "require": "./dist/organizations/published-visibility.js"
+    },
+    "./organizations/published-visibility-core": {
+      "types": "./dist/organizations/published-visibility-core.d.ts",
+      "import": "./dist/organizations/published-visibility-core.js",
+      "require": "./dist/organizations/published-visibility-core.js"
+    },
+    "./permissions/guest-holds": {
+      "types": "./dist/permissions/guest-holds.d.ts",
+      "import": "./dist/permissions/guest-holds.js",
+      "require": "./dist/permissions/guest-holds.js"
+    },
+    "./permissions/guest-admission": {
+      "types": "./dist/permissions/guest-admission.d.ts",
+      "import": "./dist/permissions/guest-admission.js",
+      "require": "./dist/permissions/guest-admission.js"
+    },
+    "./permissions/org-lapse-guard": {
+      "types": "./dist/permissions/org-lapse-guard.d.ts",
+      "import": "./dist/permissions/org-lapse-guard.js",
+      "require": "./dist/permissions/org-lapse-guard.js"
+    },
+    "./permissions/page-grant-admission": {
+      "types": "./dist/permissions/page-grant-admission.d.ts",
+      "import": "./dist/permissions/page-grant-admission.js",
+      "require": "./dist/permissions/page-grant-admission.js"
+    },
+    "./organizations/open-role-floor": {
+      "types": "./dist/organizations/open-role-floor.d.ts",
+      "import": "./dist/organizations/open-role-floor.js",
+      "require": "./dist/organizations/open-role-floor.js"
     }
   },
   "typesVersions": {
     "*": {
+      "validators/custom-domain": [
+        "./dist/validators/custom-domain.d.ts"
+      ],
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
+      "ai/normalize-parts": [
+        "./dist/ai/normalize-parts.d.ts"
+      ],
+      "ai/context-window": [
+        "./dist/ai/context-window.d.ts"
+      ],
+      "ai/summarization-prompt": [
+        "./dist/ai/summarization-prompt.d.ts"
+      ],
+      "ai/tool-result-eliding": [
+        "./dist/ai/tool-result-eliding.d.ts"
+      ],
       "ai/global-channel-id": [
         "./dist/ai/global-channel-id.d.ts"
+      ],
+      "ai/model-defaults": [
+        "./dist/ai/model-defaults.d.ts"
+      ],
+      "links/page-url-parser": [
+        "./dist/links/page-url-parser.d.ts"
       ],
       "logging/logger": [
         "./dist/logging/logger.d.ts"
       ],
       "logging/logger-config": [
         "./dist/logging/logger-config.d.ts"
+      ],
+      "logging/error-cause": [
+        "./dist/logging/error-cause.d.ts"
       ],
       "logging/logger-database": [
         "./dist/logging/logger-database.d.ts"
@@ -709,6 +3236,84 @@
       ],
       "logging/ai-usage-purge": [
         "./dist/logging/ai-usage-purge.d.ts"
+      ],
+      "billing/credit-core": [
+        "./dist/billing/credit-core.d.ts"
+      ],
+      "billing/credit-consume": [
+        "./dist/billing/credit-consume.d.ts"
+      ],
+      "billing/credit-balance": [
+        "./dist/billing/credit-balance.d.ts"
+      ],
+      "billing/credit-emit": [
+        "./dist/billing/credit-emit.d.ts"
+      ],
+      "billing/automation-preferences": [
+        "./dist/billing/automation-preferences.d.ts"
+      ],
+      "billing/credit-pricing": [
+        "./dist/billing/credit-pricing.d.ts"
+      ],
+      "billing/credit-gate": [
+        "./dist/billing/credit-gate.d.ts"
+      ],
+      "billing/spend-target": [
+        "./dist/billing/spend-target.d.ts"
+      ],
+      "billing/call-admission": [
+        "./dist/billing/call-admission.d.ts"
+      ],
+      "billing/credit-backfill": [
+        "./dist/billing/credit-backfill.d.ts"
+      ],
+      "billing/credit-funding": [
+        "./dist/billing/credit-funding.d.ts"
+      ],
+      "billing/money-model": [
+        "./dist/billing/money-model.d.ts"
+      ],
+      "billing/invoice-grant": [
+        "./dist/billing/invoice-grant.d.ts"
+      ],
+      "billing/missed-grant-reconcile": [
+        "./dist/billing/missed-grant-reconcile.d.ts"
+      ],
+      "billing/live-concurrency-query": [
+        "./dist/billing/live-concurrency-query.d.ts"
+      ],
+      "billing/wallet-core": [
+        "./dist/billing/wallet-core.d.ts"
+      ],
+      "billing/wallet-funding": [
+        "./dist/billing/wallet-funding.d.ts"
+      ],
+      "billing/org-subscription-core": [
+        "./dist/billing/org-subscription-core.d.ts"
+      ],
+      "billing/org-gift-core": [
+        "./dist/billing/org-gift-core.d.ts"
+      ],
+      "billing/org-gift": [
+        "./dist/billing/org-gift.d.ts"
+      ],
+      "billing/org-plan-quote": [
+        "./dist/billing/org-plan-quote.d.ts"
+      ],
+      "test/wallet-leg-invariant": [
+        "./dist/test/wallet-leg-invariant.d.ts"
+      ],
+      "organizations/status": [
+        "./dist/organizations/status.d.ts"
+      ],
+      "organizations/status-core": [
+        "./dist/organizations/status-core.d.ts"
+      ],
+      "billing/org-webhook-core": [
+        "./dist/billing/org-webhook-core.d.ts"
+      ],
+      "billing/wallet-funding-shell": [
+        "./dist/billing/wallet-funding-shell.d.ts"
       ],
       "logging/siem-error-hook": [
         "./dist/logging/siem-error-hook.d.ts"
@@ -722,6 +3327,12 @@
       "monitoring/ai-monitoring": [
         "./dist/monitoring/ai-monitoring.d.ts"
       ],
+      "monitoring/machine-pricing": [
+        "./dist/monitoring/machine-pricing.d.ts"
+      ],
+      "monitoring/usage-source": [
+        "./dist/monitoring/usage-source.d.ts"
+      ],
       "monitoring/ai-context-calculator": [
         "./dist/monitoring/ai-context-calculator.d.ts"
       ],
@@ -733,6 +3344,21 @@
       ],
       "encryption/encryption-utils": [
         "./dist/encryption/encryption-utils.d.ts"
+      ],
+      "encryption/blind-index": [
+        "./dist/encryption/blind-index.d.ts"
+      ],
+      "encryption/field-crypto": [
+        "./dist/encryption/field-crypto.d.ts"
+      ],
+      "encryption/user-crypto": [
+        "./dist/encryption/user-crypto.d.ts"
+      ],
+      "encryption/user-pii-backfill": [
+        "./dist/encryption/user-pii-backfill.d.ts"
+      ],
+      "encryption/legacy-ciphertext-reencrypt": [
+        "./dist/encryption/legacy-ciphertext-reencrypt.d.ts"
       ],
       "auth/device-auth-utils": [
         "./dist/auth/device-auth-utils.d.ts"
@@ -746,8 +3372,23 @@
       "audit/security-audit": [
         "./dist/audit/security-audit.d.ts"
       ],
+      "audit/sanitize-audit-details": [
+        "./dist/audit/sanitize-audit-details.d.ts"
+      ],
+      "audit/admin-read-audit": [
+        "./dist/audit/admin-read-audit.d.ts"
+      ],
       "auth/broadcast-auth": [
         "./dist/auth/broadcast-auth.d.ts"
+      ],
+      "auth/agent-dispatch-payload": [
+        "./dist/auth/agent-dispatch-payload.d.ts"
+      ],
+      "services/pending-uploads": [
+        "./dist/services/pending-uploads.d.ts"
+      ],
+      "services/pending-uploads-core": [
+        "./dist/services/pending-uploads-core.d.ts"
       ],
       "services/preview": [
         "./dist/services/preview.d.ts"
@@ -764,20 +3405,149 @@
       "services/upload-semaphore": [
         "./dist/services/upload-semaphore.d.ts"
       ],
+      "services/sandbox/can-run-code": [
+        "./dist/services/sandbox/can-run-code.d.ts"
+      ],
+      "services/app-hosting/app-hosting-env": [
+        "./dist/services/app-hosting/app-hosting-env.d.ts"
+      ],
+      "services/app-hosting/provisioner-core": [
+        "./dist/services/app-hosting/provisioner-core.d.ts"
+      ],
+      "services/app-hosting/provisioner": [
+        "./dist/services/app-hosting/provisioner.d.ts"
+      ],
+      "services/fly/flaps-retry": [
+        "./dist/services/fly/flaps-retry.d.ts"
+      ],
+      "services/fly/flaps-client": [
+        "./dist/services/fly/flaps-client.d.ts"
+      ],
+      "services/app-hosting/idle-reaper": [
+        "./dist/services/app-hosting/idle-reaper.d.ts"
+      ],
+      "services/app-hosting/build-core": [
+        "./dist/services/app-hosting/build-core.d.ts"
+      ],
+      "services/app-hosting/image-builder": [
+        "./dist/services/app-hosting/image-builder.d.ts"
+      ],
+      "services/app-hosting/build-job": [
+        "./dist/services/app-hosting/build-job.d.ts"
+      ],
+      "services/app-hosting/build-reconciler": [
+        "./dist/services/app-hosting/build-reconciler.d.ts"
+      ],
+      "services/app-hosting/build-wiring": [
+        "./dist/services/app-hosting/build-wiring.d.ts"
+      ],
+      "services/sandbox/checkpoint-policy": [
+        "./dist/services/sandbox/checkpoint-policy.d.ts"
+      ],
+      "services/sandbox/execution-policy": [
+        "./dist/services/sandbox/execution-policy.d.ts"
+      ],
+      "services/sandbox/sandbox-env": [
+        "./dist/services/sandbox/sandbox-env.d.ts"
+      ],
+      "services/sandbox/quota": [
+        "./dist/services/sandbox/quota.d.ts"
+      ],
+      "services/sandbox/audit": [
+        "./dist/services/sandbox/audit.d.ts"
+      ],
+      "services/sandbox/sandbox-options": [
+        "./dist/services/sandbox/sandbox-options.d.ts"
+      ],
+      "services/sandbox/machine-session-manager": [
+        "./dist/services/sandbox/machine-session-manager.d.ts"
+      ],
+      "services/sandbox/sandbox-billing": [
+        "./dist/services/sandbox/sandbox-billing.d.ts"
+      ],
+      "services/sandbox/sandbox-storage-billing": [
+        "./dist/services/sandbox/sandbox-storage-billing.d.ts"
+      ],
+      "services/sandbox/sandbox-storage-attribution": [
+        "./dist/services/sandbox/sandbox-storage-attribution.d.ts"
+      ],
+      "services/sandbox/command-policy": [
+        "./dist/services/sandbox/command-policy.d.ts"
+      ],
+      "services/sandbox/egress": [
+        "./dist/services/sandbox/egress.d.ts"
+      ],
+      "services/sandbox/output-limit": [
+        "./dist/services/sandbox/output-limit.d.ts"
+      ],
+      "services/sandbox/sandbox-paths": [
+        "./dist/services/sandbox/sandbox-paths.d.ts"
+      ],
+      "services/sandbox/tool-gate": [
+        "./dist/services/sandbox/tool-gate.d.ts"
+      ],
+      "services/sandbox/tool-runners": [
+        "./dist/services/sandbox/tool-runners.d.ts"
+      ],
+      "services/sandbox/git-tool-runners": [
+        "./dist/services/sandbox/git-tool-runners.d.ts"
+      ],
+      "services/sandbox/github-token": [
+        "./dist/services/sandbox/github-token.d.ts"
+      ],
+      "services/sandbox/sandbox-client/types": [
+        "./dist/services/sandbox/sandbox-client/types.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprites": [
+        "./dist/services/sandbox/sandbox-client/sprites.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sprite-sandbox-host": [
+        "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.d.ts"
+      ],
+      "services/sandbox/sandbox-client/sandbox-host-adapter": [
+        "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts"
+      ],
+      "services/sandbox/sandbox-host": [
+        "./dist/services/sandbox/sandbox-host.d.ts"
+      ],
+      "services/sandbox/machine-fs": [
+        "./dist/services/sandbox/machine-fs.d.ts"
+      ],
+      "services/sandbox/machine-git-blob": [
+        "./dist/services/sandbox/machine-git-blob.d.ts"
+      ],
+      "services/sandbox/machine-diff-scope": [
+        "./dist/services/sandbox/machine-diff-scope.d.ts"
+      ],
+      "services/sandbox/machine-diff": [
+        "./dist/services/sandbox/machine-diff.d.ts"
+      ],
       "services/memory-monitor": [
         "./dist/services/memory-monitor.d.ts"
       ],
       "services/drive-service": [
         "./dist/services/drive-service.d.ts"
       ],
+      "services/subdomain-allocation": [
+        "./dist/services/subdomain-allocation.d.ts"
+      ],
       "services/drive-member-service": [
         "./dist/services/drive-member-service.d.ts"
+      ],
+      "services/calendar-event-drive-service": [
+        "./dist/services/calendar-event-drive-service.d.ts"
+      ],
+      "services/drive-agent-service": [
+        "./dist/services/drive-agent-service.d.ts"
       ],
       "services/validated-service-token": [
         "./dist/services/validated-service-token.d.ts"
       ],
       "services/attachment-upload": [
         "./dist/services/attachment-upload.d.ts"
+      ],
+      "services/attachment-upload-core": [
+        "./dist/services/attachment-upload-core.d.ts"
       ],
       "services/attachment-upload-repository": [
         "./dist/services/attachment-upload-repository.d.ts"
@@ -787,9 +3557,6 @@
       ],
       "services/date-utils": [
         "./dist/services/date-utils.d.ts"
-      ],
-      "services/rate-limit-cache": [
-        "./dist/services/rate-limit-cache.d.ts"
       ],
       "deployment-mode": [
         "./dist/deployment-mode.d.ts"
@@ -802,6 +3569,12 @@
       ],
       "sheets/sheet": [
         "./dist/sheets/sheet.d.ts"
+      ],
+      "sheets/store": [
+        "./dist/sheets/store.d.ts"
+      ],
+      "tags/tag-core": [
+        "./dist/tags/tag-core.d.ts"
       ],
       "utils/environment": [
         "./dist/utils/environment.d.ts"
@@ -821,6 +3594,12 @@
       "auth/verification-utils": [
         "./dist/auth/verification-utils.d.ts"
       ],
+      "auth/user-repository": [
+        "./dist/auth/user-repository.d.ts"
+      ],
+      "auth/onprem-setup-link": [
+        "./dist/auth/onprem-setup-link.d.ts"
+      ],
       "services/email-service": [
         "./dist/services/email-service.d.ts"
       ],
@@ -833,8 +3612,29 @@
       "email-templates/FeedbackNotificationEmail": [
         "./dist/email-templates/FeedbackNotificationEmail.d.ts"
       ],
+      "email-templates/SdkCliLaunchEmail": [
+        "./dist/email-templates/SdkCliLaunchEmail.d.ts"
+      ],
+      "email-templates/AgentSandboxLaunchEmail": [
+        "./dist/email-templates/AgentSandboxLaunchEmail.d.ts"
+      ],
+      "email-templates/FreeCreditsChangeEmail": [
+        "./dist/email-templates/FreeCreditsChangeEmail.d.ts"
+      ],
+      "email-templates/PaymentReceiptEmail": [
+        "./dist/email-templates/PaymentReceiptEmail.d.ts"
+      ],
+      "email-templates/FormSubmissionNotificationEmail": [
+        "./dist/email-templates/FormSubmissionNotificationEmail.d.ts"
+      ],
+      "email-templates/render-email": [
+        "./dist/email-templates/render-email.d.ts"
+      ],
       "auth/secure-compare": [
         "./dist/auth/secure-compare.d.ts"
+      ],
+      "auth/oauth-account-match": [
+        "./dist/auth/oauth-account-match.d.ts"
       ],
       "auth/magic-link-service": [
         "./dist/auth/magic-link-service.d.ts"
@@ -854,6 +3654,9 @@
       "config/env-validation": [
         "./dist/config/env-validation.d.ts"
       ],
+      "observability/sentry-env": [
+        "./dist/observability/sentry-env.d.ts"
+      ],
       "services/page-content-store": [
         "./dist/services/page-content-store.d.ts"
       ],
@@ -869,14 +3672,80 @@
       "services/invites": [
         "./dist/services/invites/index.d.ts"
       ],
+      "services/reorder": [
+        "./dist/services/reorder/index.d.ts"
+      ],
       "validators/id-validators": [
         "./dist/validators/id-validators.d.ts"
       ],
       "validators/email": [
         "./dist/validators/email.d.ts"
       ],
+      "validators/subdomain": [
+        "./dist/validators/subdomain.d.ts"
+      ],
+      "canvas/sanitize-css": [
+        "./dist/canvas/sanitize-css.d.ts"
+      ],
+      "canvas/render-document": [
+        "./dist/canvas/render-document.d.ts"
+      ],
+      "canvas/csp": [
+        "./dist/canvas/csp.d.ts"
+      ],
+      "forms/submission-schema": [
+        "./dist/forms/submission-schema.d.ts"
+      ],
+      "forms/cell-mapping": [
+        "./dist/forms/cell-mapping.d.ts"
+      ],
+      "forms/honeypot": [
+        "./dist/forms/honeypot.d.ts"
+      ],
+      "forms/form-html": [
+        "./dist/forms/form-html.d.ts"
+      ],
+      "forms/field-schema": [
+        "./dist/forms/field-schema.d.ts"
+      ],
+      "forms/embed-html": [
+        "./dist/forms/embed-html.d.ts"
+      ],
+      "canvas/resolve-published-meta": [
+        "./dist/canvas/resolve-published-meta.d.ts"
+      ],
+      "canvas/site-files": [
+        "./dist/canvas/site-files.d.ts"
+      ],
+      "canvas/custom-domain-mirror": [
+        "./dist/canvas/custom-domain-mirror.d.ts"
+      ],
+      "canvas/primary-host": [
+        "./dist/canvas/primary-host.d.ts"
+      ],
+      "publish/sanitize-document-html": [
+        "./dist/publish/sanitize-document-html.d.ts"
+      ],
+      "publish/document-shell": [
+        "./dist/publish/document-shell.d.ts"
+      ],
+      "publish/render-document-page": [
+        "./dist/publish/render-document-page.d.ts"
+      ],
+      "publish/render-code-page": [
+        "./dist/publish/render-code-page.d.ts"
+      ],
+      "publish/render-sheet-page": [
+        "./dist/publish/render-sheet-page.d.ts"
+      ],
+      "organizations/leave": [
+        "./dist/organizations/leave.d.ts"
+      ],
       "notifications/types": [
         "./dist/notifications/types.d.ts"
+      ],
+      "notifications/derive-badge-count": [
+        "./dist/notifications/derive-badge-count.d.ts"
       ],
       "notifications/guards": [
         "./dist/notifications/guards.d.ts"
@@ -914,14 +3783,41 @@
       "content/tree-utils": [
         "./dist/content/tree-utils.d.ts"
       ],
+      "content/anchoring/types": [
+        "./dist/content/anchoring/types.d.ts"
+      ],
+      "content/anchoring/text-projection": [
+        "./dist/content/anchoring/text-projection.d.ts"
+      ],
+      "content/anchoring/anchor": [
+        "./dist/content/anchoring/anchor.d.ts"
+      ],
+      "content/anchoring/reanchor": [
+        "./dist/content/anchoring/reanchor.d.ts"
+      ],
+      "content/anchoring/resolve": [
+        "./dist/content/anchoring/resolve.d.ts"
+      ],
       "audit/audit-log": [
         "./dist/audit/audit-log.d.ts"
+      ],
+      "audit/search-audit-details": [
+        "./dist/audit/search-audit-details.d.ts"
       ],
       "audit/audit-query": [
         "./dist/audit/audit-query.d.ts"
       ],
+      "audit/chain-alert-payload": [
+        "./dist/audit/chain-alert-payload.d.ts"
+      ],
       "audit/security-audit-alerting": [
         "./dist/audit/security-audit-alerting.d.ts"
+      ],
+      "incidents/breach-assessment": [
+        "./dist/incidents/breach-assessment.d.ts"
+      ],
+      "incidents/incident-service": [
+        "./dist/incidents/incident-service.d.ts"
       ],
       "monitoring/change-group": [
         "./dist/monitoring/change-group.d.ts"
@@ -953,6 +3849,9 @@
       "integrations/saga/execute-tool": [
         "./dist/integrations/saga/execute-tool.d.ts"
       ],
+      "integrations/saga/create-configured-executor": [
+        "./dist/integrations/saga/create-configured-executor.d.ts"
+      ],
       "integrations/repositories/provider-repository": [
         "./dist/integrations/repositories/provider-repository.d.ts"
       ],
@@ -967,6 +3866,12 @@
       ],
       "integrations/converter/openapi": [
         "./dist/integrations/converter/openapi.d.ts"
+      ],
+      "security/auth-anomaly": [
+        "./dist/security/auth-anomaly.d.ts"
+      ],
+      "security/auth-anomaly-reporter": [
+        "./dist/security/auth-anomaly-reporter.d.ts"
       ],
       "security/jti-revocation": [
         "./dist/security/jti-revocation.d.ts"
@@ -1004,6 +3909,12 @@
       "auth/rate-limit-utils": [
         "./dist/auth/rate-limit-utils.d.ts"
       ],
+      "auth/authentication-evidence": [
+        "./dist/auth/authentication-evidence.d.ts"
+      ],
+      "auth/reauthentication": [
+        "./dist/auth/reauthentication.d.ts"
+      ],
       "auth/session-service": [
         "./dist/auth/session-service.d.ts"
       ],
@@ -1025,6 +3936,12 @@
       "auth/pkce": [
         "./dist/auth/pkce.d.ts"
       ],
+      "auth/oauth/pkce": [
+        "./dist/auth/oauth/pkce.d.ts"
+      ],
+      "auth/oauth/metadata": [
+        "./dist/auth/oauth/metadata.d.ts"
+      ],
       "auth/passkey-service": [
         "./dist/auth/passkey-service.d.ts"
       ],
@@ -1043,8 +3960,20 @@
       "permissions/file-access": [
         "./dist/permissions/file-access.d.ts"
       ],
+      "permissions/drive-relationship": [
+        "./dist/permissions/drive-relationship.d.ts"
+      ],
+      "permissions/drive-relationship-loader": [
+        "./dist/permissions/drive-relationship-loader.d.ts"
+      ],
+      "permissions/member-drives": [
+        "./dist/permissions/member-drives.d.ts"
+      ],
       "permissions/permission-mutations": [
         "./dist/permissions/permission-mutations.d.ts"
+      ],
+      "permissions/share-link-service": [
+        "./dist/permissions/share-link-service.d.ts"
       ],
       "permissions/schemas": [
         "./dist/permissions/schemas.d.ts"
@@ -1052,11 +3981,29 @@
       "permissions/accessible-page-ids": [
         "./dist/permissions/accessible-page-ids.d.ts"
       ],
+      "permissions/agent-permissions": [
+        "./dist/permissions/agent-permissions.d.ts"
+      ],
+      "permissions/app-permissions": [
+        "./dist/permissions/app-permissions.d.ts"
+      ],
+      "permissions/guest-role": [
+        "./dist/permissions/guest-role.d.ts"
+      ],
+      "permissions/membership-queries": [
+        "./dist/permissions/membership-queries.d.ts"
+      ],
+      "permissions/resolve-role-permissions": [
+        "./dist/permissions/resolve-role-permissions.d.ts"
+      ],
       "compliance/retention/retention-engine": [
         "./dist/compliance/retention/retention-engine.d.ts"
       ],
       "compliance/retention/monitoring-retention": [
         "./dist/compliance/retention/monitoring-retention.d.ts"
+      ],
+      "compliance/retention/activity-log-archival": [
+        "./dist/compliance/retention/activity-log-archival.d.ts"
       ],
       "compliance/file-cleanup/orphan-detector": [
         "./dist/compliance/file-cleanup/orphan-detector.d.ts"
@@ -1064,45 +4011,147 @@
       "compliance/export/gdpr-export": [
         "./dist/compliance/export/gdpr-export.d.ts"
       ],
+      "compliance/export/export-sign-in-gate": [
+        "./dist/compliance/export/export-sign-in-gate.d.ts"
+      ],
+      "compliance/export/export-format": [
+        "./dist/compliance/export/export-format.d.ts"
+      ],
       "compliance/anonymize": [
         "./dist/compliance/anonymize.d.ts"
       ],
       "compliance/erasure/revoke-integration-tokens": [
         "./dist/compliance/erasure/revoke-integration-tokens.d.ts"
+      ],
+      "commands/command-core": [
+        "./dist/commands/command-core.d.ts"
+      ],
+      "canvas/cert-action": [
+        "./dist/canvas/cert-action.d.ts"
+      ],
+      "services/app-hosting/routing-env": [
+        "./dist/services/app-hosting/routing-env.d.ts"
+      ],
+      "services/app-hosting/router-core": [
+        "./dist/services/app-hosting/router-core.d.ts"
+      ],
+      "services/app-hosting/router": [
+        "./dist/services/app-hosting/router.d.ts"
+      ],
+      "services/app-hosting/app-replay-key": [
+        "./dist/services/app-hosting/app-replay-key.d.ts"
+      ],
+      "services/app-hosting/parked-page": [
+        "./dist/services/app-hosting/parked-page.d.ts"
+      ],
+      "services/app-hosting/app-logs-env": [
+        "./dist/services/app-hosting/app-logs-env.d.ts"
+      ],
+      "services/app-hosting/dockerfile-synthesis-core": [
+        "./dist/services/app-hosting/dockerfile-synthesis-core.d.ts"
+      ],
+      "services/app-hosting/build-source-retention-core": [
+        "./dist/services/app-hosting/build-source-retention-core.d.ts"
+      ],
+      "validators/fly-ownership": [
+        "./dist/validators/fly-ownership.d.ts"
+      ],
+      "organizations/policies": [
+        "./dist/organizations/policies.d.ts"
+      ],
+      "organizations/policies-core": [
+        "./dist/organizations/policies-core.d.ts"
+      ],
+      "organizations/policy-suspension": [
+        "./dist/organizations/policy-suspension.d.ts"
+      ],
+      "audit/org-audit": [
+        "./dist/audit/org-audit.d.ts"
+      ],
+      "organizations/org-action-decisions": [
+        "./dist/organizations/org-action-decisions.d.ts"
+      ],
+      "organizations/org-roles": [
+        "./dist/organizations/org-roles.d.ts"
+      ],
+      "organizations/sharing-decisions": [
+        "./dist/organizations/sharing-decisions.d.ts"
+      ],
+      "permissions/access-actor": [
+        "./dist/permissions/access-actor.d.ts"
+      ],
+      "permissions/actor-authentication": [
+        "./dist/permissions/actor-authentication.d.ts"
+      ],
+      "permissions/org-derived-content": [
+        "./dist/permissions/org-derived-content.d.ts"
+      ],
+      "organizations/authentication-policy-core": [
+        "./dist/organizations/authentication-policy-core.d.ts"
+      ],
+      "organizations/sign-in-blocked": [
+        "./dist/organizations/sign-in-blocked.d.ts"
+      ],
+      "organizations/policy-reader": [
+        "./dist/organizations/policy-reader.d.ts"
+      ],
+      "organizations/published-visibility": [
+        "./dist/organizations/published-visibility.d.ts"
+      ],
+      "organizations/published-visibility-core": [
+        "./dist/organizations/published-visibility-core.d.ts"
+      ],
+      "permissions/guest-holds": [
+        "./dist/permissions/guest-holds.d.ts"
+      ],
+      "permissions/guest-admission": [
+        "./dist/permissions/guest-admission.d.ts"
+      ],
+      "permissions/page-grant-admission": [
+        "./dist/permissions/page-grant-admission.d.ts"
+      ],
+      "organizations/open-role-floor": [
+        "./dist/organizations/open-role-floor.d.ts"
       ]
     }
   },
   "dependencies": {
+    "@apple/app-store-server-library": "3.1.0",
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@clickhouse/client": "^1.23.1",
+    "@fly/sprites": "0.0.1-rc37",
     "@iarna/toml": "^2.2.5",
     "@pagespace/db": "workspace:*",
     "@paralleldrive/cuid2": "^2.2.2",
     "@react-email/components": "^0.5.5",
     "@simplewebauthn/server": "^13.2.2",
-    "apple-signin-auth": "^2.0.0",
     "diff-match-patch": "^1.0.5",
-    "drizzle-orm": "^0.32.2",
+    "drizzle-orm": "^0.45.2",
+    "free-email-domains": "1.12.18",
     "google-auth-library": "^10.3.0",
     "html-to-docx": "^1.8.0",
-    "mammoth": "^1.10.0",
+    "marked": "^17.0.1",
     "pako": "^2.1.0",
-    "pdf-parse-debugging-disabled": "^1.1.1",
     "react": "^19.1.2",
-    "react-dom": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
+    "sanitize-html": "^2.17.6",
     "server-only": "^0.0.1",
     "xlsx": "^0.18.5",
     "yaml": "^2.8.2",
-    "zod": "^4.0.16"
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@react-email/preview-server": "5.1.1",
     "@types/diff-match-patch": "^1.0.36",
     "@types/html-to-docx": "^1.8.0",
     "@types/pako": "^2.0.3",
+    "@types/pg": "^8.15.4",
     "@types/react": "^19.1.13",
+    "@types/sanitize-html": "^2.16.1",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
+    "pg": "^8.16.3",
     "typescript-eslint": "^8.59.0"
   }
 }

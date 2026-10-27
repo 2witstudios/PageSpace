@@ -1,15 +1,23 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
 import { eventAttendees } from '@pagespace/db/schema/calendar'
 import { workflows } from '@pagespace/db/schema/workflows';
+import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
+import { AUTOMATION_OWNER_LEFT_ERROR, automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
+import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import type { CalendarEvent } from '@pagespace/db/schema/calendar'
 import type { CalendarTrigger } from '@pagespace/db/schema/calendar-triggers';
 import { executeWorkflow, type WorkflowExecutionResult, type WorkflowExecutionInput } from './workflow-executor';
-import { incrementUsage } from '@/lib/subscription/usage-service';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { automationSpend } from '@pagespace/lib/billing/spend-target';
+import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
 
@@ -30,14 +38,7 @@ export async function executeCalendarTrigger(
   const startTime = Date.now();
 
   try {
-    // 1. Verify scheduling user still has drive access (may have been removed since scheduling)
-    const hasDriveAccess = await isUserDriveMember(trigger.scheduledById, trigger.driveId);
-    if (!hasDriveAccess) {
-      const error = 'Scheduling user no longer has access to the drive';
-      return { success: false, durationMs: Date.now() - startTime, error };
-    }
-
-    // 2. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
+    // 1. Load the linked workflows row (the trigger holds only "when"; payload lives on workflows)
     const [workflow] = await db
       .select()
       .from(workflows)
@@ -48,7 +49,41 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 3. Cheap preflight: verify agent page still exists before consuming a usage credit
+    // 2. [D-OW-36] Nothing runs under a missing person: a workflow whose creator left the org (flagged
+    //    owner-left), or a trigger whose scheduler's account is gone, is skipped before the access check,
+    //    the credit gate or any hold. A cancelled run records why and consumes this occurrence, so the
+    //    poller does not re-discover it every tick.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs || trigger.scheduledById === null) {
+      const error = owner.runs ? AUTOMATION_OWNER_LEFT_ERROR : owner.error;
+      await db.insert(workflowRuns).values({
+        workflowId: trigger.workflowId,
+        sourceTable: 'calendarTriggers',
+        sourceId: trigger.id,
+        triggerAt: trigger.triggerAt,
+        status: 'cancelled',
+        endedAt: new Date(),
+        error,
+      }).onConflictDoNothing();
+      logger.info('Calendar trigger: skipped (owner left)', { triggerId: trigger.id, workflowId: workflow.id });
+      return { success: false, skipped: true, durationMs: Date.now() - startTime, error };
+    }
+    const scheduledById = trigger.scheduledById;
+
+    // Verify the scheduling user still has drive access (may have been removed since scheduling)
+    // An automation runs as its scheduler (D-OW-34): membership applies, sign-in policy does not.
+    const hasDriveAccess = await isUserDriveMember(automationActor(scheduledById, 'calendar-trigger', inDrives(trigger.driveId)), trigger.driveId);
+    if (!hasDriveAccess) {
+      const error = 'Scheduling user no longer has access to the drive';
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
+
+    // 3. Cheap preflight: verify agent page still exists. Calendar triggers
+    //    are AI-only — a step-based workflow without an agent cannot run here.
+    if (!workflow.agentPageId) {
+      const error = 'Workflow has no agent page (step-based workflows are not supported by calendar triggers)';
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
     const [agentPage] = await db
       .select({ id: pages.id, isTrashed: pages.isTrashed })
       .from(pages)
@@ -59,12 +94,31 @@ export async function executeCalendarTrigger(
       return { success: false, durationMs: Date.now() - startTime, error };
     }
 
-    // 4. Rate-limit check: consume one standard AI call from the scheduler's budget
-    const usageResult = await incrementUsage(trigger.scheduledById, 'standard');
-    if (!usageResult.success) {
-      const error = 'Daily AI call limit reached for scheduling user';
-      return { success: false, durationMs: Date.now() - startTime, error };
+    // 4. Credit gate — blocks out-of-credits users before the model is invoked.
+    //    Looks up the scheduling user's tier for accurate allowance comparison.
+    //    skipDailyCap: server-scheduled triggers are not interactive fan-out, so the
+    //    per-user/day runaway backstop does not apply here.
+    const [schedulingUser] = await db
+      .select({ subscriptionTier: users.subscriptionTier })
+      .from(users)
+      .where(eq(users.id, scheduledById));
+    //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
+    //    or is skipped, never the scheduling user's credits or allowance.
+    const spend = automationSpend(workflow.driveId);
+    const gate = await canConsumeAI(
+      scheduledById,
+      toPersonalSubscriptionTier(schedulingUser?.subscriptionTier),
+      { spend, skipDailyCap: true },
+    );
+    if (!gate.allowed) {
+      logger.info('Calendar trigger: skipped (credit gate denied)', {
+        triggerId: trigger.id,
+        reason: gate.reason,
+        refusal: gate.refusal?.reason,
+      });
+      return { success: false, durationMs: Date.now() - startTime, error: creditDeniedError(gate.reason, gate.refusal) };
     }
+    const holdId = gate.holdId;
 
     // 5. Build the prompt from the workflow's stored prompt + event context.
     //    The instruction page is loaded by executeWorkflow (input.instructionPageId),
@@ -77,7 +131,7 @@ export async function executeCalendarTrigger(
       workflowId: workflow.id,
       workflowName: `calendar-trigger-${trigger.id}`,
       driveId: workflow.driveId,
-      createdBy: trigger.scheduledById,
+      createdBy: scheduledById,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
@@ -87,7 +141,15 @@ export async function executeCalendarTrigger(
       eventContext: { promptOverride },
     };
 
-    const result = await executeWorkflow(input);
+    // executeWorkflow calls AIMonitoring.trackUsage → consumeCredits internally,
+    // which debits the balance directly (no holdId). Release the reservation here
+    // so the user's spendable balance is accurate immediately after execution.
+    let result: WorkflowExecutionResult;
+    try {
+      result = await executeWorkflow(input, { creditSpend: { spend, walletId: gate.walletId } });
+    } finally {
+      if (holdId) void releaseHold(holdId).catch(() => {});
+    }
 
     logger.info('Calendar trigger executed', {
       triggerId: trigger.id,
@@ -124,11 +186,12 @@ async function buildTriggerPrompt(workflowPrompt: string, event: CalendarEvent):
   if (event.location) parts.push(`Location: ${event.location}`);
 
   // Attendees
-  const attendees = await db
+  // Decrypt PII at the edge so the attendee list in the prompt is plaintext.
+  const attendees = await decryptUserRows(await db
     .select({ name: users.name, email: users.email })
     .from(eventAttendees)
     .innerJoin(users, eq(eventAttendees.userId, users.id))
-    .where(eq(eventAttendees.eventId, event.id));
+    .where(eq(eventAttendees.eventId, event.id)));
 
   if (attendees.length > 0) {
     parts.push(`Attendees: ${attendees.map(a => a.name || a.email).join(', ')}`);

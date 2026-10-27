@@ -1,0 +1,689 @@
+import type { ToolExecutionContext } from '../core/types';
+import {
+  getUserAccessLevel,
+  getUserDriveAccess,
+  canUserEditPage,
+  canUserDeletePage,
+  getUserAccessiblePagesInDriveWithDetails,
+  type PageWithPermissions,
+} from '@pagespace/lib/permissions/permissions';
+import {
+  getAgentAccessLevel,
+  getAgentAccessiblePagesInDrive,
+  hasAgentDriveMembership,
+  hasAgentDriveAdminRole,
+} from '@pagespace/lib/permissions/agent-permissions';
+import {
+  getAppAccessLevel,
+  getAppDriveMembership,
+  getAppDriveAccessLevel,
+  getAppAccessiblePagesInDrive,
+  hasAppDriveMembership,
+} from '@pagespace/lib/permissions/app-permissions';
+import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { checkActorDriveAuthentication, checkActorResourceAuthentication, dropWithheldDerivedPages } from '@pagespace/lib/permissions/actor-authentication';
+import { PageType } from '@pagespace/lib/utils/enums';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { userBuiltinAgents } from '@pagespace/db/schema/user-builtin-agents';
+import { imagoExcludedDriveIds } from '@pagespace/lib/agents/imago-reach';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { toolModelDecision } from '@pagespace/lib/organizations/org-action-decisions';
+
+/**
+ * POL-8 at the tool boundary: content from drive X reaching a model is governed by X's org. A tool running for a chat
+ * whose model X's org does not allow may not read X — the global assistant (which runs in no drive) included. Read
+ * now, no cache. The model judged is the one the run resolved (toolModelContext); a model run that names no resolved
+ * pair is refused, never passed. Only a context that runs no model at all (no pair, not marked) is not judged here.
+ */
+/** The part of a tool context the POL-8 model check reads. */
+export type ModelRunFields = Pick<ToolExecutionContext, 'runsModel' | 'aiProvider' | 'aiModel'>;
+
+function judgesModel(context: ModelRunFields): boolean {
+  return Boolean(context.runsModel || context.aiProvider || context.aiModel);
+}
+
+async function driveDeniedByModelPolicy(context: ModelRunFields, driveId: string): Promise<boolean> {
+  if (!judgesModel(context)) return false;
+  const policies = (await getDrivePolicies(driveId))?.policies ?? null;
+  return !toolModelDecision(policies, { provider: context.aiProvider, modelId: context.aiModel }).ok;
+}
+
+async function pageDeniedByModelPolicy(context: ModelRunFields, pageId: string): Promise<boolean> {
+  if (!judgesModel(context)) return false;
+  const [page] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId)).limit(1);
+  return page ? driveDeniedByModelPolicy(context, page.driveId) : false;
+}
+
+/**
+ * POL-8 for content injected into a run outside a tool call (a command's pages): the same model check the tools
+ * get, without the access check the caller has already made.
+ */
+export async function pageReadableByModel(context: ModelRunFields, pageId: string): Promise<boolean> {
+  return !(await pageDeniedByModelPolicy(context, pageId));
+}
+
+// toolActor lives in its own dependency-free module: tool-name catalogs the browser imports (sandbox-tools,
+// sandbox-git-tools) need it, and this module pulls the server-only permission layer.
+import { toolActor } from './tool-actor';
+export { toolActor };
+
+/**
+ * SEC-2/3: the org sign-in policy of the page's (or drive's) org, asked of the person (or automation) driving the
+ * turn — WHOEVER the tool authorizes as. A page agent's own drive memberships widen what it may reach, never which
+ * org's sign-in rule the driver must satisfy, so a stale or weak credential cannot read org content through an
+ * agent homed elsewhere.
+ */
+async function passesSignInPolicy(context: ToolExecutionContext, resourceId: string): Promise<boolean> {
+  return (await checkActorResourceAuthentication(toolActor(context), resourceId)).allowed;
+}
+
+async function passesDriveSignInPolicy(context: ToolExecutionContext, driveId: string): Promise<boolean> {
+  return (await checkActorDriveAuthentication(toolActor(context), driveId)).allowed;
+}
+
+export function getAgentPageId(context: ToolExecutionContext): string | undefined {
+  return context.chatSource?.type === 'page' ? context.chatSource.agentPageId : undefined;
+}
+
+/**
+ * Whether a page-agent has opted into user-scoped reach (`pages.userScopedAccess`,
+ * owner-toggled via update_agent_config, default false). When true, tools that
+ * would otherwise confine the agent to its own drive memberships should fall
+ * back to the invoking user's own access instead — for personal/global-style
+ * assistants that need the user's full reach rather than explicit membership.
+ *
+ * Carries the SAME AI_CHAT type gate as resolveActingAgentId — the two seams
+ * answer the same question ("is this an agent acting with the user's reach?")
+ * and consumers (MachineDirectoryRuntimeDeps.isUserScopedAgent) are documented
+ * as mirroring them. The column is AI_CHAT-only by construction today, but a
+ * permissions seam does not lean on a schema invariant holding forever: a
+ * non-agent row that somehow carries the flag must not widen the machine
+ * Settings-toggle exemption.
+ */
+export async function hasAgentUserScopedAccess(agentPageId: string): Promise<boolean> {
+  const row = await fetchActingPageRow(agentPageId);
+  return row?.type === PageType.AI_CHAT && row.userScopedAccess;
+}
+
+/**
+ * The ONE row both actor gates read for `chatSource.agentPageId`: is this page
+ * actually an agent (`type`), has it opted into user-scoped reach
+ * (`userScopedAccess`), and is it someone's built-in Imago agent
+ * (`builtinOwnerId`, from `user_builtin_agents`)? Kept as a single select so
+ * the gates below cost zero additional queries on a path every tool call runs
+ * through.
+ */
+async function fetchActingPageRow(agentPageId: string) {
+  const [row] = await db
+    .select({ type: pages.type, userScopedAccess: pages.userScopedAccess, builtinOwnerId: userBuiltinAgents.userId })
+    .from(pages)
+    .leftJoin(userBuiltinAgents, eq(userBuiltinAgents.pageId, pages.id))
+    .where(eq(pages.id, agentPageId));
+  return row;
+}
+
+/**
+ * Who a tool call acts as — the ONE decision every gate below branches on.
+ *
+ *  - `user`: the invoking user's own access. No agent, a non-agent page, or a
+ *    page agent that opted into user-scoped reach.
+ *  - `agent`: a membership-scoped page agent: its own `drive_agent_members`
+ *    reach, never the user's.
+ *  - `imago`: the invoking user's OWN built-in Imago agent (owner decision
+ *    2026-10-06): the Global Assistant's replacement, so it acts with the
+ *    user's full reach — every drive, member-only drive, shared and private
+ *    page — minus the drives the user keeps it out of (`imago_drive_access`
+ *    off). An excluded drive is denied outright: its pages, its drive-level
+ *    gates, its listings.
+ *  - `nobody`: someone else's Imago agent, however it was reached (consult,
+ *    @mention, workflow, ask_agent, a page chat on a shared page). It acts for
+ *    its owner alone, so for anyone else it reaches nothing (IMG-4.9's rule,
+ *    kept by IMG-10.10) — it does NOT fall through to the invoker's reach the
+ *    way an ordinary user-scoped agent does.
+ */
+type Actor =
+  | { kind: 'user' }
+  | { kind: 'agent'; agentPageId: string }
+  | { kind: 'imago'; agentPageId: string; excludedDriveIds: ReadonlySet<string> }
+  | { kind: 'nobody'; agentPageId: string };
+
+const USER_ACTOR: Actor = { kind: 'user' };
+
+async function resolveActor(context: ToolExecutionContext): Promise<Actor> {
+  const agentPageId = getAgentPageId(context);
+  if (!agentPageId) return USER_ACTOR;
+  const row = await fetchActingPageRow(agentPageId);
+  if (row?.type !== PageType.AI_CHAT) return USER_ACTOR;
+  if (row.builtinOwnerId != null) {
+    if (row.builtinOwnerId !== context.userId) return { kind: 'nobody', agentPageId };
+    return { kind: 'imago', agentPageId, excludedDriveIds: await imagoExcludedDriveIds(context.userId) };
+  }
+  return row.userScopedAccess ? USER_ACTOR : { kind: 'agent', agentPageId };
+}
+
+/** The drive a page id lives in, or the id itself when it names a drive (create_page's root path). */
+async function driveIdOf(pageOrDriveId: string): Promise<string> {
+  const [row] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageOrDriveId));
+  return row?.driveId ?? pageOrDriveId;
+}
+
+/** Whether the actor's user-scoped reach is cut off in `driveId`: excluded for Imago, everywhere for nobody. */
+function deniedDrive(actor: Actor, driveId: string): boolean {
+  if (actor.kind === 'nobody') return true;
+  return actor.kind === 'imago' && actor.excludedDriveIds.has(driveId);
+}
+
+/** `deniedDrive` for a page (or a drive id standing in for its root). */
+async function deniedPage(actor: Actor, pageId: string): Promise<boolean> {
+  if (actor.kind === 'nobody') return true;
+  if (actor.kind !== 'imago' || actor.excludedDriveIds.size === 0) return false;
+  return actor.excludedDriveIds.has(await driveIdOf(pageId));
+}
+
+/**
+ * The agent id the canActor* helpers should authorize as, or undefined when
+ * the caller is not a page-agent OR the agent has user-scoped access — in
+ * both cases the helpers fall through to the invoking user's own access.
+ * Invoker-scoped by design: a user-scoped agent acts with the CURRENT
+ * chatter's reach, never its owner's.
+ *
+ * "Not a page-agent" is a claim about the PAGE, not just about whether a
+ * chatSource carries an id: a chat on any non-AI_CHAT page carries THAT page
+ * as agentPageId (api/ai/chat/route.ts sets it for every page chat), and a
+ * non-agent page must not be treated as an acting agent — no driveAgentMembers
+ * row can ever exist for it, so every getAgentAccessLevel lookup returned null
+ * and denied. Falling through to the authenticated user is the honest actor —
+ * the chat route already authorized that user against the page. A missing
+ * page row is a non-agent for the same reason (and the user's own ACL still
+ * denies a page that does not exist).
+ *
+ * Nested (ask_agent) runs inherit the PARENT's actor identity by design —
+ * agent-communication-tools.ts spreads the caller's context, and
+ * sandbox-tools-runtime's activeMachineAgentPageId documents the same "the
+ * agent's own page or the parent's for a sub-agent" rule. So a consulted agent
+ * reached FROM a machine pane also resolves to the invoking user: bounded by
+ * that user's own ACL, never beyond it, and never wider than what the pane's
+ * own tools already reach. Before this gate that whole path was dead, not
+ * tighter — ask_agent's own canActorViewPage gate denied at the door.
+ *
+ * The invoker's own Imago agent resolves to undefined too: it acts with the
+ * user's reach, so callers take the user branch — and must pass what that
+ * branch enumerates through `filterDriveIdsForActor`, which drops the drives
+ * the user keeps Imago out of. Someone else's Imago agent resolves to its page
+ * id, so callers take the agent branch, where it reaches nothing.
+ *
+ * Exported for tools that branch on the same "is this a membership-scoped
+ * agent, or should it fall through to the user's own reach" question outside
+ * these chokepoints (e.g. drive discovery/creation) — reuse this instead of
+ * re-deriving `getAgentPageId(context) && !hasAgentUserScopedAccess(...)` inline.
+ */
+export async function resolveActingAgentId(context: ToolExecutionContext): Promise<string | undefined> {
+  const actor = await resolveActor(context);
+  // `nobody` answers as an agent so callers take the membership branch, where
+  // `filterAgentDriveIdsByActorReach` then gives it no drive at all — never the
+  // user branch, which would hand it the invoker's drives.
+  return actor.kind === 'agent' || actor.kind === 'nobody' ? actor.agentPageId : undefined;
+}
+
+/**
+ * Whether the caller carries an MCP drive-scope restriction (a non-empty
+ * allowedDriveIds). Empty/undefined means full access — session auth or an
+ * unscoped token — and skips all scope checks.
+ *
+ * Exported as `isMcpScoped` for tools that should be blocked entirely for
+ * drive-scoped tokens (e.g. creating a brand-new drive), mirroring the
+ * /api/mcp/drives REST gate.
+ */
+export function isMcpScoped(context: ToolExecutionContext): boolean {
+  return (context.mcpAllowedDriveIds?.length ?? 0) > 0;
+}
+
+function hasMcpScope(context: ToolExecutionContext): boolean {
+  return isMcpScoped(context);
+}
+
+/**
+ * Whether the app-member RBAC ceiling applies: a drive-scoped MCP token whose
+ * own membership role (mcp_token_drives) caps every tool action. Older callers
+ * that set only mcpAllowedDriveIds (no token id) keep the scope-only behavior.
+ */
+function hasAppTokenCeiling(context: ToolExecutionContext): boolean {
+  return !!context.mcpTokenId && isMcpScoped(context);
+}
+
+/**
+ * Whether the token's membership row in this drive carries an EXPLICIT role.
+ * Inherit rows (role NULL) apply NO tool-layer ceiling: the key acts as its
+ * owner, the route gate already ran the owner's access, and an agent actor
+ * keeps its own ACL (pre-RBAC behavior). Explicit roles cap deny-only.
+ */
+async function hasExplicitAppRole(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  const membership = await getAppDriveMembership(toolActor(context), context.mcpTokenId!, driveId);
+  return membership !== null && membership.role !== null;
+}
+
+/**
+ * Deny-only page-level cap from the token's own drive-membership role. Returns
+ * true when the ceiling applies and the token's role does NOT grant the needed
+ * permission. Never grants anything the actor's own ACL would deny; a no-op
+ * for inherited (role NULL) memberships.
+ */
+async function pageDeniedByAppToken(
+  context: ToolExecutionContext,
+  pageId: string,
+  need: 'view' | 'edit' | 'delete',
+): Promise<boolean> {
+  if (!hasAppTokenCeiling(context)) return false;
+  const [row] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId));
+  const driveId = row?.driveId ?? pageId;
+  if (!(await hasExplicitAppRole(context, driveId))) return false;
+  const level = await getAppAccessLevel(toolActor(context), context.mcpTokenId!, pageId);
+  if (!level) return true;
+  switch (need) {
+    case 'view': return !level.canView;
+    case 'edit': return !level.canEdit;
+    case 'delete': return !level.canDelete;
+  }
+}
+
+/**
+ * True when a scoped MCP caller is trying to reach a drive outside its token
+ * scope. The actor's own ACL (user or agent) is checked separately; this is an
+ * additional ceiling that a scoped token can never exceed, mirroring
+ * checkMCPDriveScope on the REST surface.
+ *
+ * Exported so tools that authorize via primitives OTHER than the canActor*
+ * chokepoint (e.g. activity, calendar, member listing) can apply the same
+ * ceiling without changing their existing permission logic. Deny-only and a
+ * no-op for unscoped callers, so it never affects the in-app product.
+ */
+export function driveOutsideMcpScope(context: ToolExecutionContext, driveId: string): boolean {
+  if (!hasMcpScope(context)) return false;
+  return !context.mcpAllowedDriveIds!.includes(driveId);
+}
+
+/**
+ * Filter a list of drive IDs down to those a scoped MCP token may reach.
+ * Returns the input unchanged for unscoped callers (full access).
+ */
+export function filterDriveIdsByMcpScope(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): string[] {
+  if (!hasMcpScope(context)) return driveIds;
+  const allowed = new Set(context.mcpAllowedDriveIds);
+  return driveIds.filter((id) => allowed.has(id));
+}
+
+/**
+ * Page-level equivalent: resolves the page's drive (only when a scope is active)
+ * and checks it against the token scope.
+ *
+ * The create_page root path authorizes by passing the DRIVE id to
+ * canActorEditPage ("the drive is the parent of root pages"), so when no page
+ * row matches we fall back to treating the id as a drive id and checking that
+ * against the scope. A genuinely unknown id matches neither and stays
+ * fail-closed (the actor ACL would reject it anyway).
+ */
+async function pageOutsideMcpScope(context: ToolExecutionContext, pageId: string): Promise<boolean> {
+  if (!hasMcpScope(context)) return false;
+  const [row] = await db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, pageId));
+  const driveId = row?.driveId ?? pageId;
+  return !context.mcpAllowedDriveIds!.includes(driveId);
+}
+
+/**
+ * How many parent hops the own-subtree walk below will follow before giving
+ * up. Page trees are shallow in practice; the bound only turns a pathological
+ * or cyclic parent chain into a denial instead of a hang.
+ */
+const AGENT_SUBTREE_WALK_LIMIT = 32;
+
+/**
+ * Whether `pageId` is the acting agent's own page or one of its descendants.
+ *
+ * An agent's own subtree is the one space it is meant to author: the Agent
+ * Memory feature (lib/ai/core/agent-memory.ts) instructs every AI_CHAT agent
+ * to create and edit an "Agent Memory" child of its own page, but the default
+ * drive membership (MEMBER) resolves canEdit:false on every non-channel page,
+ * so every write there was refused — create_page against the agent page as
+ * parent and every line edit on the memory page alike (cron workflow runs fail
+ * this way since the workflow executor began carrying the agent identity into
+ * the tool context). Children of the agent page can only come to exist by an
+ * actor already passing the edit gate on the agent page, so the subtree
+ * carries no authority the agent was not already trusted with.
+ *
+ * Delete is deliberately NOT granted by this walk — an agent must not be able
+ * to trash its own page (or its memory) even though it may write them.
+ */
+async function isAgentOwnedPage(agentPageId: string, pageId: string): Promise<boolean> {
+  let currentId: string | null = pageId;
+  for (let hops = 0; currentId && hops < AGENT_SUBTREE_WALK_LIMIT; hops++) {
+    if (currentId === agentPageId) return true;
+    const [row] = await db
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, currentId));
+    currentId = row?.parentId ?? null;
+  }
+  return false;
+}
+
+export async function canActorEditPage(
+  context: ToolExecutionContext,
+  pageId: string,
+): Promise<boolean> {
+  if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (!(await passesSignInPolicy(context, pageId))) return false;
+  if (await pageDeniedByModelPolicy(context, pageId)) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'edit')) return false;
+  const actor = await resolveActor(context);
+  if (actor.kind === 'agent') {
+    return (await isAgentOwnedPage(actor.agentPageId, pageId)) ||
+      ((await getAgentAccessLevel(actor.agentPageId, pageId))?.canEdit ?? false);
+  }
+  if (await deniedPage(actor, pageId)) return false;
+  return canUserEditPage(toolActor(context), pageId);
+}
+
+export async function canActorDeletePage(
+  context: ToolExecutionContext,
+  pageId: string,
+): Promise<boolean> {
+  if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (!(await passesSignInPolicy(context, pageId))) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'delete')) return false;
+  const actor = await resolveActor(context);
+  if (actor.kind === 'agent') {
+    return (await getAgentAccessLevel(actor.agentPageId, pageId))?.canDelete ?? false;
+  }
+  if (await deniedPage(actor, pageId)) return false;
+  return canUserDeletePage(toolActor(context), pageId);
+}
+
+export async function canActorViewPage(
+  context: ToolExecutionContext,
+  pageId: string,
+): Promise<boolean> {
+  if (await pageOutsideMcpScope(context, pageId)) return false;
+  if (!(await passesSignInPolicy(context, pageId))) return false;
+  if (await pageDeniedByModelPolicy(context, pageId)) return false;
+  if (await pageDeniedByAppToken(context, pageId, 'view')) return false;
+  const actor = await resolveActor(context);
+  if (actor.kind === 'agent') {
+    return (await getAgentAccessLevel(actor.agentPageId, pageId))?.canView ?? false;
+  }
+  if (await deniedPage(actor, pageId)) return false;
+  const perms = await getUserAccessLevel(toolActor(context), pageId);
+  return perms?.canView ?? false;
+}
+
+/**
+ * Whether the actor may CONSULT (ask) an agent — the one rule shared by the
+ * invoke-an-agent engine (executeAskAgent) and the channel-mention responder,
+ * so the responder's preliminary gate and the engine's own gate can never
+ * disagree.
+ *
+ * Viewing the agent's page is sufficient. It is not necessary: an agent that
+ * is a MEMBER of the drive the actor is operating in was added there (by an
+ * owner/admin/member, see drive-agent-service) precisely so that drive's
+ * members can talk to it, and the drive's agent-members list already shows it
+ * to every member. A guest agent — homed in a drive the actor cannot see —
+ * is exactly this case. So the second grant is: the agent is a member of
+ * `currentDriveId` (falling back to the actor's locationContext drive) AND
+ * the actor can access that drive under its own ceiling (canActorAccessDrive:
+ * MCP scope, app-token ceiling, agent membership or user access).
+ */
+export async function canActorConsultAgent(
+  context: ToolExecutionContext,
+  agentPageId: string,
+  currentDriveId?: string | null,
+): Promise<boolean> {
+  if (await canActorViewPage(context, agentPageId)) return true;
+  const driveId = currentDriveId ?? context.locationContext?.currentDrive?.id ?? null;
+  if (!driveId) return false;
+  if (!(await hasAgentDriveMembership(agentPageId, driveId))) return false;
+  return canActorAccessDrive(context, driveId);
+}
+
+export async function canActorAccessDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  if (driveOutsideMcpScope(context, driveId)) return false;
+  if (!(await passesDriveSignInPolicy(context, driveId))) return false;
+  if (await driveDeniedByModelPolicy(context, driveId)) return false;
+  // Membership ceiling only (not drive-level view): callers page-filter their
+  // results via getActorAccessiblePagesInDrive / canActorViewPage, so a token
+  // with only per-page custom-role grants keeps access to those pages.
+  if (hasAppTokenCeiling(context) && !(await hasAppDriveMembership(toolActor(context), context.mcpTokenId!, driveId))) {
+    return false;
+  }
+  const actor = await resolveActor(context);
+  if (actor.kind === 'agent') return hasAgentDriveMembership(actor.agentPageId, driveId);
+  if (deniedDrive(actor, driveId)) return false;
+  return getUserDriveAccess(toolActor(context), driveId);
+}
+
+/**
+ * Whether the actor may manage drive-level resources that require elevated
+ * authority — currently standalone cron workflows. Mirrors the workflows REST
+ * API (apps/web/src/app/api/workflows/route.ts), which gates on owner/admin.
+ *
+ * User actors must be the drive owner or an admin (not merely a member or a
+ * page-permission grantee). Agent actors are gated by their drive membership —
+ * the same authority model used by every other agent write tool — since which
+ * agents may schedule workflows is controlled by the agent's enabledTools
+ * allowlist, configured by an owner/admin.
+ */
+export async function canActorManageDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveMembership);
+}
+
+/**
+ * Shared body of the two drive-level gates. The MCP scope ceiling, the
+ * app-token ceiling and the user owner/admin fallback are identical for both
+ * and MUST stay that way — if one of those ever tightens and only one gate
+ * picks it up, the looser gate becomes the way in. Only the agent question
+ * differs, so that is the one thing injected.
+ */
+async function driveGateWithAgentCheck(
+  context: ToolExecutionContext,
+  driveId: string,
+  agentCheck: (agentPageId: string, driveId: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (driveOutsideMcpScope(context, driveId)) return false;
+  if (!(await passesDriveSignInPolicy(context, driveId))) return false;
+  if (await driveDeniedByAppToken(context, driveId, 'manage')) return false;
+  const actor = await resolveActor(context);
+  if (actor.kind === 'agent') return agentCheck(actor.agentPageId, driveId);
+  // Imago manages or administers a drive (cron workflows, cross-drive moves
+  // in) exactly where its user may — never in a drive the user keeps it out of.
+  if (deniedDrive(actor, driveId)) return false;
+  const access = await checkDriveAccess(driveId, toolActor(context));
+  return access.isOwner || access.isAdmin;
+}
+
+/**
+ * Whether the actor may ADMINISTER a drive — the owner/admin bar, enforced
+ * uniformly for user and agent actors alike.
+ *
+ * Deliberately separate from `canActorManageDrive`. That helper resolves an
+ * agent actor to `hasAgentDriveMembership`, a bare row-existence check that
+ * ignores `role`, which is the right model for tools whose reach is already
+ * bounded by the agent's enabledTools allowlist. It is the WRONG model for
+ * accepting content into a drive from outside it: a plain MEMBER agent would
+ * clear a bar that /api/pages/bulk-move denies to a human without OWNER/ADMIN,
+ * and the moved subtree would land in a drive on weaker authority than the REST
+ * path requires. Used by the cross-drive move's destination check.
+ */
+export async function canActorAdministerDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<boolean> {
+  return driveGateWithAgentCheck(context, driveId, hasAgentDriveAdminRole);
+}
+
+/**
+ * D-OW-62: an agent's membership listing knows nothing of the credential driving it, so pages restating org-derived
+ * content (memory pages) that a contributing org's sign-in policy withholds from that credential are dropped here, as
+ * the user listing (getUserAccessiblePagesInDriveWithDetails) drops them.
+ */
+async function withoutWithheldDerivedPages(
+  context: ToolExecutionContext,
+  listed: PageWithPermissions[],
+): Promise<PageWithPermissions[]> {
+  const readable = new Set(await dropWithheldDerivedPages(toolActor(context), listed.map((page) => page.id)));
+  return listed.filter((page) => readable.has(page.id));
+}
+
+export async function getActorAccessiblePagesInDrive(
+  context: ToolExecutionContext,
+  driveId: string,
+): Promise<PageWithPermissions[]> {
+  if (driveOutsideMcpScope(context, driveId)) return [];
+  if (!(await passesDriveSignInPolicy(context, driveId))) return [];
+  if (await driveDeniedByModelPolicy(context, driveId)) return [];
+  const actor = await resolveActor(context);
+  if (deniedDrive(actor, driveId)) return [];
+  const actorPages = actor.kind === 'agent'
+    ? await withoutWithheldDerivedPages(context, await getAgentAccessiblePagesInDrive(actor.agentPageId, driveId))
+    : await getUserAccessiblePagesInDriveWithDetails(toolActor(context), driveId);
+  if (!hasAppTokenCeiling(context)) return actorPages;
+  // Inherit rows apply no ceiling — the key acts as its owner.
+  if (!(await hasExplicitAppRole(context, driveId))) return actorPages;
+
+  // App-member ceiling: intersect with the token's own accessible set, AND-ing
+  // each permission flag so the token never exceeds its explicit membership role.
+  const capById = new Map(
+    (await getAppAccessiblePagesInDrive(toolActor(context), context.mcpTokenId!, driveId)).map((p) => [p.id, p.permissions]),
+  );
+  return actorPages
+    .filter((p) => capById.get(p.id)?.canView)
+    .map((p) => {
+      const cap = capById.get(p.id)!;
+      return {
+        ...p,
+        permissions: {
+          canView: p.permissions.canView && cap.canView,
+          canEdit: p.permissions.canEdit && cap.canEdit,
+          canShare: p.permissions.canShare && cap.canShare,
+          canDelete: p.permissions.canDelete && cap.canDelete,
+        },
+      };
+    });
+}
+
+/**
+ * Drive-level ceiling for tools that authorize via primitives other than the
+ * canActor* chokepoint (activity, calendar, member listing, roles, triggers):
+ * the token's own membership role, AND the actor's user-scoped reach — a drive
+ * the user keeps their Imago agent out of, and every drive for someone else's
+ * Imago agent (`filterDriveIdsForActor`). Deny-only; a no-op for sessions,
+ * unscoped tokens and every other actor.
+ */
+export async function driveDeniedByAppToken(
+  context: ToolExecutionContext,
+  driveId: string,
+  need: 'view' | 'edit' | 'manage' = 'view',
+): Promise<boolean> {
+  if (driveOutsideMcpScope(context, driveId)) return true;
+  // SEC-2/3: tools that authorize through other primitives still never reach a drive whose org refuses the driver.
+  if (!(await passesDriveSignInPolicy(context, driveId))) return true;
+  if (need !== 'manage' && (await driveDeniedByModelPolicy(context, driveId))) return true;
+  if (await driveDeniedForActor(context, driveId)) return true;
+  if (!hasAppTokenCeiling(context)) return false;
+  const membership = await getAppDriveMembership(toolActor(context), context.mcpTokenId!, driveId);
+  if (!membership) return true;
+  // Inherit: no tool-layer ceiling — the key acts as its owner.
+  if (membership.role === null) return false;
+  if (need === 'manage') {
+    return membership.role !== 'OWNER' && membership.role !== 'ADMIN';
+  }
+  const level = await getAppDriveAccessLevel(toolActor(context), context.mcpTokenId!, driveId);
+  if (!level) return true;
+  return need === 'edit' ? !level.canEdit : !level.canView;
+}
+
+/**
+ * The drives a membership-scoped agent may enumerate: its own drive ids, minus
+ * those outside the token ceiling (`filterDriveIdsByAppTokenScope`) — and none
+ * at all for someone else's Imago agent, which `resolveActingAgentId` sends
+ * down this branch — so drive discovery (list_drives, multi_drive_list_agents)
+ * never names a drive the gates above would refuse.
+ */
+export async function filterAgentDriveIdsByActorReach(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  return filterDriveIdsByAppTokenScope(context, driveIds);
+}
+
+/**
+ * The drives among `driveIds` the actor's user-scoped reach may enumerate:
+ * the invoker's own Imago agent loses the drives the user keeps it out of,
+ * someone else's Imago agent loses every drive, any other actor keeps them
+ * all. For tools that start from the USER's drives (list_drives' user branch,
+ * multi_drive_list_agents, get_activity, multi-drive search) — where an
+ * excluded drive would otherwise surface its name, prompt and rows.
+ */
+export async function filterDriveIdsForActor(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const actor = await resolveActor(context);
+  if (actor.kind === 'nobody') return [];
+  if (actor.kind !== 'imago' || actor.excludedDriveIds.size === 0) return driveIds;
+  return driveIds.filter((driveId) => !actor.excludedDriveIds.has(driveId));
+}
+
+/** Whether the actor may not reach `driveId` through user-scoped reach (see `filterDriveIdsForActor`). */
+export async function driveDeniedForActor(context: ToolExecutionContext, driveId: string): Promise<boolean> {
+  return deniedDrive(await resolveActor(context), driveId);
+}
+
+/**
+ * `driveDeniedForActor` for a resource that may carry no drive (a driveless
+ * Global session): null is the user's own, so only someone else's Imago agent
+ * is refused it.
+ */
+export async function nullableDriveDeniedForActor(
+  context: ToolExecutionContext,
+  driveId: string | null,
+): Promise<boolean> {
+  const actor = await resolveActor(context);
+  return driveId === null ? actor.kind === 'nobody' : deniedDrive(actor, driveId);
+}
+
+/** `driveDeniedForActor` for the drive `pageId` lives in — for checks that run the user's own ACL. */
+export async function pageDeniedForActor(context: ToolExecutionContext, pageId: string): Promise<boolean> {
+  return deniedPage(await resolveActor(context), pageId);
+}
+
+/**
+ * Role-aware variant of filterDriveIdsByMcpScope: drops drives outside the
+ * token scope, drives where the token's own role grants no view access, drives
+ * whose org's sign-in policy refuses the turn's driver, drives whose org does
+ * not allow the running model (POL-8), and drives outside the actor's user-scoped
+ * reach (`filterDriveIdsForActor`).
+ */
+export async function filterDriveIdsByAppTokenScope(
+  context: ToolExecutionContext,
+  driveIds: string[],
+): Promise<string[]> {
+  const scoped = await filterDriveIdsForActor(context, filterDriveIdsByMcpScope(context, driveIds));
+  // Not short-circuited for unscoped callers: driveDeniedByAppToken also drops drives whose org's sign-in policy
+  // refuses the turn's driver (SEC-2/3), which every caller is subject to.
+  const results = await Promise.all(
+    scoped.map(async (driveId) => (await driveDeniedByAppToken(context, driveId, 'view')) ? null : driveId),
+  );
+  return results.filter((id): id is string => id !== null);
+}

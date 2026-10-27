@@ -115,7 +115,7 @@ User-generated HTML is sanitized before render. Canvas pages render inside Shado
 
 ### Application Secret Encryption
 
-OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Stored secrets are decrypted only on the request path that needs them and are never returned in API responses. AI provider credentials are held by the deployment operator at the infrastructure layer and are not stored per user.
+OAuth tokens for connected integrations and other application-layer secrets are encrypted at rest with AES-256-GCM using scrypt-derived keys, a unique salt per write, and a unique IV per encryption. Stored secrets are decrypted only on the request path that needs them and are never returned in API responses. AI provider credentials are held by PageSpace at the infrastructure layer and are not stored per user.
 `;
 
 export default function ZeroTrustPage() {

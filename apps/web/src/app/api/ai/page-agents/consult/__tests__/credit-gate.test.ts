@@ -1,0 +1,351 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
+import type { SessionAuthResult } from '@/lib/auth';
+
+// ============================================================================
+// Prepaid credit-gate enforcement for POST /api/ai/page-agents/consult
+//
+// The gate is consulted after the view-permission check and before the model
+// is invoked: an out-of-credits user gets a 402 and generateText never runs.
+// ============================================================================
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
+  isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn(() => []),
+  isScopedMCPAuth: vi.fn(() => false),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
+  }),
+  // SPEND-7: the caller is a member of drive-a (their session) and of no other drive named here.
+  isPrincipalDriveMember: vi.fn(async (_auth: unknown, driveId: string) => driveId === 'drive-a'),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
+  canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() },
+    ai: { child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })) },
+  },
+}));
+
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  supportsTemperature: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+// Single row returned for every query in this test's db mock — so it carries both
+// the agent-page fields and the gate user's subscriptionTier/role.
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
+
+vi.mock('@pagespace/db/db', () => {
+  type QueryBuilder = {
+    from: () => QueryBuilder;
+    where: () => QueryBuilder;
+    orderBy: () => QueryBuilder;
+    limit: () => QueryBuilder;
+    then: (resolve: (v: unknown[]) => unknown) => unknown;
+  };
+  const builder: QueryBuilder = {
+    from: vi.fn(() => builder),
+    where: vi.fn(() => builder),
+    orderBy: vi.fn(() => builder),
+    limit: vi.fn(() => builder),
+    then: (resolve: (v: unknown[]) => unknown) => resolve([agentPage]),
+  };
+  return { db: { select: vi.fn(() => builder) } };
+});
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), desc: vi.fn(), and: vi.fn() }));
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
+// reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+// PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` (the cross-conversation
+// `getRecentPageMessagesForUser` reader is gone — a new conversation now
+// starts empty),
+// which read the unified `messages` table.
+/**
+ * The route reserves the conversation by INSERTING it, and no longer swallows a
+ * rejection from that write: a repository failure is a 500, not a 409 claiming
+ * the id is taken. These specs previously loaded the real repository against a
+ * mocked `db` and relied on the discarded `.catch()` to hide the resulting
+ * failure — so they need the seam mocked explicitly now that failures are
+ * honest. 'created' is the ordinary outcome for the ids they use.
+ */
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: vi.fn(async () => 'created' as const),
+    getConversation: vi.fn(async () => null),
+  },
+}));
+
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    // These suites assert other things, so an empty history is the honest
+    // stand-in for the two readers the cutover introduced.
+    getPageConversationMessages: vi.fn().mockResolvedValue([]),
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' } }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
+
+// The credit gate under test. Default: allowed. Individual tests override.
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  // WAL-8: the funder's tier; here the caller's own.
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  // A pure-telemetry call site: the route hands the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module must provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
+}));
+
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
+  isProviderError: vi.fn().mockReturnValue(false),
+}));
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {},
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
+  buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
+  ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
+  isModelAllowedForTier: vi.fn(() => true),
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.4-nano',
+  })),
+}));
+
+vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));
+vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
+
+vi.mock('ai', () => ({
+  generateText: vi.fn().mockResolvedValue({
+    text: 'answer',
+    steps: [{ text: 'answer', content: [] }],
+    totalUsage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+  }),
+  convertToModelMessages: vi.fn().mockReturnValue([]),
+  stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+}));
+
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { createAIProvider } from '@/lib/ai/core/provider-factory';
+import { generateText } from 'ai';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+const mockAuth = (): SessionAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess-1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const makeRequest = () =>
+  new Request('https://example.com/api/ai/page-agents/consult', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agentId: 'agent-1', question: 'What is up?' }),
+  });
+
+describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
+    // Reset the shared row to a non-admin, public-provider default each test.
+    agentPage.aiProvider = 'openai';
+    agentPage.aiModel = 'openai/gpt-5.4-nano';
+    agentPage.role = 'user';
+  });
+
+  it('returns 402 out_of_credits and never configures a provider or invokes the model', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: false, reason: 'out_of_credits' });
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).toBe(402);
+    const body = await response.json();
+    expect(body.error).toBe('out_of_credits');
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('SPEND-3 (partial) SPEND-7 (partial) a consult spends in the agent\'s drive and names the conversation it writes to (a new one too, so its first call\'s source is pinned), never a source', async () => {
+    await POST(makeRequest());
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: expect.any(String) });
+    vi.mocked(canConsumeAI).mockClear();
+    await POST(new Request('https://example.com/api/ai/page-agents/consult', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'agent-1', question: 'And now?', conversationId: 'conv-1' }),
+    }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv-1' });
+  });
+
+  it('SPEND-7 (partial) a consultation called from a session in drive A spends in A — its gate, its usage row and its org model policy — never in drive B where the agent lives, and carries no drive-B stored source', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h-1', walletId: 'w-a' });
+    const res = await POST(new Request('https://example.com/api/ai/page-agents/consult', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'agent-1', question: 'Q?', sessionDriveId: 'drive-a' }),
+    }));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null });
+    // The session drive's org AND the agent drive's org both judge the model (D-OW-64).
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a', contentDriveIds: ['drive-1'] });
+    const { AIMonitoring } = await import('@pagespace/lib/monitoring/ai-monitoring');
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-a', walletId: 'w-a', holdId: 'h-1' }));
+  });
+
+  it('SPEND-7 (partial) a session drive the caller cannot use is refused 403 before anything is reserved — never swapped for the agent\'s drive', async () => {
+    vi.mocked(canConsumeAI).mockClear();
+    vi.mocked(generateText).mockClear();
+    const res = await POST(new Request('https://example.com/api/ai/page-agents/consult', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ agentId: 'agent-1', question: 'Q?', sessionDriveId: 'drive-not-mine' }),
+    }));
+    expect(res.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('POL-8 (partial) the agent\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy, not a 500', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+    await POST(makeRequest());
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-1', contentDriveIds: ['drive-1'] });
+
+    vi.mocked(createAIProvider).mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
+    const { isProviderError } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(isProviderError).mockReturnValueOnce(true);
+    vi.mocked(generateText).mockClear();
+    const refused = await POST(makeRequest());
+
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'org_policy', policy: 'modelAllowlist' });
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('WAL-8 (partial) the plan is judged again on the source the gate HELD: a pre-read Business the gate moved onto Free own credits is refused 403 and the model never runs (D-OW-64)', async () => {
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const { isModelAllowedForTier } = await import('@/lib/ai/core/ai-providers-config');
+    vi.mocked(isModelAllowedForTier).mockImplementation((_model, tier) => tier === 'business');
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'ok', holdId: 'h-held', walletId: 'w-own', spendSource: 'own_credits', entitlementTier: 'free' });
+    vi.mocked(generateText).mockClear();
+
+    const refused = await POST(makeRequest());
+
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'Subscription required' });
+    expect(generateText).not.toHaveBeenCalled();
+    vi.mocked(isModelAllowedForTier).mockImplementation(() => true);
+  });
+
+  it('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on the consult\'s spend', async () => {
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const { isModelAllowedForTier } = await import('@/lib/ai/core/ai-providers-config');
+    vi.mocked(isModelAllowedForTier).mockImplementation((_model, tier) => tier === 'business');
+
+    // The caller is on Pro, but the org drive's wallet (Business) funds the call: the model runs.
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+    expect((await POST(makeRequest())).status).toBe(200);
+    expect(vi.mocked(resolveEntitlementTier).mock.calls.at(-1)).toEqual(['user-1', 'pro', expect.objectContaining({ kind: 'drive', driveId: 'drive-1', chosen: null })]);
+
+    // The funder's tier does not reach the model: refused as a tier block before any hold or model call.
+    vi.mocked(canConsumeAI).mockClear();
+    vi.mocked(generateText).mockClear();
+    vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('free');
+    const refused = await POST(makeRequest());
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ error: 'Subscription required' });
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+    vi.mocked(isModelAllowedForTier).mockImplementation(() => true);
+  });
+
+  it('does not block with a 402 when the gate allows', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok' });
+
+    const response = await POST(makeRequest());
+
+    expect(canConsumeAI).toHaveBeenCalled();
+    expect(response.status).not.toBe(402);
+  });
+
+  it('SPEND-4 (partial) a drive rule that moved the consultation to another source is in the answer and its headers, from and to', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-own', spendSource: 'own_credits',
+      fallback: { from: 'drive_wallet', to: 'own_credits' },
+    });
+    const response = await POST(makeRequest());
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.spendFallback).toEqual({ from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' });
+    expect(readSpendFallbackHeaders(response.headers)).toEqual(body.spendFallback);
+  });
+
+  it('SPEND-4 (partial) a consultation that spent the source it named answers spendFallback null', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-product', spendSource: 'drive_wallet' });
+    const response = await POST(makeRequest());
+    expect((await response.json()).spendFallback).toBeNull();
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
+  });
+
+  it('rejects a non-admin consulting an admin-only (glm) agent with 403 and never invokes the model', async () => {
+    // P1#2 — the admin Z.ai Coder Plan is unmetered; a non-admin viewer of a
+    // glm-configured shared agent must NOT be able to consume it.
+    agentPage.aiProvider = 'glm';
+    agentPage.aiModel = 'glm-4.7';
+    agentPage.role = 'user';
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin consult a glm agent and skips the credit gate (unmetered)', async () => {
+    agentPage.aiProvider = 'glm';
+    agentPage.aiModel = 'glm-4.7';
+    agentPage.role = 'admin';
+
+    const response = await POST(makeRequest());
+
+    expect(response.status).not.toBe(403);
+    // Exempt provider: the gate is skipped entirely (no hold, no balance check).
+    expect(canConsumeAI).not.toHaveBeenCalled();
+    expect(generateText).toHaveBeenCalled();
+  });
+});

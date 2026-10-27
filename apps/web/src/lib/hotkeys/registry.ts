@@ -43,6 +43,16 @@ export const HOTKEY_REGISTRY: HotkeyDefinition[] = [
     defaultBinding: 'Meta+B',
   },
 
+  // Editing
+  {
+    id: 'editing.find',
+    label: 'Find in Page',
+    description: 'Open the find bar to search within the current page',
+    category: 'editing',
+    defaultBinding: 'Meta+F',
+    allowInInputs: true,
+  },
+
   // Tabs
   {
     id: 'tabs.cycle-next',

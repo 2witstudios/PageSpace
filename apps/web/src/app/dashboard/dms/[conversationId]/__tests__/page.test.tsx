@@ -11,10 +11,30 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
-const mockUser = { id: 'user-me', name: 'Me', email: 'me@x.test', image: null };
+const mockUser = {
+  id: 'user-me',
+  name: 'Me',
+  email: 'me@x.test',
+  image: '/api/avatar/user-me/avatar.png?t=1',
+};
 vi.mock('@/hooks/useAuth', () => ({
   useAuth: () => ({ user: mockUser }),
 }));
+
+vi.mock('@/components/ui/avatar', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+
+  return {
+    Avatar: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar" className={className}>{children}</div>
+    ),
+    AvatarImage: ({ src }: React.ComponentProps<'img'>) =>
+      src ? React.createElement('img', { 'data-slot': 'avatar-image', src, alt: '' }) : null,
+    AvatarFallback: ({ children, className }: React.ComponentProps<'div'>) => (
+      <div data-slot="avatar-fallback" className={className}>{children}</div>
+    ),
+  };
+});
 
 // Controllable socket mock
 type Handler = (...args: unknown[]) => void;
@@ -83,21 +103,38 @@ vi.mock('@/components/ai/ui/conversation', () => ({
   ConversationScrollButton: () => null,
 }));
 
-// MessagePartRenderer — render content as plain text for assertions
-vi.mock('@/components/messages/MessagePartRenderer', () => ({
-  renderMessageParts: (parts: Array<{ text?: string }>) =>
-    parts?.[0]?.text ?? null,
-  convertToMessageParts: (content: string) =>
-    content ? [{ type: 'text', text: content }] : [],
+// RichText — render content as plain text for assertions
+vi.mock('@/components/messages/RichText', () => ({
+  RichText: ({ content }: { content: string }) => <span>{content}</span>,
+  addHardLineBreaks: (content: string) => content,
 }));
 
-// MessageAttachment — sentinel for inspection
+// MessageLinkPreviews — stub out; this test covers attachments, not link previews
+vi.mock('@/components/messages/MessageLinkPreviews', () => ({
+  MessageLinkPreviews: () => null,
+}));
+
+// MessageAttachments — sentinel for inspection. The page renders the plural
+// gallery component; a message with no renderable attachment produces nothing,
+// which is what the negative assertions below rely on.
 const messageAttachmentCalls = vi.fn();
-vi.mock('@/components/shared/MessageAttachment', () => ({
-  MessageAttachment: ({ message }: { message: { fileId?: string | null } }) => {
+vi.mock('@/components/shared/MessageAttachments', () => ({
+  MessageAttachments: ({
+    message,
+  }: {
+    message: { fileId?: string | null; attachments?: Array<{ fileId?: string | null }> | null };
+  }) => {
     messageAttachmentCalls(message);
-    if (!message.fileId) return null;
-    return <div data-testid={`attachment-${message.fileId}`}>attachment</div>;
+    const ids = (message.attachments ?? []).map((a) => a.fileId).filter(Boolean);
+    const rendered = ids.length > 0 ? ids : message.fileId ? [message.fileId] : [];
+    if (rendered.length === 0) return null;
+    return (
+      <>
+        {rendered.map((id) => (
+          <div key={id} data-testid={`attachment-${id}`}>attachment</div>
+        ))}
+      </>
+    );
   },
 }));
 
@@ -105,7 +142,7 @@ vi.mock('@/components/shared/MessageAttachment', () => ({
 type ChannelInputProps = {
   value: string;
   onChange: (v: string) => void;
-  onSend: (a?: FileAttachment) => void;
+  onSend: (a?: FileAttachment[]) => void;
   conversationId?: string;
   channelId?: string;
   attachmentsEnabled?: boolean;
@@ -128,13 +165,14 @@ vi.mock(
             <button
               data-testid="send-with-attachment"
               onClick={() =>
-                props.onSend({
+                props.onSend([{
+                  instanceId: 'instance-x',
                   id: 'file-x',
                   originalName: 'pic.png',
                   size: 1024,
                   mimeType: 'image/png',
                   contentHash: 'hash-x',
-                })
+                }])
               }
             />
           </div>
@@ -150,6 +188,7 @@ vi.mock(
 import InboxDMPage from '../page';
 
 const sampleAttachment: FileAttachment = {
+  instanceId: 'instance-x',
   id: 'file-x',
   originalName: 'pic.png',
   size: 1024,
@@ -174,7 +213,7 @@ describe('InboxDMPage — attachments', () => {
     expect(lastChannelInputPropsRef.current!.attachmentsEnabled).toBe(true);
   });
 
-  it('sendWithAttachment_postsBodyIncludesFileIdAndAttachmentMeta', async () => {
+  it('sendWithAttachment_postsBodyIncludesTheAttachment', async () => {
     await act(async () => {
       render(<InboxDMPage />);
     });
@@ -186,15 +225,24 @@ describe('InboxDMPage — attachments', () => {
     expect(mockPost).toHaveBeenCalledTimes(1);
     const call = mockPost.mock.calls[0];
     expect(call[0]).toBe('/api/messages/conv-1');
+    // One send is one message carrying an ARRAY now, even for a single file —
+    // the singular fileId/attachmentMeta pair is still accepted by the route
+    // for the published SDK and CLI, but this composer no longer sends it.
     expect(call[1]).toMatchObject({
-      fileId: sampleAttachment.id,
-      attachmentMeta: {
-        originalName: sampleAttachment.originalName,
-        size: sampleAttachment.size,
-        mimeType: sampleAttachment.mimeType,
-        contentHash: sampleAttachment.contentHash,
-      },
+      attachments: [
+        {
+          fileId: sampleAttachment.id,
+          attachmentMeta: {
+            originalName: sampleAttachment.originalName,
+            size: sampleAttachment.size,
+            mimeType: sampleAttachment.mimeType,
+            contentHash: sampleAttachment.contentHash,
+          },
+        },
+      ],
     });
+    // And a nonce, so the echo retires exactly this row.
+    expect(typeof (call[1] as { clientNonce?: unknown }).clientNonce).toBe('string');
   });
 
   it('sendWithoutAttachment_postsBodyOmitsFileFields', async () => {
@@ -218,6 +266,33 @@ describe('InboxDMPage — attachments', () => {
     expect(body).toMatchObject({ content: 'hello' });
     expect(body.fileId).toBeUndefined();
     expect(body.attachmentMeta).toBeUndefined();
+  });
+
+  it('renders the current user avatar for own DM messages', async () => {
+    swrMessages = {
+      messages: [
+        {
+          id: 'msg-own',
+          conversationId: 'conv-1',
+          senderId: 'user-me',
+          content: 'hello from me',
+          isRead: false,
+          readAt: null,
+          isEdited: false,
+          editedAt: null,
+          createdAt: '2026-05-06T12:00:00.000Z',
+          parentId: null,
+          reactions: [],
+        },
+      ],
+    };
+
+    await act(async () => {
+      render(<InboxDMPage />);
+    });
+
+    const avatarImage = document.querySelector('[data-slot="avatar-image"]');
+    expect(avatarImage).toHaveAttribute('src', mockUser.image);
   });
 
   it('renderMessage_withFileId_rendersMessageAttachment', async () => {

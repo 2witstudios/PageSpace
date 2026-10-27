@@ -503,6 +503,25 @@ describe('activity-logger', () => {
       expect(capturedState.insertValues?.isArchived).toBe(false);
     });
 
+    it('should stamp GDPR Art 30 record-of-processing fields (#980)', async () => {
+      await logActivity(baseInput);
+      expect(capturedState.insertValues).toMatchObject({
+        dataCategory: 'content',
+        legalBasis: 'contract',
+        retentionPolicy: 'account_lifetime',
+        recipients: ['internal'],
+      });
+    });
+
+    it('should classify security operations as legitimate interest (#980)', async () => {
+      await logActivity({ ...baseInput, operation: 'login', resourceType: 'user' });
+      expect(capturedState.insertValues).toMatchObject({
+        dataCategory: 'identity',
+        legalBasis: 'legitimate_interest',
+        retentionPolicy: 'security_log_retention',
+      });
+    });
+
     it('should set isAiGenerated=false by default', async () => {
       await logActivity(baseInput);
       expect(capturedState.insertValues?.isAiGenerated).toBe(false);
@@ -581,6 +600,49 @@ describe('activity-logger', () => {
       });
       mockInsertValues.mockRejectedValue(fkError);
       await expect(logActivity({ ...baseInput, pageId: 'page-1' })).resolves.toBeUndefined();
+    });
+
+    it('should retry via detail fallback when .constraint is absent but detail includes pageId', async () => {
+      const fkError = Object.assign(new Error('FK violation'), {
+        code: '23503',
+        detail: 'Key (pageId)=(page-1) is not present in table "pages".',
+      });
+      let callCount = 0;
+      mockInsertValues.mockImplementation((values: Record<string, unknown>) => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(fkError);
+        capturedState.insertValues = values;
+        return Promise.resolve(undefined);
+      });
+      await logActivity({ ...baseInput, pageId: 'page-1' });
+      expect(callCount).toBe(2);
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
+    });
+
+    it('should retry without pageId when the FK error is nested under .cause (Drizzle wrapper)', async () => {
+      const fkError = Object.assign(
+        new Error('Failed query: insert into "activity_logs" ("id", "userId") values ($1, $2)'),
+        {
+          cause: Object.assign(
+            new Error('insert or update on table "activity_logs" violates foreign key constraint'),
+            {
+              code: '23503',
+              constraint: 'activity_logs_pageId_pages_id_fk',
+              detail: 'Key (pageId)=(page-1) is not present in table "pages".',
+            }
+          ),
+        }
+      );
+      let callCount = 0;
+      mockInsertValues.mockImplementation((values: Record<string, unknown>) => {
+        callCount++;
+        if (callCount === 1) return Promise.reject(fkError);
+        capturedState.insertValues = values;
+        return Promise.resolve(undefined);
+      });
+      await logActivity({ ...baseInput, pageId: 'page-1' });
+      expect(callCount).toBe(2);
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
     });
   });
 
@@ -875,6 +937,22 @@ describe('activity-logger', () => {
       expect(capturedState.insertValues?.resourceId).toBe('d1');
     });
 
+    it('should include driveWidePermissions in newValues when passed on create', async () => {
+      const dwp = { canView: true, canEdit: false, canShare: false };
+      logRoleActivity('u1', 'create', { roleId: 'r1', driveId: 'd1', permissions: { p1: true }, driveWidePermissions: dwp }, { actorEmail: 'a@b.com' });
+      await flush();
+      expect(capturedState.insertValues?.newValues).toEqual({ permissions: { p1: true }, driveWidePermissions: dwp });
+    });
+
+    it('should include previousDriveWidePermissions in previousValues when passed on update', async () => {
+      const prevDwp = { canView: false, canEdit: false, canShare: false };
+      const newDwp = { canView: true, canEdit: true, canShare: false };
+      logRoleActivity('u1', 'update', { roleId: 'r1', driveId: 'd1', driveWidePermissions: newDwp, previousDriveWidePermissions: prevDwp }, { actorEmail: 'a@b.com' });
+      await flush();
+      expect(capturedState.insertValues?.newValues).toEqual({ driveWidePermissions: newDwp });
+      expect(capturedState.insertValues?.previousValues).toEqual({ driveWidePermissions: prevDwp });
+    });
+
     it('should not set metadata for non-reorder operations', async () => {
       logRoleActivity('u1', 'delete', { roleId: 'r1', driveId: 'd1' }, { actorEmail: 'a@b.com' });
       await flush();
@@ -954,6 +1032,20 @@ describe('activity-logger', () => {
     it('should include conversationType in metadata', async () => {
       logMessageActivity('u1', 'message_delete', { id: 'msg-1', pageId: 'p1', driveId: null, conversationType: 'global' }, { actorEmail: 'a@b.com' });
       await flush();
+      expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.conversationType).toBe('global');
+    });
+
+    it('should forward a null pageId as undefined for global conversations', async () => {
+      logMessageActivity(
+        'u1',
+        'message_delete',
+        { id: 'msg-1', pageId: null, driveId: null, conversationType: 'global' },
+        { actorEmail: 'a@b.com' },
+        { previousContent: 'old', aiConversationId: 'conv-1' }
+      );
+      await flush();
+      expect(capturedState.insertValues?.pageId).toBeUndefined();
+      expect(capturedState.insertValues?.aiConversationId).toBe('conv-1');
       expect((capturedState.insertValues?.metadata as Record<string, unknown>)?.conversationType).toBe('global');
     });
 

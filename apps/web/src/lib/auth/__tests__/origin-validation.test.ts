@@ -28,18 +28,18 @@ import {
  *   - Origin normalization handles various URL formats
  */
 
-// Mock dependencies at system boundary
-vi.mock('@pagespace/lib/logging/logger-config', () => ({
-  loggers: {
-    auth: {
-      warn: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-    },
-  },
+// Mock dependencies at system boundary. origin-validation runs in the Edge
+// runtime, so it logs through the edge logger (created once at module load —
+// the mock returns a stable singleton so assertions can reference it).
+const mockAuthLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
 }));
-
-import { loggers } from '@pagespace/lib/logging/logger-config';
+vi.mock('@/lib/logging/edge-logger', () => ({
+  createEdgeLogger: vi.fn(() => mockAuthLogger),
+}));
 
 describe('origin-validation', () => {
   // Store original env values
@@ -109,7 +109,7 @@ describe('origin-validation', () => {
         const result = validateOrigin(request);
 
         expect(result).toBeNull();
-        expect(loggers.auth.debug).toHaveBeenCalledWith(
+        expect(mockAuthLogger.debug).toHaveBeenCalledWith(
           'Origin validation: no Origin header present (allowed)',
           expect.objectContaining({
             method: 'POST',
@@ -147,7 +147,7 @@ describe('origin-validation', () => {
         const result = validateOrigin(request);
 
         expect(result).toBeNull();
-        expect(loggers.auth.debug).toHaveBeenCalledWith(
+        expect(mockAuthLogger.debug).toHaveBeenCalledWith(
           'Origin validation successful',
           expect.objectContaining({
             origin: 'https://app.example.com',
@@ -219,7 +219,7 @@ describe('origin-validation', () => {
 
         validateOrigin(request);
 
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
+        expect(mockAuthLogger.warn).toHaveBeenCalledWith(
           'Origin validation failed: unexpected origin',
           expect.objectContaining({
             origin: 'https://malicious.example.com',
@@ -363,7 +363,7 @@ describe('origin-validation', () => {
         const result = validateOrigin(request);
 
         expect(result).toBeNull();
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
+        expect(mockAuthLogger.warn).toHaveBeenCalledWith(
           'Origin validation: WEB_APP_URL not configured, skipping validation',
           expect.objectContaining({
             origin: 'https://any-origin.example.com',
@@ -462,7 +462,7 @@ describe('origin-validation', () => {
           skipped: true,
           reason: 'No Origin header present',
         });
-        expect(loggers.auth.debug).toHaveBeenCalledWith(
+        expect(mockAuthLogger.debug).toHaveBeenCalledWith(
           'Middleware origin validation: no Origin header (skipped)',
           expect.objectContaining({
             method: 'POST',
@@ -511,7 +511,7 @@ describe('origin-validation', () => {
           skipped: false,
           reason: 'Origin not in allowed list (block mode - request rejected)',
         });
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
+        expect(mockAuthLogger.warn).toHaveBeenCalledWith(
           'Middleware origin validation: unexpected origin (block mode)',
           expect.objectContaining({
             origin: 'https://evil.example.com',
@@ -560,7 +560,7 @@ describe('origin-validation', () => {
           skipped: false,
           reason: 'Origin not in allowed list (warn mode - request allowed)',
         });
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
+        expect(mockAuthLogger.warn).toHaveBeenCalledWith(
           'Middleware origin validation: unexpected origin (warn mode)',
           expect.objectContaining({
             origin: 'https://evil.example.com',
@@ -588,7 +588,7 @@ describe('origin-validation', () => {
           skipped: true,
           reason: 'WEB_APP_URL not configured',
         });
-        expect(loggers.auth.warn).toHaveBeenCalledWith(
+        expect(mockAuthLogger.warn).toHaveBeenCalledWith(
           'Middleware origin validation: WEB_APP_URL not configured',
           expect.objectContaining({
             origin: 'https://any-origin.example.com',

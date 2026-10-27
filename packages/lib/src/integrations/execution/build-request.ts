@@ -7,17 +7,71 @@
 
 import type { HttpExecutionConfig, HttpRequest, ParameterRef } from '../types';
 
+// The WHATWG URL Standard's path state treats these literal (ASCII
+// case-insensitive) strings as single-/double-dot segments — and normalizes
+// them — even though they aren't the literal "." / "..". A segment check
+// that only compares against "." / ".." disagrees with what `URL.pathname =`
+// actually normalizes, so it can be bypassed with e.g. "%2e%2e". Backslash is
+// also treated as a path separator by the URL parser for special schemes
+// (http/https among them), so it must be rejected outright rather than
+// split on — it isn't a legitimate character in a GitHub API path segment.
+const SINGLE_DOT_SEGMENT = /^(\.|%2e)$/i;
+const DOUBLE_DOT_SEGMENT = /^(\.\.|\.%2e|%2e\.|%2e%2e)$/i;
+const isDotSegment = (segment: string): boolean =>
+  SINGLE_DOT_SEGMENT.test(segment) || DOUBLE_DOT_SEGMENT.test(segment);
+
+/**
+ * A raw path param may contain literal "/" (e.g. a nested file path), but
+ * every segment must still be non-empty and not a dot-segment, otherwise a
+ * value like "../../other-repo/contents/x" (or its percent-encoded
+ * equivalent) walks the built URL out of the intended path prefix once
+ * assigned to `URL.pathname` (which normalizes dot-segments).
+ */
+const assertNoTraversal = ({ key, value }: { key: string; value: string }): string => {
+  if (value.includes('\\')) {
+    throw new Error(`Path parameter "${key}" must not contain "\\"`);
+  }
+  if (value.split('/').some((segment) => segment === '' || isDotSegment(segment))) {
+    throw new Error(`Path parameter "${key}" must not contain empty or "."/".." segments`);
+  }
+  return value;
+};
+
+/**
+ * A plain identifier param (owner, repo, ref, sha, ...) should never carry a
+ * path separator or a dot-segment; allowing either lets it reshape the URL
+ * structure rather than fill a single path segment.
+ */
+const assertPlainIdentifier = ({ key, value }: { key: string; value: string }): string => {
+  if (value.includes('/') || value.includes('\\') || isDotSegment(value)) {
+    throw new Error(`Path parameter "${key}" must not contain "/" or be "." or ".."`);
+  }
+  return value;
+};
+
 /**
  * Interpolate path template with input values.
  * Replaces {param} placeholders with corresponding input values.
+ * Params listed in `rawPathParams` may contain literal "/" (still traversal-checked);
+ * every other param must be a plain identifier with no "/" or "."/".." segments.
  */
-export const interpolatePath = (
-  template: string,
-  input: Record<string, unknown>
-): string => {
+export const interpolatePath = ({
+  template,
+  input,
+  rawPathParams = [],
+}: {
+  template: string;
+  input: Record<string, unknown>;
+  rawPathParams?: string[];
+}): string => {
+  const rawKeys = new Set(rawPathParams);
   return template.replace(/\{(\w+)\}/g, (_, key) => {
     const value = input[key];
-    return value !== undefined ? String(value) : '';
+    if (value === undefined) return '';
+    const str = String(value);
+    return rawKeys.has(key)
+      ? assertNoTraversal({ key, value: str })
+      : assertPlainIdentifier({ key, value: str });
   });
 };
 
@@ -135,7 +189,11 @@ export const buildHttpRequest = (
   baseUrl: string
 ): HttpRequest => {
   // Build path
-  const path = interpolatePath(config.pathTemplate, input);
+  const path = interpolatePath({
+    template: config.pathTemplate,
+    input,
+    rawPathParams: config.rawPathParams,
+  });
 
   // Build URL - properly merge base path with request path
   const baseUrlObj = new URL(baseUrl);

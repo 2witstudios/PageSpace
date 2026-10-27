@@ -48,6 +48,8 @@ describe('Token Lookup - Hash Only', () => {
       it('should find by hash lookup and return the token record', async () => {
         const mockRecord = {
           id: 'mcp-token-id-1',
+          authenticatedAt: null,
+          authenticationAssurance: null,
           userId: 'user-id-1',
           tokenHash: mockTokenHash,
           tokenPrefix: 'mcp_abc123xy',

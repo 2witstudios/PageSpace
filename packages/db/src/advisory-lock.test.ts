@@ -1,0 +1,469 @@
+import { EventEmitter } from 'node:events';
+import { describe, it, expect, vi } from 'vitest';
+import { AdvisoryLockLostError, throwIfLockLost, withAdvisoryLock, withBlockingAdvisoryLock, type AdvisoryLockPool } from './advisory-lock';
+
+/** A mock client that, like pg.Client, is an EventEmitter — and records the listener count at each release. */
+function makeEmittingClient(query: ReturnType<typeof vi.fn>) {
+  const emitter = new EventEmitter();
+  const listenersAtRelease: number[] = [];
+  const client = {
+    query,
+    release: vi.fn((_destroyWithError?: Error) => {
+      listenersAtRelease.push(emitter.listenerCount('error'));
+    }),
+    on: (event: 'error', listener: (error: Error) => void) => emitter.on(event, listener),
+    removeListener: (event: 'error', listener: (error: Error) => void) => emitter.removeListener(event, listener),
+    emit: (error: Error) => emitter.emit('error', error),
+    listenerCount: () => emitter.listenerCount('error'),
+  };
+  return { client, listenersAtRelease };
+}
+
+function makeClient(overrides: Partial<{ query: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = {}) {
+  return {
+    query: vi.fn(),
+    release: vi.fn(),
+    ...overrides,
+  };
+}
+
+describe('withAdvisoryLock', () => {
+  it('given the lock is free, should acquire it, run fn, and release cleanly', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // try-lock
+        .mockResolvedValueOnce({ rows: [] }), // unlock
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const fn = vi.fn(async () => 'work-result');
+
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'work-result', lockLost: false });
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(client.query.mock.calls[0][0]).toContain('pg_try_advisory_lock');
+    expect(client.query.mock.calls[0][1]).toEqual(['my-lock']);
+    expect(client.query.mock.calls[1][0]).toContain('pg_advisory_unlock');
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+
+  it('given the lock is already held, should no-op WITHOUT running fn and release without destroying', async () => {
+    const client = makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const fn = vi.fn(async () => 'unreachable');
+
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
+
+    expect(result).toEqual({ outcome: 'lock_busy' });
+    expect(fn).not.toHaveBeenCalled();
+    expect(client.query).toHaveBeenCalledTimes(1);
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+
+  it('given the unlock query fails after acquiring, should destroy the connection instead of releasing it alive', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce(new Error('unlock failed')),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'ok');
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'ok', lockLost: false });
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  // The never-throws contract must hold even when release() itself throws: without the guard,
+  // the success-path release throwing would route into the catch, whose destroy-release then
+  // throws a synchronous double-release error that escapes — replacing a successful fn() result
+  // with a rejection inside withAdvisoryLock's finally.
+  it('given release() itself throws after a successful unlock, should swallow the double-release error and still resolve acquired', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw new Error('Release called on a client which has already been released'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+      lockLost: false,
+    });
+
+    expect(client.release).toHaveBeenCalledTimes(2);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'Release called on a client which has already been released',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws a non-Error value, should stringify it in the destroy-release log and still resolve', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }),
+      release: vi
+        .fn()
+        .mockImplementationOnce(() => { throw new Error('release hook failed'); })
+        .mockImplementationOnce(() => { throw 'released twice'; }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({
+      outcome: 'acquired',
+      result: 'ok',
+      lockLost: false,
+    });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'released twice',
+    );
+    errorSpy.mockRestore();
+  });
+
+  // Lock keys can be derived from request-supplied ids, so the failure log must treat the key
+  // as data: constant format string (%s), newlines stripped — a crafted key must not be able to
+  // forge log lines or smuggle %-directives (CodeQL js/log-injection / js/tainted-format-string).
+  it('given a lock key containing newlines, should log it JSON-escaped as a format argument, never interpolated into the format string', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce(new Error('unlock failed')),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await withAdvisoryLock(pool, 'evil\nkey\r%s', async () => 'ok');
+
+    const [format, keyArg] = errorSpy.mock.calls[0];
+    expect(format).not.toContain('evil');
+    // JSON.stringify escapes the newlines to literal \n/\r — a crafted key cannot start a new
+    // log line, and the constant format string means %s in the key is inert data.
+    expect(keyArg).toBe(JSON.stringify('evil\nkey\r%s'));
+    errorSpy.mockRestore();
+  });
+
+  // pg's release(err) only destroys the connection when handed an actual Error — a raw driver
+  // rejection value (drivers CAN reject with strings/objects) passed through unwrapped would be
+  // truthy enough to look intentional but is not guaranteed to trip pg's destroy path. The
+  // helper must wrap it so the destroy-instead-of-pool decision (and the operator-visible log)
+  // hold regardless of what the driver rejected with.
+  it('given the unlock query rejects with a non-Error value, should wrap it in an Error (preserving the original text) and still destroy the connection', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockRejectedValueOnce('unlock rejected as a plain string'),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'ok');
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'ok', lockLost: false });
+    expect(client.release).toHaveBeenCalledTimes(1);
+    const releasedWith = client.release.mock.calls[0][0];
+    expect(releasedWith).toBeInstanceOf(Error);
+    expect((releasedWith as Error).message).toContain('unlock rejected as a plain string');
+    // The recurring-failure signal must stay operator-visible even for non-Error rejections.
+    // Constant format string + args (never the key interpolated into the format position) —
+    // see the CodeQL note at the console.error call.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Advisory unlock failed'),
+      JSON.stringify('my-lock'),
+      'unlock rejected as a plain string',
+    );
+    errorSpy.mockRestore();
+  });
+
+  // Leaf 5.6/5.7 (triaged D fix, fmfmzw4g4gh6u6q9cjt7ylne): the lock connection's own failure
+  // must be a STRUCTURALLY distinct, resolved outcome — never a thrown/rejected promise — so a
+  // caller can tell "the lock machinery is broken" apart from "fn threw" without guessing. Before
+  // this fix both surfaced as the same unwrapped, untagged rejected promise.
+  it('given the try-lock query itself throws, should destroy the connection and resolve connection_error (never resolve acquired/busy, never reject)', async () => {
+    const client = makeClient({ query: vi.fn().mockRejectedValueOnce(new Error('connection reset')) });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const fn = vi.fn(async () => 'unreachable');
+
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
+
+    expect(result.outcome).toBe('connection_error');
+    expect(result).toMatchObject({ outcome: 'connection_error', error: expect.any(Error) });
+    expect(fn).not.toHaveBeenCalled();
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeInstanceOf(Error);
+  });
+
+  it('given pool.connect() itself throws, should resolve connection_error (never reject, never touch a client)', async () => {
+    const connectError = new Error('pool exhausted');
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => { throw connectError; }) };
+    const fn = vi.fn(async () => 'unreachable');
+
+    const result = await withAdvisoryLock(pool, 'my-lock', fn);
+
+    expect(result).toEqual({ outcome: 'connection_error', error: connectError });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  // CodeRabbit (PR #2097): every exit must keep its promised RESOLVED outcome even when
+  // release() itself throws — not just the post-acquisition paths the earlier tests covered.
+  it('given release() throws on the lock-busy path, should still resolve lock_busy', async () => {
+    const client = makeClient({
+      query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(withAdvisoryLock(pool, 'my-lock', async () => 'unreachable')).resolves.toEqual({
+      outcome: 'lock_busy',
+    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given release() throws on the try-lock-failure path, should still resolve connection_error', async () => {
+    const client = makeClient({
+      query: vi.fn().mockRejectedValueOnce(new Error('connection reset')),
+      release: vi.fn(() => { throw new Error('pool gone'); }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await withAdvisoryLock(pool, 'my-lock', async () => 'unreachable');
+
+    expect(result).toMatchObject({ outcome: 'connection_error', error: expect.any(Error) });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('release() itself failed'),
+      JSON.stringify('my-lock'),
+      'pool gone',
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('given fn itself throws after acquiring, should still unlock cleanly (fn error does not poison the lock connection) and rethrow', async () => {
+    const client = makeClient({
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+        .mockResolvedValueOnce({ rows: [] }),
+    });
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+    const fn = vi.fn(async () => {
+      throw new Error('work failed');
+    });
+
+    await expect(withAdvisoryLock(pool, 'my-lock', fn)).rejects.toThrow('work failed');
+
+    // fn's failure is unrelated to the lock connection's own protocol state —
+    // the unlock still runs and the connection is released alive.
+    expect(client.query).toHaveBeenCalledTimes(2);
+    expect(client.release).toHaveBeenCalledTimes(1);
+    expect(client.release.mock.calls[0][0]).toBeUndefined();
+  });
+
+  describe('the checked-out connection\'s \'error\' event (pg-pool drops its idle listener on checkout)', () => {
+    it('given the backend drops while fn runs, should absorb the error, skip the unlock query, and destroy the connection with that error', async () => {
+      const { client, listenersAtRelease } = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }));
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const dropped = new Error('terminating connection due to administrator command');
+
+      const result = await withAdvisoryLock(pool, 'my-lock', async () => {
+        // Without a listener this emit throws synchronously — the process-crashing path.
+        expect(() => client.emit(dropped)).not.toThrow();
+        return 'ok';
+      });
+
+      expect(result).toEqual({ outcome: 'acquired', result: 'ok', lockLost: true });
+      expect(client.query).toHaveBeenCalledTimes(1); // try-lock only; no unlock on a dead backend
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(client.release.mock.calls[0][0]).toBe(dropped);
+      expect(listenersAtRelease).toEqual([0]);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Lock connection errored while held'),
+        JSON.stringify('my-lock'),
+        dropped.message,
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('given the backend drops while the unlock query is in flight, should absorb the error and destroy the connection', async () => {
+      const dropped = new Error('Connection terminated unexpectedly');
+      const query = vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] });
+      const { client, listenersAtRelease } = makeEmittingClient(query);
+      query.mockImplementationOnce(async () => {
+        // pg emits 'error' on an unexpected close even while a query is active, then fails the query.
+        client.emit(dropped);
+        throw dropped;
+      });
+      const pool: AdvisoryLockPool = { connect: vi.fn(async () => client) };
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await expect(withAdvisoryLock(pool, 'my-lock', async () => 'ok')).resolves.toEqual({ outcome: 'acquired', result: 'ok', lockLost: false });
+
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(client.release.mock.calls[0][0]).toBe(dropped);
+      expect(listenersAtRelease).toEqual([0]);
+      errorSpy.mockRestore();
+    });
+
+    it('given the backend drops while fn runs, should abort fn\'s signal with the connection error and report lockLost', async () => {
+      const { client } = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const dropped = new Error('terminating connection due to administrator command');
+      const seen: { before: boolean; after: boolean; reason: unknown } = { before: true, after: false, reason: undefined };
+
+      const result = await withAdvisoryLock({ connect: async () => client }, 'my-lock', async (signal) => {
+        seen.before = signal.aborted;
+        client.emit(dropped);
+        seen.after = signal.aborted;
+        seen.reason = signal.reason;
+        return 'partial';
+      });
+
+      expect(seen).toEqual({ before: false, after: true, reason: dropped });
+      expect(result).toEqual({ outcome: 'acquired', result: 'partial', lockLost: true });
+      errorSpy.mockRestore();
+    });
+
+    it('given the backend drops in the same turn the try-lock resolves, should NOT run fn and should resolve connection_error', async () => {
+      const dropped = new Error('Connection terminated unexpectedly');
+      const query = vi.fn();
+      const { client, listenersAtRelease } = makeEmittingClient(query);
+      query.mockImplementationOnce(async () => {
+        // The success response and the socket close are processed together: 'error' fires
+        // before withAdvisoryLock resumes from the try-lock await.
+        client.emit(dropped);
+        return { rows: [{ acquired: true }] };
+      });
+      const fn = vi.fn(async () => 'unreachable');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await withAdvisoryLock({ connect: async () => client }, 'my-lock', fn);
+
+      expect(result).toEqual({ outcome: 'connection_error', error: dropped });
+      expect(fn).not.toHaveBeenCalled();
+      expect(client.release).toHaveBeenCalledTimes(1);
+      expect(client.release.mock.calls[0][0]).toBe(dropped);
+      expect(listenersAtRelease).toEqual([0]);
+      errorSpy.mockRestore();
+    });
+
+    it('given the connection stays healthy, should attach exactly one listener while held and remove it before every release', async () => {
+      const acquired = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }));
+      let listenersDuringFn = -1;
+      await withAdvisoryLock({ connect: async () => acquired.client }, 'my-lock', async () => {
+        listenersDuringFn = acquired.client.listenerCount();
+      });
+      expect(listenersDuringFn).toBe(1);
+      expect(acquired.listenersAtRelease).toEqual([0]);
+      expect(acquired.client.release.mock.calls[0][0]).toBeUndefined();
+
+      const busy = makeEmittingClient(vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }));
+      await withAdvisoryLock({ connect: async () => busy.client }, 'my-lock', async () => 'unreachable');
+      expect(busy.listenersAtRelease).toEqual([0]);
+
+      const failed = makeEmittingClient(vi.fn().mockRejectedValueOnce(new Error('reset')));
+      await withAdvisoryLock({ connect: async () => failed.client }, 'my-lock', async () => 'unreachable');
+      expect(failed.listenersAtRelease).toEqual([0]);
+    });
+  });
+});
+
+describe('throwIfLockLost', () => {
+  it('given no signal (code running outside any lock), should not throw', () => {
+    expect(() => throwIfLockLost(undefined, 'the charge')).not.toThrow();
+  });
+
+  it('given a signal that has not been aborted, should not throw', () => {
+    expect(() => throwIfLockLost(new AbortController().signal, 'the charge')).not.toThrow();
+  });
+
+  it('given an aborted signal, should throw AdvisoryLockLostError naming the work and carrying the connection error', () => {
+    const lost = new AbortController();
+    const dropped = new Error('terminating connection due to administrator command');
+    lost.abort(dropped);
+
+    let thrown: unknown;
+    try {
+      throwIfLockLost(lost.signal, 'the storage correction');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(AdvisoryLockLostError);
+    expect(thrown).toMatchObject({
+      name: 'AdvisoryLockLostError',
+      message: expect.stringContaining('before the storage correction'),
+      connectionError: dropped,
+    });
+  });
+});
+describe('withBlockingAdvisoryLock', () => {
+  it('waits WITHOUT holding a connection: each busy attempt hands its connection back, then it retries with backoff until it gets the lock', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => clients.shift()!) };
+    const sleep = vi.fn(async (_ms: number) => {});
+    const released: number[] = [];
+    const all = [...clients];
+    all.forEach((c, i) => c.release.mockImplementation(() => released.push(i)));
+
+    const result = await withBlockingAdvisoryLock(pool, 'k', async () => 'done', { timeoutMs: 5_000, sleep });
+
+    expect(result).toEqual({ outcome: 'acquired', result: 'done', lockLost: false });
+    // Busy connection 0 was back in the pool before attempt 1 connected, and so on.
+    expect(released).toEqual([0, 1, 2]);
+    expect(sleep.mock.calls.map((c) => c[0])).toEqual([10, 20]);
+  });
+
+  it('without an injected sleep it really waits between attempts', async () => {
+    const clients = [
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: false }] }) }),
+      makeClient({ query: vi.fn().mockResolvedValueOnce({ rows: [{ acquired: true }] }).mockResolvedValueOnce({ rows: [] }) }),
+    ];
+    const started = Date.now();
+    const result = await withBlockingAdvisoryLock({ connect: vi.fn(async () => clients.shift()!) }, 'k', async () => 'done', { timeoutMs: 5_000 });
+    expect(result).toEqual({ outcome: 'acquired', result: 'done', lockLost: false });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(5);
+  });
+
+  it('past the deadline it is lock_busy and fn never runs', async () => {
+    const pool: AdvisoryLockPool = { connect: vi.fn(async () => makeClient({ query: vi.fn().mockResolvedValue({ rows: [{ acquired: false }] }) })) };
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock(pool, 'k', fn, { timeoutMs: 0 })).toEqual({ outcome: 'lock_busy' });
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('a connection_error is returned at once, not retried', async () => {
+    const connect = vi.fn(async () => {
+      throw new Error('exhausted');
+    });
+    const fn = vi.fn(async () => 'unreachable');
+    expect(await withBlockingAdvisoryLock({ connect }, 'k', fn, { timeoutMs: 5_000 })).toMatchObject({ outcome: 'connection_error' });
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(fn).not.toHaveBeenCalled();
+  });
+});

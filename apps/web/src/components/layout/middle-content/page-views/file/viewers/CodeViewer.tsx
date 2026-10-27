@@ -83,12 +83,14 @@ export default function CodeViewer({ page }: CodeViewerProps) {
     const loadCode = async () => {
       try {
         setIsLoading(true);
-        const response = await fetchWithAuth(`/api/files/${page.id}/download`);
-        if (!response.ok) {
-          throw new Error('Failed to load file');
-        }
-
-        const text = await response.text();
+        const res = await fetchWithAuth(`/api/files/${page.id}/view`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!res.ok) throw new Error('Failed to load file');
+        const { url } = await res.json() as { url: string };
+        const fileRes = await fetch(url);
+        if (!fileRes.ok) throw new Error('Failed to load file content');
+        const text = await fileRes.text();
         setCode(text);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load file');

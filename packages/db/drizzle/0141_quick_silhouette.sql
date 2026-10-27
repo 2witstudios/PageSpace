@@ -1,0 +1,1 @@
+ALTER TABLE "webhook_triggers" ADD CONSTRAINT "webhook_triggers_connection_workflow_event_unique" UNIQUE("connectionId","workflowId","eventType");

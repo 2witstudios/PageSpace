@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { verifySignupRegistration } from '@pagespace/lib/auth/passkey-service';
+import { markEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
@@ -15,11 +17,14 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionGettingStartedDriveIfNeeded, type ProvisionGettingStartedDriveResult } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@pagespace/lib/onboarding/home-drive';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
+  type InviteKind,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -155,12 +160,12 @@ export async function POST(req: Request) {
 
     const { userId, passkeyId } = result.data;
 
-    // Provision getting started drive for new user
-    let provisionedDrive: ProvisionGettingStartedDriveResult | null = null;
+    // Provision the Home drive (idempotent)
+    let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
-      provisionedDrive = await provisionGettingStartedDriveIfNeeded(userId);
+      provisionedDrive = await provisionHomeDriveIfNeeded(userId);
     } catch (error) {
-      loggers.auth.error('Failed to provision Getting Started drive', error as Error, {
+      loggers.auth.error('Failed to provision Home drive', error as Error, {
         userId,
       });
     }
@@ -192,7 +197,10 @@ export async function POST(req: Request) {
     const { platform, deviceId, deviceName: deviceNameField } = validation.data;
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId,
       type: 'user',
       scopes: ['*'],
@@ -219,7 +227,8 @@ export async function POST(req: Request) {
     // ?inviteError=<code> so the user can act on it.
     let inviteAcceptedDriveId: string | null = null;
     let inviteAcceptedPageId: string | null = null;
-    let inviteAcceptedKind: 'drive' | 'page' | 'connection' | null = null;
+    let inviteAcceptedKind: InviteKind | null = null;
+    let orgLandingPath: string | null = null;
     let inviteAcceptError: string | null = null;
     if (validation.data.inviteToken) {
       const inviteResult = await consumeAnyInviteIfPresent({
@@ -232,6 +241,7 @@ export async function POST(req: Request) {
       inviteAcceptedDriveId = inviteResult.invitedDriveId;
       inviteAcceptedPageId = inviteResult.invitedPageId;
       inviteAcceptedKind = inviteResult.kind;
+      orgLandingPath = inviteResult.orgLandingPath;
       if (inviteResult.inviteError) {
         inviteAcceptError = inviteResult.inviteError;
       }
@@ -246,10 +256,44 @@ export async function POST(req: Request) {
       now: new Date(),
     });
 
+    // Email verification. A passkey only proves authenticator control, not email
+    // ownership, so a fresh signup starts unverified. A successfully consumed
+    // BOUND invite token (delivered to this inbox and presented here) is the one
+    // exception — it proves the user accessed the address, so we mark verified.
+    // The broad consumeAllInvitesForEmail drain above is NOT proof: it matches
+    // pending invites by email without proving the user clicked an emailed link.
+    const inviteProvesEmailOwnership =
+      inviteAcceptedKind !== null && inviteAcceptError === null;
+    if (inviteProvesEmailOwnership) {
+      try {
+        await markEmailVerified(userId);
+      } catch (error) {
+        loggers.auth.warn('Failed to mark passkey-signup email verified via invite', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      // Best-effort verification email — must NOT fail the signup. The user can
+      // resend from the account banner if delivery fails.
+      try {
+        await sendVerificationEmail({ userId, email, userName: name });
+      } catch (error) {
+        loggers.auth.warn('Failed to send passkey-signup verification email', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(userId);
+
     let deviceTokenValue: string | undefined;
     if (deviceId) {
       try {
         deviceTokenValue = await createDeviceToken({
+          authentication,
           userId, deviceId,
           tokenVersion: 1, // verifySignupRegistration creates users with tokenVersion: 1
           platform: platform || 'web',
@@ -299,7 +343,10 @@ export async function POST(req: Request) {
     // user land on the dashboard but with an inviteError query param so the
     // UI can surface what went wrong.
     let redirectUrl: string;
-    if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
+    if (orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectUrl = orgLandingPath;
+    } else if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
     } else if (inviteAcceptedKind === 'connection') {
       redirectUrl = `/dashboard/connections?welcome=true&connection_requested=1`;

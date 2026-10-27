@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
     revokeDeviceSessions: vi.fn(),
-    revokeAllUserSessions: vi.fn(),
+    revokeWebUserSessions: vi.fn(),
   },
 }));
 
@@ -32,16 +32,16 @@ describe('device-auth-helpers', () => {
       const count = await revokeSessionsForLogin('user-1', 'device-abc', 'new_login', 'Google OAuth');
 
       expect(sessionService.revokeDeviceSessions).toHaveBeenCalledWith('user-1', 'device-abc', 'new_login');
-      expect(sessionService.revokeAllUserSessions).not.toHaveBeenCalled();
+      expect(sessionService.revokeWebUserSessions).not.toHaveBeenCalled();
       expect(count).toBe(1);
     });
 
-    it('without deviceId falls back to revokeAllUserSessions', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(2);
+    it('without deviceId falls back to revokeWebUserSessions', async () => {
+      vi.mocked(sessionService.revokeWebUserSessions).mockResolvedValue(2);
 
       const count = await revokeSessionsForLogin('user-1', undefined, 'new_login', 'password');
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'new_login');
+      expect(sessionService.revokeWebUserSessions).toHaveBeenCalledWith('user-1', 'new_login');
       expect(sessionService.revokeDeviceSessions).not.toHaveBeenCalled();
       expect(count).toBe(2);
     });
@@ -55,7 +55,7 @@ describe('device-auth-helpers', () => {
         isNew: true,
       });
 
-      const token = await createWebDeviceToken({
+      const token = await createWebDeviceToken({ authentication: null,
         userId: 'user-1',
         deviceId: 'device-abc',
         tokenVersion: 1,
@@ -80,7 +80,7 @@ describe('device-auth-helpers', () => {
         isNew: true,
       });
 
-      await createWebDeviceToken({
+      await createWebDeviceToken({ authentication: null,
         userId: 'user-1',
         deviceId: 'device-abc',
         tokenVersion: 1,
@@ -96,7 +96,7 @@ describe('device-auth-helpers', () => {
       vi.mocked(validateOrCreateDeviceToken).mockRejectedValue(new Error('DB error'));
 
       await expect(
-        createWebDeviceToken({ userId: 'user-1', deviceId: 'device-abc', tokenVersion: 1 }),
+        createWebDeviceToken({ authentication: null, userId: 'user-1', deviceId: 'device-abc', tokenVersion: 1 }),
       ).rejects.toThrow('DB error');
     });
   });

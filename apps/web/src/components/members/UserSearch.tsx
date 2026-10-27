@@ -12,7 +12,9 @@ interface SearchResult {
   userId: string;
   username?: string;
   displayName: string;
-  email: string;
+  // Public-profile substring matches no longer carry an email (M3 hardening);
+  // only exact-email matches do. Optional so the UI degrades gracefully.
+  email?: string;
   bio?: string;
   avatarUrl?: string;
 }

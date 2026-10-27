@@ -1,38 +1,6 @@
 import Link from "next/link";
 import { Smartphone, Tablet, ArrowLeft } from "lucide-react";
-
-const screenshots = [
-  {
-    name: "Hero",
-    path: "/screenshots/hero",
-    description: "Main feature showcase with device mockup",
-    device: "iPhone 6.9\"",
-  },
-  {
-    name: "Feature 1: AI Workspace",
-    path: "/screenshots/feature-1",
-    description: "AI-powered document assistant",
-    device: "iPhone 6.9\"",
-  },
-  {
-    name: "Feature 2: Documents",
-    path: "/screenshots/feature-2",
-    description: "Rich document editing",
-    device: "iPhone 6.9\"",
-  },
-  {
-    name: "Dark Mode",
-    path: "/screenshots/dark-mode",
-    description: "Dark theme showcase",
-    device: "iPhone 6.9\"",
-  },
-  {
-    name: "Collaboration",
-    path: "/screenshots/collaboration",
-    description: "Real-time team collaboration",
-    device: "iPhone 6.9\"",
-  },
-];
+import { CANVAS, DEVICES, shotsFor, capturePath } from "@/lib/app-store-shots";
 
 export default function ScreenshotsPage() {
   return (
@@ -59,44 +27,62 @@ export default function ScreenshotsPage() {
           <div className="flex gap-6 text-sm">
             <div className="flex items-center gap-2">
               <Smartphone className="w-4 h-4" />
-              <span>iPhone 6.9&quot;: 1320 x 2868px</span>
+              <span>
+                {CANVAS.iphone.label}: {CANVAS.iphone.width} x {CANVAS.iphone.height}px
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <Tablet className="w-4 h-4" />
-              <span>iPad 13&quot;: 2064 x 2752px</span>
+              <span>
+                {CANVAS.ipad.label}: {CANVAS.ipad.width} x {CANVAS.ipad.height}px
+              </span>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {screenshots.map((screenshot) => (
-            <Link
-              key={screenshot.path}
-              href={screenshot.path}
-              className="group block"
-            >
-              <div className="aspect-[1320/2868] rounded-xl border border-border bg-card overflow-hidden mb-3 hover:border-primary/50 hover:shadow-lg transition-all">
-                <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-                  <Smartphone className="w-12 h-12" />
-                </div>
-              </div>
-              <h3 className="font-medium text-foreground group-hover:text-primary transition-colors">
-                {screenshot.name}
-              </h3>
-              <p className="text-sm text-muted-foreground">{screenshot.description}</p>
-              <p className="text-xs text-muted-foreground mt-1">{screenshot.device}</p>
-            </Link>
-          ))}
-        </div>
+        {DEVICES.map((device) => (
+          <section key={device} className="mb-10">
+            <h2 className="font-semibold text-foreground mb-4">{CANVAS[device].label}</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {shotsFor(device).map((shot) => (
+                <Link key={shot.slug} href={`/screenshots/${device}/${shot.slug}`} className="group block">
+                  <div
+                    className="rounded-xl border border-border bg-card overflow-hidden mb-3 flex items-center justify-center text-muted-foreground hover:border-primary/50 hover:shadow-lg transition-all"
+                    style={{ aspectRatio: `${CANVAS[device].width} / ${CANVAS[device].height}` }}
+                  >
+                    {device === "ipad" ? <Tablet className="w-12 h-12" /> : <Smartphone className="w-12 h-12" />}
+                  </div>
+                  <h3 className="font-medium text-foreground group-hover:text-primary transition-colors">
+                    {shot.headline.join(" ")}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">{shot.subline}</p>
+                  <p className="text-xs text-muted-foreground mt-1 font-mono">
+                    {capturePath(device, shot.slug)}
+                  </p>
+                </Link>
+              ))}
+            </div>
+          </section>
+        ))}
 
         <div className="mt-12 p-6 rounded-xl border border-border bg-card">
           <h2 className="font-semibold mb-4">Capture All Screenshots</h2>
+          <ol className="text-sm text-muted-foreground list-decimal pl-5 space-y-1 mb-4">
+            <li>
+              Record each screen off a simulator running the shipping build:{" "}
+              <code className="bg-muted px-1.5 py-0.5 rounded">xcrun simctl io booted screenshot &lt;slug&gt;.png</code>
+            </li>
+            <li>
+              Save them under{" "}
+              <code className="bg-muted px-1.5 py-0.5 rounded">public/screenshots/ios/&lt;device&gt;/</code>
+            </li>
+            <li>Run the capture script — it fails if any capture is missing.</li>
+          </ol>
           <div className="font-mono text-sm bg-muted p-4 rounded-lg">
-            <p className="text-muted-foreground mb-2"># Run Playwright capture script</p>
-            <p>pnpm --filter marketing capture</p>
+            <p>bun run --cwd apps/marketing capture</p>
           </div>
           <p className="text-sm text-muted-foreground mt-4">
-            Output will be saved to <code className="bg-muted px-1.5 py-0.5 rounded">apps/marketing/output/</code>
+            Output is written to <code className="bg-muted px-1.5 py-0.5 rounded">apps/marketing/output/</code>
           </p>
         </div>
       </main>

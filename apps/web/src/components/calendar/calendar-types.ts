@@ -60,6 +60,12 @@ export interface CalendarEvent {
     slug: string;
   } | null;
   hasAgentTrigger?: boolean;
+  /** Present only on virtual occurrences produced by server-side expansion.
+   *  Stores the parent recurring event's original ISO startAt so the edit
+   *  modal can restore the series base date rather than the occurrence date,
+   *  preventing accidental anchor-shifting when saving without a date change. */
+  recurringBaseStartAt?: string;
+  recurringBaseEndAt?: string;
 }
 
 export interface RecurrenceRule {
@@ -181,6 +187,7 @@ export const TASK_OVERLAY_STYLE = {
   bg: 'bg-muted/30',
   border: 'border-l-muted-foreground/50 border-dashed',
   text: 'text-muted-foreground italic',
+  dot: 'bg-muted-foreground/50',
   opacity: 'opacity-70',
 };
 
@@ -227,6 +234,26 @@ export function isSameDay(date1: Date, date2: Date): boolean {
   );
 }
 
+/**
+ * A horizontal swipe only counts when it clears a minimum distance AND dominates
+ * the vertical component -- otherwise a vertical scroll that drifts sideways
+ * silently changes the day mid-gesture.
+ */
+const MIN_SWIPE_DISTANCE = 50;
+const AXIS_DOMINANCE_RATIO = 1.5;
+
+export function resolveSwipeDirection({
+  dx,
+  dy,
+}: {
+  dx: number;
+  dy: number;
+}): 'next' | 'previous' | null {
+  if (Math.abs(dx) < MIN_SWIPE_DISTANCE) return null;
+  if (Math.abs(dx) <= Math.abs(dy) * AXIS_DOMINANCE_RATIO) return null;
+  return dx > 0 ? 'next' : 'previous';
+}
+
 // Helper to get events for a specific day
 export function getEventsForDay(events: CalendarEvent[], date: Date): CalendarEvent[] {
   return events.filter((event) => {
@@ -250,18 +277,3 @@ export function getTasksForDay(tasks: TaskWithDueDate[], date: Date): TaskWithDu
   });
 }
 
-// Format time for display
-export function formatEventTime(date: Date, allDay: boolean): string {
-  if (allDay) return 'All day';
-  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-}
-
-// Get hour from date (0-23)
-export function getHour(date: Date): number {
-  return date.getHours();
-}
-
-// Get minutes from date (0-59)
-export function getMinutes(date: Date): number {
-  return date.getMinutes();
-}

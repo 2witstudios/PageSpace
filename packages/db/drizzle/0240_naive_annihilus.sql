@@ -1,0 +1,1 @@
+CREATE INDEX "agent_sessions_live_sprite_idx" ON "agent_sessions" USING btree ("sandboxId","spriteTornDownAt") WHERE "agent_sessions"."sandboxId" IS NOT NULL AND "agent_sessions"."spriteTornDownAt" IS NULL;

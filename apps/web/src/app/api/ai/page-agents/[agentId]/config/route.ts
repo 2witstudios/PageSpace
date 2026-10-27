@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, canPrincipalEditPage, isScopedMCPAuth } from '@/lib/auth';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
-import { pageSpaceTools } from '@/lib/ai/core';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { describeAgentToolSurface, formatConfigSurfaceNotes, toolSurfaceEcho } from '@/lib/ai/core/agent-tool-surface';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
@@ -62,10 +65,12 @@ export async function PUT(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'config', details: { reason: 'auth_failed', method: 'PUT' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'page_agent', resourceId: 'config', details: { reason: 'auth_failed', method: 'PUT', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const { agentId } = await context.params;
     const body = await request.json();
@@ -76,6 +81,9 @@ export async function PUT(
       aiModel,
       agentDefinition,
       visibleToGlobalAssistant,
+      toolExposureMode,
+      sandboxEnabled,
+      defaultEnvId,
       expectedRevision,
     } = body;
 
@@ -105,13 +113,13 @@ export async function PUT(
     }
 
     // Check permissions
-    const canEdit = await canUserEditPage(userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_edit_permission', method: 'PUT' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to update this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     const parsedEnabledTools = parseEnabledToolsInput(enabledTools);
@@ -127,9 +135,11 @@ export async function PUT(
       parseEnabledToolsInput(agent.enabledTools).value
     );
 
-    // Validate enabled tools if provided
+    // Validate enabled tools if provided. A drive-scoped MCP token cannot
+    // newly enable an account-level-only tool (e.g. create_drive) — mirrors
+    // the runtime chat/consult tool-list filtering.
     if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
-      const availableToolNames = Object.keys(pageSpaceTools);
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = requestedEnabledTools.sanitized.filter(
         (toolName: string) => !availableToolNames.includes(toolName)
       );
@@ -172,6 +182,63 @@ export async function PUT(
       updateData.visibleToGlobalAssistant = Boolean(visibleToGlobalAssistant);
       updatedFields.push('visibleToGlobalAssistant');
     }
+    if (toolExposureMode !== undefined) {
+      if (toolExposureMode !== 'upfront' && toolExposureMode !== 'search') {
+        return NextResponse.json(
+          { error: 'toolExposureMode must be "upfront" or "search"' },
+          { status: 400 }
+        );
+      }
+      updateData.toolExposureMode = toolExposureMode;
+      updatedFields.push('toolExposureMode');
+    }
+    if (sandboxEnabled !== undefined) {
+      // REJECTED, not coerced (CodeRabbit): `Boolean("false")` is `true`, and
+      // this is the switch that decides whether a stored sandbox allowlist is
+      // granted at all — a JSON string turning the sandbox family ON is not a
+      // silent conversion anyone wants. The neighbouring booleans still coerce;
+      // they decide sidebar visibility and prompt assembly, not tool grants.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
+      // The same field the settings tab and `update_agent_config` write, gated
+      // by the same edit permission. Before issue #2460 this door could store
+      // `enabledTools: ['bash', …]` and had no way to turn on the switch that
+      // grants them — a config that reads as configured and means nothing.
+      updateData.sandboxEnabled = sandboxEnabled;
+      updatedFields.push('sandboxEnabled');
+    }
+    if (defaultEnvId !== undefined) {
+      // Same validation the web Settings PATCH route (`/api/pages/[pageId]/
+      // agent-config`) applies — reject rather than coerce, and resolve
+      // through `resolveEnvInDrive` so this door cannot be used to enumerate
+      // env ids across drives the caller cannot see (review — general-
+      // purpose self-review, PR #2513: this MCP/API-facing route supported
+      // every other agent-config field but had no way to read or write the
+      // agent's default environment at all).
+      if (defaultEnvId !== null && (typeof defaultEnvId !== 'string' || defaultEnvId === '')) {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a non-empty string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === null) {
+        updateData.defaultEnvId = null;
+      } else {
+        const env = await resolveEnvInDrive(defaultEnvId, agent.driveId);
+        if (!env) {
+          return NextResponse.json(
+            { error: 'Environment not found' },
+            { status: 404 }
+          );
+        }
+        updateData.defaultEnvId = defaultEnvId;
+      }
+      updatedFields.push('defaultEnvId');
+    }
 
     if (updatedFields.length === 0) {
       return NextResponse.json(
@@ -198,6 +265,9 @@ export async function PUT(
       });
       updatedAgent = { ...agent, ...updateData };
     } catch (error) {
+      // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+      const refused = orgModelPolicyErrorResponse(error);
+      if (refused) return NextResponse.json(refused.body, { status: refused.status });
       if (error instanceof PageRevisionMismatchError) {
         return NextResponse.json(
           {
@@ -214,6 +284,17 @@ export async function PUT(
     const responseEnabledTools = Array.isArray(updatedAgent.enabledTools)
       ? updatedAgent.enabledTools
       : [];
+
+    // STORED vs EFFECTIVE, both reported (issue #2460): the allowlist above is
+    // what was saved, and this is what the gates downstream of it will leave
+    // the agent actually able to call.
+    const toolSurface = describeAgentToolSurface({
+      enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
+      sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+      toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
+    });
+    const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 
     // Broadcast agent update event
     await broadcastPageEvent(
@@ -250,8 +331,13 @@ export async function PUT(
         enabledTools: responseEnabledTools,
         aiProvider: aiProvider || agent.aiProvider || 'default',
         aiModel: aiModel || agent.aiModel || 'default',
-        hasSystemPrompt: !!(systemPrompt || agent.systemPrompt)
+        hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
+        toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront',
+        sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+        defaultEnvId: updatedAgent.defaultEnvId ?? null,
+        ...toolSurfaceEcho(toolSurface),
       },
+      ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),
       stats: {
         pageType: 'AI_CHAT',
         updatedFields: updatedFields.length,

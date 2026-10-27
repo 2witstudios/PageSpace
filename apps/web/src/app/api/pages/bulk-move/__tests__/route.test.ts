@@ -24,6 +24,15 @@ vi.mock('@/lib/auth', () => ({
   checkMCPDriveScope: vi.fn(() => null),
   getAllowedDriveIds: vi.fn(() => []),
   isMCPAuthResult: vi.fn(() => false),
+  isScopedMCPAuth: vi.fn(() => false),
+  canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
+  }),
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -44,8 +53,19 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
+
+// The cross-drive service consults the memory-page guard, which resolves
+// through @pagespace/lib's BUILT dist — whose `@pagespace/db/db` import this
+// file's db mock does not intercept. Left unmocked this route test would reach
+// a real database: green in CI where Postgres exists, failing anywhere else.
+// Real constants kept so a reworded refusal cannot pass silently.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return { ...actual, findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()) };
+});
 
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
   validatePageMove: vi.fn().mockResolvedValue({ valid: true }),
@@ -60,14 +80,30 @@ vi.mock('@pagespace/lib/monitoring/change-group', () => ({
     createChangeGroupId: vi.fn(() => 'change-group-123'),
 }));
 
+// The org-aware relationship is the gate (its pure role decisions stay real).
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => ({
+  loadDriveRelationship: vi.fn(),
+}));
+
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the source drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
+  const txQueryPagesFindFirst = vi.fn().mockResolvedValue(undefined);
+  const txQueryDrivesFindFirst = vi.fn().mockResolvedValue(undefined);
   const tx = {
     update: txUpdate,
-    query: { pages: { findMany: txQueryPagesFindMany } },
+    query: {
+      pages: { findMany: txQueryPagesFindMany, findFirst: txQueryPagesFindFirst },
+      drives: { findFirst: txQueryDrivesFindFirst },
+    },
   };
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
     await fn(tx);
@@ -81,7 +117,7 @@ vi.mock('@pagespace/db/db', () => {
       },
       transaction,
     },
-    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
+    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txQueryPagesFindFirst, txQueryDrivesFindFirst, transaction },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
@@ -100,9 +136,27 @@ vi.mock('@pagespace/db/schema/members', () => ({
   driveMembers: { driveId: 'driveMembers.driveId', userId: 'driveMembers.userId', acceptedAt: 'driveMembers.acceptedAt', role: 'driveMembers.role' },
 }));
 
+vi.mock('@/services/api/task-sync-service', () => ({
+  syncTaskItemOnMove: vi.fn().mockResolvedValue(undefined),
+  // The move service now also scrubs drive-scoped task associations (agent
+  // assignees, workflow triggers) for the moved roots and their descendants.
+  scrubDriveScopedTaskAssociations: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('@/lib/canvas/publish-page', () => ({
+  syncPublishedHomeRoot: vi.fn().mockResolvedValue(undefined),
+}));
+
 // ── Imports (after mocks) ───────────────────────────────────────────────
 
 import { POST } from '../route';
+import type { DriveRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
+import {
+  findProtectedMemoryPages,
+  MEMORY_PAGE_MOVE_ERROR,
+} from '@pagespace/lib/memory/memory-pages';
+import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { authenticateRequestWithOptions, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult } from '@/lib/auth';
 import { broadcastPageEvent } from '@/lib/websocket';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
@@ -110,11 +164,14 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
-const { txUpdate, txUpdateSet, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
+const { txUpdate, txUpdateSet, txQueryPagesFindMany, txQueryPagesFindFirst, txQueryDrivesFindFirst, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
   txUpdateSet: ReturnType<typeof vi.fn>;
   txQueryPagesFindMany: ReturnType<typeof vi.fn>;
+  txQueryPagesFindFirst: ReturnType<typeof vi.fn>;
+  txQueryDrivesFindFirst: ReturnType<typeof vi.fn>;
   transaction: ReturnType<typeof vi.fn>;
 };
 
@@ -161,7 +218,20 @@ const validBody = {
   targetParentId: null,
 };
 
+const NONE: DriveRelationship = { isOwner: false, membership: null };
+const asMember = (role: 'OWNER' | 'ADMIN' | 'MEMBER', source: 'invite' | 'org' = 'invite'): DriveRelationship => ({
+  isOwner: false,
+  membership: { role, customRoleId: null, source, auditOrgAdminPrivateAccess: false, openDriveFloor: null },
+});
+/** The non-lead relationship loadDriveRelationship answers; the lead (drives.ownerId) is always LEAD. */
+let nonLead: DriveRelationship = NONE;
+const setRelationship = (rel: DriveRelationship) => { nonLead = rel; };
+
 function setupSuccessScenario() {
+  nonLead = NONE;
+  vi.mocked(loadDriveRelationship).mockImplementation(async (actor, drive) =>
+    drive.ownerId === actor.userId ? { isOwner: true, membership: null } : nonLead);
+
   // Auth
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(mockUserId));
   vi.mocked(checkMCPDriveScope).mockReturnValue(null);
@@ -183,10 +253,15 @@ function setupSuccessScenario() {
   txUpdateSet.mockReturnValue({ where: txUpdateWhere });
   txUpdate.mockReturnValue({ set: txUpdateSet });
   txQueryPagesFindMany.mockResolvedValue([]);
+  txQueryPagesFindFirst.mockResolvedValue(undefined);
+  txQueryDrivesFindFirst.mockResolvedValue(undefined);
   mockTransaction.mockImplementation(async (fn: (t: unknown) => Promise<void>) => {
     await fn({
       update: txUpdate,
-      query: { pages: { findMany: txQueryPagesFindMany } },
+      query: {
+        pages: { findMany: txQueryPagesFindMany, findFirst: txQueryPagesFindFirst },
+        drives: { findFirst: txQueryDrivesFindFirst },
+      },
     });
   });
 }
@@ -197,6 +272,25 @@ describe('POST /api/pages/bulk-move', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupSuccessScenario();
+    vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set<string>());
+  });
+
+  // ── Memory page protection ──────────────────────────────────────────
+
+  describe('memory page protection', () => {
+    it('refuses to move a memory page out of its drive', async () => {
+      // pageService.updatePage's guard does not run on this route — it moves
+      // pages through the cross-drive service instead. Without the guard there,
+      // this endpoint could relocate a memory page out of the Home drive its
+      // pointers assume.
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['page-1']));
+
+      const response = await POST(createRequest(validBody));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe(MEMORY_PAGE_MOVE_ERROR);
+    });
   });
 
   // ── Authentication ──────────────────────────────────────────────────
@@ -284,7 +378,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('allows when user is drive ADMIN member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN' } as never);
+      setRelationship(asMember('ADMIN'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -295,7 +389,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('allows when user is drive OWNER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'OWNER' } as never);
+      setRelationship(asMember('OWNER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -306,7 +400,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('returns 403 when user is only a VIEWER member', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'VIEWER' } as never);
+      setRelationship(asMember('MEMBER'));
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -317,7 +411,7 @@ describe('POST /api/pages/bulk-move', () => {
 
     it('returns 403 when user has no membership', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
@@ -333,18 +427,35 @@ describe('POST /api/pages/bulk-move', () => {
     // composes isNotNull(driveMembers.acceptedAt).
     it('rejects pending ADMIN (acceptedAt IS NULL) — adversarial pending-admin-can-bulk-move-into-unaccepted-drive path', async () => {
       vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user' } as never);
-      // Simulate the gate filtering out the pending row (post-fix, the DB
-      // returns nothing for an acceptedAt IS NULL membership).
-      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue(undefined as never);
+      // The org-aware relationship reads ACCEPTED rows only: a pending ADMIN invitation is no
+      // membership (proven against Postgres in drive-gate-primitives.integration.test.ts).
+      setRelationship(NONE);
 
       const response = await POST(createRequest(validBody));
 
       expect(response.status).toBe(403);
-      // Force the route to compose the gate; without isNotNull on
-      // driveMembers.acceptedAt, the regression test cannot detect a
-      // future drift back to the old predicate.
-      const { isNotNull } = await import('@pagespace/db/operators');
-      expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('ORG-4 (partial) an org Admin with no drive_members row moves pages into an org drive', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'PRIVATE' } as never);
+      setRelationship(asMember('ADMIN'));
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(loadDriveRelationship).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), expect.objectContaining({ id: mockTargetDriveId, orgId: 'org_1', orgVisibility: 'PRIVATE' }));
+    });
+
+    it('X-6 (partial) a stale source=org ADMIN row opens nothing: the route never reads drive_members', async () => {
+      vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: mockTargetDriveId, ownerId: 'other-user', orgId: 'org_1', orgVisibility: 'OPEN' } as never);
+      vi.mocked(db.query.driveMembers.findFirst).mockResolvedValue({ role: 'ADMIN', source: 'org' } as never);
+      setRelationship(NONE);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(403);
+      expect(db.query.driveMembers.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -425,14 +536,17 @@ describe('POST /api/pages/bulk-move', () => {
       expect(body.error).toMatch(/permission.*move.*page/i);
     });
 
-    it('includes page title in permission error', async () => {
+    it('names the refused page by the id the caller sent, never by its title', async () => {
       vi.mocked(canUserEditPage).mockResolvedValue(false);
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([mockSourcePage({ title: 'Protected Doc' })] as never);
+      const page = mockSourcePage({ title: 'Protected Doc' });
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([page] as never);
 
       const response = await POST(createRequest(validBody));
       const body = await response.json();
 
-      expect(body.error).toContain('Protected Doc');
+      // A caller refused the edit may not be able to view the page either.
+      expect(body.error).toContain(page.id);
+      expect(body.error).not.toContain('Protected Doc');
     });
   });
 
@@ -653,6 +767,71 @@ describe('POST /api/pages/bulk-move', () => {
       );
     });
 
+  });
+
+  // ── Drive home page invariant ───────────────────────────────────────
+
+  describe('drive home page invariant', () => {
+    it('clears the source drive homePageId when its home page moves out', async () => {
+      setupSuccessScenario();
+      // Source drive's home page is the page being moved cross-drive
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-1' });
+      // After the move, the page no longer belongs to the source drive
+      txQueryPagesFindFirst.mockResolvedValue(undefined);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txQueryDrivesFindFirst).toHaveBeenCalled();
+      expect(txUpdateSet).toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('leaves homePageId untouched when the home page stays in the source drive', async () => {
+      setupSuccessScenario();
+      // Source drive's home page is some other page that did not move
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-still-here' });
+      txQueryPagesFindFirst.mockResolvedValue({ id: 'page-still-here' });
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txUpdateSet).not.toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('skips the check entirely for same-drive moves', async () => {
+      setupSuccessScenario();
+      // Page already lives in the target drive
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        mockSourcePage({ driveId: mockTargetDriveId }),
+      ] as never);
+
+      const response = await POST(createRequest(validBody));
+
+      expect(response.status).toBe(200);
+      expect(txQueryDrivesFindFirst).not.toHaveBeenCalled();
+      expect(txUpdateSet).not.toHaveBeenCalledWith({ homePageId: null });
+    });
+
+    it('fires syncPublishedHomeRoot (fire-and-forget) for each drive whose home page moved out', async () => {
+      setupSuccessScenario();
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: 'page-1' });
+      // After move the page is no longer in the source drive
+      txQueryPagesFindFirst.mockResolvedValue(undefined);
+
+      await POST(createRequest(validBody));
+
+      expect(syncPublishedHomeRoot).toHaveBeenCalledWith(mockSourceDriveId);
+    });
+
+    it('does not fire syncPublishedHomeRoot when homePageId was not cleared', async () => {
+      setupSuccessScenario();
+      // Source drive has no home page set
+      txQueryDrivesFindFirst.mockResolvedValue({ homePageId: null });
+
+      await POST(createRequest(validBody));
+
+      expect(syncPublishedHomeRoot).not.toHaveBeenCalled();
+    });
   });
 
   // ── Error handling ──────────────────────────────────────────────────

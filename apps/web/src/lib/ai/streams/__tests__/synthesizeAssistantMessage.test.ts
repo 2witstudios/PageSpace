@@ -38,6 +38,60 @@ describe('synthesizeAssistantMessage', () => {
     expect(msg.parts.map((p) => p.type)).toEqual(['text', 'tool-list_pages']);
   });
 
+  it('given an ISO startedAt, should attach it as a createdAt Date', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [{ type: 'text' as const, text: 'hi' }], '2024-01-01T00:00:00.000Z');
+
+    expect(msg.createdAt).toEqual(new Date('2024-01-01T00:00:00.000Z'));
+  });
+
+  it('given no startedAt, should omit createdAt entirely (not set it to undefined)', () => {
+    const msg = synthesizeAssistantMessage('msg-1', []);
+
+    expect('createdAt' in msg).toBe(false);
+  });
+
+  it('given an unparseable startedAt, should omit createdAt rather than attach an Invalid Date', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], 'not-a-date');
+
+    expect('createdAt' in msg).toBe(false);
+  });
+
+  // Epic leaf 6.8 (D ixpwr76xepu2x9v4pxgksyhz): a live-open tab whose stream is
+  // interrupted (crash reap, or an ordinary Stop) must badge it immediately, not
+  // only after the next reload — mirrors createdAt's "set when known, omit
+  // otherwise" convention.
+  it('given status "interrupted", should attach it to the synthesized message', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [{ type: 'text' as const, text: 'hi' }], undefined, 'interrupted');
+    expect(msg.status).toBe('interrupted');
+  });
+
+  it('given status "complete", should attach it to the synthesized message', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], undefined, 'complete');
+    expect(msg.status).toBe('complete');
+  });
+
+  it('given no status, should omit it entirely (not set it to undefined) — a live-streaming synthesis has no terminal status yet', () => {
+    const msg = synthesizeAssistantMessage('msg-1', []);
+    expect('status' in msg).toBe(false);
+  });
+
+  it('given BOTH a valid startedAt AND a status together, should attach createdAt and status in the same call', () => {
+    const msg = synthesizeAssistantMessage(
+      'msg-1',
+      [{ type: 'text' as const, text: 'hi' }],
+      '2024-01-01T00:00:00.000Z',
+      'complete',
+    );
+    expect(msg.createdAt).toEqual(new Date('2024-01-01T00:00:00.000Z'));
+    expect(msg.status).toBe('complete');
+  });
+
+  it('given an unparseable startedAt AND a status together, should omit createdAt but still attach status', () => {
+    const msg = synthesizeAssistantMessage('msg-1', [], 'not-a-date', 'interrupted');
+    expect('createdAt' in msg).toBe(false);
+    expect(msg.status).toBe('interrupted');
+  });
+
   it('given the same input twice, should produce structurally equal messages but referentially independent parts arrays', () => {
     const parts = [{ type: 'text' as const, text: 'hi' }];
     const a = synthesizeAssistantMessage('msg-1', parts);

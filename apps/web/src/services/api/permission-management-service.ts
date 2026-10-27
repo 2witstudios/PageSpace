@@ -2,19 +2,11 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages } from '@pagespace/db/schema/core'
-import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
-import { createId } from '@paralleldrive/cuid2';
-
-/**
- * Permission flags
- */
-export interface PermissionFlags {
-  canView: boolean;
-  canEdit: boolean;
-  canShare: boolean;
-  canDelete: boolean;
-}
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { getUserAccessLevel, isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+import { listDriveRoles, getRoleById, updateDriveRole } from '@pagespace/lib/services/drive-role-service';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * User info for permission display
@@ -58,20 +50,6 @@ export interface GetPermissionsError {
 
 export type GetPermissionsResult = GetPermissionsSuccess | GetPermissionsError;
 
-export interface GrantPermissionSuccess {
-  success: true;
-  permission: PermissionEntry;
-  isUpdate: boolean;
-}
-
-export interface GrantPermissionError {
-  success: false;
-  error: string;
-  status: number;
-}
-
-export type GrantPermissionResult = GrantPermissionSuccess | GrantPermissionError;
-
 export interface RevokePermissionSuccess {
   success: true;
 }
@@ -92,16 +70,16 @@ export const permissionManagementService = {
   /**
    * Check if user can view the permission list for a page
    */
-  async canUserViewPermissions(userId: string, pageId: string): Promise<boolean> {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+  async canUserViewPermissions(actor: AccessActor, pageId: string): Promise<boolean> {
+    const accessLevel = await getUserAccessLevel(actor, pageId);
     return accessLevel?.canShare || false;
   },
 
   /**
    * Check if user can manage (grant/revoke) permissions for a page
    */
-  async canUserManagePermissions(userId: string, pageId: string): Promise<boolean> {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+  async canUserManagePermissions(actor: AccessActor, pageId: string): Promise<boolean> {
+    const accessLevel = await getUserAccessLevel(actor, pageId);
     if (accessLevel?.canShare) return true;
 
     // Check if owner or admin
@@ -112,20 +90,8 @@ export const permissionManagementService = {
 
     if (!page?.drive) return false;
 
-    // Owner check
-    if (page.drive.ownerId === userId) return true;
-
-    // Admin check
-    const adminMembership = await db.select()
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.driveId, page.drive.id),
-        eq(driveMembers.userId, userId),
-        eq(driveMembers.role, 'ADMIN')
-      ))
-      .limit(1);
-
-    return adminMembership.length > 0;
+    // Owner or ACCEPTED admin — a pending ADMIN invite grants nothing.
+    return isDriveOwnerOrAdmin(actor, page.drive.id);
   },
 
   /**
@@ -171,8 +137,9 @@ export const permissionManagementService = {
 
     return {
       success: true,
-      owner: pageWithDrive.drive.owner as PermissionUser,
-      permissions: permissions.map(p => ({
+      // Decrypt PII at the edge so owner + grantee identities show plaintext.
+      owner: (await decryptUserRow(pageWithDrive.drive.owner)) as PermissionUser,
+      permissions: await Promise.all(permissions.map(async p => ({
         id: p.id,
         userId: p.userId,
         canView: p.canView,
@@ -181,76 +148,8 @@ export const permissionManagementService = {
         canDelete: p.canDelete,
         grantedBy: p.grantedBy,
         grantedAt: p.grantedAt,
-        user: p.user as PermissionUser | null,
-      })),
-    };
-  },
-
-  /**
-   * Grant or update permissions for a user on a page
-   */
-  async grantOrUpdatePermission(params: {
-    pageId: string;
-    targetUserId: string;
-    permissions: PermissionFlags;
-    grantedBy: string;
-  }): Promise<GrantPermissionResult> {
-    const { pageId, targetUserId, permissions, grantedBy } = params;
-
-    // Use transaction to prevent race conditions on concurrent requests
-    const result = await db.transaction(async (tx) => {
-      // Check if permission already exists within transaction
-      const existing = await tx.query.pagePermissions.findFirst({
-        where: and(
-          eq(pagePermissions.pageId, pageId),
-          eq(pagePermissions.userId, targetUserId)
-        )
-      });
-
-      if (existing) {
-        // Update existing permission
-        const updated = await tx.update(pagePermissions)
-          .set({
-            canView: permissions.canView,
-            canEdit: permissions.canEdit,
-            canShare: permissions.canShare,
-            canDelete: permissions.canDelete,
-          })
-          .where(eq(pagePermissions.id, existing.id))
-          .returning();
-
-        return {
-          permission: updated[0],
-          isUpdate: true,
-        };
-      }
-
-      // Create new permission
-      const newPermission = await tx.insert(pagePermissions).values({
-        id: createId(),
-        pageId,
-        userId: targetUserId,
-        canView: permissions.canView,
-        canEdit: permissions.canEdit,
-        canShare: permissions.canShare,
-        canDelete: permissions.canDelete,
-        grantedBy,
-        grantedAt: new Date(),
-      }).returning();
-
-      return {
-        permission: newPermission[0],
-        isUpdate: false,
-      };
-    });
-
-    return {
-      success: true,
-      permission: {
-        ...result.permission,
-        user: null, // User info not returned on create/update
-      },
-      isUpdate: result.isUpdate,
+        user: (await decryptUserRow(p.user)) as PermissionUser | null,
+      }))),
     };
   },
 
@@ -273,4 +172,108 @@ export const permissionManagementService = {
   },
 };
 
-export type PermissionManagementService = typeof permissionManagementService;
+// ============================================================================
+// Role permission types
+// ============================================================================
+
+export interface RolePermissionFlags {
+  canView: boolean;
+  canEdit: boolean;
+  canShare: boolean;
+}
+
+export interface RoleGrant extends RolePermissionFlags {
+  roleId: string;
+  name: string;
+  color: string | null;
+}
+
+type RolePermResult = { success: true } | { success: false; error: string; status: number };
+
+// ============================================================================
+// Role permission service functions
+// ============================================================================
+
+export const rolePermissionService = {
+  async getPageRoleGrants(pageId: string): Promise<RoleGrant[]> {
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return [];
+
+    const roles = await listDriveRoles(page.driveId);
+    return roles
+      .filter(role => role.permissions[pageId] != null)
+      .map(role => ({
+        roleId: role.id,
+        name: role.name,
+        color: role.color,
+        canView: role.permissions[pageId].canView,
+        canEdit: role.permissions[pageId].canEdit,
+        canShare: role.permissions[pageId].canShare,
+      }));
+  },
+
+  async setRolePagePermission(
+    actor: AccessActor,
+    pageId: string,
+    roleId: string,
+    permissions: RolePermissionFlags,
+  ): Promise<RolePermResult> {
+    if ((permissions.canEdit || permissions.canShare) && !permissions.canView) {
+      return { success: false, error: 'canView must be true when canEdit or canShare is set', status: 400 };
+    }
+
+    const canManage = await permissionManagementService.canUserManagePermissions(actor, pageId);
+    if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
+
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return { success: false, error: 'Page not found', status: 404 };
+
+    const role = await getRoleById(page.driveId, roleId);
+    if (!role) return { success: false, error: 'Role not found', status: 404 };
+
+    // permissionsPatch merges this single page atomically against whatever
+    // permissions map is current at write time — a full `permissions` replace
+    // computed from the `role` read above would race a concurrent grant/revoke
+    // on a different page and silently drop it.
+    await updateDriveRole(page.driveId, roleId, {
+      permissionsPatch: {
+        [pageId]: {
+          canView: permissions.canView,
+          canEdit: permissions.canEdit,
+          canShare: permissions.canShare,
+        },
+      },
+    });
+    return { success: true };
+  },
+
+  async removeRolePagePermission(
+    actor: AccessActor,
+    pageId: string,
+    roleId: string,
+  ): Promise<RolePermResult> {
+    const canManage = await permissionManagementService.canUserManagePermissions(actor, pageId);
+    if (!canManage) return { success: false, error: 'Insufficient permissions', status: 403 };
+
+    const page = await db.query.pages.findFirst({
+      where: eq(pages.id, pageId),
+      columns: { driveId: true },
+    });
+    if (!page) return { success: false, error: 'Page not found', status: 404 };
+
+    const role = await getRoleById(page.driveId, roleId);
+    if (!role) return { success: false, error: 'Role not found', status: 404 };
+
+    // permissionsPatch with a `null` entry prunes just this page atomically —
+    // see setRolePagePermission above for why a full `permissions` replace
+    // computed from the `role` read would race a concurrent mutation.
+    await updateDriveRole(page.driveId, roleId, { permissionsPatch: { [pageId]: null } });
+    return { success: true };
+  },
+};

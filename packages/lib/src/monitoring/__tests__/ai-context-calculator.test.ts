@@ -108,6 +108,26 @@ describe('estimateToolDefinitionTokens', () => {
 // estimateMessageTokens
 // ---------------------------------------------------------------------------
 describe('estimateMessageTokens', () => {
+  it('counts AI SDK v5 tool-{name} parts (input/output fields), not just legacy tool-call/tool-result', () => {
+    const bigOutput = 'x'.repeat(8000); // ~2000 tokens
+    const sdkMessage = {
+      role: 'assistant' as const,
+      parts: [
+        {
+          type: 'tool-read_page',
+          toolCallId: 'call-1',
+          input: { pageId: 'p1' },
+          output: bigOutput,
+        } as never,
+      ],
+    };
+    const tokens = estimateMessageTokens(sdkMessage);
+    // Without the tool-* branch this collapses to ~15 tokens of overhead and
+    // compaction thresholds never fire on real persisted histories.
+    expect(tokens).toBeGreaterThan(2000);
+  });
+
+
   it('should add 5 (role) + 10 (overhead) for a message with no parts', () => {
     const msg: UIMessage = { role: 'user', parts: [] };
     expect(estimateMessageTokens(msg)).toBe(15);
@@ -351,29 +371,64 @@ describe('getContextWindowSize', () => {
     });
   });
 
-  describe('PageSpace / GLM family', () => {
-    it('should return 200k for glm-5', () => {
-      expect(getContextWindowSize('glm-5')).toBe(200_000);
+  describe('OpenRouter vendor-prefixed models', () => {
+    // The pagespace/glm branch was removed; every cloud model now carries its real
+    // vendor prefix. getContextWindowSize prefers an exact match in the authoritative
+    // shared catalog (MODEL_CONTEXT_WINDOWS) so truncation enforces the model's real
+    // limit; the substring heuristic is only a fallback for ids absent from the catalog.
+    it('returns the catalog window for openai/gpt-5.4-nano (400k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.4-nano')).toBe(400_000);
     });
 
-    it('should return 200k for glm-4.7', () => {
-      expect(getContextWindowSize('glm-4.7')).toBe(200_000);
+    it('returns the catalog window for openai/gpt-5.4-mini (400k)', () => {
+      expect(getContextWindowSize('openai/gpt-5.4-mini')).toBe(400_000);
     });
 
-    it('should return 200k for glm-4.6', () => {
-      expect(getContextWindowSize('glm-4.6')).toBe(200_000);
+    it('returns the catalog window for anthropic/claude-haiku-4.5 (200k)', () => {
+      expect(getContextWindowSize('anthropic/claude-haiku-4.5')).toBe(200_000);
     });
 
-    it('should return 128k for glm-4.5', () => {
-      expect(getContextWindowSize('glm-4.5')).toBe(128_000);
+    it('returns the catalog window for anthropic/claude-sonnet-4.6 (1M)', () => {
+      expect(getContextWindowSize('anthropic/claude-sonnet-4.6')).toBe(1_000_000);
     });
 
-    it('should return 200k default for unknown glm model', () => {
-      expect(getContextWindowSize('glm-99')).toBe(200_000);
+    it('returns the catalog window for google/gemini-2.5-flash (1,048,576)', () => {
+      expect(getContextWindowSize('google/gemini-2.5-flash')).toBe(1_048_576);
     });
 
-    it('should match via provider=pagespace', () => {
-      expect(getContextWindowSize('some-model', 'pagespace')).toBe(200_000);
+    it('falls back to the heuristic 200k default for an uncatalogued vendor model', () => {
+      expect(getContextWindowSize('some-totally-unknown-vendor/model')).toBe(200_000);
+    });
+  });
+
+  describe('Z.ai direct (admin `glm` provider, bare ids)', () => {
+    // The admin-only Coder Plan endpoint sends BARE `glm-*` ids with no vendor
+    // prefix, so the prefixed-id catalog lookup cannot fire and no substring
+    // heuristic matches them. Before the direct lookup they all resolved to the
+    // 200k default, which made buildModelContext compact a 1M-window model at
+    // 150k (0.75) and hard-truncate it at 190k (0.95).
+    it('returns the catalog window for glm-5.3-flash (1,310,720) not the 200k default', () => {
+      expect(getContextWindowSize('glm-5.3-flash', 'glm')).toBe(1_310_720);
+    });
+
+    it('returns the catalog window for glm-5.3 (1M)', () => {
+      expect(getContextWindowSize('glm-5.3', 'glm')).toBe(1_000_000);
+    });
+
+    it('returns the catalog window for glm-4.5-air (128k)', () => {
+      expect(getContextWindowSize('glm-4.5-air', 'glm')).toBe(128_000);
+    });
+
+    it('resolves a bare glm id even when no provider is passed', () => {
+      expect(getContextWindowSize('glm-5.1')).toBe(202_752);
+    });
+
+    it('keeps the 200k default for a bare glm id absent from the catalog', () => {
+      expect(getContextWindowSize('glm-9.9-imaginary', 'glm')).toBe(200_000);
+    });
+
+    it('does not disturb the prefixed OpenRouter twin, which keeps its own catalog entry', () => {
+      expect(getContextWindowSize('z-ai/glm-5.3-flash', 'zai')).toBe(1_310_720);
     });
   });
 

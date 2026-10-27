@@ -2,24 +2,33 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
+import { getCreatablePageTypes, isDocumentPage } from '@pagespace/lib/content/page-types.config'
+import { PageType } from '@pagespace/lib/utils/enums'
+import { looksLikeHtmlDocument } from '@/lib/editor/line-breaks'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
 import { pageService, type CreatePageParams } from '@/services/api';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+const creatablePageTypes = getCreatablePageTypes() as unknown as [string, ...string[]];
 
 // Zod schema for page creation request
 const createPageSchema = z.object({
   title: z.string().min(1, 'Title is required'),
-  type: z.enum(getCreatablePageTypes() as [string, ...string[]]),
+  type: z.enum(creatablePageTypes),
   driveId: z.string().min(1, 'Drive ID is required'),
   parentId: z.string().nullable().optional(),
   content: z.string().optional(),
   contentMode: z.enum(['html', 'markdown']).optional(),
   systemPrompt: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
+  // The switch that decides whether a stored sandbox allowlist grants anything
+  // (issue #2460). A real boolean or nothing — never a coerced string.
+  sandboxEnabled: z.boolean().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
 });
@@ -52,21 +61,58 @@ export async function POST(request: Request) {
       return scopeError;
     }
 
+    // A drive-scoped MCP token cannot newly enable an account-level-only tool
+    // (e.g. create_drive) — mirrors the runtime chat/consult tool-list filtering.
+    if (validatedData.enabledTools && validatedData.enabledTools.length > 0) {
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const invalidTools = validatedData.enabledTools.filter((toolName) => !availableToolNames.includes(toolName));
+      if (invalidTools.length > 0) {
+        return NextResponse.json(
+          { error: `Invalid tools: ${invalidTools.join(', ')}` },
+          { status: 400 }
+        );
+      }
+    }
+
     // Track MCP source so the unread indicator (blue dot) shows for MCP-created pages.
     // Without this, MCP-created pages are filtered out as "the user's own changes" since
     // MCP tokens authenticate as the owning user.
+    // The principal authorizer makes scoped tokens create under their OWN
+    // drive-membership role (app member RBAC) instead of the owning user's.
     const isMCP = isMCPAuthResult(auth);
-    const createOptions = isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined;
+    const createOptions = {
+      ...(isMCP ? { context: { metadata: { source: 'mcp' } } } : undefined),
+      authorizeEdit: (targetId: string) => canPrincipalEditPage(auth, targetId),
+    };
 
-    const result = await pageService.createPage(userId, {
+    // Machine-written documents default to markdown (#2463). html mode stores
+    // TipTap markup, whose line numbers only exist as a normalized projection —
+    // an agent writing raw JSON or markdown into one is editing a document
+    // whose lines are not the lines it wrote. A browser session still defaults
+    // to html: that IS the editor's format. An explicit contentMode always wins,
+    // and existing pages keep whatever mode they were created with.
+    //
+    // The content decides too: this route accepts a body, and a caller that
+    // POSTs actual HTML without naming a mode means html. Defaulting THAT to
+    // markdown would store Tiptap markup in a page whose lines are its own
+    // newlines — the same #2463 failure with the modes swapped, and with no
+    // warning, since the mismatch warning only looks the other way.
+    const wantsMarkdownDefault =
+      isMCP &&
+      isDocumentPage(validatedData.type as PageType) &&
+      !looksLikeHtmlDocument(validatedData.content);
+    const contentMode = validatedData.contentMode ?? (wantsMarkdownDefault ? 'markdown' : undefined);
+
+    const result = await pageService.createPage(actorFromAuth(auth), {
       title: validatedData.title,
       type: validatedData.type as CreatePageParams['type'],
       driveId: validatedData.driveId,
       parentId: validatedData.parentId,
       content: validatedData.content,
-      contentMode: validatedData.contentMode,
+      contentMode,
       systemPrompt: validatedData.systemPrompt,
       enabledTools: validatedData.enabledTools,
+      sandboxEnabled: validatedData.sandboxEnabled,
       aiProvider: validatedData.aiProvider,
       aiModel: validatedData.aiModel,
     }, createOptions);

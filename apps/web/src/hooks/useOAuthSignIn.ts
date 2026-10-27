@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { isDesktopPlatform } from '@/lib/desktop-auth';
+import { currentDesktopShell, type DesktopShell } from '@/lib/auth/desktop-shell';
 
 const EXTERNAL_AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -14,6 +15,13 @@ export interface OAuthSigninBodyInput {
   deviceId: string;
   deviceName: string;
   inviteToken?: string;
+  returnUrl?: string;
+  /**
+   * Which desktop app is asking. Round-trips through the signed OAuth state so
+   * the callback deep-links back into THIS app rather than its sibling — the
+   * two register different protocol schemes.
+   */
+  shell?: DesktopShell;
 }
 
 export const buildOAuthSigninBody = ({
@@ -21,30 +29,37 @@ export const buildOAuthSigninBody = ({
   deviceId,
   deviceName,
   inviteToken,
+  returnUrl,
+  shell,
 }: OAuthSigninBodyInput): Record<string, string> => ({
   platform,
   deviceId,
   deviceName,
   ...(inviteToken && { inviteToken }),
+  ...(returnUrl && { returnUrl }),
+  ...(shell && { shell }),
 });
 
 export interface PostNativeAuthRedirectInput {
   isNewUser?: boolean;
   invitedDriveId?: string | null;
+  returnUrl?: string;
 }
 
 /**
- * Decide where to land a user after a successful native (iOS) OAuth flow.
+ * Decide where to land a user after a successful native (iOS/Android) OAuth flow.
  *
- * Precedence: invite-consumed drive > new-user welcome > /dashboard.
+ * Precedence: invite-consumed drive > returnUrl > new-user welcome > /dashboard.
  * Pure function — extracted so the redirect logic can be tested without
  * rendering the hook.
  */
 export const buildPostNativeAuthRedirect = ({
   isNewUser,
   invitedDriveId,
+  returnUrl,
 }: PostNativeAuthRedirectInput): string => {
   if (invitedDriveId) return `/dashboard/${invitedDriveId}?invited=1`;
+  if (returnUrl) return returnUrl;
   if (isNewUser) return '/dashboard?welcome=true';
   return '/dashboard';
 };
@@ -53,9 +68,10 @@ interface UseOAuthSignInOptions {
   onStart?: () => void;
   onError?: (message: string) => void;
   inviteToken?: string;
+  returnUrl?: string;
 }
 
-export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignInOptions = {}) {
+export function useOAuthSignIn({ onStart, onError, inviteToken, returnUrl }: UseOAuthSignInOptions = {}) {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isAppleLoading, setIsAppleLoading] = useState(false);
   const [waitingProvider, setWaitingProvider] = useState<OAuthProvider | null>(null);
@@ -90,6 +106,7 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
   const handleNativeSuccess = async (result: {
     isNewUser?: boolean;
     invitedDriveId?: string | null;
+    returnUrl?: string;
     user?: { id: string; name: string | null; email: string | null; image?: string | null };
   }) => {
     const { useAuthStore } = await import('@/stores/useAuthStore');
@@ -100,26 +117,39 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
     router.replace(buildPostNativeAuthRedirect({
       isNewUser: result.isNewUser,
       invitedDriveId: result.invitedDriveId,
+      returnUrl: result.returnUrl,
     }));
   };
 
   const getDeviceInfo = async () => {
     if (isDesktopPlatform() && window.electron) {
       const info = await window.electron.auth.getDeviceInfo();
-      return { platform: 'desktop' as const, deviceId: info.deviceId, deviceName: info.deviceName };
+      return {
+        platform: 'desktop' as const,
+        deviceId: info.deviceId,
+        deviceName: info.deviceName,
+        shell: currentDesktopShell(),
+      };
     }
 
     const { getOrCreateDeviceId, getDeviceName } = await import('@/lib/analytics');
-    return { platform: 'web' as const, deviceId: getOrCreateDeviceId(), deviceName: getDeviceName() };
+    return {
+      platform: 'web' as const,
+      deviceId: getOrCreateDeviceId(),
+      deviceName: getDeviceName(),
+      shell: undefined,
+    };
   };
 
   const initiateWebOAuth = async (endpoint: string, provider: OAuthProvider) => {
-    const { platform, deviceId, deviceName } = await getDeviceInfo();
+    const { platform, deviceId, deviceName, shell } = await getDeviceInfo();
     const body = buildOAuthSigninBody({
       platform,
       deviceId,
       deviceName,
       inviteToken,
+      returnUrl,
+      shell,
     });
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -171,10 +201,20 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
 
     try {
       const { isNativeGoogleAuthAvailable, signInWithGoogle: nativeSignIn } =
-        await import('@/lib/ios-google-auth');
+        await import('@/lib/native-google-auth');
 
       if (isNativeGoogleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
+        // Deliberately no fall-through to web OAuth on a native failure. There
+        // is no working web OAuth inside either native shell — iOS ends on
+        // Google's `disallowed_useragent` page in the WebView, Android leaves for
+        // the external browser and drops the session in the wrong cookie jar, and
+        // the `pagespace://auth-exchange` handoff that would close the gap has no
+        // `appUrlOpen` consumer on either platform. Falling through would trade a
+        // visible error inside a working app for a silent dead end outside it.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {
@@ -199,10 +239,14 @@ export function useOAuthSignIn({ onStart, onError, inviteToken }: UseOAuthSignIn
 
     try {
       const { isNativeAppleAuthAvailable, signInWithApple: nativeSignIn } =
-        await import('@/lib/ios-apple-auth');
+        await import('@/lib/native-apple-auth');
 
       if (isNativeAppleAuthAvailable()) {
-        const result = await nativeSignIn(inviteToken ? { inviteToken } : {});
+        const result = await nativeSignIn({
+          ...(inviteToken && { inviteToken }),
+          ...(returnUrl && { returnUrl }),
+        });
+        // See the Google branch: no fall-through on a native failure.
         if (result.success) {
           await handleNativeSuccess(result);
         } else if (result.error !== 'Sign-in cancelled') {

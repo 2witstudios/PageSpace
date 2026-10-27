@@ -1,0 +1,426 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
+import { tool } from 'ai';
+import { z } from 'zod';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND, spendDriveId } from '@pagespace/lib/billing/spend-target';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { IMAGE_GEN_HOLD_ESTIMATE_CENTS, resolveImageCost } from '@pagespace/lib/billing/credit-pricing';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { maskIdentifier } from '@/lib/logging/mask';
+import type { ToolExecutionContext } from '../core/types';
+import { DEFAULT_IMAGE_MODEL } from '../core/model-capabilities';
+import { generateImageBytes, ImageGenerationError } from '../core/image-generation';
+import { createImageProvider, isProviderError } from '../core/provider-factory';
+import { isImageGenerationAllowed } from '../core/image-gen-access';
+import { createImageFilePage, ImageStorageQuotaError } from '@/lib/upload/create-file-page';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { canActorEditPage } from './actor-permissions';
+import { resolveDefaultDriveId } from './drive-context-defaults';
+
+const imageLogger = loggers.ai.child({ module: 'image-generation-tools' });
+
+/**
+ * Load the user's app-admin flag + subscription tier (defensive fallback when not
+ * threaded via experimental_context, e.g. non-chat tool callers).
+ */
+async function loadUserGating(userId: string): Promise<{ isAdmin: boolean; tier: SubscriptionTier }> {
+  const rows = await db
+    .select({ role: users.role, tier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return {
+    isAdmin: rows[0]?.role === 'admin',
+    tier: resolvePersonalCapabilityTier(rows[0]?.tier),
+  };
+}
+
+/** Derive a concise page/file title from the prompt. */
+function titleFromPrompt(prompt: string): string {
+  const trimmed = prompt.trim().replace(/\s+/g, ' ');
+  return trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed || 'Generated image';
+}
+
+interface ImageTarget {
+  targetDriveId?: string;
+  targetParentId?: string;
+  /**
+   * Why the image landed where it did. The two Home outcomes are kept DISTINCT
+   * on purpose: telling the model "no workspace was in view" when the real
+   * reason was a read-only current workspace makes it explain the wrong thing
+   * to the user, and hides a permissions problem behind a navigation one.
+   */
+  savedTo: 'requested' | 'current_drive' | 'home_no_location' | 'home_unwritable_location';
+}
+
+/** Both Home outcomes, for the branches that only care that it went Home. */
+function isHomeGallery(savedTo: ImageTarget['savedTo']): boolean {
+  return savedTo === 'home_no_location' || savedTo === 'home_unwritable_location';
+}
+
+/**
+ * Decide where a generated image is filed, and authorize it.
+ *
+ * Explicit targets HARD-FAIL when the actor can't edit them: silently redirecting a
+ * named workspace to the Home gallery is exactly the surprise this tool used to
+ * produce. An IMPLICIT default (nothing named, so we inferred the workspace in view)
+ * degrades to the Home gallery instead — the user never scoped the request, so a
+ * view-only current drive shouldn't fail it.
+ *
+ * Deliberately called BEFORE the credit hold and the provider round-trip: a denial
+ * then costs nothing. Checking after generation would land permission failures in the
+ * `store_failed` path — billed, unsaved, and indistinguishable from an S3 outage.
+ */
+async function resolveImageTarget(
+  context: ToolExecutionContext,
+  args: { driveId?: string; parentId?: string },
+): Promise<{ ok: true; target: ImageTarget } | { ok: false; error: string }> {
+  if (args.parentId) {
+    const parent = await pageRepository.findById(args.parentId);
+    if (!parent || parent.isTrashed) {
+      return { ok: false, error: `Page "${args.parentId}" was not found.` };
+    }
+    if (args.driveId && parent.driveId !== args.driveId) {
+      return { ok: false, error: `Page "${args.parentId}" is not in drive "${args.driveId}".` };
+    }
+    if (!(await canActorEditPage(context, args.parentId))) {
+      return { ok: false, error: 'Insufficient permissions to save an image in that location.' };
+    }
+    return {
+      ok: true,
+      target: { targetDriveId: parent.driveId, targetParentId: args.parentId, savedTo: 'requested' },
+    };
+  }
+
+  if (args.driveId) {
+    // Same convention as create_page's root path: the drive is the parent of root pages.
+    if (!(await canActorEditPage(context, args.driveId))) {
+      return { ok: false, error: 'Insufficient permissions to save an image in that workspace.' };
+    }
+    return { ok: true, target: { targetDriveId: args.driveId, savedTo: 'requested' } };
+  }
+
+  const defaultDriveId = resolveDefaultDriveId(context);
+  if (!defaultDriveId) {
+    return { ok: true, target: { savedTo: 'home_no_location' } };
+  }
+  if (await canActorEditPage(context, defaultDriveId)) {
+    return { ok: true, target: { targetDriveId: defaultDriveId, savedTo: 'current_drive' } };
+  }
+  return { ok: true, target: { savedTo: 'home_unwritable_location' } };
+}
+
+export const imageGenerationTools = {
+  generate_image: tool({
+    description: `Generate an image from a text prompt using the user's configured image model.
+The image is saved into the workspace the user is currently in (a "Generated Images" folder at that
+drive's root), or into driveId/parentId when you pass them; it falls back to the user's Home drive
+only when no workspace is in view. It is shown inline in the conversation. Use this when the user
+asks you to create, draw, generate, or illustrate an image, logo, diagram, or picture. Currently
+restricted to app administrators.`,
+    inputSchema: z.object({
+      prompt: z
+        .string()
+        .min(1)
+        .describe('A detailed description of the image to generate (subject, style, composition, lighting).'),
+      aspectRatio: z
+        .enum(['1:1', '16:9', '9:16', '4:3', '3:4'])
+        .optional()
+        .describe('Optional aspect ratio hint (default square). Some models may ignore it.'),
+      driveId: z
+        .string()
+        .optional()
+        .describe('Drive to save the image into. Omit to use the workspace currently in view; the image lands in that drive\'s "Generated Images" folder.'),
+      parentId: z
+        .string()
+        .optional()
+        .describe('Exact page or folder to save the image under (must be inside driveId). Omit to use the drive\'s "Generated Images" folder.'),
+    }),
+    execute: async (
+      { prompt, aspectRatio, driveId, parentId },
+      { experimental_context: rawContext },
+    ) => {
+      const context = rawContext as ToolExecutionContext | undefined;
+      const userId = context?.userId;
+      if (!userId) {
+        throw new Error('User authentication required for image generation');
+      }
+
+      // Admin-only rollout gate (defensive — the route also gates exposure). Fast-path
+      // from context; fall back to a DB read so the tool self-defends regardless of caller.
+      let isAdmin = context?.isAdmin;
+      let tier = context?.subscriptionTier as SubscriptionTier | undefined;
+      if (isAdmin === undefined || tier === undefined) {
+        const gating = await loadUserGating(userId);
+        isAdmin = isAdmin ?? gating.isAdmin;
+        tier = tier ?? gating.tier;
+      }
+      if (!isImageGenerationAllowed(isAdmin)) {
+        return {
+          success: false,
+          error: 'Image generation is currently restricted to app administrators.',
+        };
+      }
+
+      // Resolve + authorize the destination BEFORE reserving credits or calling the
+      // provider, so a permission failure costs nothing and can never be confused with
+      // a storage failure after a billable generation.
+      const targetResult = await resolveImageTarget(context as ToolExecutionContext, { driveId, parentId });
+      if (!targetResult.ok) {
+        return { success: false, error: targetResult.error };
+      }
+      const target = targetResult.target;
+
+      const model = context?.imageGenerationModel || DEFAULT_IMAGE_MODEL;
+
+      // POL-8: the image model is built by the provider factory, which judges it against the org allowlists of the
+      // drive the turn runs in and of the drive the image lands in. Refused before any credit is reserved.
+      const imageProvider = await createImageProvider({ model }, {
+        driveId: spendDriveId(context?.creditSpend?.spend ?? PERSONAL_SPEND),
+        contentDriveIds: target.targetDriveId ? [target.targetDriveId] : [],
+      });
+      if (isProviderError(imageProvider)) {
+        return { success: false, error: imageProvider.error };
+      }
+
+      // Reserve credits for the call (image-sized estimate; real cost settles at trackUsage).
+      // The image spends the wallet the turn it runs in already named (WAL-5, SPEND-4):
+      // the same drive and source, never a different one. Outside a gated turn there is
+      // no drive session, so it spends personal credits (SPEND-8).
+      // Gated and recorded as the consumer the turn's gate bound (a manual Run's presser), else the caller.
+      const billedUserId = context?.creditSpend?.userId ?? userId;
+      const gate = await canConsumeAI(billedUserId, (tier ?? 'free') as SubscriptionTier, {
+        spend: context?.creditSpend?.spend ?? PERSONAL_SPEND,
+        estCostCents: IMAGE_GEN_HOLD_ESTIMATE_CENTS,
+      });
+      if (!gate.allowed) {
+        return {
+          success: false,
+          error: 'Insufficient credits to generate an image. Tell the user their credit balance is too low.',
+        };
+      }
+      const holdId = gate.holdId;
+      const walletId = gate.walletId;
+
+      /**
+       * Settle the reserved hold against real provider spend.
+       *
+       * INVARIANT: once the OpenRouter round-trip COMPLETES we have been charged, so the
+       * spend must be recorded — even if a later step (saving the file) fails. Releasing
+       * the hold there instead would leave real provider spend with no ai_usage_logs row
+       * and no debit.
+       *
+       * Every settle passes `success: true` — including failed-but-billable spend — because
+       * trackAIUsage only bills when `success` is true OR tokens were consumed, and image
+       * calls carry no token counts. Marking these rows `success: false` would therefore
+       * skip billing entirely and reintroduce the leak. The tradeoff is that a failed-but-
+       * billed generation is invisible to the success/failure analytics that filter on
+       * `success = false` (error-pattern detection, successRate): use the `error` tag and
+       * `metadata.outcome` (`store_failed` / `no_image_returned`) to find them instead.
+       */
+      const settleSpend = async (args: {
+        providerCostDollars?: number;
+        generationIds: string[];
+        mediaType?: string;
+        driveId?: string;
+        pageId?: string;
+        error?: string;
+      }) => {
+        const resolved = resolveImageCost(args.providerCostDollars);
+        const settle = await AIMonitoring.trackUsage({
+          userId: billedUserId,
+          provider: 'openrouter',
+          model,
+          providerCostDollars: resolved.costDollars,
+          costSource: resolved.costSource,
+          openrouterGenerationIds: args.generationIds,
+          holdId,
+          walletId,
+          // SPEND-10: an image an automation run generates is that automation's spend.
+          automationRef: context?.creditSpend?.automationRef,
+          success: true,
+          source: 'image_generation',
+          conversationId: context?.conversationId,
+          driveId: args.driveId,
+          pageId: args.pageId,
+          ...(args.error ? { error: args.error } : {}),
+          metadata: {
+            imageModel: model,
+            mediaType: args.mediaType,
+            costSource: resolved.costSource,
+            ...(args.error ? { outcome: args.error } : {}),
+          },
+        }).catch((metErr) => {
+          // Defensive only — currently UNREACHABLE: trackAIUsage wraps its whole body in a
+          // logging try/catch and never rejects. It REPORTS its failures instead (see the
+          // `persisted` check below), which is what an unbilled generation surfaces as.
+          // Kept so a future change that lets it throw can't silently fail the request.
+          imageLogger.error('Failed to record image usage', metErr as Error, {
+            userId: maskIdentifier(userId),
+            model,
+            costDollars: resolved.costDollars,
+            generationIds: args.generationIds,
+          });
+          return { persisted: false, creditsSettled: false };
+        });
+
+        // An image generation is a ONE-SHOT charge: there is no window, no watermark and
+        // no next tick, so a lost usage row cannot be retried — it can only be reported.
+        // Say so at the one place that knows the user-facing context (which model, whose
+        // generation) rather than leaving only the seam's own log.
+        if (!settle.persisted) {
+          imageLogger.error(
+            'Image generation usage was not persisted — this spend is unbilled and unrecoverable',
+            new Error('image settle was not persisted'),
+            {
+              userId: maskIdentifier(userId),
+              model,
+              costDollars: resolved.costDollars,
+              generationIds: args.generationIds,
+            },
+          );
+        }
+
+        // Belt-and-braces hold cleanup. `trackAIUsage` never rejects, and it now disposes
+        // of the reservation on every one of its own exits — settled against by
+        // consumeCredits, or released when the usage row could not be written. So this is
+        // no longer covering a stranded hold; it stays as a cheap idempotent backstop for a
+        // path that ends without either.
+        //
+        // Deleting the hold here is safe and idempotent: consumeCredits already removes it
+        // inside its settle transaction (and in the zero-charge branch), so on the happy path
+        // this deletes zero rows — releaseHold emits only when a row actually came back, so
+        // there is no duplicate balance push. A hold is a pure RESERVATION (the gate sums
+        // creditHolds.estCents against spendable); deleting one never credits the balance, so
+        // this can't refund a settled charge.
+        //
+        // Edge case, accepted: if consumeCredits' transaction failed, the ledger row stays
+        // 'pending' and settlePendingLedgerRow debits it later — releasing the hold here means
+        // that pending debit is briefly under-reserved. No double-credit results; the only
+        // effect is a slightly optimistic spendable for one in-flight call.
+        if (holdId) await releaseHold(holdId).catch(() => {});
+      };
+
+      let image;
+      try {
+        image = await generateImageBytes({ prompt, model, aspectRatio }, { client: imageProvider.client });
+      } catch (error) {
+        // A completed-but-empty generation was still billed by OpenRouter → settle it, but
+        // ONLY against an AUTHORITATIVE cost (`usage.cost`, including a legitimate $0 from a
+        // free model — hence `!== undefined`, not truthiness).
+        //
+        // A generation id is NOT sufficient evidence: `reconcileStatus` is set only when
+        // `hasRealCost && generationIds.length > 0` (ai-monitoring), and the reconcile cron
+        // picks up only `'pending'` rows — so an id-only row settled at the flat estimate
+        // would be a permanent, unreconcilable charge for a generation that produced nothing.
+        // Without an authoritative cost we cannot substantiate the amount, so we release the
+        // hold rather than invent a charge. (We may under-bill a failed call; we never
+        // over-bill one.)
+        //
+        // A transport/auth failure never reached the provider → release the hold.
+        const imgErr = error instanceof ImageGenerationError ? error : null;
+        if (imgErr?.billable && imgErr.providerCostDollars !== undefined) {
+          await settleSpend({
+            providerCostDollars: imgErr.providerCostDollars,
+            generationIds: imgErr.generationIds,
+            error: 'no_image_returned',
+          });
+        } else if (holdId) {
+          await releaseHold(holdId).catch(() => {});
+        }
+        imageLogger.warn('Image generation failed', {
+          userId: maskIdentifier(userId),
+          model,
+          billable: error instanceof ImageGenerationError ? error.billable : false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return {
+          success: false,
+          error:
+            error instanceof ImageGenerationError
+              ? error.message
+              : 'Image generation failed. The model may be unavailable — try again or a different prompt.',
+        };
+      }
+
+      const title = titleFromPrompt(prompt);
+      let created;
+      try {
+        created = await createImageFilePage({
+          userId,
+          buffer: Buffer.from(image.bytes),
+          mimeType: image.mediaType,
+          title,
+          prompt,
+          targetDriveId: target.targetDriveId,
+          targetParentId: target.targetParentId,
+        });
+      } catch (error) {
+        // The image WAS generated (and billed) — settle the spend rather than release,
+        // otherwise real provider cost goes unrecorded. The user still gets a failure.
+        await settleSpend({
+          providerCostDollars: image.providerCostDollars,
+          generationIds: image.generationIds,
+          mediaType: image.mediaType,
+          error: 'store_failed',
+        });
+        imageLogger.error('Failed to save generated image', error as Error, {
+          userId: maskIdentifier(userId),
+        });
+        const message =
+          error instanceof ImageStorageQuotaError
+            ? error.message
+            : 'The image was generated but could not be saved to your drive.';
+        return { success: false, error: message };
+      }
+
+      await settleSpend({
+        providerCostDollars: image.providerCostDollars,
+        generationIds: image.generationIds,
+        mediaType: image.mediaType,
+        driveId: created.driveId,
+        pageId: created.pageId,
+      });
+
+      imageLogger.info('Image generated', {
+        userId: maskIdentifier(userId),
+        model,
+        mediaType: image.mediaType,
+        pageId: created.pageId,
+      });
+
+      return {
+        success: true,
+        pageId: created.pageId,
+        driveId: created.driveId,
+        parentId: created.parentId,
+        savedTo: target.savedTo,
+        viewUrl: `/api/files/${created.pageId}/view`,
+        title,
+        mediaType: image.mediaType,
+        prompt,
+        summary: isHomeGallery(target.savedTo)
+          ? `Generated an image for "${title}" and saved it to the user's Home workspace gallery.`
+          : `Generated an image for "${title}" and saved it to this workspace.`,
+        // The Home fallback is where generated images used to get stranded — say so
+        // at the moment it happens, so the model can offer to relocate rather than
+        // leaving the user to discover the file in the wrong workspace later. The
+        // reason is reported accurately: "you can't write there" is a different
+        // problem from "I didn't know where you were", and only one of them is
+        // fixed by navigating somewhere first.
+        ...(isHomeGallery(target.savedTo) && {
+          nextSteps: [
+            target.savedTo === 'home_no_location'
+              ? "This image was saved to the user's Home workspace because no workspace was in view. If it belongs elsewhere, call move_page with targetDriveId to relocate it."
+              : "This image was saved to the user's Home workspace because the workspace in view is read-only for this user. Ask where it should go, or call move_page with targetDriveId for a workspace they can edit.",
+          ],
+        }),
+      };
+    },
+  }),
+};

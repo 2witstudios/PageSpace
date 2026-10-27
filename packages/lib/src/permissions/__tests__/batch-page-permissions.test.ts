@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -8,7 +17,7 @@ vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn() },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
-  pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed' },
+  pages: { id: 'id', driveId: 'driveId', isTrashed: 'isTrashed', type: 'type' },
   drives: { id: 'id', ownerId: 'ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -18,6 +27,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
     userId: 'userId',
     role: 'role',
     acceptedAt: 'acceptedAt',
+    customRoleId: 'customRoleId',
   },
   pagePermissions: {
     pageId: 'pageId',
@@ -27,6 +37,11 @@ vi.mock('@pagespace/db/schema/members', () => ({
     canShare: 'canShare',
     canDelete: 'canDelete',
     expiresAt: 'expiresAt',
+  },
+  driveRoles: {
+    id: 'id',
+    driveId: 'driveId',
+    permissions: 'permissions',
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
@@ -50,7 +65,7 @@ vi.mock('../../logging/logger-config', () => ({
   },
 }));
 
-vi.mock('../../validators', () => ({
+vi.mock('../../validators/id-validators', () => ({
   parseUserId: vi.fn(),
   parsePageId: vi.fn(),
 }));
@@ -59,6 +74,7 @@ import { getBatchPagePermissions } from '../permissions';
 import { db } from '@pagespace/db/db';
 import { isNotNull } from '@pagespace/db/operators';
 import { loggers } from '../../logging/logger-config';
+import { credentialActor } from '../access-actor';
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -67,28 +83,43 @@ import { loggers } from '../../logging/logger-config';
 const USER = 'user_abc';
 
 interface Row {
+  driveId: string;
+  driveOrgId: string | null;
+  memberCustomRoleId: string | null;
   pageId: string;
   isTrashed: boolean;
+  isPrivate: boolean;
+  pageType: string | null;
   driveOwnerId: string | null;
-  adminMemberId: string | null;
+  memberRole: string | null;
   explicitCanView: boolean | null;
   explicitCanEdit: boolean | null;
   explicitCanShare: boolean | null;
   explicitCanDelete: boolean | null;
+  customRolePerms: Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }> | null;
+  customRoleDriveWidePerms: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
 }
 
 const FULL = { canView: true, canEdit: true, canShare: true, canDelete: true };
 const NONE = { canView: false, canEdit: false, canShare: false, canDelete: false };
+const READ_ONLY = { canView: true, canEdit: false, canShare: false, canDelete: false };
 
 function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
   return {
+    driveId: 'drive_personal',
+    driveOrgId: null,
+    memberCustomRoleId: overrides.customRolePerms || overrides.customRoleDriveWidePerms ? 'role_personal' : null,
     isTrashed: false,
+    isPrivate: false,
+    pageType: null,
     driveOwnerId: null,
-    adminMemberId: null,
+    memberRole: null,
     explicitCanView: null,
     explicitCanEdit: null,
     explicitCanShare: null,
     explicitCanDelete: null,
+    customRolePerms: null,
+    customRoleDriveWidePerms: null,
     ...overrides,
   };
 }
@@ -100,13 +131,15 @@ function makeRow(overrides: Partial<Row> & { pageId: string }): Row {
  *     .leftJoin(drives, ...)
  *     .leftJoin(driveMembers, ...)
  *     .leftJoin(pagePermissions, ...)
+ *     .leftJoin(driveRoles, ...)
  *     .where(...)
  *
  * The terminal `.where(...)` resolves to the provided rows.
  */
 function stubQueryRows(rows: Row[]) {
   const where = vi.fn().mockResolvedValue(rows);
-  const leftJoin3 = vi.fn().mockReturnValue({ where });
+  const leftJoin4 = vi.fn().mockReturnValue({ where });
+  const leftJoin3 = vi.fn().mockReturnValue({ leftJoin: leftJoin4, where });
   const leftJoin2 = vi.fn().mockReturnValue({ leftJoin: leftJoin3, where });
   const leftJoin1 = vi.fn().mockReturnValue({ leftJoin: leftJoin2, where });
   const from = vi.fn().mockReturnValue({ leftJoin: leftJoin1, where });
@@ -128,13 +161,13 @@ describe('getBatchPagePermissions', () => {
   it('given a batch of pageIds, should issue exactly one db.select call', async () => {
     stubQueryRows([]);
 
-    await getBatchPagePermissions(USER, ['p1', 'p2', 'p3', 'p4']);
+    await getBatchPagePermissions(credentialActor(USER, null), ['p1', 'p2', 'p3', 'p4']);
 
     expect(db.select).toHaveBeenCalledTimes(1);
   });
 
   it('given an empty pageIds array, should return an empty map without querying the DB', async () => {
-    const result = await getBatchPagePermissions(USER, []);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), []);
 
     expect(result.size).toBe(0);
     expect(db.select).not.toHaveBeenCalled();
@@ -143,29 +176,28 @@ describe('getBatchPagePermissions', () => {
   it('given owner access, should grant all four permissions', async () => {
     stubQueryRows([makeRow({ pageId: 'p1', driveOwnerId: USER })]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(FULL);
   });
 
   it('given an accepted ADMIN member, should grant all four permissions', async () => {
-    // Invariant from the CTE: the drive_members LEFT JOIN already filters on
-    // role = 'ADMIN' AND acceptedAt IS NOT NULL, so a non-null adminMemberId
-    // here encodes an accepted admin.
-    stubQueryRows([makeRow({ pageId: 'p1', adminMemberId: 'member_x' })]);
+    // drive_members LEFT JOIN filters acceptedAt IS NOT NULL, so memberRole = 'ADMIN'
+    // encodes an accepted admin.
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'ADMIN' })]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(FULL);
   });
 
-  it('given an unaccepted ADMIN invite (adminMemberId null), should fall through to explicit-grant check', async () => {
-    // The CTE's acceptedAt IS NOT NULL predicate causes an unaccepted admin
-    // invite to yield adminMemberId = null. With no explicit grant, this
-    // degrades to all-false.
-    stubQueryRows([makeRow({ pageId: 'p1', adminMemberId: null })]);
+  it('given an unaccepted invite (memberRole null), should fall through to explicit-grant check', async () => {
+    // The drive_members LEFT JOIN's acceptedAt IS NOT NULL predicate causes
+    // unaccepted invites to yield memberRole = null. With no explicit grant,
+    // this degrades to all-false.
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: null })]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(NONE);
   });
@@ -184,7 +216,7 @@ describe('getBatchPagePermissions', () => {
       }),
     ]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual({
       canView: true,
@@ -199,7 +231,7 @@ describe('getBatchPagePermissions', () => {
     // pagePermissions join, so they surface as all-null explicit* fields.
     stubQueryRows([makeRow({ pageId: 'p1' })]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(NONE);
   });
@@ -209,15 +241,47 @@ describe('getBatchPagePermissions', () => {
       makeRow({ pageId: 'p1', isTrashed: true, driveOwnerId: USER }),
     ]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(NONE);
   });
 
-  it('given an inaccessible pageId (row exists, no grants), should return all four false', async () => {
-    stubQueryRows([makeRow({ pageId: 'p1' })]);
+  it('given an accepted MEMBER on a non-private page, should grant read-only access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER' })]);
 
-    const result = await getBatchPagePermissions(USER, ['p1']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
+  it('given an accepted MEMBER on a non-private CHANNEL page, should grant canEdit access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', pageType: 'CHANNEL' })]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given an accepted MEMBER on a non-private DOCUMENT page, should grant read-only access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', pageType: 'DOCUMENT' })]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
+  it('given an accepted MEMBER on a private page, should deny access', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', memberRole: 'MEMBER', isPrivate: true })]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
+  it('given an inaccessible pageId (row exists, no grants, private page), should return all four false', async () => {
+    stubQueryRows([makeRow({ pageId: 'p1', isPrivate: true })]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(result.get('p1')).toEqual(NONE);
   });
@@ -228,7 +292,7 @@ describe('getBatchPagePermissions', () => {
     // pageId with NONE before iterating rows so callers still get an entry.
     stubQueryRows([]);
 
-    const result = await getBatchPagePermissions(USER, ['missing']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['missing']);
 
     expect(result.get('missing')).toEqual(NONE);
   });
@@ -236,7 +300,7 @@ describe('getBatchPagePermissions', () => {
   it('given a mixed batch, should classify each pageId independently', async () => {
     stubQueryRows([
       makeRow({ pageId: 'owned', driveOwnerId: USER }),
-      makeRow({ pageId: 'admin', adminMemberId: 'member_1' }),
+      makeRow({ pageId: 'admin', memberRole: 'ADMIN' }),
       makeRow({
         pageId: 'granted',
         explicitCanView: true,
@@ -245,14 +309,18 @@ describe('getBatchPagePermissions', () => {
         explicitCanDelete: false,
       }),
       makeRow({ pageId: 'trashed', isTrashed: true, driveOwnerId: USER }),
-      makeRow({ pageId: 'denied' }),
+      makeRow({ pageId: 'member_open', memberRole: 'MEMBER' }),
+      makeRow({ pageId: 'member_private', memberRole: 'MEMBER', isPrivate: true }),
+      makeRow({ pageId: 'denied', isPrivate: true }),
     ]);
 
-    const result = await getBatchPagePermissions(USER, [
+    const result = await getBatchPagePermissions(credentialActor(USER, null), [
       'owned',
       'admin',
       'granted',
       'trashed',
+      'member_open',
+      'member_private',
       'denied',
       'missing',
     ]);
@@ -266,22 +334,147 @@ describe('getBatchPagePermissions', () => {
       canDelete: false,
     });
     expect(result.get('trashed')).toEqual(NONE);
+    expect(result.get('member_open')).toEqual(READ_ONLY);
+    expect(result.get('member_private')).toEqual(NONE);
     expect(result.get('denied')).toEqual(NONE);
     expect(result.get('missing')).toEqual(NONE);
-    expect(result.size).toBe(6);
+    expect(result.size).toBe(8);
   });
 
   it('should filter drive_members join on acceptedAt IS NOT NULL (matches single-page path)', async () => {
     stubQueryRows([]);
 
-    await getBatchPagePermissions(USER, ['p1']);
+    await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
 
     expect(vi.mocked(isNotNull)).toHaveBeenCalledWith('acceptedAt');
   });
 
+  it('given MEMBER with custom role entry {canView:true, canEdit:true} on a PRIVATE page, should grant custom role permissions', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { 'p1': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:true, canEdit:true} on a NON-PRIVATE page, should grant custom role permissions instead of read-only', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'p1': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role but NO entry for this page on a non-private page, should fall through to Rule 4', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'other-page': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role but NO entry for this page on a private page, should deny access', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { 'other-page': { canView: true, canEdit: true, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER whose custom role has drive-wide canView but NO entry for a PRIVATE page, should deny access', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: {},
+        customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
+  it('given MEMBER whose custom role has drive-wide canView AND a per-page entry for a PRIVATE page, should grant the entry', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: true,
+        customRolePerms: { p1: { canView: true, canEdit: false, canShare: false } },
+        customRoleDriveWidePerms: { canView: true, canEdit: true, canShare: true },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(READ_ONLY);
+  });
+
+  it('given MEMBER with custom role entry {canView:false} on a non-private page, should deny access (explicit deny beats Rule 4)', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        isPrivate: false,
+        customRolePerms: { 'p1': { canView: false, canEdit: false, canShare: false } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('given MEMBER with custom role entry {canView:false, canEdit:true}, should grant nothing (no edit without view)', async () => {
+    stubQueryRows([
+      makeRow({
+        pageId: 'p1',
+        memberRole: 'MEMBER',
+        pageType: 'DOCUMENT',
+        customRolePerms: { p1: { canView: false, canEdit: true, canShare: true } },
+      }),
+    ]);
+
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1']);
+
+    expect(result.get('p1')).toEqual(NONE);
+  });
+
   it('given a DB failure, should return the pre-seeded deny map (fail-closed) and log', async () => {
     const where = vi.fn().mockRejectedValue(new Error('DB down'));
-    const leftJoin3 = vi.fn().mockReturnValue({ where });
+    const leftJoin4 = vi.fn().mockReturnValue({ where });
+    const leftJoin3 = vi.fn().mockReturnValue({ leftJoin: leftJoin4, where });
     const leftJoin2 = vi.fn().mockReturnValue({ leftJoin: leftJoin3, where });
     const leftJoin1 = vi.fn().mockReturnValue({ leftJoin: leftJoin2, where });
     const from = vi.fn().mockReturnValue({ leftJoin: leftJoin1, where });
@@ -289,7 +482,7 @@ describe('getBatchPagePermissions', () => {
       { from } as unknown as ReturnType<typeof db.select>
     );
 
-    const result = await getBatchPagePermissions(USER, ['p1', 'p2']);
+    const result = await getBatchPagePermissions(credentialActor(USER, null), ['p1', 'p2']);
 
     expect(result.get('p1')).toEqual(NONE);
     expect(result.get('p2')).toEqual(NONE);

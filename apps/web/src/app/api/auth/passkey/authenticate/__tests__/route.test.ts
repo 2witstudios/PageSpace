@@ -19,6 +19,12 @@ vi.mock('next/server', () => ({
 
 vi.mock('@pagespace/lib/auth/passkey-service', () => ({
   verifyAuthentication: vi.fn(),
+  findUserIdByCredentialId: vi.fn(),
+}));
+vi.mock('@pagespace/lib/auth/account-lockout', () => ({
+  getAccountLockoutStatus: vi.fn(),
+  recordFailedLoginAttempt: vi.fn(),
+  resetFailedLoginAttempts: vi.fn(),
 }));
 vi.mock('@pagespace/lib/auth/session-service', () => ({
   sessionService: {
@@ -33,6 +39,8 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     }),
     revokeAllUserSessions: vi.fn().mockResolvedValue(0),
+    revokeWebUserSessions: vi.fn().mockResolvedValue(0),
+    revokeAdminUserSessions: vi.fn().mockResolvedValue(0),
     revokeSession: vi.fn().mockResolvedValue(undefined),
   },
 }));
@@ -76,6 +84,7 @@ vi.mock('@/lib/auth', () => ({
   validateLoginCSRFToken: vi.fn(),
   getClientIP: vi.fn().mockReturnValue('127.0.0.1'),
   createDeviceToken: vi.fn().mockResolvedValue('ps_dev_mock_token'),
+  revokeSessionsForLogin: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/auth/cookie-config', () => ({
@@ -100,12 +109,22 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'home-1', created: false }),
+}));
+
 import { POST } from '../route';
-import { verifyAuthentication } from '@pagespace/lib/auth/passkey-service';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { verifyAuthentication, findUserIdByCredentialId } from '@pagespace/lib/auth/passkey-service';
+import {
+  getAccountLockoutStatus,
+  recordFailedLoginAttempt,
+  resetFailedLoginAttempts,
+} from '@pagespace/lib/auth/account-lockout';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
@@ -113,7 +132,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
+import { validateLoginCSRFToken, getClientIP, createDeviceToken, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 
 const validPayload = {
@@ -144,9 +163,28 @@ describe('POST /api/auth/passkey/authenticate', () => {
       // @ts-expect-error - partial mock data
       data: { userId: 'user-1' },
     });
+    vi.mocked(findUserIdByCredentialId).mockResolvedValue('user-1');
+    vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+      isLocked: false,
+      failedAttempts: 0,
+      lockedUntil: null,
+      remainingAttempts: 10,
+    });
+    vi.mocked(recordFailedLoginAttempt).mockResolvedValue({ success: true });
+    vi.mocked(resetFailedLoginAttempts).mockResolvedValue(undefined);
   });
 
   describe('successful authentication', () => {
+    it.each([true, false])('SEC-2 (partial) binds only server-verified user verification to the new session (%s)', async (userVerified) => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({ ok: true, data: { userId: 'user-1', isNewSession: true, userVerified } });
+      const before = Date.now();
+      await POST(createRequest({ ...validPayload, userVerified: true }));
+      const authentication = vi.mocked(sessionService.createSession).mock.calls[0][0].authentication;
+      expect(authentication?.assurance).toBe(userVerified ? 'user_verified_passkey' : 'single_factor');
+      expect(authentication?.authenticatedAtMs).toBeGreaterThanOrEqual(before);
+      expect(authentication?.authenticatedAtMs).toBeLessThanOrEqual(Date.now());
+    });
+
     it('returns 200 with success, userId, and redirectUrl', async () => {
       const response = await POST(createRequest());
       const body = await response.json();
@@ -171,10 +209,12 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(csrfCookie).toContain('mock-csrf-token');
     });
 
-    it('revokes existing sessions before creating new one', async () => {
+    it('revokes prior sessions via the device-scoped helper before creating new one', async () => {
       await POST(createRequest());
 
-      expect(sessionService.revokeAllUserSessions).toHaveBeenCalledWith('user-1', 'passkey_login');
+      // No deviceId in the default payload → helper receives undefined and applies
+      // its legacy all-web-session fallback internally.
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', undefined, 'passkey_login', 'passkey');
       expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
         userId: 'user-1',
         type: 'user',
@@ -182,26 +222,10 @@ describe('POST /api/auth/passkey/authenticate', () => {
       }));
     });
 
-    it('logs when existing sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(3);
+    it('scopes revocation to the supplied deviceId (does not nuke other devices)', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'web', deviceId: 'device-A' }));
 
-      await POST(createRequest());
-
-      expect(loggers.auth.info).toHaveBeenCalledWith('Revoked all sessions on passkey login', expect.objectContaining({
-        userId: 'user-1',
-        count: 3,
-      }));
-    });
-
-    it('does not log when no sessions are revoked', async () => {
-      vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
-
-      await POST(createRequest());
-
-      expect(loggers.auth.info).not.toHaveBeenCalledWith(
-        'Revoked all sessions on passkey login',
-        expect.objectContaining({ userId: 'user-1' }),
-      );
+      expect(revokeSessionsForLogin).toHaveBeenCalledWith('user-1', 'device-A', 'passkey_login', 'passkey');
     });
 
     it('passes clientIP as createdByIp when not unknown', async () => {
@@ -278,6 +302,97 @@ describe('POST /api/auth/passkey/authenticate', () => {
       expect(csrfCookie).toContain('; Secure');
 
       vi.unstubAllEnvs();
+    });
+  });
+
+  describe('account lockout (per-account layer, complements per-IP rate limiting)', () => {
+    it('rejects a locked account with 423 BEFORE verifying the assertion', async () => {
+      const lockedUntil = new Date(Date.now() + 10 * 60 * 1000);
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil,
+        remainingAttempts: 0,
+      });
+
+      const response = await POST(createRequest());
+      const body = await response.json();
+
+      expect(response.status).toBe(423);
+      expect(body.error).toMatch(/locked/i);
+      // The crypto verification must not run for a locked account
+      expect(verifyAuthentication).not.toHaveBeenCalled();
+      expect(findUserIdByCredentialId).toHaveBeenCalledWith('cred-1');
+    });
+
+    it('audits the lockout rejection', async () => {
+      vi.mocked(getAccountLockoutStatus).mockResolvedValue({
+        isLocked: true,
+        failedAttempts: 10,
+        lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        remainingAttempts: 0,
+      });
+
+      await POST(createRequest());
+
+      expect(auditRequest).toHaveBeenCalledWith(
+        expect.any(Request),
+        expect.objectContaining({
+          eventType: 'security.rate.limited',
+          details: expect.objectContaining({ reason: 'passkey_account_locked' }),
+        }),
+      );
+    });
+
+    it('records a failed attempt on VERIFICATION_FAILED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'VERIFICATION_FAILED', message: 'Error' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('records a failed attempt on COUNTER_REPLAY_DETECTED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'COUNTER_REPLAY_DETECTED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).toHaveBeenCalledWith('user-1');
+    });
+
+    it('does NOT record a failed attempt on a benign CHALLENGE_EXPIRED', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CHALLENGE_EXPIRED' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('does NOT record a failed attempt when the credential maps to no account', async () => {
+      vi.mocked(findUserIdByCredentialId).mockResolvedValue(null);
+      vi.mocked(verifyAuthentication).mockResolvedValue({
+        ok: false,
+        error: { code: 'CREDENTIAL_NOT_FOUND' },
+      });
+
+      await POST(createRequest());
+
+      expect(recordFailedLoginAttempt).not.toHaveBeenCalled();
+    });
+
+    it('resets the lockout counter on successful authentication', async () => {
+      await POST(createRequest());
+
+      expect(resetFailedLoginAttempts).toHaveBeenCalledWith('user-1');
     });
   });
 
@@ -432,6 +547,51 @@ describe('POST /api/auth/passkey/authenticate', () => {
           riskScore: 0.3,
         })
       );
+    });
+  });
+
+  // Passkey is the on-prem sign-in (password auth was removed in #861, and
+  // on-prem has no email delivery). Without this call a returning on-prem user
+  // would never reach Home-drive / Imago-agent provisioning.
+  describe('Home drive and Imago agent provisioning', () => {
+    it('given a successful sign-in, should provision the Home drive and Imago agents for the verified user', async () => {
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledTimes(1);
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given a desktop exchange sign-in, should provision too', async () => {
+      await POST(createRequest({ ...validPayload, platform: 'desktop', deviceId: 'device-1', desktopExchange: true }));
+
+      expect(provisionHomeDriveIfNeeded).toHaveBeenCalledWith('user-1');
+    });
+
+    it('given provisioning fails, should still sign the user in and log the failure', async () => {
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('db blip'));
+
+      const response = await POST(createRequest());
+
+      expect(response.status).toBe(200);
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(loggers.auth.error).toHaveBeenCalledWith(
+        'Failed to provision Home drive during passkey sign-in',
+        expect.any(Error),
+        { userId: 'user-1' },
+      );
+    });
+
+    it('given a failed verification, should not provision anything', async () => {
+      vi.mocked(verifyAuthentication).mockResolvedValueOnce({
+        ok: false,
+        // @ts-expect-error - partial mock data
+        error: { code: 'VERIFICATION_FAILED' },
+      });
+
+      await POST(createRequest());
+
+      expect(provisionHomeDriveIfNeeded).not.toHaveBeenCalled();
     });
   });
 
@@ -629,7 +789,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
   describe('inviteToken handling (web JSON response)', () => {
     it('given an inviteToken consumed successfully, returns redirectUrl pointing to the invited drive with invited=1', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
-      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({ kind: 'drive', invitedDriveId: 'drive_xyz', invitedPageId: null, connectionId: null });
+      vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({ kind: 'drive', invitedDriveId: 'drive_xyz', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
       const body = await response.json();
@@ -642,7 +802,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('given an inviteToken whose consumption failed (e.g. TOKEN_CONSUMED race), returns redirectUrl carrying ?inviteError=<code> so the UI can surface the failure', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'TOKEN_CONSUMED',
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'TOKEN_CONSUMED',
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));
@@ -656,7 +816,7 @@ describe('POST /api/auth/passkey/authenticate', () => {
     it('given EMAIL_MISMATCH on invite consumption, surfaces ?inviteError=EMAIL_MISMATCH on the redirect', async () => {
       const { consumeAnyInviteIfPresent } = await import('@/lib/auth/native-invite-acceptance');
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'EMAIL_MISMATCH',
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'EMAIL_MISMATCH',
       });
 
       const response = await POST(createRequest({ ...validPayload, inviteToken: 'ps_invite_abc' }));

@@ -5,12 +5,19 @@ import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { UIMessage } from 'ai';
 import { InputPositioner, type InputPosition } from '@/components/ui/floating-input/InputPositioner';
 import { InputCard } from '@/components/ui/floating-input/InputCard';
+import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
+import type { AIErrorCause } from '@/lib/ai/shared/aiErrorCause';
 import { ChatMessagesArea, ChatMessagesAreaRef } from '@/components/ai/shared/chat/ChatMessagesArea';
 import { WelcomeContent } from './WelcomeContent';
 import { useEnterToSend } from '@/hooks/useEnterToSend';
 import type { PendingStream } from '@/stores/usePendingStreamsStore';
+import { resolveInputPosition, type InputPositionLatch } from '@/lib/ai/streams/resolveInputPosition';
 
 export interface ChatLayoutProps {
+  /** Conversation identity — latches the docked input position per conversation so a
+   *  mid-refetch frame (isLoading/hasMessages momentarily both false) can't flash the
+   *  input back to centered for a conversation that plainly has content. */
+  conversationId: string | null;
   /** Messages in the conversation */
   messages: UIMessage[];
   /** Current input value */
@@ -23,6 +30,8 @@ export interface ChatLayoutProps {
   onStop: () => void;
   /** Whether AI is currently streaming */
   isStreaming: boolean;
+  /** A Stop has been requested and has not resolved yet — see useStopStream/InputActions. */
+  isStopping?: boolean;
   /** Whether the chat is loading/initializing */
   isLoading: boolean;
   /** Whether the input is disabled */
@@ -33,8 +42,8 @@ export interface ChatLayoutProps {
   driveId?: string;
   /** Allow cross-drive mentions */
   crossDrive?: boolean;
-  /** Current error (if any) */
-  error?: Error | null;
+  /** Current typed error cause (epic leaf 6.5), if any */
+  cause?: AIErrorCause | null;
   /** Whether to show the error */
   showError?: boolean;
   /** Callback when error is cleared */
@@ -45,6 +54,12 @@ export interface ChatLayoutProps {
   welcomeSubtitle?: string;
   /** Custom welcome icon */
   welcomeIcon?: React.ReactNode;
+  /**
+   * Replaces the default `WelcomeContent` (title/subtitle/icon) entirely when
+   * provided — used by the Home screen's signal line. `welcomeTitle` /
+   * `welcomeSubtitle` / `welcomeIcon` are ignored while this is set.
+   */
+  welcomeContent?: React.ReactNode;
   /** Edit message handler */
   onEdit?: (messageId: string, newContent: string) => Promise<void>;
   /** Delete message handler */
@@ -61,6 +76,10 @@ export interface ChatLayoutProps {
   onUndoSuccess?: () => void;
   /** Callback for pull-up refresh (to check for missed messages) */
   onPullUpRefresh?: () => Promise<void>;
+  /** Scroll-near-top handler (epic leaf 6.6) — fetches the next older page. */
+  onScrollNearTop?: () => void;
+  /** Whether an older page is currently loading (inline indicator, not an error state). */
+  isLoadingOlder?: boolean;
 
   /** Render custom input - receives InputCard and current state */
   renderInput?: (props: {
@@ -69,6 +88,7 @@ export interface ChatLayoutProps {
     onSend: () => void;
     onStop: () => void;
     isStreaming: boolean;
+    isStopping?: boolean;
     disabled?: boolean;
     placeholder?: string;
     driveId?: string;
@@ -103,6 +123,8 @@ export interface ChatLayoutProps {
   showMcp?: boolean;
   /** Remote in-progress streams from other users (or other tabs) — rendered inline as assistant messages */
   remoteStreams?: PendingStream[];
+  findMatchSet?: Set<string>;
+  findCurrentMessageId?: string | null;
 }
 
 export interface ChatLayoutRef {
@@ -119,23 +141,26 @@ export interface ChatLayoutRef {
 export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
   (
     {
+      conversationId,
       messages,
       input,
       onInputChange,
       onSend,
       onStop,
       isStreaming,
+      isStopping = false,
       isLoading,
       disabled = false,
       placeholder = 'Type your message...',
       driveId,
       crossDrive = false,
-      error,
+      cause,
       showError = true,
       onClearError,
       welcomeTitle,
       welcomeSubtitle,
       welcomeIcon,
+      welcomeContent,
       onEdit,
       onDelete,
       onRetry,
@@ -144,6 +169,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       isReadOnly = false,
       onUndoSuccess,
       onPullUpRefresh,
+      onScrollNearTop,
+      isLoadingOlder,
       renderInput,
       mcpRunningServers = 0,
       mcpServerNames = [],
@@ -154,6 +181,8 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       onMcpServerToggle,
       showMcp = false,
       remoteStreams = [],
+      findMatchSet,
+      findCurrentMessageId,
     },
     ref
   ) => {
@@ -166,11 +195,22 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
       scrollToBottom: () => messagesRef.current?.scrollToBottom(),
     }));
 
-    // Determine position based on message state
+    // Determine position based on message state. The latch survives renders in a ref
+    // (not state) — it only ever gates a derived value computed fresh every render,
+    // never itself triggers one.
     const hasMessages = messages.length > 0;
     const hasRemoteStreams = remoteStreams.length > 0;
-    const inputPosition: InputPosition = hasMessages || isLoading || hasRemoteStreams ? 'docked' : 'centered';
+    const latchRef = useRef<InputPositionLatch>({ conversationId: null, docked: false });
+    const { position: inputPosition, latch } = resolveInputPosition({
+      conversationId,
+      isLoading,
+      hasMessages,
+      hasRemoteStreams,
+      latch: latchRef.current,
+    });
+    latchRef.current = latch;
     const isCentered = inputPosition === 'centered';
+    const showMessagesPanel = inputPosition === 'docked';
 
     // Default input renderer (placeholder - will be replaced with ChatInput in Phase 3)
     const defaultInputContent = (
@@ -216,6 +256,7 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
           onSend,
           onStop,
           isStreaming,
+          isStopping,
           disabled: disabled || isLoading,
           placeholder,
           driveId,
@@ -234,11 +275,15 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
 
     return (
       <div className="relative flex flex-col h-full overflow-hidden">
-        {/* Messages area - only visible when there are messages */}
+        {/* Messages area - only visible when docked. Keyed by conversationId (not a
+            static string) so a conversation switch is a clean remount rather than the
+            same instance silently swapping its content out from under an in-flight
+            exit/enter animation. */}
         <AnimatePresence>
-          {(hasMessages || isLoading || hasRemoteStreams) && (
+          {showMessagesPanel && (
             <motion.div
-              key="messages"
+              key={conversationId ?? 'new'}
+              data-testid="chat-layout-body"
               initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0 }}
@@ -258,7 +303,11 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
                 isReadOnly={isReadOnly}
                 onUndoSuccess={onUndoSuccess}
                 onPullUpRefresh={onPullUpRefresh}
+                onScrollNearTop={onScrollNearTop}
+                isLoadingOlder={isLoadingOlder}
                 remoteStreams={remoteStreams}
+                findMatchSet={findMatchSet}
+                findCurrentMessageId={findCurrentMessageId}
               />
             </motion.div>
           )}
@@ -276,12 +325,14 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
               className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
             >
               <div className="w-full max-w-[600px] px-6 -translate-y-48">
-                <WelcomeContent
-                  title={welcomeTitle}
-                  subtitle={welcomeSubtitle}
-                  icon={welcomeIcon}
-                  showIcon={false}
-                />
+                {welcomeContent ?? (
+                  <WelcomeContent
+                    title={welcomeTitle}
+                    subtitle={welcomeSubtitle}
+                    icon={welcomeIcon}
+                    showIcon={false}
+                  />
+                )}
               </div>
             </motion.div>
           )}
@@ -290,8 +341,9 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
         {/* Floating input */}
         <InputPositioner position={inputPosition}>
           <InputCard
-            error={showError && error ? error.message : null}
-            onClearError={onClearError}
+            errorSlot={
+              <ChatErrorBanner cause={cause} show={showError} onClearError={onClearError} />
+            }
           >
             {inputContent}
           </InputCard>
@@ -302,5 +354,3 @@ export const ChatLayout = React.forwardRef<ChatLayoutRef, ChatLayoutProps>(
 );
 
 ChatLayout.displayName = 'ChatLayout';
-
-export default ChatLayout;

@@ -41,7 +41,8 @@ vi.mock('google-auth-library', () => ({
 
 vi.mock('@/lib/repositories/auth-repository', () => ({
   authRepository: {
-    findUserByGoogleIdOrEmail: vi.fn(),
+    findUserByGoogleId: vi.fn(),
+    findUserByEmail: vi.fn(),
     findUserById: vi.fn(),
     createUser: vi.fn(),
     updateUser: vi.fn(),
@@ -109,8 +110,8 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/getting-started-drive', () => ({
-  provisionGettingStartedDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
+  provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: false }),
 }));
 
 vi.mock('@/lib/auth', () => ({
@@ -132,7 +133,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -153,7 +154,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
@@ -230,7 +231,7 @@ describe('POST /api/auth/google/one-tap', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -250,13 +251,14 @@ describe('POST /api/auth/google/one-tap', () => {
     vi.mocked(sessionService.revokeAllUserSessions).mockResolvedValue(0);
     vi.mocked(generateCSRFToken).mockReturnValue('mock-csrf-token');
 
-    vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
+    vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({ driveId: 'drive-123', created: false });
     vi.mocked(getClientIP).mockReturnValue('127.0.0.1');
     vi.mocked(createDeviceToken).mockResolvedValue('ps_dev_mock_token');
     vi.mocked(resolveGoogleAvatarImage).mockResolvedValue(null);
 
     // Default to new user flow
-    vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+    vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
     vi.mocked(authRepository.findUserById).mockResolvedValue(null);
     vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
     vi.mocked(authRepository.updateUser).mockResolvedValue(undefined);
@@ -401,7 +403,8 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('returns success for existing user', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -410,6 +413,85 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(response.status).toBe(200);
       expect(body.isNewUser).toBe(false);
       expect(authRepository.createUser).not.toHaveBeenCalled();
+    });
+
+    // SECURITY (M5): an unverified Google email must never link to / authenticate
+    // an existing magic-link / passkey account. Subject-id matches stay allowed.
+    describe('email_verified takeover guard (M5)', () => {
+      it('refuses to authenticate an existing account when email matches but email_verified is false', async () => {
+        // Token: unverified email, and NO googleId subject match — only the email
+        // collides with a pre-existing (e.g. magic-link) account.
+        mockVerifyIdToken.mockResolvedValue({
+          getPayload: () => ({
+            sub: 'attacker-google-sub',
+            email: 'victim@example.com',
+            name: 'Attacker',
+            email_verified: false,
+          }),
+        });
+        vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+        vi.mocked(authRepository.findUserByEmail).mockResolvedValue({
+          ...mockExistingUser,
+          email: 'victim@example.com',
+          googleId: null,
+        } as never);
+
+        const request = createOneTapRequest(validOneTapPayload);
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(403);
+        expect(body.success).toBeUndefined();
+        // No account was linked, created, or signed in.
+        expect(authRepository.updateUser).not.toHaveBeenCalled();
+        expect(authRepository.createUser).not.toHaveBeenCalled();
+        expect(sessionService.createSession).not.toHaveBeenCalled();
+      });
+
+      it('still authenticates when the subject id matches even if email_verified is false', async () => {
+        // A returning Google user whose token happens to carry email_verified:false
+        // is identified by the strong subject id — sign-in proceeds.
+        mockVerifyIdToken.mockResolvedValue({
+          getPayload: () => ({
+            sub: 'google-id-123',
+            email: 'test@example.com',
+            name: 'Test User',
+            email_verified: false,
+          }),
+        });
+        vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+        vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
+
+        const request = createOneTapRequest(validOneTapPayload);
+        const response = await POST(request);
+
+        expect(response.status).toBe(200);
+        expect(sessionService.createSession).toHaveBeenCalledTimes(1);
+        expect(authRepository.createUser).not.toHaveBeenCalled();
+      });
+
+      it('creates a fresh account for an unverified email with no existing match', async () => {
+        // No subject match and no email collision → normal new-user signup, even
+        // though the email is unverified (nothing to take over).
+        mockVerifyIdToken.mockResolvedValue({
+          getPayload: () => ({
+            sub: 'brand-new-sub',
+            email: 'brand-new@example.com',
+            name: 'New Person',
+            email_verified: false,
+          }),
+        });
+        vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+        vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
+
+        const request = createOneTapRequest(validOneTapPayload);
+        const response = await POST(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.isNewUser).toBe(true);
+        expect(authRepository.createUser).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('sets session cookie for web platform', async () => {
@@ -436,7 +518,7 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('returns redirectTo with provisioned drive when created', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockResolvedValue({
+      vi.mocked(provisionHomeDriveIfNeeded).mockResolvedValue({
         driveId: 'new-drive-id',
         created: true,
       });
@@ -491,7 +573,7 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(body.desktopTokens).toBeUndefined();
     });
 
-    it('calls createDeviceToken with platform desktop', async () => {
+    it('SEC-2 (partial) calls createDeviceToken with platform desktop and the Google single-factor evidence (D-OW-45)', async () => {
       const request = createOneTapRequest({
         credential: 'valid-credential',
         platform: 'desktop',
@@ -502,6 +584,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(createDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           userId: mockNewUser.id,
           deviceId: 'device-123',
           platform: 'desktop',
@@ -520,6 +603,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(createDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -550,7 +634,8 @@ describe('POST /api/auth/google/one-tap', () => {
   describe('user update scenarios', () => {
     it('updates existing user without googleId', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -562,7 +647,8 @@ describe('POST /api/auth/google/one-tap', () => {
     it('updates existing user with different avatar', async () => {
       const userWithOldAvatar = { ...mockExistingUser, image: '/old-avatar.jpg' };
       vi.mocked(resolveGoogleAvatarImage).mockResolvedValue('/new-avatar.jpg');
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithOldAvatar as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithOldAvatar as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce({ ...userWithOldAvatar, image: '/new-avatar.jpg' } as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -587,7 +673,8 @@ describe('POST /api/auth/google/one-tap', () => {
         image: null,
         emailVerified: new Date(),
       };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(fullyUpdatedUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(fullyUpdatedUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
@@ -609,14 +696,14 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('drive provisioning', () => {
     it('continues on drive provisioning error', async () => {
-      vi.mocked(provisionGettingStartedDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
+      vi.mocked(provisionHomeDriveIfNeeded).mockRejectedValueOnce(new Error('DB error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
 
       expect(response.status).toBe(200);
       expect(loggers.auth.error).toHaveBeenCalledWith(
-        'Failed to provision Getting Started drive',
+        'Failed to provision Home drive',
         new Error('DB error'),
         { userId: 'user-123', provider: 'google-one-tap' }
       );
@@ -687,7 +774,8 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('tracks login event for existing users', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(mockExistingUser as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
       await POST(request);
@@ -704,7 +792,8 @@ describe('POST /api/auth/google/one-tap', () => {
 
   describe('error handling', () => {
     it('returns 500 on unexpected exception', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByGoogleId).mockRejectedValueOnce(new Error('Database error'));
+      vi.mocked(authRepository.findUserByEmail).mockRejectedValueOnce(new Error('Database error'));
 
       const request = createOneTapRequest(validOneTapPayload);
       const response = await POST(request);
@@ -724,7 +813,8 @@ describe('POST /api/auth/google/one-tap', () => {
       vi.mocked(loggers.auth.info).mock.calls.find(call => call[0] === msg);
 
     it('masks email in "Creating new user via Google One Tap" log', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -737,7 +827,8 @@ describe('POST /api/auth/google/one-tap', () => {
     });
 
     it('does not include name in "New user created via Google One Tap" log', async () => {
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValue(null);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValue(null);
       vi.mocked(authRepository.createUser).mockResolvedValue(mockNewUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -752,7 +843,8 @@ describe('POST /api/auth/google/one-tap', () => {
 
     it('masks email in "Updating existing user via Google One Tap" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -766,7 +858,8 @@ describe('POST /api/auth/google/one-tap', () => {
 
     it('does not include name in "User updated via Google One Tap" log', async () => {
       const userWithoutGoogleId = { ...mockExistingUser, googleId: null };
-      vi.mocked(authRepository.findUserByGoogleIdOrEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByGoogleId).mockResolvedValueOnce(userWithoutGoogleId as never);
+      vi.mocked(authRepository.findUserByEmail).mockResolvedValueOnce(userWithoutGoogleId as never);
       vi.mocked(authRepository.findUserById).mockResolvedValueOnce(mockExistingUser as never);
 
       const request = createOneTapRequest(validOneTapPayload);
@@ -786,7 +879,7 @@ describe('POST /api/auth/google/one-tap', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createOneTapRequest({ ...validOneTapPayload, inviteToken: 'ps_invite_xyz' });
@@ -805,7 +898,7 @@ describe('POST /api/auth/google/one-tap', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 

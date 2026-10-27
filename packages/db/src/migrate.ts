@@ -1,56 +1,53 @@
 
+import { drizzle } from "drizzle-orm/node-postgres";
 import { readMigrationFiles } from "drizzle-orm/migrator";
-import { sql } from "drizzle-orm";
-import { db } from "./db";
+import { getMigrationPool } from "./db";
+import { assertOrgFundingCutoverOffline, assertPersonalBillingCutoverOffline } from "./personal-cutover-gate";
+import { runMigrations } from "./migration-runner";
 
 /**
- * Custom migration runner that executes each migration in its own transaction.
+ * Main-DB migration entrypoint. The per-migration-transaction logic lives in
+ * migration-runner.ts (shared with the Admin PG runner, migrate-admin.ts);
+ * this shell only binds the main journal: ./drizzle + the 'drizzle' schema.
  *
- * Drizzle's built-in migrate() runs ALL pending migrations in a single transaction,
- * which breaks when a migration adds an enum value (ALTER TYPE ADD VALUE) and a
- * later migration uses that value — PostgreSQL error 55P04:
- * "New enum values must be committed before they can be used."
- *
- * This runner commits each migration individually, fixing the enum issue.
+ * Runs on getMigrationPool(), NOT the app-throttled `db` — migrations run
+ * DDL that can legitimately exceed the app pool's statement_timeout/
+ * lock_timeout (see getMigrationPool()'s doc comment in db.ts).
  */
 async function main() {
   console.log("Running migrations...");
   console.log("DATABASE_URL:", process.env.DATABASE_URL ? "Set" : "Not set");
 
   const migrations = readMigrationFiles({ migrationsFolder: "drizzle" });
+  const migrationPool = getMigrationPool();
 
-  const migrationsSchema = "drizzle";
-  const migrationsTable = "__drizzle_migrations";
-
-  // Ensure schema and table exist
-  await db.execute(sql`CREATE SCHEMA IF NOT EXISTS ${sql.identifier(migrationsSchema)}`);
-  await db.execute(
-    sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)} (
-      id SERIAL PRIMARY KEY,
-      hash text NOT NULL,
-      created_at bigint
-    )`
-  );
-
-  // Get last applied migration
-  const dbMigrations = await db.execute(
-    sql`SELECT id, hash, created_at FROM ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)} ORDER BY created_at DESC LIMIT 1`
-  );
-  const lastDbMigration = dbMigrations.rows[0] as { id: number; hash: string; created_at: string } | undefined;
-
-  for (const migration of migrations) {
-    if (!lastDbMigration || Number(lastDbMigration.created_at) < migration.folderMillis) {
-      console.log(`  Applying: ${migration.hash.substring(0, 8)}... (${migration.folderMillis})`);
-
-      await db.transaction(async (tx) => {
-        for (const stmt of migration.sql) {
-          await tx.execute(sql.raw(stmt));
-        }
-        await tx.execute(
-          sql`INSERT INTO ${sql.identifier(migrationsSchema)}.${sql.identifier(migrationsTable)} ("hash", "created_at") VALUES (${migration.hash}, ${migration.folderMillis})`
-        );
-      });
-    }
+  try {
+    const retired = await migrationPool.query<{ present: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'users'
+          AND column_name = 'subscriptionGrandfathered'
+      ) AS present
+    `);
+    assertPersonalBillingCutoverOffline(retired.rows[0]?.present === true, process.env.BILLING_CUTOVER_OFFLINE);
+    const funding = await migrationPool.query<{ funding: boolean; subscriptions: boolean }>(`
+      SELECT to_regclass('org_subscription_funding') IS NOT NULL AS funding,
+             to_regclass('org_subscriptions') IS NOT NULL AS subscriptions
+    `);
+    const hasOrgSubscriptions = funding.rows[0]?.subscriptions === true
+      && ((await migrationPool.query(`SELECT 1 FROM org_subscriptions LIMIT 1`)).rowCount ?? 0) > 0;
+    assertOrgFundingCutoverOffline(
+      { fundingTableExists: funding.rows[0]?.funding === true, hasOrgSubscriptions },
+      process.env.BILLING_CUTOVER_OFFLINE,
+    );
+    await runMigrations(
+      drizzle(migrationPool),
+      migrations,
+      { migrationsSchema: "drizzle", migrationsTable: "__drizzle_migrations" },
+      console.log,
+    );
+  } finally {
+    await migrationPool.end();
   }
 
   console.log("Migrations finished.");

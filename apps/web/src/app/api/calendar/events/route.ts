@@ -1,32 +1,38 @@
 import { NextResponse, after } from 'next/server';
 import { z } from 'zod';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, gte, lte, inArray, isNull, asc } from '@pagespace/db/operators'
-import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar'
+import { eq, and, or, gte, lte, inArray, isNull, isNotNull, asc } from '@pagespace/db/operators'
+import { calendarEvents, eventAttendees, calendarEventDrives } from '@pagespace/db/schema/calendar'
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { desc } from '@pagespace/db/operators';
-import { createCalendarTriggerWorkflow, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
+import { upsertCalendarTriggerWorkflowInTx, validateCalendarAgentTrigger } from '@/lib/workflows/calendar-trigger-helpers';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, filterDrivesByMCPScope } from '@/lib/auth';
-import { isUserDriveMember, getDriveIdsForUser, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPCreateScope, isPrincipalDriveMember, getPrincipalDriveIds, canPrincipalViewPage, isScopedMCPAuth } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import { pushEventToGoogle } from '@/lib/integrations/google-calendar/push-service';
-import { isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { absoluteInstant } from '@/lib/validation/date-params';
+import { expandRecurringEvents } from '@/lib/workflows/recurrence-utils';
 import { CronExpressionParser } from 'cron-parser';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { filterDrivesForActor } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
-// Query parameters for listing events
+// Query parameters for listing events. The range bounds are absolute instants,
+// not wall-clock times — see `absoluteInstant`; an event's own start/end is the
+// opposite case and gets read in the event's timezone below.
 const listQuerySchema = z.object({
   context: z.enum(['user', 'drive']).default('user'),
   driveId: z.string().optional(),
-  startDate: z.coerce.date(),
-  endDate: z.coerce.date(),
+  startDate: absoluteInstant,
+  endDate: absoluteInstant,
   includePersonal: z.coerce.boolean().default(true),
 });
 
@@ -40,7 +46,11 @@ const createEventSchema = z.object({
   startAt: z.coerce.date(),
   endAt: z.coerce.date(),
   allDay: z.boolean().default(false),
-  timezone: z.string().default('UTC'),
+  // Deliberately optional, NOT `.default('UTC')`: the route resolves an absent
+  // timezone against the caller's profile (resolveTimezone), and a default here
+  // would erase the difference between "omitted" and "explicitly UTC" before the
+  // handler could tell them apart.
+  timezone: z.string().optional(),
   recurrenceRule: z.object({
     frequency: z.enum(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']),
     interval: z.number().int().min(1).default(1),
@@ -84,6 +94,7 @@ async function getTriggeredEventIds(eventIds: string[]): Promise<Set<string>> {
 
 /**
  * Expand workflow schedules into virtual calendar events within a date range.
+ * expandRecurringEvents is imported from recurrence-utils.
  * - Cron workflows: expand cron expression into future occurrences
  * - Past actual runs (any source): join workflow_runs and surface each fire
  *   that landed inside the requested window.
@@ -252,15 +263,28 @@ export async function GET(request: Request) {
       const scopeError = checkMCPDriveScope(auth, params.driveId);
       if (scopeError) return scopeError;
 
-      const canView = await isUserDriveMember(userId, params.driveId);
+      const canView = await isPrincipalDriveMember(auth, params.driveId);
       if (!canView) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
 
+      // Fetch events shared into this drive via the junction table
+      const sharedRows = await db
+        .select({ eventId: calendarEventDrives.eventId })
+        .from(calendarEventDrives)
+        .where(eq(calendarEventDrives.driveId, params.driveId));
+      const sharedEventIds = sharedRows.map(r => r.eventId);
+
+      // Drive-or-shared condition (reused for both attendee and event queries)
+      const driveOrSharedCondition = sharedEventIds.length > 0
+        ? or(eq(calendarEvents.driveId, params.driveId), inArray(calendarEvents.id, sharedEventIds))
+        : eq(calendarEvents.driveId, params.driveId);
+
       // Get event IDs where user is an attendee (for ATTENDEES_ONLY events)
+      // Covers both home-drive events and shared events.
       const attendeeEventsInDrive = await db
         .select({ eventId: eventAttendees.eventId })
         .from(eventAttendees)
@@ -268,21 +292,32 @@ export async function GET(request: Request) {
         .where(
           and(
             eq(eventAttendees.userId, userId),
-            eq(calendarEvents.driveId, params.driveId)
+            driveOrSharedCondition,
           )
         );
       const attendeeEventIdsInDrive = attendeeEventsInDrive.map(e => e.eventId);
 
       // Fetch drive events within date range, respecting visibility:
-      // - DRIVE: visible to all drive members
+      // - DRIVE: visible to all drive members (including shared drives)
       // - ATTENDEES_ONLY: only visible to creator or attendees
       // - PRIVATE: only visible to creator
+      // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
       const events = await db.query.calendarEvents.findMany({
         where: and(
-          eq(calendarEvents.driveId, params.driveId),
+          driveOrSharedCondition,
           eq(calendarEvents.isTrashed, false),
-          lte(calendarEvents.startAt, params.endDate),
-          gte(calendarEvents.endAt, params.startDate),
+          // Include recurring events that started before the window (they may
+          // have occurrences inside it); non-recurring must overlap normally.
+          or(
+            and(
+              lte(calendarEvents.startAt, params.endDate),
+              gte(calendarEvents.endAt, params.startDate),
+            ),
+            and(
+              isNotNull(calendarEvents.recurrenceRule),
+              lte(calendarEvents.startAt, params.endDate),
+            ),
+          ),
           or(
             // DRIVE visibility - visible to all drive members
             eq(calendarEvents.visibility, 'DRIVE'),
@@ -323,7 +358,11 @@ export async function GET(request: Request) {
 
       // Annotate events with agent trigger presence
       const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
-      const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+      const annotatedEvents = expandRecurringEvents(
+        events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+        params.startDate,
+        params.endDate,
+      );
 
       // Append workflow virtual events
       const workflowEvents = await getWorkflowVirtualEvents([params.driveId], params.startDate, params.endDate);
@@ -331,10 +370,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: annotatedEvents, workflowEvents });
     }
 
-    // User context: aggregate events from all sources
-    const allDriveIds = await getDriveIdsForUser(userId);
-    // Filter drives by MCP token scope
-    const driveIds = filterDrivesByMCPScope(auth, allDriveIds);
+    // User context: aggregate events from all sources. User parity: any drive
+    // member sees DRIVE-visible events, so the principal's membership universe
+    // is the gate (every scoped row requires the owner to still be a member: getPrincipalDriveIds).
+    const driveIds = await getPrincipalDriveIds(auth);
 
     // Build conditions for user's visible events:
     // 1. Personal events (driveId is null, created by user)
@@ -342,7 +381,9 @@ export async function GET(request: Request) {
     // 3. Events where user is an attendee
     const conditions = [];
 
-    // Personal events
+    // Personal events. Identity-scoped to the caller (createdById = userId),
+    // so this is safe even for a drive-scoped token: it can only ever see its
+    // own personal events this way, never another user's.
     if (params.includePersonal) {
       conditions.push(
         and(
@@ -352,7 +393,7 @@ export async function GET(request: Request) {
       );
     }
 
-    // Drive events
+    // Drive events (home drive ownership or shared via junction table)
     if (driveIds.length > 0) {
       conditions.push(
         and(
@@ -360,6 +401,21 @@ export async function GET(request: Request) {
           eq(calendarEvents.visibility, 'DRIVE')
         )
       );
+
+      // Events shared into any of the user's drives via junction table
+      const sharedIntoUserDrives = await db
+        .select({ eventId: calendarEventDrives.eventId })
+        .from(calendarEventDrives)
+        .where(inArray(calendarEventDrives.driveId, driveIds));
+      const sharedIntoUserEventIds = [...new Set(sharedIntoUserDrives.map(r => r.eventId))];
+      if (sharedIntoUserEventIds.length > 0) {
+        conditions.push(
+          and(
+            inArray(calendarEvents.id, sharedIntoUserEventIds),
+            eq(calendarEvents.visibility, 'DRIVE'),
+          )
+        );
+      }
     }
 
     // Get event IDs where user is an attendee
@@ -377,12 +433,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ events: [] });
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const events = await db.query.calendarEvents.findMany({
       where: and(
         or(...conditions),
         eq(calendarEvents.isTrashed, false),
-        lte(calendarEvents.startAt, params.endDate),
-        gte(calendarEvents.endAt, params.startDate)
+        // Include recurring events that started before the window (they may
+        // have occurrences inside it); non-recurring must overlap normally.
+        or(
+          and(
+            lte(calendarEvents.startAt, params.endDate),
+            gte(calendarEvents.endAt, params.startDate),
+          ),
+          and(
+            isNotNull(calendarEvents.recurrenceRule),
+            lte(calendarEvents.startAt, params.endDate),
+          ),
+        ),
       ),
       with: {
         createdBy: {
@@ -405,9 +472,35 @@ export async function GET(request: Request) {
       orderBy: [asc(calendarEvents.startAt)],
     });
 
+    // Scoped keys: the attendee branch above is identity-derived and can
+    // surface drive events outside the key's drive universe. Cap drive events
+    // at the principal's drives — mirrors the calendar tools. A driveless
+    // event the token's own user created is exempt from that cap (it has no
+    // drive to be out-of-scope of, and the token still acts on behalf of that
+    // exact identity) — but a driveless event belonging to a DIFFERENT user
+    // (reachable only via the attendee branch) stays capped out.
+    const principalDriveIdSet = new Set(driveIds);
+    const scopedEvents = isScopedMCPAuth(auth)
+      ? events.filter((e) =>
+          (e.driveId !== null && principalDriveIdSet.has(e.driveId)) ||
+          (e.driveId === null && e.createdById === userId)
+        )
+      : events;
+    // SEC-2/3 (D-OW-45): the attendee branch is identity-derived, so it can surface an event in an org drive whose
+    // sign-in policy this credential fails. An event in a drive is that drive's content: drop it here.
+    const signedInDrives = await filterDrivesForActor(
+      actorFromAuth(auth),
+      [...new Set(scopedEvents.flatMap((e) => (e.driveId ? [e.driveId] : [])))],
+    );
+    const visibleEvents = scopedEvents.filter((e) => e.driveId === null || signedInDrives.has(e.driveId));
+
     // Annotate events with agent trigger presence
-    const triggeredIds = await getTriggeredEventIds(events.map(e => e.id));
-    const annotatedEvents = events.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) }));
+    const triggeredIds = await getTriggeredEventIds(visibleEvents.map(e => e.id));
+    const annotatedEvents = expandRecurringEvents(
+      visibleEvents.map(e => ({ ...e, hasAgentTrigger: triggeredIds.has(e.id) })),
+      params.startDate,
+      params.endDate,
+    );
 
     // Append workflow virtual events
     const workflowEvents = await getWorkflowVirtualEvents(driveIds, params.startDate, params.endDate);
@@ -448,28 +541,42 @@ export async function POST(request: Request) {
 
     const data = parseResult.data;
 
-    // Apply timezone-aware parsing for naive ISO datetimes.
-    // When a client sends "2026-02-19T19:00:00" with timezone "America/Chicago",
-    // the time should be interpreted as 7pm Central, not 7pm UTC.
-    const startAt = (typeof body.startAt === 'string' && isNaiveISODatetime(body.startAt))
-      ? parseNaiveDatetimeInTimezone(body.startAt, data.timezone)
+    // Explicit body value wins, else the caller's profile timezone, else UTC —
+    // the same resolution the task and trigger routes use, so "tomorrow at 7pm"
+    // means one instant across the API rather than one per endpoint.
+    const timezone = await resolveTimezone(data.timezone, userId);
+
+    // Read the datetimes in the resolved timezone: "2026-02-19T19:00:00" with
+    // "America/Chicago" is 7pm Central, not 7pm UTC. Absolute values are
+    // unaffected — the zod-coerced value already agrees with them.
+    const startAt = typeof body.startAt === 'string'
+      ? parseDatetimeInTimezone(body.startAt, timezone)
       : data.startAt;
-    const endAt = (typeof body.endAt === 'string' && isNaiveISODatetime(body.endAt))
-      ? parseNaiveDatetimeInTimezone(body.endAt, data.timezone)
+    const endAt = typeof body.endAt === 'string'
+      ? parseDatetimeInTimezone(body.endAt, timezone)
       : data.endAt;
 
-    // Check MCP create scope (scoped tokens can only create in their allowed drives)
-    const createScopeError = checkMCPCreateScope(auth, data.driveId ?? null);
-    if (createScopeError) return createScopeError;
+    // Check MCP create scope (scoped tokens can only create in their allowed drives).
+    // Only applies when a driveId is actually supplied — checkMCPCreateScope treats a
+    // null targetDriveId as "creating a brand-new drive" (its real caller is POST
+    // /api/drives). A personal (driveless) event isn't scoped to any drive, so a
+    // scoped token may always create one for its own user.
+    if (data.driveId) {
+      const createScopeError = checkMCPCreateScope(auth, data.driveId);
+      if (createScopeError) return createScopeError;
+    }
 
     // Validate drive access if driveId is provided
     if (data.driveId) {
-      const canAccess = await isUserDriveMember(userId, data.driveId);
+      // User parity: any accepted member may create drive events; the principal
+      // membership check applies the same rule to keys (explicit MEMBER roles
+      // included — a member user could do this, so a member key can too).
+      const canAccess = await isPrincipalDriveMember(auth, data.driveId);
       if (!canAccess) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), data.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
     }
 
@@ -490,13 +597,6 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      if (data.recurrenceRule) {
-        return NextResponse.json(
-          { error: 'Agent triggers are not supported for recurring events' },
-          { status: 400 }
-        );
-      }
-
       try {
         const validated = await validateCalendarAgentTrigger(db, {
           driveId: data.driveId,
@@ -508,7 +608,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: message }, { status: 400 });
       }
 
-      const canViewAgent = await canUserViewPage(userId, agentPageId);
+      const canViewAgent = await canPrincipalViewPage(auth, agentPageId);
       if (!canViewAgent) {
         return NextResponse.json(
           { error: 'Agent not found in this drive' },
@@ -528,11 +628,14 @@ export async function POST(request: Request) {
         );
       }
 
-      // For drive events, verify all proposed attendees are drive members
+      // For drive events, verify all proposed attendees are drive members.
+      // Uses getDriveRecipientUserIds (includes drive owner) since the event
+      // has no junction rows yet — getAllMemberUserIdsForEvent would add no
+      // shared-drive members for a brand-new event.
       if (data.driveId) {
-        const driveMemberIds = await getDriveMemberUserIds(data.driveId);
-        const driveMemberSet = new Set(driveMemberIds);
-        const nonMembers = otherAttendees.filter(id => !driveMemberSet.has(id));
+        const memberIds = await getDriveRecipientUserIds(data.driveId);
+        const memberSet = new Set(memberIds);
+        const nonMembers = otherAttendees.filter(id => !memberSet.has(id));
 
         if (nonMembers.length > 0) {
           return NextResponse.json(
@@ -557,7 +660,11 @@ export async function POST(request: Request) {
           startAt,
           endAt,
           allDay: data.allDay,
-          timezone: data.timezone,
+          // Store the RESOLVED zone, not the raw body field: the column is the
+          // event's own timezone from here on (PATCH and rendering read it back),
+          // so letting it fall to the schema default would re-introduce the bug
+          // on the next edit.
+          timezone,
           recurrenceRule: data.recurrenceRule ?? null,
           visibility: data.visibility,
           color: data.color,
@@ -588,19 +695,20 @@ export async function POST(request: Request) {
       }
 
       if (data.agentTrigger && agentPageId && data.driveId) {
-        await createCalendarTriggerWorkflow({
-          tx,
+        await upsertCalendarTriggerWorkflowInTx(tx, {
           driveId: data.driveId,
           scheduledById: userId,
           calendarEventId: created.id,
           triggerAt: startAt,
-          timezone: data.timezone,
+          timezone,
           agentTrigger: {
             agentPageId,
             prompt: data.agentTrigger.prompt,
             instructionPageId: data.agentTrigger.instructionPageId ?? null,
             contextPageIds: data.agentTrigger.contextPageIds ?? [],
           },
+          recurrenceRule: data.recurrenceRule ?? null,
+          recurrenceExceptions: [],
         });
       }
 

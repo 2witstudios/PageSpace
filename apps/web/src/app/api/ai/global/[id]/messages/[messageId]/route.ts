@@ -4,11 +4,13 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { globalConversationRepository } from '@/lib/repositories/global-conversation-repository';
-import { processMessageContentUpdate } from '@/lib/repositories/chat-message-repository';
 import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { broadcastAiMessageEdited, broadcastAiMessageDeleted } from '@/lib/websocket/socket-utils';
 import { resolveTriggeredBy } from '@/lib/websocket/broadcast-triggered-by';
-import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import {
+  messageRepository,
+  processMessageContentUpdate,
+} from '@/lib/repositories/message-repository';
+import { getState, invalidate } from '@/lib/ai/core/compaction/compaction-repository';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -24,7 +26,7 @@ export async function PATCH(
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'edit', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -50,9 +52,19 @@ export async function PATCH(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+    }
+
+    // A 'streaming' row is mid-flight: its content is a placeholder the generation is about
+    // to overwrite via the execute-end/onFinish upsert. Editing it now would be silently
+    // clobbered the moment that upsert lands. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be edited yet' },
+        { status: 409 }
+      );
     }
 
     // Store original content for activity logging
@@ -61,35 +73,42 @@ export async function PATCH(
     // Process content update (preserving structure if needed)
     const updatedContent = processMessageContentUpdate(message.content, content);
 
-    // Update the message content
-    await globalConversationRepository.updateMessageContent(messageId, updatedContent);
+    // Update the message content via the repository choke point: one
+    // transaction with the rev bump, then the legacy chat:message_edited
+    // broadcast + authoritative conversation:message_updated event — both
+    // emitted from the repository, not this route (Agent-Session SSoT §3).
+    await messageRepository.editGlobalMessage({
+      messageId,
+      conversationId,
+      ownerUserId: userId,
+      updatedContent,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
-    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageEdited({
-          messageId,
-          pageId: globalChannelId(userId),
-          conversationId,
-          parts: [{ type: 'text', text: updatedContent }],
-          editedAt: new Date().toISOString(),
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast global message edit', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(conversationId),
-        });
+    // Invalidate compaction when a message in this conversation is edited (stale summary guard).
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId, { source: 'global' });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range (later edits
+      // leave the still-valid summary in place).
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'global' });
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after global message edit', err as Error);
+    }
 
     // Log activity for audit trail (non-blocking)
     try {
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_update', {
         id: messageId,
-        pageId: conversationId, // Global conversations use conversationId as identifier
+        // Global conversations aren't page-backed - conversationId belongs to the
+        // `conversations` table, so writing it to activity_logs.pageId violates the
+        // pages FK. Linkage is carried by aiConversationId + metadata.conversationType.
+        pageId: null,
         driveId: null, // Global conversations are user-level, not drive-level
         conversationType: 'global',
       }, actorInfo, {
@@ -140,7 +159,7 @@ export async function DELETE(
     // Authenticate
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'global_chat_message', resourceId: 'delete', details: { reason: 'auth_failed', method: 'DELETE', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -157,41 +176,58 @@ export async function DELETE(
     }
 
     // Get the message to verify it belongs to this conversation
-    const message = await globalConversationRepository.getMessageById(conversationId, messageId);
+    const message = await messageRepository.getMessageInConversation(conversationId, messageId);
     if (!message) {
       return NextResponse.json({ error: 'Message not found' }, { status: 404 });
+    }
+
+    // A 'streaming' row is mid-flight: deleting it now would race the execute-end/onFinish
+    // upsert, which does not check isActive and would resurrect the row's content into an
+    // inactive-but-visible-again state. See Server Stream Durability epic PR 2.
+    if (message.status === 'streaming') {
+      return NextResponse.json(
+        { error: 'This message is still generating and cannot be deleted yet' },
+        { status: 409 }
+      );
     }
 
     // Store content for audit trail before deletion
     const deletedContent = message.content;
 
-    // Soft delete the message
-    await globalConversationRepository.softDeleteMessage(messageId);
+    // Soft delete via the repository choke point (rev bump + legacy
+    // chat:message_deleted + authoritative conversation:message_deleted,
+    // with the newest-surviving-message lastMessageAt recompute preserved).
+    await messageRepository.softDeleteGlobalMessage({
+      messageId,
+      conversationId,
+      ownerUserId: userId,
+      legacyTriggeredBy: await resolveTriggeredBy(userId, request),
+    });
 
-    // Broadcast to remote viewers (other tabs of this user). Failure must never break the request.
-    void (async () => {
-      try {
-        const triggeredBy = await resolveTriggeredBy(userId, request);
-        await broadcastAiMessageDeleted({
-          messageId,
-          pageId: globalChannelId(userId),
-          conversationId,
-          triggeredBy,
-        });
-      } catch (broadcastError) {
-        loggers.api.error('Failed to broadcast global message delete', broadcastError as Error, {
-          messageId: maskIdentifier(messageId),
-          conversationId: maskIdentifier(conversationId),
-        });
+    // Invalidate compaction when a message in this conversation is deleted (stale summary guard).
+    // Awaited so the stale summary cannot be read by a concurrent request before we return.
+    try {
+      const state = await getState(conversationId, { source: 'global' });
+      // No row: a first compaction may be in flight — write the invalidation
+      // tombstone so its pending insert loses. Row present: invalidate only
+      // when the touched message is inside the compacted range (later edits
+      // leave the still-valid summary in place).
+      if (!state || (state.compactedUpToCreatedAt && message.createdAt <= state.compactedUpToCreatedAt)) {
+        await invalidate(conversationId, { source: 'global' });
       }
-    })();
+    } catch (err) {
+      loggers.api.error('Failed to invalidate compaction state after global message delete', err as Error);
+    }
 
     // Log activity for audit trail (non-blocking)
     try {
       const actorInfo = await getActorInfo(userId);
       logMessageActivity(userId, 'message_delete', {
         id: messageId,
-        pageId: conversationId, // Global conversations use conversationId as identifier
+        // Global conversations aren't page-backed - conversationId belongs to the
+        // `conversations` table, so writing it to activity_logs.pageId violates the
+        // pages FK. Linkage is carried by aiConversationId + metadata.conversationType.
+        pageId: null,
         driveId: null, // Global conversations are user-level, not drive-level
         conversationType: 'global',
       }, actorInfo, {

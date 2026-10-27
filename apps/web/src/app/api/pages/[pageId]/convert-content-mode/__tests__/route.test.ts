@@ -79,6 +79,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
 }));
 vi.mock('@pagespace/lib/services/page-version-service', () => ({
@@ -108,6 +109,7 @@ vi.mock('marked', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../convert-content-mode/route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -413,4 +415,13 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       expect(Array.isArray(body.error)).toBe(true);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

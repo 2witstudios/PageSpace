@@ -1,12 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'motion/react';
 import { Mail } from 'lucide-react';
 import {
-  AuthShell,
+  AuthLayout,
   AuthDivider,
   OAuthButtons,
   GoogleOneTap,
@@ -14,18 +14,24 @@ import {
   MagicLinkForm,
   ExternalAuthWaiting,
 } from '@/components/auth';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { useAuthCSRF } from '@/hooks/useAuthCSRF';
 import { useOAuthSignIn } from '@/hooks/useOAuthSignIn';
 import type { InviteContextData } from '@/lib/auth/invite-resolver';
+import { getPreferredBrowserName } from '@/lib/auth/browser-detection';
+import { useInAppBrowserNotice } from '@/hooks/useInAppBrowserNotice';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
 
 interface SignUpClientProps {
   inviteToken?: string;
   inviteContext?: InviteContextData;
+  returnUrl?: string;
 }
 
-export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) {
+export function SignUpClient({ inviteToken, inviteContext, returnUrl }: SignUpClientProps) {
   const [error, setError] = useState<string | null>(null);
   const [showMagicLink, setShowMagicLink] = useState(false);
+  const inAppInfo = useInAppBrowserNotice();
   const router = useRouter();
   const { csrfToken, refreshToken } = useAuthCSRF();
   const [passkeyLoading, setPasskeyLoading] = useState(false);
@@ -41,22 +47,55 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
     onStart: () => setError(null),
     onError: (msg) => setError(msg),
     ...(inviteToken && { inviteToken }),
+    ...(returnUrl && { returnUrl }),
   });
 
   const isAnyLoading = isGoogleLoading || isAppleLoading || passkeyLoading;
 
+  // A genuine in-app browser cannot complete Google's web OAuth, so open the
+  // magic-link form for it. The Capacitor shell never reports in-app (native
+  // Google works there), so this leaves the app's sign-in screen alone.
+  useEffect(() => {
+    if (inAppInfo.isInApp) setShowMagicLink(true);
+  }, [inAppInfo.isInApp]);
+
+  const browserName = getPreferredBrowserName() ?? 'your browser';
+  const appLabel = inAppInfo.appName ?? 'this app';
+  // The v3 look is only applied when Imago is enabled; classic markup is unchanged.
+  const v3 = isV3AuthEnabled();
+
   return (
-    <AuthShell>
+    <AuthLayout>
       <GoogleOneTap
-        autoSelect={true}
+        autoSelect={false}
         cancelOnTapOutside={true}
         context="signup"
         {...(inviteToken && { inviteToken })}
       />
 
+      {inAppInfo.isInApp && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="mb-6"
+        >
+          <Alert variant="warning">
+            <AlertTitle>Google sign-in is blocked in {appLabel}</AlertTitle>
+            <AlertDescription>
+              Use a magic link below, or open this page in {browserName} to sign in with Google.
+            </AlertDescription>
+          </Alert>
+        </motion.div>
+      )}
+
       {inviteContext && (
         <motion.div
-          className="mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40"
+          className={
+            v3
+              ? 'mb-6 rounded-[10px] border border-[oklch(0.50_0.16_235/0.22)] bg-[oklch(0.50_0.16_235/0.07)] px-3.5 py-3 text-[13.5px] leading-[1.5]'
+              : 'mb-6 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40'
+          }
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.3 }}
@@ -69,8 +108,8 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
               </>
             ) : (
               <>
-                You&apos;re joining{' '}
-                <span className="font-semibold text-blue-700 dark:text-blue-300">
+                {v3 ? 'You’re joining' : "You're joining"}{' '}
+                <span className={v3 ? 'font-semibold text-[oklch(0.38_0.16_235)]' : 'font-semibold text-blue-700 dark:text-blue-300'}>
                   {inviteContext.driveName}
                 </span>
                 , invited by{' '}
@@ -87,7 +126,13 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
       >
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+        <h1
+          className={
+            v3
+              ? 'text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]'
+              : 'text-3xl font-bold tracking-tight text-gray-900 dark:text-white'
+          }
+        >
           Get on the same page.
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -115,12 +160,13 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
             csrfToken={csrfToken}
             refreshToken={refreshToken}
             onEmailExists={() => {
-              router.push('/auth/signin');
+              router.push(returnUrl ? `/auth/signin?next=${encodeURIComponent(returnUrl)}` : '/auth/signin');
             }}
             onLoadingChange={setPasskeyLoading}
             disabled={isAnyLoading}
             inviteToken={inviteToken}
             lockedEmail={inviteContext?.email}
+            {...(returnUrl && { nextPath: returnUrl })}
           />
         </motion.div>
       )}
@@ -153,7 +199,7 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
       >
         {showMagicLink ? (
           <div id="magic-link-form" className="mt-2">
-            <MagicLinkForm {...(inviteToken && { inviteToken })} />
+            <MagicLinkForm {...(inviteToken && { inviteToken })} {...(returnUrl && { nextPath: returnUrl })} />
           </div>
         ) : (
           <button
@@ -178,13 +224,13 @@ export function SignUpClient({ inviteToken, inviteContext }: SignUpClientProps) 
         <p className="text-sm text-muted-foreground">
           Already have an account?{' '}
           <Link
-            href="/auth/signin"
+            href={returnUrl ? `/auth/signin?next=${encodeURIComponent(returnUrl)}` : '/auth/signin'}
             className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300"
           >
             Log in
           </Link>
         </p>
       </motion.div>
-    </AuthShell>
+    </AuthLayout>
   );
 }

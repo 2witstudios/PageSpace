@@ -1,0 +1,250 @@
+/**
+ * credit-backfill — reconciliation shell run by a cron. Guarantees every billable
+ * AI call decrements the prepaid balance exactly once, even across crashes and
+ * mid-flight deploys. Two sweeps, planned by the pure computeBackfillActions:
+ *   1. ledger rows stuck 'pending' (claimed but never settled) -> re-settle
+ *   2. usage rows with no ledger entry at all (consume never ran) -> consume now
+ * Local-only: makes NO Stripe calls.
+ */
+
+import { db } from '@pagespace/db/db';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { and, eq, lt, gt, inArray, isNull, notInArray } from '@pagespace/db/operators';
+import { isBillingEnabled } from '../deployment-mode';
+import { computeBackfillActions } from './credit-core';
+import { MACHINE_MARKUP_BPS } from './credit-pricing';
+import { consumeCredits, markUsageUnattributed, settlePendingLedgerRow } from './credit-consume';
+import { emitCreditsUpdated } from './credit-emit';
+import { loggers } from '../logging/logger-config';
+import type { AIUsageSource } from '../monitoring/usage-source';
+import { errorLogFields } from '../logging/error-cause';
+
+// Per-source markup floor for orphan recovery (see computeBackfillActions):
+// adding a second per-source floor is a one-line addition here, not a change
+// to the pure planning function.
+const MARKUP_BPS_OVERRIDES_BY_SOURCE: Partial<Record<AIUsageSource, number>> = {
+  terminal: MACHINE_MARKUP_BPS,
+};
+
+const BATCH = 200;
+// Providers whose usage is metering-exempt (no credit_ledger row is ever created for them).
+// Must mirror METERING_EXEMPT_PROVIDERS in packages/lib/src/ai/model-defaults.ts plus
+// 'pagespace', the legacy provider alias used before the glm rename.
+const METERING_EXEMPT_PROVIDERS = ['glm', 'pagespace'];
+const GRACE_MS = 5 * 60 * 1000; // let an in-flight consume finish before sweeping
+// Safety cap on drain passes so a perpetually-stuck row (one that keeps failing
+// to settle and so re-appears in every sweep) can't spin the cron unbounded.
+// BATCH * MAX_PASSES per sweep is the most one cron run will clear.
+const MAX_PASSES = 50;
+
+export interface BackfillResult {
+  retried: number;
+  orphans: number;
+  /**
+   * Usage rows that cost money but name no wallet (WAL-6b fail closed): never charged to anyone
+   * by the sweep — they are reported here and logged for reconciliation.
+   */
+  unattributed: number;
+  /** Stale holds reclaimed this run (a crashed stream's reservation never settled). */
+  expiredHolds: number;
+}
+
+/** Max concurrent balance broadcasts when reclaiming swept holds (bounds the fan-out). */
+const EMIT_CONCURRENCY = 10;
+
+/**
+ * Push fresh balances to many users without blocking the caller. Runs in bounded
+ * batches so a large hold sweep doesn't open one socket per user simultaneously.
+ * `emitCreditsUpdated` swallows its own errors, so allSettled never rejects; this is
+ * launched fire-and-forget (the app server is long-running, so detached work runs to
+ * completion). Exported-free: internal to the backfill shell.
+ */
+async function emitBalancesBestEffort(userIds: string[]): Promise<void> {
+  for (let i = 0; i < userIds.length; i += EMIT_CONCURRENCY) {
+    await Promise.allSettled(
+      userIds.slice(i, i + EMIT_CONCURRENCY).map((uid) => emitCreditsUpdated(uid)),
+    );
+  }
+}
+
+/**
+ * Delete holds past their expiresAt and report how many went. Holds from a crashed or
+ * abandoned call that never reached consumeCredits would otherwise reserve spend (and
+ * count against the free in-flight cap) forever; deleting them frees that spendable
+ * back up. A live, still-running call's hold has a future expiresAt and is untouched.
+ * Idempotent: re-running deletes nothing new. Never throws.
+ *
+ * The cron sweeps every expired hold (via backfillCredits). `userIds` narrows the sweep
+ * to those users' holds, for a caller that must not touch anyone else's (a test on a
+ * shared database); an empty list sweeps nothing rather than widening to every hold.
+ */
+export async function sweepExpiredHolds(opts: { now?: Date; userIds?: string[] } = {}): Promise<number> {
+  if (!isBillingEnabled()) return 0;
+  if (opts.userIds && opts.userIds.length === 0) return 0;
+  const now = opts.now ?? new Date();
+  const expired = lt(creditHolds.expiresAt, now);
+  try {
+    const swept = await db
+      .delete(creditHolds)
+      .where(opts.userIds ? and(expired, inArray(creditHolds.userId, opts.userIds)) : expired)
+      .returning({ id: creditHolds.id, userId: creditHolds.userId });
+    // Reclaiming a stale hold raises that user's spendable back up — push the fresh
+    // balance so the navbar recovers without a refresh. This is the backstop for a
+    // call that was interrupted before settlement: its dangling reservation finally
+    // clears here. One emit per distinct user. Fire-and-forget (void) so a slow or
+    // unreachable realtime server (each emit self-times-out at 5s) never serializes
+    // its delay across users and stalls the pending/orphan reconciliation after it;
+    // the fan-out is bounded so a large sweep doesn't open one socket per user at once.
+    const affected = [...new Set(swept.map((h) => h.userId))];
+    void emitBalancesBestEffort(affected);
+    return swept.length;
+  } catch (error) {
+    loggers.ai.warn('credit hold expiry sweep failed', errorLogFields(error));
+    return 0;
+  }
+}
+
+export async function backfillCredits(): Promise<BackfillResult> {
+  if (!isBillingEnabled()) return { retried: 0, orphans: 0, unattributed: 0, expiredHolds: 0 };
+
+  const now = new Date();
+  const cutoff = new Date(now.getTime() - GRACE_MS);
+
+  // Sweep abandoned holds FIRST, every user's (see sweepExpiredHolds).
+  const expiredHolds = await sweepExpiredHolds({ now });
+
+  let retried = 0;
+  let orphanCount = 0;
+  let unattributed = 0;
+
+  // Fingerprint of the rows a pass fetched. If two consecutive passes fetch the
+  // exact same set, nothing settled between them and re-running can't make
+  // progress — e.g. balance-less 'pending' rows that decrementAndSettle leaves
+  // untouched (credit-consume.ts), which would otherwise be re-attempted every
+  // pass up to MAX_PASSES. Stop instead of churning the same unprocessable rows.
+  let prevFingerprint = '';
+
+  // Drain the backlog: each settled/consumed row drops out of the next sweep
+  // (pending rows flip off 'pending'; orphans gain a ledger row), so re-querying
+  // makes forward progress. Keep going until a pass returns fewer than BATCH from
+  // both sweeps (nothing more to fetch) or stops making progress, bounded by
+  // MAX_PASSES.
+  let pass = 0;
+  for (; pass < MAX_PASSES; pass++) {
+    const pending = await db
+      .select({ id: creditLedger.id })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.consumeStatus, 'pending'), lt(creditLedger.createdAt, cutoff)))
+      .limit(BATCH);
+
+    // Reconcile usage rows that never decremented the balance — including
+    // success:false rows that still carry a non-zero cost (tokens consumed before
+    // a mid-stream error: real provider spend that must be billed). Rows with
+    // no/zero cost are excluded; there is nothing to draw down for them.
+    const orphans = await db
+      .select({
+        aiUsageLogId: aiUsageLogs.id,
+        userId: aiUsageLogs.userId,
+        cost: aiUsageLogs.cost,
+        // Recover the per-source markup (e.g. terminal's own floor) that the
+        // original call never got to apply — see computeBackfillActions.
+        source: aiUsageLogs.source,
+        // WAL-5 / WAL-9: the wallet the call was charged to and what it was for, recorded
+        // with the usage row, so recovery settles exactly there — an org pool's compute
+        // never lands on the recorded person's own wallet, nor counts toward their seat.
+        walletId: aiUsageLogs.walletId,
+        metadata: aiUsageLogs.metadata,
+        // SPEND-10: the automation the call ran for, so the re-settled spend is still listed as it.
+        automationRef: aiUsageLogs.automationRef,
+      })
+      .from(aiUsageLogs)
+      .leftJoin(creditLedger, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
+      .where(
+        and(
+          isNull(creditLedger.id),
+          gt(aiUsageLogs.cost, 0),
+          lt(aiUsageLogs.timestamp, cutoff),
+          notInArray(aiUsageLogs.provider, METERING_EXEMPT_PROVIDERS),
+          // WAL-6b: a row already found to name no wallet is terminal — never rescanned.
+          isNull(aiUsageLogs.unattributedAt),
+        ),
+      )
+      .limit(BATCH);
+
+    if (pending.length === 0 && orphans.length === 0) break;
+
+    const actions = computeBackfillActions(
+      pending,
+      orphans.map((o) => ({
+        aiUsageLogId: o.aiUsageLogId,
+        userId: o.userId,
+        costDollars: o.cost ?? 0,
+        source: o.source,
+        walletId: o.walletId,
+        metadata: o.metadata,
+        automationRef: o.automationRef,
+      })),
+      MARKUP_BPS_OVERRIDES_BY_SOURCE,
+    );
+
+    for (const action of actions) {
+      try {
+        if (action.kind === 'retry_pending') {
+          await settlePendingLedgerRow(action.ledgerId);
+          retried++;
+        } else if (action.kind === 'apply_orphan') {
+          await consumeCredits({
+            aiUsageLogId: action.aiUsageLogId,
+            userId: action.userId,
+            costDollars: action.costDollars,
+            markupBpsOverride: action.markupBpsOverride,
+            walletId: action.walletId,
+            spendKind: action.spendKind,
+            ...(action.fallbackFromWalletId ? { fallbackFromWalletId: action.fallbackFromWalletId } : {}),
+            ...(action.automationRef ? { automationRef: action.automationRef } : {}),
+          });
+          orphanCount++;
+        } else {
+          // WAL-6b fail closed: no wallet was chosen for this usage, so the sweep charges no one —
+          // never the recorded person by default. Marked terminal (counted on the admin billing
+          // panel for reconciliation) and reported once, here.
+          loggers.ai.error('billable AI usage names no wallet — not charged, left for reconciliation', new Error('unattributed usage'), {
+            aiUsageLogId: action.aiUsageLogId,
+            userId: action.userId,
+            costDollars: action.costDollars,
+          });
+          await markUsageUnattributed(action.aiUsageLogId, now);
+          unattributed++;
+        }
+      } catch (error) {
+        loggers.ai.warn('credit backfill action failed', {
+          ...errorLogFields(error),
+          action,
+        });
+      }
+    }
+
+    // A short pass means both sweeps are drained; stop. A full pass on either
+    // sweep means more rows may remain — loop again (up to MAX_PASSES).
+    if (pending.length < BATCH && orphans.length < BATCH) break;
+
+    // Sorted so the comparison is order-independent (the sweeps have no ORDER BY).
+    const fingerprint =
+      pending.map((p) => p.id).sort().join(',') +
+      '|' +
+      orphans.map((o) => o.aiUsageLogId).sort().join(',');
+    if (fingerprint === prevFingerprint) break; // no forward progress — give up this run
+    prevFingerprint = fingerprint;
+  }
+
+  // Loop ran to the cap rather than draining/stalling — a real backlog remains.
+  if (pass === MAX_PASSES) {
+    loggers.ai.debug('credit backfill hit MAX_PASSES; backlog may remain', {
+      retried,
+      orphans: orphanCount,
+    });
+  }
+
+  return { retried, orphans: orphanCount, unattributed, expiredHolds };
+}

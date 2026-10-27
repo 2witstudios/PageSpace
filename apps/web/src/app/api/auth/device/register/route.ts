@@ -57,6 +57,8 @@ export async function POST(req: Request) {
     }
 
     const deviceToken = await createWebDeviceToken({
+      // The device token stands for the session that asked for it: the same ceremony evidence (D-OW-45).
+      authentication: auth.authentication ?? null,
       userId: auth.userId,
       deviceId,
       tokenVersion: user.tokenVersion,

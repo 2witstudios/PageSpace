@@ -303,9 +303,8 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
         onClick={handleNavigate}
         disabled={!pageId}
         className={cn(
-          "w-full flex items-center justify-between px-3 py-2 bg-muted/30 border-b",
-          "hover:bg-muted/50 transition-colors text-left",
-          !pageId && "cursor-default"
+          "w-full flex items-center justify-between px-3 py-2 bg-muted/30 border-b transition-colors text-left",
+          pageId ? "hover:bg-muted/50" : "cursor-default pointer-events-none"
         )}
       >
         <div className="flex items-center gap-2 overflow-hidden">
@@ -346,7 +345,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
 
       {/* Content with contextual diff */}
       <div
-        className="bg-white dark:bg-gray-900 overflow-auto"
+        className="bg-card overflow-auto"
         style={{ maxHeight: `${maxHeight}px` }}
       >
         <div className="text-gray-900 dark:text-gray-100">

@@ -4,10 +4,15 @@ vi.mock('../session-repository', () => ({
   sessionRepository: {
     findUserById: vi.fn(),
     findActiveSession: vi.fn(),
+    // D5: the failure path now does a secondary any-state lookup to classify the reason.
+    // Defaults to undefined ⇒ 'not_found' ⇒ validateSession still returns null (parity).
+    findSessionByHashAnyState: vi.fn(),
     insertSession: vi.fn(),
     touchSession: vi.fn(),
     revokeByHash: vi.fn(),
     revokeAllForUser: vi.fn(),
+    revokeWebForUser: vi.fn(),
+    revokeAdminForUser: vi.fn(),
     revokeForUserDevice: vi.fn(),
     deleteExpired: vi.fn(),
   },
@@ -50,7 +55,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      const token = await service.createSession({
+      const token = await service.createSession({ authentication: null,
         userId: 'user-1',
         type: 'user',
         scopes: ['read', 'write'],
@@ -75,7 +80,7 @@ describe('SessionService', () => {
       vi.mocked(sessionRepository.findUserById).mockResolvedValue(undefined);
 
       await expect(
-        service.createSession({
+        service.createSession({ authentication: null,
           userId: 'nonexistent',
           type: 'user',
           scopes: [],
@@ -91,7 +96,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'service', scopes: ['read'], expiresInMs: 60000,
       });
 
@@ -104,7 +109,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'mcp', scopes: ['read'], expiresInMs: 60000,
       });
 
@@ -117,11 +122,27 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1', type: 'device', scopes: ['read'], expiresInMs: 60000,
       });
 
       expect(generateOpaqueToken).toHaveBeenCalledWith('dev');
+    });
+
+    it('createSession_withSocketType_generatesTokenWithSockPrefix', async () => {
+      vi.mocked(sessionRepository.findUserById).mockResolvedValue({
+        id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0,
+      });
+      vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
+
+      await service.createSession({ authentication: null,
+        userId: 'user-1', type: 'socket', scopes: [], expiresInMs: 60000,
+      });
+
+      expect(generateOpaqueToken).toHaveBeenCalledWith('sock');
+      expect(sessionRepository.insertSession).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'socket' }),
+      );
     });
   });
 
@@ -207,6 +228,7 @@ describe('SessionService', () => {
         adminRoleVersion: 0, type: 'user', scopes: ['read', 'write'],
         expiresAt, lastUsedAt: null, createdAt: new Date(),
         resourceType: null, resourceId: null, driveId: null,
+        authenticatedAt: null, authenticationAssurance: null,
         user: { id: 'user-1', tokenVersion: 1, role: 'admin', adminRoleVersion: 0, suspendedAt: null },
       });
 
@@ -224,8 +246,41 @@ describe('SessionService', () => {
         resourceType: undefined,
         resourceId: undefined,
         driveId: undefined,
+        authentication: null,
       });
       expect(sessionRepository.touchSession).toHaveBeenCalledWith('hashed_ps_sess_valid');
+    });
+
+    it('validateSession_withExpectedTypeMismatch_returnsNullWithoutSideEffects', async () => {
+      vi.mocked(isValidTokenFormat).mockReturnValue(true);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'socket', scopes: [],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
+        resourceType: null, resourceId: null, driveId: null,
+        user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: null },
+      });
+
+      const result = await service.validateSession('ps_sock_valid', { expectedType: 'user' });
+
+      expect(result).toBeNull();
+      expect(sessionRepository.revokeByHash).not.toHaveBeenCalled();
+      expect(sessionRepository.touchSession).not.toHaveBeenCalled();
+    });
+
+    it('validateSession_withMatchingExpectedType_returnsClaims', async () => {
+      vi.mocked(isValidTokenFormat).mockReturnValue(true);
+      vi.mocked(sessionRepository.findActiveSession).mockResolvedValue({
+        id: 'sess-1', userId: 'user-1', tokenHash: 'h', tokenVersion: 1,
+        adminRoleVersion: 0, type: 'socket', scopes: [],
+        expiresAt: new Date(Date.now() + 60000), lastUsedAt: null, createdAt: new Date(),
+        resourceType: null, resourceId: null, driveId: null,
+        user: { id: 'user-1', tokenVersion: 1, role: 'user', adminRoleVersion: 0, suspendedAt: null },
+      });
+
+      const result = await service.validateSession('ps_sock_valid', { expectedType: 'socket' });
+
+      expect(result?.type).toBe('socket');
     });
   });
 
@@ -261,6 +316,30 @@ describe('SessionService', () => {
     });
   });
 
+  describe('revokeWebUserSessions', () => {
+    it('delegates to revokeWebForUser (excludes admin sessions) and returns the count', async () => {
+      vi.mocked(sessionRepository.revokeWebForUser).mockResolvedValue(2);
+
+      const count = await service.revokeWebUserSessions('user-1', 'magic_link_login');
+
+      expect(count).toBe(2);
+      expect(sessionRepository.revokeWebForUser).toHaveBeenCalledWith('user-1', 'magic_link_login');
+      expect(sessionRepository.revokeAllForUser).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revokeAdminUserSessions', () => {
+    it('delegates to revokeAdminForUser (only admin sessions) and returns the count', async () => {
+      vi.mocked(sessionRepository.revokeAdminForUser).mockResolvedValue(1);
+
+      const count = await service.revokeAdminUserSessions('user-1', 'admin_login');
+
+      expect(count).toBe(1);
+      expect(sessionRepository.revokeAdminForUser).toHaveBeenCalledWith('user-1', 'admin_login');
+      expect(sessionRepository.revokeAllForUser).not.toHaveBeenCalled();
+    });
+  });
+
   describe('revokeDeviceSessions', () => {
     it('revokeDeviceSessions_withActiveDeviceSessions_returnsRevokedCount', async () => {
       vi.mocked(sessionRepository.revokeForUserDevice).mockResolvedValue(2);
@@ -287,7 +366,7 @@ describe('SessionService', () => {
       });
       vi.mocked(sessionRepository.insertSession).mockResolvedValue(undefined);
 
-      await service.createSession({
+      await service.createSession({ authentication: null,
         userId: 'user-1',
         type: 'user',
         scopes: ['*'],

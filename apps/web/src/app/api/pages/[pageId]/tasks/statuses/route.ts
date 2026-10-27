@@ -1,12 +1,14 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
+import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { seedInheritedTaskStatusConfigs, resolveInheritedStatusSeed } from '@/services/api/task-sync-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
-import { canUserEditPage, canUserViewPage } from '@pagespace/lib/permissions/permissions'
+import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -17,6 +19,24 @@ function slugify(name: string): string {
     .trim()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+const MAX_WIP_LIMIT = 999;
+const WIP_LIMIT_ERROR = `wipLimit must be a positive integer no greater than ${MAX_WIP_LIMIT}, or null`;
+
+/**
+ * Normalise a status's advisory WIP limit from an unvalidated body.
+ * Absent (undefined) or null → null (no limit); PUT checks presence itself so an
+ * absent field leaves the stored value alone. A positive integer up to
+ * MAX_WIP_LIMIT is kept. Anything else is invalid. The limit is advisory only:
+ * no write path ever refuses a status move because a column is over it.
+ */
+function parseWipLimit(input: unknown): { ok: true; value: number | null } | { ok: false } {
+  if (input === undefined || input === null) return { ok: true, value: null };
+  if (typeof input !== 'number' || !Number.isInteger(input) || input < 1 || input > MAX_WIP_LIMIT) {
+    return { ok: false };
+  }
+  return { ok: true, value: input };
 }
 
 /**
@@ -37,9 +57,9 @@ export async function GET(
   const scopeError = await checkMCPPageScope(auth, pageId);
   if (scopeError) return scopeError;
 
-  const canView = await canUserViewPage(userId, pageId);
+  const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
   const taskList = await db.query.taskLists.findFirst({
@@ -47,14 +67,29 @@ export async function GET(
   });
 
   if (!taskList) {
-    // Return default statuses if no task list exists yet
+    // No list row yet, so preview what this page WOULD be seeded with rather
+    // than the four built-ins. Since sub-lists inherit their ancestor's
+    // vocabulary, the built-ins are the right answer only for a page with no
+    // task-list ancestor — everywhere else this screen was naming four statuses
+    // that were never going to exist, one function above the POST that seeds the
+    // inherited set. A read: resolveInheritedStatusSeed only walks and reads.
+    //
+    // It discloses an ancestor's status names to a principal who may not be able
+    // to view that ancestor — but only the same names this very route returns
+    // once anything has initialised the list, with no ancestor check either.
+    // The preview is earlier, not wider. (See the note on
+    // resolveInheritedStatusSeed for why the seed itself is not gated.) The walk
+    // is bounded at STATUS_INHERITANCE_MAX_DEPTH and runs only for a page that
+    // has no list row yet, which is once.
+    const seed = await resolveInheritedStatusSeed(db, pageId);
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'task_status_config', resourceId: pageId, details: { action: 'list_status_configs' } });
 
     return NextResponse.json({
-      statusConfigs: DEFAULT_TASK_STATUSES.map((s, i) => ({
+      statusConfigs: seed.map((s, i) => ({
         id: `default-${s.slug}`,
         taskListId: '',
         ...s,
+        wipLimit: null,
         position: i,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -62,6 +97,7 @@ export async function GET(
     });
   }
 
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const statusConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -90,13 +126,17 @@ export async function POST(
   const postScopeError = await checkMCPPageScope(auth, pageId);
   if (postScopeError) return postScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
   const { name, color, group, position } = body;
+  const wipLimitResult = parseWipLimit(body.wipLimit);
+  if (!wipLimitResult.ok) {
+    return NextResponse.json({ error: WIP_LIMIT_ERROR }, { status: 400 });
+  }
 
   if (!name || typeof name !== 'string' || name.trim().length === 0) {
     return NextResponse.json({ error: 'Name is required' }, { status: 400 });
@@ -124,13 +164,13 @@ export async function POST(
         status: 'pending',
       }).returning();
 
-      // Create default status configs
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: created.id,
-          ...s,
-        }))
-      );
+      // Inherit, not defaults. This is a lazy-init like every other, and the
+      // vocabulary is decided permanently by whichever path touches the page
+      // first — so a sub-list whose statuses are opened here before anyone
+      // reads it would otherwise be stamped with the four built-ins while its
+      // ancestor defines its own, and every later PATCH against an inherited
+      // slug 400s.
+      await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
 
       return created;
     });
@@ -171,6 +211,7 @@ export async function POST(
     color,
     group,
     position: newPosition,
+    wipLimit: wipLimitResult.value,
   }).returning();
 
   // Broadcast update
@@ -205,9 +246,9 @@ export async function PUT(
   const putScopeError = await checkMCPPageScope(auth, pageId);
   if (putScopeError) return putScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const body = await req.json();
@@ -226,6 +267,8 @@ export async function PUT(
   }
 
   // Validate each status
+  // undefined = leave the stored limit untouched (field absent from the body).
+  const wipLimits: (number | null | undefined)[] = [];
   for (const s of statuses) {
     if (!s.id) {
       return NextResponse.json({ error: 'Each status must have an id' }, { status: 400 });
@@ -235,6 +278,18 @@ export async function PUT(
     }
     if (!['todo', 'in_progress', 'done'].includes(s.group)) {
       return NextResponse.json({ error: 'Each status group must be: todo, in_progress, or done' }, { status: 400 });
+    }
+    // Only an explicit wipLimit (number or null) is written. Clients that predate
+    // the field (e.g. StatusConfigManager) PUT statuses without it, and that must
+    // not wipe a limit set elsewhere.
+    if (s !== null && typeof s === 'object' && 'wipLimit' in s) {
+      const wip = parseWipLimit(s.wipLimit);
+      if (!wip.ok) {
+        return NextResponse.json({ error: WIP_LIMIT_ERROR }, { status: 400 });
+      }
+      wipLimits.push(wip.value);
+    } else {
+      wipLimits.push(undefined);
     }
   }
 
@@ -248,6 +303,7 @@ export async function PUT(
           color: s.color,
           group: s.group,
           position: s.position ?? i,
+          ...(wipLimits[i] !== undefined ? { wipLimit: wipLimits[i] } : {}),
         })
         .where(and(
           eq(taskStatusConfigs.id, s.id),
@@ -257,6 +313,7 @@ export async function PUT(
   });
 
   // Fetch updated configs
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const updatedConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
     orderBy: [asc(taskStatusConfigs.position)],
@@ -294,9 +351,9 @@ export async function DELETE(
   const deleteScopeError = await checkMCPPageScope(auth, pageId);
   if (deleteScopeError) return deleteScopeError;
 
-  const canEdit = await canUserEditPage(userId, pageId);
+  const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You need edit permission to manage statuses' }, { status: 403 }));
   }
 
   const { searchParams } = new URL(req.url);
@@ -327,14 +384,16 @@ export async function DELETE(
     return NextResponse.json({ error: 'Status config not found' }, { status: 404 });
   }
 
-  // Check if any tasks use this status
-  const tasksWithStatus = await db.query.taskItems.findMany({
-    where: and(
-      eq(taskItems.taskListId, taskList.id),
+  // Check if any tasks in this list use this status (join through pages.parentId)
+  const tasksWithStatus = await db
+    .select({ id: taskItems.id })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(
+      eq(pages.parentId, pageId),
+      eq(pages.isTrashed, false),
       eq(taskItems.status, statusToDelete.slug),
-    ),
-    columns: { id: true },
-  });
+    ));
 
   if (tasksWithStatus.length > 0 && !migrateToSlug) {
     return NextResponse.json({
@@ -358,6 +417,7 @@ export async function DELETE(
   }
 
   // Ensure at least one status remains in each group
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
   const allConfigs = await db.query.taskStatusConfigs.findMany({
     where: eq(taskStatusConfigs.taskListId, taskList.id),
   });

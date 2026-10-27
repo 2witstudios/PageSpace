@@ -4,13 +4,8 @@ import { assert } from './riteway';
 import { getManagedProviderKey } from '../ai-utils';
 
 const ENV_KEYS = [
-  'ANTHROPIC_DEFAULT_API_KEY',
   'OPENAI_DEFAULT_API_KEY',
-  'GOOGLE_AI_DEFAULT_API_KEY',
-  'XAI_DEFAULT_API_KEY',
   'OPENROUTER_DEFAULT_API_KEY',
-  'GLM_CODER_DEFAULT_API_KEY',
-  'MINIMAX_DEFAULT_API_KEY',
   'OLLAMA_BASE_URL',
   'LMSTUDIO_BASE_URL',
   'AZURE_OPENAI_API_KEY',
@@ -22,88 +17,91 @@ describe('getManagedProviderKey', () => {
     for (const key of ENV_KEYS) delete process.env[key];
   });
 
-  test('Anthropic with env unset', () => {
+  test('cloud vendor with OpenRouter env unset', () => {
     assert({
-      given: 'ANTHROPIC_DEFAULT_API_KEY is unset',
-      should: 'return null',
+      given: 'OPENROUTER_DEFAULT_API_KEY is unset',
+      should: 'return null for a cloud vendor',
       actual: getManagedProviderKey('anthropic'),
       expected: null,
     });
   });
 
-  test('Anthropic with env set', () => {
-    process.env.ANTHROPIC_DEFAULT_API_KEY = 'sk-ant-managed';
+  test('Anthropic resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
     assert({
-      given: 'ANTHROPIC_DEFAULT_API_KEY is set',
-      should: 'return the env key without a baseUrl',
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the anthropic vendor to the OpenRouter key',
       actual: getManagedProviderKey('anthropic'),
-      expected: { apiKey: 'sk-ant-managed' },
+      expected: { apiKey: 'or-key' },
     });
   });
 
-  test('OpenAI with env set', () => {
+  test('OpenAI resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+    assert({
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the openai vendor to the OpenRouter key',
+      actual: getManagedProviderKey('openai'),
+      expected: { apiKey: 'or-key' },
+    });
+  });
+
+  test('Google resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+    assert({
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the google vendor to the OpenRouter key',
+      actual: getManagedProviderKey('google'),
+      expected: { apiKey: 'or-key' },
+    });
+  });
+
+  test('xAI resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+    assert({
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the xai vendor to the OpenRouter key',
+      actual: getManagedProviderKey('xai'),
+      expected: { apiKey: 'or-key' },
+    });
+  });
+
+  test('MiniMax (a cloud vendor) resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+    assert({
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the minimax vendor to the OpenRouter key',
+      actual: getManagedProviderKey('minimax'),
+      expected: { apiKey: 'or-key' },
+    });
+  });
+
+  test('The literal openrouter backend resolves to the OpenRouter key', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
+    assert({
+      given: 'OPENROUTER_DEFAULT_API_KEY is set',
+      should: 'resolve the openrouter backend to that key',
+      actual: getManagedProviderKey('openrouter'),
+      expected: { apiKey: 'or-key' },
+    });
+  });
+
+  test('Voice provider uses the real OpenAI key, not OpenRouter', () => {
     process.env.OPENAI_DEFAULT_API_KEY = 'sk-openai';
     assert({
       given: 'OPENAI_DEFAULT_API_KEY is set',
-      should: 'return the env key',
-      actual: getManagedProviderKey('openai'),
+      should: 'resolve openai_voice to the direct OpenAI key',
+      actual: getManagedProviderKey('openai_voice'),
       expected: { apiKey: 'sk-openai' },
     });
   });
 
-  test('Google with env set', () => {
-    process.env.GOOGLE_AI_DEFAULT_API_KEY = 'google-managed';
+  test('Voice provider with env unset returns null', () => {
     assert({
-      given: 'GOOGLE_AI_DEFAULT_API_KEY is set',
-      should: 'return the env key',
-      actual: getManagedProviderKey('google'),
-      expected: { apiKey: 'google-managed' },
-    });
-  });
-
-  test('xAI with env set', () => {
-    process.env.XAI_DEFAULT_API_KEY = 'xai-managed';
-    assert({
-      given: 'XAI_DEFAULT_API_KEY is set',
-      should: 'return the env key',
-      actual: getManagedProviderKey('xai'),
-      expected: { apiKey: 'xai-managed' },
-    });
-  });
-
-  test('OpenRouter shares its env var with openrouter_free', () => {
-    process.env.OPENROUTER_DEFAULT_API_KEY = 'or-key';
-    assert({
-      given: 'OPENROUTER_DEFAULT_API_KEY is set',
-      should: 'resolve openrouter to that key',
-      actual: getManagedProviderKey('openrouter'),
-      expected: { apiKey: 'or-key' },
-    });
-    assert({
-      given: 'OPENROUTER_DEFAULT_API_KEY is set',
-      should: 'resolve openrouter_free to the same key',
-      actual: getManagedProviderKey('openrouter_free'),
-      expected: { apiKey: 'or-key' },
-    });
-  });
-
-  test('GLM Coder Plan with env set', () => {
-    process.env.GLM_CODER_DEFAULT_API_KEY = 'glm-coder';
-    assert({
-      given: 'GLM_CODER_DEFAULT_API_KEY is set',
-      should: 'return the env key for the glm provider',
-      actual: getManagedProviderKey('glm'),
-      expected: { apiKey: 'glm-coder' },
-    });
-  });
-
-  test('MiniMax with env set', () => {
-    process.env.MINIMAX_DEFAULT_API_KEY = 'minimax-key';
-    assert({
-      given: 'MINIMAX_DEFAULT_API_KEY is set',
-      should: 'return the env key',
-      actual: getManagedProviderKey('minimax'),
-      expected: { apiKey: 'minimax-key' },
+      given: 'OPENAI_DEFAULT_API_KEY is unset',
+      should: 'return null for openai_voice',
+      actual: getManagedProviderKey('openai_voice'),
+      expected: null,
     });
   });
 
@@ -114,6 +112,15 @@ describe('getManagedProviderKey', () => {
       should: 'return baseUrl without an apiKey',
       actual: getManagedProviderKey('ollama'),
       expected: { baseUrl: 'http://localhost:11434' },
+    });
+  });
+
+  test('Ollama with base URL env unset returns null', () => {
+    assert({
+      given: 'OLLAMA_BASE_URL is unset',
+      should: 'return null',
+      actual: getManagedProviderKey('ollama'),
+      expected: null,
     });
   });
 
@@ -154,11 +161,11 @@ describe('getManagedProviderKey', () => {
     });
   });
 
-  test('Empty env values are treated as unset', () => {
-    process.env.ANTHROPIC_DEFAULT_API_KEY = '';
+  test('Empty OpenRouter env value is treated as unset', () => {
+    process.env.OPENROUTER_DEFAULT_API_KEY = '';
     assert({
-      given: 'ANTHROPIC_DEFAULT_API_KEY is set to empty string',
-      should: 'return null',
+      given: 'OPENROUTER_DEFAULT_API_KEY is set to empty string',
+      should: 'return null for a cloud vendor',
       actual: getManagedProviderKey('anthropic'),
       expected: null,
     });

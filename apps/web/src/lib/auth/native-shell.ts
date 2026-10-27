@@ -1,0 +1,36 @@
+// Edge-safe leaf (no imports): consumed by middleware.ts, which must never
+// pull in the Node-only '@/lib/auth' barrel.
+
+/**
+ * True when the request comes from one of the PageSpace Electron desktop
+ * shells, detected by the `Electron/<version>` product token Chromium appends
+ * to the shell's UA PLUS the app's own name token, which is whatever
+ * `app.getName()` yields and which the desktop app never overrides:
+ * `PageSpace/<version>` or `PageSpaceCoder/<version>` in packaged builds
+ * (electron-builder `productName`), or `desktop/<version>` in dev
+ * (package.json `name`). Requiring the app token keeps third-party Electron
+ * browsers on the normal signin redirect; accepting every spelling keeps every
+ * shipped AND dev shell covered — a false negative here would reintroduce the
+ * desktop logout bounce, so the app-token check is deliberately the OR of all
+ * known spellings.
+ *
+ * Two traps for anyone adding the next shell. Chromium STRIPS SPACES from the
+ * app name when it builds the UA, so productName "PageSpace Coder" ships as
+ * `PageSpaceCoder/` — the spaced spelling never appears and matches nothing.
+ * And `PageSpaceCoder/` does not contain `PageSpace/`, so a second app is not
+ * covered by the first app's token. Take the expected value from a real
+ * packaged build, not from the productName.
+ *
+ * Used only to relax the middleware's page-navigation signin bounce — never an
+ * auth boundary. The shell navigates with cookies while its real credential
+ * (the Bearer token) lives in the main process and is attached per API call,
+ * so a missing session cookie says nothing about whether the desktop user is
+ * authenticated. A spoofed UA therefore gains nothing: the shell pages are
+ * public, and every API route still validates its own credentials.
+ */
+const APP_NAME_TOKENS = ['PageSpace/', 'PageSpaceCoder/', 'desktop/'];
+
+export function isElectronShell(userAgent: string | null | undefined): boolean {
+  if (!userAgent || !userAgent.includes('Electron/')) return false;
+  return APP_NAME_TOKENS.some((token) => userAgent.includes(token));
+}

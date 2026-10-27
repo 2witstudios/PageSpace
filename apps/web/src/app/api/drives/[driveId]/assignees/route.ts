@@ -1,12 +1,15 @@
+import { canPrincipalViewPage, getPrincipalDriveAccess } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { getUserDriveAccess, canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators'
+import { eq, and, isNotNull, ne } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { driveMembers, userProfiles } from '@pagespace/db/schema/members';
+import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Unified assignee type for task assignment
@@ -49,12 +52,12 @@ export async function GET(
       );
     }
 
-    const hasDriveAccess = await getUserDriveAccess(userId, driveId);
+    const hasDriveAccess = await getPrincipalDriveAccess(auth, driveId);
     if (!hasDriveAccess) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'You don\'t have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
 
     // Fetch members with their profiles
@@ -78,7 +81,8 @@ export async function GET(
       .leftJoin(userProfiles, eq(driveMembers.userId, userProfiles.userId))
       .where(and(
         eq(driveMembers.driveId, driveId),
-        isNotNull(driveMembers.acceptedAt)
+        isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST')
       ));
 
     // Fetch AI agents in the drive
@@ -99,7 +103,7 @@ export async function GET(
     const agentAccessResults = await Promise.all(
       allAgents.map(async (agent) => ({
         agent,
-        canView: await canUserViewPage(userId, agent.id),
+        canView: await canPrincipalViewPage(auth, agent.id),
       }))
     );
     const accessibleAgents = agentAccessResults
@@ -109,8 +113,11 @@ export async function GET(
     // Build unified assignee list
     const assignees: Assignee[] = [];
 
-    // Add members (filter out those with null user)
-    const validMembers = members.filter((m) => m.user);
+    // Add members (filter out those with null user). Decrypt PII at the edge so
+    // the assignee display shows plaintext name/email.
+    const validMembers = await Promise.all(
+      members.filter((m) => m.user).map(async (m) => ({ ...m, user: await decryptUserRow(m.user) })),
+    );
     const memberUserIds = new Set(validMembers.map((m) => m.userId));
 
     for (const member of validMembers) {
@@ -144,11 +151,13 @@ export async function GET(
 
       if (ownerData.length > 0 && ownerData[0].user) {
         const owner = ownerData[0];
+        // Decrypt PII at the edge so the owner display shows plaintext name/email.
+        const ownerUser = await decryptUserRow(owner.user);
         assignees.unshift({
-          id: owner.user.id,
+          id: ownerUser.id,
           type: 'user',
-          name: owner.profile?.displayName || owner.user.name || owner.user.email,
-          image: owner.profile?.avatarUrl || owner.user.image || null,
+          name: owner.profile?.displayName || ownerUser.name || ownerUser.email,
+          image: owner.profile?.avatarUrl || ownerUser.image || null,
         });
       }
     }

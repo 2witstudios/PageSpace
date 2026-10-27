@@ -1,6 +1,20 @@
 name: Docker Images
 
 on:
+  workflow_dispatch:
+    inputs:
+      build_only:
+        description: 'Build candidate images without changing latest tags or deploying'
+        type: boolean
+        default: false
+      topology_run_id:
+        description: 'Original topology artifact run ID for a fresh-runner billing recovery'
+        type: string
+        default: ''
+      billing_cutover:
+        description: 'Offline final billing cutover: remove old app machines before migration'
+        type: boolean
+        default: false
   push:
     branches: [master]
     tags: ['v*.*.*']
@@ -8,14 +22,48 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'docker/**'
-      - 'pnpm-lock.yaml'
+      # A BUILD INPUT THAT WAS NOT A TRIGGER, and the asymmetry was silent.
+      # `apps/web/Dockerfile.migrate` does `COPY scripts ./scripts` — one-off
+      # scripts are meant to run on the migrate image, and its own comments say
+      # so — but a script-only change matched none of the paths above, so this
+      # workflow never ran for it, the image was never rebuilt, and the
+      # published tag never gained the file.
+      #
+      # Proved on 2026-08-10: `registry.fly.io/pagespace-web:migrate` did not
+      # contain `scripts/backfill-agent-workspace-nodes.ts` at all. An absolute
+      # path failed identically, which rules out a working-directory
+      # explanation — the file was simply absent.
+      #
+      # The consequence was not theoretical. The node-tree epic's rollout says
+      # to run its backfill "as a one-off machine on the migrate image", and the
+      # drop that follows (`0256`) is gated on that run exiting 0. With the
+      # script absent, that gate could not be executed at all — the one check
+      # between the drop and a workspace whose membership lives only in the
+      # columns being dropped.
+      #
+      # This is a class of bug rather than one missing file: every future
+      # script-only change would go the same way, invisibly, with CI green.
+      - 'scripts/**'
+      - 'bun.lock'
       - '.github/workflows/docker-images.yml'
 
 env:
+  RELEASE_IMAGE_TAG: ${{ inputs.billing_cutover == true && format('sha-{0}', github.sha) || 'latest' }}
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/2witstudios/pagespace
 
+# Serialize deploys: back-to-back merges to master queue instead of racing on the
+# mutable :latest tag (the slower run would otherwise win and land prod on an older
+# commit). Queue rather than cancel so an in-flight migration/deploy is never interrupted.
+concurrency:
+  group: deploy-fly-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   build-and-push:
     name: Build & Push ${{ matrix.service }}
     runs-on: ubuntu-latest
@@ -30,21 +78,23 @@ jobs:
           - service: web
             dockerfile: apps/web/Dockerfile
             context: .
+            # Realtime is same-origin: Caddy routes pagespace.ai/socket.io/* → realtime.
+            # NEXT_PUBLIC_* are baked at build time — the fly.web.toml runtime [env] cannot
+            # override them, so the storage cap MUST match (1024), not the old VPS-era 20.
             build_args: |
               NEXT_PUBLIC_APP_URL=https://pagespace.ai
               NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
-              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=20
+              NEXT_PUBLIC_ADMIN_APP_URL=https://admin.pagespace.ai
+              NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB=1024
               NEXT_PUBLIC_GOOGLE_OAUTH_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
               NEXT_PUBLIC_GOOGLE_OAUTH_IOS_CLIENT_ID=636969838408-0jbv7gq9793m0uchdrjlr8v1k6m5lh59.apps.googleusercontent.com
-          - service: marketing
-            dockerfile: apps/marketing/Dockerfile
-            context: .
-            build_args: |
-              NEXT_PUBLIC_MARKETING_URL=https://pagespace.ai
-              NEXT_PUBLIC_APP_URL=https://pagespace.ai
+              NEXT_PUBLIC_PUBLISH_EDGE_IPV4=137.66.4.209
+              NEXT_PUBLIC_PUBLISH_EDGE_IPV6=2a09:8280:1::118:198f:0
+              NEXT_PUBLIC_PUBLISH_EDGE_CNAME_TARGET=pagespace-proxy.fly.dev
               NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
-              NEXT_PUBLIC_GOOGLE_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
-              NEXT_PUBLIC_ENABLE_ONE_TAP=true
+              # Imago rollout flag, inlined at build time: true since the IMG-11.2
+              # flip, with IMAGO_ENABLED=true set on the imago app's runtime env.
+              NEXT_PUBLIC_IMAGO_ENABLED=true
           - service: migrate
             dockerfile: apps/web/Dockerfile.migrate
             context: .
@@ -61,9 +111,31 @@ jobs:
             dockerfile: docker/cron/Dockerfile
             context: docker/cron
             build_args: ""
+          - service: admin
+            dockerfile: apps/admin/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_WEB_APP_URL=https://pagespace.ai
+          # Built and published only: /imago production routing (and so any
+          # deploy-fly step for it) is human-only, IMG-11.1.
+          - service: imago
+            dockerfile: apps/imago/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_REALTIME_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+          - service: marketing
+            dockerfile: apps/marketing/Dockerfile
+            context: .
+            build_args: |
+              NEXT_PUBLIC_MARKETING_URL=https://pagespace.ai
+              NEXT_PUBLIC_APP_URL=https://pagespace.ai
+              NEXT_PUBLIC_COOKIE_DOMAIN=.pagespace.ai
+              NEXT_PUBLIC_GOOGLE_CLIENT_ID=636969838408-p2v0ov9j4klle7pj9uedo8339tikl2ii.apps.googleusercontent.com
+              NEXT_PUBLIC_ENABLE_ONE_TAP=true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -81,7 +153,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ inputs.build_only != true }}
+            type=raw,value=sha-${{ github.sha }}
             type=sha,prefix=sha-,format=short
             type=semver,pattern=v{{version}}
 
@@ -95,4 +168,427 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          build-args: ${{ matrix.build_args }}
+          # Secrets cannot be referenced in strategy.matrix — inject them here
+          # for the web/admin services only; empty strings are ignored by buildx.
+          # Admin gets its own Sentry project (NEXT_PUBLIC_SENTRY_DSN_ADMIN /
+          # SENTRY_PROJECT_ADMIN secrets) so its issue stream stays separate
+          # from web's, reusing the shared SENTRY_ORG/SENTRY_AUTH_TOKEN.
+          build-args: |
+            ${{ matrix.build_args }}
+            ${{ matrix.service == 'web' && format('NEXT_PUBLIC_SENTRY_DSN={0}', secrets.NEXT_PUBLIC_SENTRY_DSN) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_AUTH_TOKEN={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
+            ${{ matrix.service == 'web' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT) || '' }}
+            ${{ matrix.service == 'admin' && format('NEXT_PUBLIC_SENTRY_DSN={0}', secrets.NEXT_PUBLIC_SENTRY_DSN_ADMIN) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_AUTH_TOKEN={0}', secrets.SENTRY_AUTH_TOKEN) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_ORG={0}', secrets.SENTRY_ORG) || '' }}
+            ${{ matrix.service == 'admin' && format('SENTRY_PROJECT={0}', secrets.SENTRY_PROJECT_ADMIN) || '' }}
+
+  deploy-fly:
+    name: Deploy to Fly.io
+    needs: [build-and-push, ci]
+    runs-on: ubuntu-latest
+    environment: fly-production
+    if: github.ref == 'refs/heads/master' && inputs.build_only != true
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Log in to Fly registry
+        run: flyctl auth docker
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # MONEY-3 resume: a re-run after a runner loss starts with an empty /tmp. The durable
+      # pre-drain artifact is the ONLY recovery input — restore it before anything can
+      # snapshot the (already drained) empty fleets. A first run has no artifact yet; that
+      # is not an error, the snapshot step below takes the original.
+      - name: Resume from the durable topology snapshot
+        if: inputs.billing_cutover == true
+        continue-on-error: ${{ inputs.topology_run_id == '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: billing-cutover-topology
+          path: /tmp/pagespace-cutover
+          run-id: ${{ inputs.topology_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Snapshot old application topology for billing cutover
+        if: inputs.billing_cutover == true
+        run: |
+          # On a resume, the durable copy IS the original pre-drain topology: never
+          # re-snapshot over it — the fleets may already be drained, and snapshotting
+          # then would record empty fleets as the restoration target.
+          bash scripts/fly-billing-cutover.sh --snapshot-only /tmp/pagespace-cutover
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # MONEY-3: the only copy of the restoration topology is durably persisted BEFORE the
+      # first destructive scale call. If this runner dies mid-migration or mid-deploy, a
+      # fresh resume run downloads this artifact instead of reconciling fleets to empty.
+      - name: Persist the restoration topology before draining
+        if: inputs.billing_cutover == true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: billing-cutover-topology
+          path: /tmp/pagespace-cutover
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Drain old application images for billing cutover
+        if: inputs.billing_cutover == true
+        run: bash scripts/fly-billing-cutover.sh --drain /tmp/pagespace-cutover
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Run migrations
+        run: |
+          # EXIT captures sanitized evidence before destroying the one-shot machine.
+          DIAGNOSTICS_DIR="$RUNNER_TEMP/migration-diagnostics/main"
+          MACHINE_JSON="/tmp/fly_machine.json"
+          MACHINE_ID=""
+          rm -f "$MACHINE_JSON"
+          source scripts/fly-migration-diagnostics.sh
+          trap capture_migration_diagnostics EXIT
+
+          docker pull ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG
+
+          # Migrations exit before reaching "started" state, so flyctl errors with
+          # "failed to reach desired start state" after 60s. This is expected.
+          # Use || true so bash -e doesn't exit; we verify success via machine state below.
+          flyctl machine run registry.fly.io/pagespace-web:migrate-$RELEASE_IMAGE_TAG \
+            --env "BILLING_CUTOVER_OFFLINE=$BILLING_CUTOVER_OFFLINE" \
+            --app pagespace-web \
+            --region iad \
+            --restart no \
+            2>&1 | tee /tmp/machine_output.txt || true
+
+          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/machine_output.txt | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "ERROR: could not parse machine ID from flyctl output"
+            cat /tmp/machine_output.txt
+            exit 1
+          fi
+          echo "Migration machine: $MACHINE_ID"
+
+          # Fail on any unexpected error (not the expected "desired start state" one)
+          if grep -q "Error:" /tmp/machine_output.txt && ! grep -q "desired start state" /tmp/machine_output.txt; then
+            echo "ERROR: unexpected flyctl error:"
+            grep "Error:" /tmp/machine_output.txt
+            exit 1
+          fi
+
+          # Poll for terminal state, then verify exit evidence: stopped alone does not prove success.
+          # flyctl machine wait --state stopped hangs the full timeout when migrations fail
+          # because the machine is already in "failed" state, not "stopped". Poll both.
+          TIMEOUT=900
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            # flyctl machine status has no --json flag (outputs a formatted table regardless).
+            # Use the Fly.io Machines REST API directly for reliable JSON state polling.
+            HTTP_CODE=$(curl --connect-timeout 10 --max-time 30 -s -o /tmp/fly_machine.json -w "%{http_code}" \
+              -H "Authorization: Bearer $FLY_API_TOKEN" \
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID" || true)
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATE=$(jq -r '.state // "unknown"' /tmp/fly_machine.json 2>/dev/null || echo "unknown")
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo "ERROR: migration machine $MACHINE_ID not found (unexpectedly destroyed)"
+              exit 1
+            else
+              STATE="unknown"
+            fi
+            echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$HTTP_CODE" = "200" ] && jq -e --arg mode failed -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
+              echo "ERROR: migration exit evidence indicates failure"
+              exit 1
+            fi
+            if [ "$STATE" = "stopped" ]; then
+              if jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_machine.json >/dev/null; then
+                break
+              fi
+              echo "Exit evidence pending; waiting within ${TIMEOUT}s deadline"
+            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
+              echo "ERROR: migration machine reached $STATE state (migrations failed)"
+              exit 1
+            fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: timed out after ${TIMEOUT}s waiting for migration machine"
+            exit 1
+          fi
+
+          echo "Migrations complete"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_NO_UPDATE_CHECK: "true"
+          BILLING_CUTOVER_OFFLINE: ${{ inputs.billing_cutover == true && 'true' || 'false' }}
+
+      # Admin PG (trust plane, #890): mirrors the main migration machine but runs
+      # db:migrate:admin. The machine runs in the pagespace-web app, BUT it must
+      # not use that app's runtime ADMIN_DATABASE_URL secret — that is the
+      # least-privilege admin_app LOGIN (Phase 2), which cannot run DDL. The
+      # OWNER connection string lives ONLY in the ADMIN_DATABASE_URL_MIGRATE
+      # GitHub secret and is passed to the one-shot machine via --env, so owner
+      # credentials never sit in any Fly app's runtime secrets (migrate-admin.ts
+      # prefers ADMIN_DATABASE_URL_MIGRATE over the inherited runtime URL).
+      # GATED on the ADMIN_DB_MIGRATIONS_ENABLED repo variable: deploys must not break
+      # before the Fly pagespace-db-admin instance is provisioned. Ops flips the
+      # variable to 'true' after provisioning — see the Phase 6 runbook (issue #890)
+      # and the Fly secret matrix in infrastructure/UPGRADE.md (Phase 2).
+      - name: Run admin migrations
+        if: ${{ vars.ADMIN_DB_MIGRATIONS_ENABLED == 'true' }}
+        run: |
+          # EXIT captures sanitized evidence before destroying the one-shot machine.
+          DIAGNOSTICS_DIR="$RUNNER_TEMP/migration-diagnostics/admin"
+          MACHINE_JSON="/tmp/fly_admin_machine.json"
+          MACHINE_ID=""
+          rm -f "$MACHINE_JSON"
+          source scripts/fly-migration-diagnostics.sh
+          trap capture_migration_diagnostics EXIT
+
+          # Fail fast: without the dedicated migrate URL the machine would fall
+          # back to the app's runtime login and fail with permission errors deep
+          # inside the migration — surface the misconfiguration by name instead.
+          if [ -z "$ADMIN_DATABASE_URL_MIGRATE" ]; then
+            echo "ERROR: ADMIN_DATABASE_URL_MIGRATE secret is not set."
+            echo "ADMIN_DB_MIGRATIONS_ENABLED=true requires the dedicated owner migrate URL"
+            echo "(see infrastructure/UPGRADE.md, Phase 2 Fly secret matrix)."
+            exit 1
+          fi
+
+          docker pull ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-migrate:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG
+
+          # Same expected "desired start state" error as the main migration machine
+          # (one-shot machines exit before reaching "started"); verify via state below.
+          flyctl machine run registry.fly.io/pagespace-web:migrate-admin-$RELEASE_IMAGE_TAG \
+            --app pagespace-web \
+            --region iad \
+            --restart no \
+            --env ADMIN_DATABASE_URL_MIGRATE="$ADMIN_DATABASE_URL_MIGRATE" \
+            bun run db:migrate:admin \
+            2>&1 | tee /tmp/admin_machine_output.txt || true
+
+          MACHINE_ID=$(grep -oP 'Machine ID: \K[0-9a-f]+' /tmp/admin_machine_output.txt | head -1)
+          if [ -z "$MACHINE_ID" ]; then
+            echo "ERROR: could not parse machine ID from flyctl output"
+            cat /tmp/admin_machine_output.txt
+            exit 1
+          fi
+          echo "Admin migration machine: $MACHINE_ID"
+
+          if grep -q "Error:" /tmp/admin_machine_output.txt && ! grep -q "desired start state" /tmp/admin_machine_output.txt; then
+            echo "ERROR: unexpected flyctl error:"
+            grep "Error:" /tmp/admin_machine_output.txt
+            exit 1
+          fi
+
+          # Poll for verified exit evidence; stopped alone is pending —
+          # same REST-API polling as the main migration step.
+          TIMEOUT=900
+          ELAPSED=0
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            HTTP_CODE=$(curl --connect-timeout 10 --max-time 30 -s -o /tmp/fly_admin_machine.json -w "%{http_code}" \
+              -H "Authorization: Bearer $FLY_API_TOKEN" \
+              "https://api.machines.dev/v1/apps/pagespace-web/machines/$MACHINE_ID" || true)
+            if [ "$HTTP_CODE" = "200" ]; then
+              STATE=$(jq -r '.state // "unknown"' /tmp/fly_admin_machine.json 2>/dev/null || echo "unknown")
+            elif [ "$HTTP_CODE" = "404" ]; then
+              echo "ERROR: admin migration machine $MACHINE_ID not found (unexpectedly destroyed)"
+              exit 1
+            else
+              STATE="unknown"
+            fi
+            echo "  [${ELAPSED}s] state: $STATE"
+            if [ "$HTTP_CODE" = "200" ] && jq -e --arg mode failed -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
+              echo "ERROR: migration exit evidence indicates failure"
+              exit 1
+            fi
+            if [ "$STATE" = "stopped" ]; then
+              if jq -e -f scripts/fly-migration-succeeded.jq /tmp/fly_admin_machine.json >/dev/null; then
+                break
+              fi
+              echo "Exit evidence pending; waiting within ${TIMEOUT}s deadline"
+            elif [ "$STATE" = "failed" ] || [ "$STATE" = "destroyed" ]; then
+              echo "ERROR: migration machine reached $STATE state (migrations failed)"
+              exit 1
+            fi
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "ERROR: timed out after ${TIMEOUT}s waiting for admin migration machine"
+            exit 1
+          fi
+
+          echo "Admin migrations complete"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_NO_UPDATE_CHECK: "true"
+          ADMIN_DATABASE_URL_MIGRATE: ${{ secrets.ADMIN_DATABASE_URL_MIGRATE }}
+
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: migration-diagnostics
+          path: ${{ runner.temp }}/migration-diagnostics
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # REALTIME BEFORE WEB — order is load-bearing, do not swap.
+      #
+      # apps/realtime owns the socket room grammar and the event handlers
+      # (`join_conversation`, `join_session`) that apps/web's client code emits
+      # into, so the dependency runs one way: new web needs new realtime.
+      #
+      # Getting it backwards fails SILENTLY. Socket.IO drops an event with no
+      # registered listener — no error, no ack, no disconnect — so a new web
+      # client emitting `join_conversation` at an old realtime believes it
+      # joined, never enters the room, and receives none of the rev-carrying
+      # `conversation:*` events fanned out to it. Live delivery degrades to
+      # nothing for the whole deploy window with no signal to retry on.
+      #
+      # This way round, the stale case is benign: an old web client simply
+      # never emits the new joins, and the new handlers idle until it reloads.
+      # Pinned by apps/realtime/src/__tests__/deploy-order.guard.test.ts.
+      - name: Deploy realtime
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-realtime:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-realtime:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-realtime.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-realtime.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-realtime --image registry.fly.io/pagespace-realtime:$RELEASE_IMAGE_TAG --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-realtime.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-realtime
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy web
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-web:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-web:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-web.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-web.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-web --image registry.fly.io/pagespace-web:$RELEASE_IMAGE_TAG --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-web.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-web
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy processor
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-processor:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-processor:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG
+          # strategy=immediate (fly.processor.toml): restarts in-place, no two-phase rolling swap.
+          # flyctl deploy with immediate strategy completes in ~3s (updates config + restart) and
+          # returns "good state" only after the machine is up. No post-deploy machine wait needed —
+          # flyctl machine wait against an immediate-strategy machine hits a transient "replacing"
+          # state and produces false-negative CI failures.
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-processor.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-processor.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-processor --image registry.fly.io/pagespace-processor:$RELEASE_IMAGE_TAG --wait-timeout 120
+          if [ -f /tmp/pagespace-cutover/pagespace-processor.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-processor
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy admin
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-admin:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-admin:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-admin.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-admin.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-admin --image registry.fly.io/pagespace-admin:$RELEASE_IMAGE_TAG --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-admin.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-admin
+          fi
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy cron
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-cron:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-cron:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG
+          config_args=()
+          if [ -f /tmp/pagespace-cutover/pagespace-cron.toml ]; then
+            config_args=(--config /tmp/pagespace-cutover/pagespace-cron.toml)
+          fi
+          flyctl deploy "${config_args[@]}" --app pagespace-cron --image registry.fly.io/pagespace-cron:$RELEASE_IMAGE_TAG --wait-timeout 300
+          if [ -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            bash scripts/fly-billing-restore.sh /tmp/pagespace-cutover pagespace-cron
+          fi
+
+          # Cron is a SINGLETON scheduler: exactly one machine must run, or scheduled jobs
+          # (memory/pulse crons) double-fire. Reconcile to one machine, ensure it's started,
+          # then VERIFY the invariant — if it can't be enforced, fail the deploy rather than
+          # silently leave duplicate (double-firing) or stopped (non-firing) cron machines.
+          if [ ! -f /tmp/pagespace-cutover/pagespace-cron.machines.json ]; then
+            flyctl scale count 1 --app pagespace-cron --yes
+          fi
+          for id in $(flyctl machines list --app pagespace-cron --json | jq -r '.[].id'); do
+            flyctl machine start "$id" --app pagespace-cron 2>/dev/null || true
+          done
+          crons=$(flyctl machines list --app pagespace-cron --json)
+          count=$(echo "$crons" | jq 'length')
+          started=$(echo "$crons" | jq '[.[] | select(.state == "started")] | length')
+          if [ "$count" -ne 1 ] || [ "$started" -ne 1 ]; then
+            echo "ERROR: cron must be exactly 1 started machine (count=$count started=$started)"
+            echo "$crons" | jq -r '.[] | "  \(.id) \(.state)"'
+            exit 1
+          fi
+          echo "cron: 1/1 machine started"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy imago
+        run: |
+          docker pull "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker tag "ghcr.io/2witstudios/pagespace-imago:$RELEASE_IMAGE_TAG" "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          docker push "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG"
+          flyctl deploy --app pagespace-imago --image "registry.fly.io/pagespace-imago:$RELEASE_IMAGE_TAG" --yes --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Deploy marketing
+        run: |
+          docker pull ghcr.io/2witstudios/pagespace-marketing:$RELEASE_IMAGE_TAG
+          docker tag ghcr.io/2witstudios/pagespace-marketing:$RELEASE_IMAGE_TAG registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG
+          docker push registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG
+          flyctl deploy --app pagespace-marketing --image registry.fly.io/pagespace-marketing:$RELEASE_IMAGE_TAG --wait-timeout 300
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

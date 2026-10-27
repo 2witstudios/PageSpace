@@ -1,16 +1,18 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
   ALL_PROVIDER_NAMES,
   buildProviderAvailabilityMap,
-  getDefaultPageSpaceSettings,
   isProviderAvailable,
 } from '@/lib/ai/core/ai-utils';
-import { ONPREM_ALLOWED_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
+import { ONPREM_ALLOWED_PROVIDERS, DYNAMIC_MODEL_PROVIDERS, isValidModel, resolveProviderModel, ADMIN_ONLY_PROVIDERS } from '@/lib/ai/core/ai-providers-config';
 import { aiSettingsRepository } from '@/lib/repositories/ai-settings-repository';
-import { requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
+import { requiresProSubscription, createAdminRestrictedResponse } from '@/lib/subscription/rate-limit-middleware';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
@@ -25,33 +27,57 @@ function availabilityOptions() {
 }
 
 /**
- * GET /api/ai/settings
- * Returns deployment-level provider availability and the user's selected provider/model.
+ * GET /api/ai/settings[?driveId=]
+ * Returns deployment-level provider availability and the user's selected provider/model. With `driveId` (a drive the
+ * caller can reach), also `allowedModels`: the models that drive's org lets its pickers offer (POL-8), as provider →
+ * allowed model ids (a dynamic provider: the allowed ids, or null for any), or null when nothing is restricted.
  */
 export async function GET(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'get', details: { reason: 'auth_failed', method: 'GET', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
 
+    const driveId = new URL(request.url).searchParams.get('driveId');
+    if (driveId && !(await getPrincipalDriveAccess(auth, driveId))) {
+      // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
+    }
+
     const user = await aiSettingsRepository.getUserSettings(userId);
-    const pageSpaceSettings = getDefaultPageSpaceSettings();
+    // Every cloud vendor is OpenRouter-backed and user-visible; on-prem masking is
+    // handled inside buildProviderAvailabilityMap via the on-prem allowlist.
     const providers = buildProviderAvailabilityMap(availabilityOptions());
 
     auditRequest(request, { eventType: 'data.read', userId, resourceType: 'ai_settings', resourceId: userId, details: {
       action: 'get_settings',
     } });
 
+    // Resolve the stored pair through the same function the provider factory uses, so
+    // the selection we report is the one that would actually run. A user whose stored
+    // model has since been delisted from the catalog (model retirements happen every
+    // catalog refresh) would otherwise be shown a model the selector can't offer, while
+    // their requests silently ran the substituted default. Local/dynamic providers serve
+    // runtime-discovered models, so resolveProviderModel gates only their name.
+    const { provider: currentProvider, model: currentModel } = resolveProviderModel(
+      null,
+      null,
+      user?.currentAiProvider,
+      user?.currentAiModel,
+    );
+
     return NextResponse.json({
-      currentProvider: user?.currentAiProvider || 'pagespace',
-      currentModel: user?.currentAiModel || 'glm-4.5-air',
-      userSubscriptionTier: user?.subscriptionTier || 'free',
-      pageSpaceBackend: pageSpaceSettings?.provider ?? null,
+      currentProvider,
+      currentModel,
+      imageGenerationModel: user?.imageGenerationModel ?? null,
+      userSubscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
+      isAdmin: auth.role === 'admin',
       providers,
       isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
+      allowedModels: await offeredModels(driveId),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -86,7 +112,7 @@ export async function PATCH(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) {
-      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'update_selection', details: { reason: 'auth_failed', method: 'PATCH' }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', resourceType: 'ai_settings', resourceId: 'update_selection', details: { reason: 'auth_failed', method: 'PATCH', authFailureReason: auth.authFailureReason }, riskScore: 0.5 });
       return auth.error;
     }
     const userId = auth.userId;
@@ -108,10 +134,22 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const isLocalProvider = ONPREM_ALLOWED_PROVIDERS.has(provider);
-    if (!isLocalProvider && (!model || typeof model !== 'string')) {
+    const skipModelValidation = ONPREM_ALLOWED_PROVIDERS.has(provider) || DYNAMIC_MODEL_PROVIDERS.has(provider);
+    if (!skipModelValidation && (!model || typeof model !== 'string')) {
       return NextResponse.json(
         { error: 'Model is required' },
+        { status: 400 }
+      );
+    }
+
+    // Hard-enforce the curated catalog at the explicit selection boundary: a saved
+    // (provider, model) must exist in AI_PROVIDERS. Generation is tolerant (it
+    // substitutes the default for stale stored configs), but a user/API explicitly
+    // choosing an off-catalog model gets a clear 400 here rather than a silent
+    // fallback later.
+    if (!skipModelValidation && !isValidModel(provider, model)) {
+      return NextResponse.json(
+        { error: `Model "${model}" is not a valid model for provider "${provider}".` },
         { status: 400 }
       );
     }
@@ -124,12 +162,16 @@ export async function PATCH(request: Request) {
       );
     }
 
-    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined)) {
+    if (ADMIN_ONLY_PROVIDERS.has(provider) && auth.role !== 'admin') {
+      return createAdminRestrictedResponse();
+    }
+
+    if (requiresProSubscription(provider, model, resolvePersonalCapabilityTier(user.subscriptionTier), auth.role === 'admin')) {
       return NextResponse.json(
         {
           error: 'Subscription required',
-          message: 'PageSpace Pro AI requires a Pro or Business subscription.',
-          upgradeUrl: '/settings/billing',
+          message: 'This model is available on paid plans.',
+          upgradeUrl: '/settings/plan',
         },
         { status: 403 }
       );

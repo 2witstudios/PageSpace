@@ -42,6 +42,25 @@ describe('usePendingStreamsStore', () => {
       expect(getRemotePageStreams('page-a')).toHaveLength(2);
     });
 
+    it('given initial parts, should seed the stream with them', () => {
+      const { addStream } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('restored')]);
+    });
+
+    it('given a duplicate addStream carrying initial parts, should keep the existing entry parts (no double-seed)', () => {
+      const { addStream } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+      addStream({ ...BASE_STREAM, parts: [text('restored')] });
+
+      const { getRemotePageStreams } = usePendingStreamsStore.getState();
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('restored')]);
+    });
+
     it('given a stream with messageId X already present, should preserve existing parts on duplicate addStream', () => {
       const { addStream, appendPart } = usePendingStreamsStore.getState();
       addStream(BASE_STREAM);
@@ -200,6 +219,32 @@ describe('usePendingStreamsStore', () => {
     it('given no streams for the channel, should return empty array', () => {
       const { getOwnStreams } = usePendingStreamsStore.getState();
       expect(getOwnStreams('page-empty')).toEqual([]);
+    });
+  });
+
+  describe('setStreamParts', () => {
+    it('given an existing stream, should replace parts wholesale rather than merge', () => {
+      const { addStream, setStreamParts, getRemotePageStreams } = usePendingStreamsStore.getState();
+      addStream({ ...BASE_STREAM, parts: [text('a')] });
+      setStreamParts('msg-1', [text('a'), text('b')], 1);
+
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('a'), text('b')]);
+    });
+
+    it('given a stale seq (not greater than the last write), should drop the write', () => {
+      const { addStream, setStreamParts, getRemotePageStreams } = usePendingStreamsStore.getState();
+      addStream(BASE_STREAM);
+      setStreamParts('msg-1', [text('newer')], 5);
+      setStreamParts('msg-1', [text('stale')], 4);
+
+      const [stream] = getRemotePageStreams('page-a');
+      expect(stream.parts).toEqual([text('newer')]);
+    });
+
+    it('given an unknown messageId, should not throw', () => {
+      const { setStreamParts } = usePendingStreamsStore.getState();
+      expect(() => setStreamParts('unknown', [text('x')], 1)).not.toThrow();
     });
   });
 });

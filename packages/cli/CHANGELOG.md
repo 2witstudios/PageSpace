@@ -1,0 +1,305 @@
+# Changelog — @pagespace/cli
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+### Added
+
+- **`pagespace wallets drive|list|source` — read your wallets from the terminal.** `wallets drive
+  <driveId>` shows a drive's wallet: remaining credits, your own cap for today and this month,
+  whether donations are on and the drive's default spend source. `wallets list` shows what you spend
+  from and fund. `wallets source <conversationId> [--drive <driveId>]` shows which wallet a
+  conversation spends from and what the next AI call would do (`--drive` only matters for a global
+  conversation). Amounts are shown as credits, never as money; `--json` prints the raw result.
+  `list` and `source` need a key with no drive restriction.
+- **`pagespace wallets drive-source <driveId>`** shows which wallet a new conversation in a drive
+  would spend from, and the wallets you may pick there.
+- **Read-only, by design.** A key can never create, fund, donate to or change a wallet, or change
+  what a conversation or your account spends from — sign in to the web app for that. There is no
+  CLI verb for any of it.
+- **`pagespace mcp` exposes `wallets.getDriveWallet`, `wallets.list`,
+  `wallets.getConversationSource`, `wallets.getDriveSource` and `wallets.getAlwaysOwnCredits` as
+  tools** — and no wallet write.
+- Organizations and wallets are not yet enabled on pagespace.ai; until they are, these verbs answer
+  not found.
+
+## [1.11.0] — 2026-09-16
+
+### Added
+
+- **`pagespace workspaces list` and `pagespace workspaces exec` — a shell in an agent workspace's
+  sandbox.** Running a command in a workspace sandbox used to be possible only through an agent in
+  chat. `workspaces list [--drive <id>]` shows your workspaces, and `workspaces exec <workspaceId>
+  -- <command…>` runs a command there: stdout and stderr go to your terminal's stdout and stderr,
+  and **the CLI exits with the command's own exit status**, so `exec … -- test -f build/ok && …`
+  composes like a local shell. `--cwd <dir>` (relative to the sandbox root) and `--timeout-ms <ms>`
+  (up to 200000) are optional, and `--json` prints the raw result instead. A cold workspace starts
+  its sandbox on the first exec. The run is gated, metered and audited exactly like the agent's
+  own `bash` tool: it needs a plan that includes code execution, and a key scoped to other drives
+  cannot see or reach the workspace. One argument after `--` runs as a shell command line, so
+  quote a pipeline as one argument (`-- 'ls | wc -l'`) and your local shell does not run half of
+  it. Several arguments are passed as separate words with their quoting preserved, so
+  `-- sh -c 'echo hi; exit 3'` hands `sh` the whole script as one word.
+- **`--` ends option parsing for every command.** Everything after it is passed to the command
+  verbatim, so a flag like `--json` after `--` belongs to the remote command, not to the CLI.
+- **`pagespace mcp` exposes `workspaces.list` and `workspaces.exec` as tools.**
+
+## [1.10.0] — 2026-09-12
+
+### Added
+
+- **`pagespace sheets formatting` and `pagespace sheets format` — read and write how a sheet
+  looks.** The row verbs could fill a sheet but not style it, so a sheet built from a script stayed
+  a grid of bare numbers. `formatting <pageId>` prints the declared tables, the conditional rules
+  **with their ids** (the only way to get an id you can later remove), frozen rows and columns,
+  column formats and widths, and row heights; add `--ranges A1:F40,H2:H9` to also read the formats
+  on individual cells, which are not read otherwise because they live on the rows. `format
+  <pageId>` takes a JSON array of ops on stdin or `--json-input` and applies them **in order, in
+  one transaction, all or nothing** — one bad op refuses the whole call, names its index, and
+  writes nothing. Both take `--tab <n>` and `--json` like every other sheet verb.
+
+  Prefer declaring a **region** to formatting cells: a region says what an area *is* (header rows,
+  what each column means, where the totals are, an accent hue) and an open range like `A1:F` covers
+  rows added later at no cost however tall the sheet gets. `format` is not gated behind `--yes`,
+  unlike `delete-rows`: formatting is presentation, recoverable by writing it again, and prompting
+  to bold a header row would only train the habit of passing `--yes` blind.
+
+### Changed
+
+- **The `pagespace env` documentation now states, in plain words and before the commands, what
+  approving a local-environment request actually permits.** Approving a command lets it run under
+  your own user account, with your privileges, as if you had typed it into your own terminal: it
+  can read anything you can read and change anything you can change, and there is no sandbox
+  around it. It also says, where the decision is actually made rather than forty lines below it,
+  that an `ask` approval is remembered per user, session and operation — **not** per command — so
+  you see the first command of each kind and approving it covers every later one of that kind in
+  that session, unseen. The `roots` in `env-policy.json` confine the paths an agent can *name* —
+  the working directory it asks for and the files it asks to open — not what a program does once
+  it has started. A short note explains the chain those two facts make possible: a file the agent
+  reads on your machine can carry text that steers the agent, and with an approval already cached
+  the resulting command runs without a prompt. The README also now says outright that `allowlist` mode allowlists **operations**
+  (`exec`, `fs_read`, `fs_write`), not executables, and that no per-executable allowlist exists;
+  `exec` in `ops` under `allowlist` means any command runs unprompted. Behaviour is unchanged —
+  this is the boundary the daemon has always had, written down where the person deciding whether
+  to run `env connect` will read it.
+
+## [1.9.0] — 2026-09-06
+
+### Added
+
+- **`pagespace env connect <enrollmentId>` / `env disconnect <enrollmentId>` / `env policy` — the
+  bridge daemon: serve this machine as a local Environment (exec + files).** `env connect` earns a
+  short-lived socket token from the machine key on every (re)connect, sends a machine-signed hello,
+  then answers signed requests from PageSpace: each one carries a server-signed, single-use grant
+  bound to exactly what was asked, is checked against **your** local policy file
+  (`~/.pagespace/env-policy.json` — mode `ask` / `allowlist` / `deny`, allowed users, ops, roots,
+  env allowlist, output and time caps), and only then runs, with the confined working directory
+  and a scrubbed environment (loader hooks such as `LD_PRELOAD` never reach a child). No policy
+  file, an unreadable one, or one not owned by you / writable by others means **everything is
+  denied** — the daemon still connects so the Environment shows as connected. `ask` mode prompts in
+  the terminal once per user + session + operation and refuses to start without a TTY. Every
+  decision is appended to `~/.pagespace/env-audit.jsonl` with the grant id the server also logs. A
+  server-signed revoke deletes the machine key and exits; Ctrl-C or `env disconnect` closes the
+  socket and kills every child process group. Reconnects with backoff after a server restart. The
+  daemon never listens on a port. PTY sessions are not served yet (advertised `pty:false`). Requires
+  `LOCAL_ENVS_ENABLED=true` on the deployment. Adds `ws` as a runtime dependency.
+
+- **`pagespace env enroll <enrollmentId> <code>` and `pagespace env token <enrollmentId>` — bind
+  this machine to a local Environment.** `enroll` generates an Ed25519 keypair on the machine,
+  presents the one-time code with the public half, and stores the private half in the credential
+  store under `env:<enrollmentId>`; it is never printed or sent, and a refused enrollment discards
+  it. `token` proves possession of the key (server nonce, machine signature) and prints a
+  short-lived bridge token. Both work without a login, and the machine credential can never
+  authenticate an ordinary command (`logout` reports it as not logged in, `keys use` refuses it).
+  Requires a deployment with `LOCAL_ENVS_ENABLED=true`.
+
+- **`pagespace files upload <path> --drive <driveId>` — put a file in a drive without a browser.**
+  Previously nothing outside the web client could, which blocked every headless producer of media.
+  Optional `--parent`, `--title` and `--mime`. The media type is resolved from a table of formats
+  the server actually processes, and an unrecognized extension is a usage error asking for `--mime`
+  rather than a silent `application/octet-stream` — the declared type is signed into the storage
+  request, so a wrong guess fails later with an error that names neither the field nor the cause.
+  When the bytes are already stored the command says so (`already stored; no bytes sent`), because
+  that path returns almost instantly and silence reads as a lost upload.
+
+### Fixed
+
+- **`pages replace-lines` can refuse a stale edit instead of half-applying it.** The new
+  `--expect-lines N` flag sends the total line count you last read; if the document is no longer
+  that length the server refuses (409) rather than replacing the range you named and leaving the
+  rest of the old content behind. `pages read` and `pages replace-lines` also print a warning to
+  stderr when the target page's content mode disagrees with its content (raw JSON or markdown in a
+  rich-text page), which is where line numbers are least likely to mean what you expect.
+
+- **The `keys describe` command printed after a mint now works when you paste it.** 1.8.0 printed
+  `--key <name>` space-separated, which the argument parser rejects when the name begins with `-`
+  (`--name -prod` mints fine, so this is reachable), and omitted `--host`, so a key minted against a
+  non-default host resolved against the default one and was not found. It now prints
+  `--key=<name>`, shell-quoted, with `--host` when there is one.
+- **`keys create` refuses a blank or whitespace-padded `--name` instead of minting an unfindable
+  key.** A key is stored under its name verbatim, but every lookup trims first — so `--name "  x  "`
+  wrote the store under `"  x  "` while `--key` resolved `"x"` and missed, and `--name ""` wrote a
+  key no lookup could ever produce. A padded name is now refused with the trimmed spelling
+  suggested; a blank or all-whitespace one is refused as blank.
+- **`keys create` now says WHY it could not read a new key's permissions back.** When the server
+  returns a refresh credential instead of a static token there is no bearer to ask with; 1.8.0 said
+  the readback had failed but not that. (The `pagespace keys` wizard already gave the reason — the
+  two surfaces now match.)
+- **`pagespace login --key <name>` no longer suggests a command that would revoke your personal
+  login.** When a NAMED key was the credential already stored, the message named that key but
+  suggested a bare `pagespace logout --host <host>` — and `logout` resolves its own key name, so it
+  landed on `default`, revoking that refresh token server-side and deleting it. The suggestion now
+  names the same key the message is about. `login --device` printed the same line.
+- **The `logout` command suggested when a key name is already taken is pasteable too.** It printed
+  `--key <name>` space-separated with the name interpolated, so a key called `-prod` produced a
+  command the parser rejects and `lead gen` one that logs out of the wrong key. Same fix as the
+  post-mint hint, which is where the hole was first found.
+- **`keys describe`'s usage line and the README** now say it needs a content credential named — it
+  is the one `keys` verb that reports on one rather than managing keys, and the README's summary
+  paragraph previously said the opposite.
+
+## [1.8.0] — 2026-08-23
+
+### Added
+
+- **`pagespace sheets` — seven verbs that treat a spreadsheet as data.** `describe` shows a sheet's
+  tabs, row and column counts without reading a row. `query` filters and sorts **server-side**, so
+  asking a 100,000-row sheet for the twelve rows you want no longer means pulling the whole thing
+  down first. `rows` walks a tab in order, `append` adds rows, `update-cells` writes by A1 address
+  (and, unlike the older `edit-cells`, can reach a tab other than the first), and `delete-rows`
+  removes a range.
+
+  Filters match **the values you see**: a formula column compares as its result, not its `=` text.
+
+  `delete-rows` is the one irreversible verb, so it confirms before acting. `--yes` skips the
+  prompt; with no TTY and no `--yes` it fails closed rather than assuming consent — a script that
+  never meant to delete cannot delete by omission.
+
+  All seven honour `--json` for scripting, and the same six operations are served as MCP tools, so
+  an agent gets them without shelling out.
+
+- **`pagespace keys describe`** — reports the credential this invocation would use: its drives, the
+  role granted in each, and the **effective** permissions that role resolves to
+  (view/edit/share/delete). Resolved server-side by the same code that authorizes real requests, so
+  it cannot disagree with them. Drive-level permissions answer the drive-as-root-node question
+  (creating a top-level page, sharing or deleting the drive), where any membership grants edit; a
+  page inside can be strictly narrower, so `--page <pageId>` resolves that page too — a plain
+  `member` key may create at the drive root and still be view-only on a document, which is the
+  "reads fine, every write fails" shape #2470 was about. It is the one `keys` verb a key can run,
+  and it describes only itself — never the other keys you hold. The same summary now closes `keys create` and the
+  `pagespace keys` wizard's Create flow, and it is served as an MCP tool (`tokens.describeSelf`).
+- **`pagespace keys list` shows the role granted on each drive**, including custom roles by name and
+  inherit scopes spelled out, instead of the drive name alone.
+
+### Fixed
+
+- **`pagespace keys list`/`revoke`/`use` and the wizard no longer report a live key as invalidated.**
+  Run under an `mcp_` key, they answered "Static token was invalidated and has no refresh path" —
+  indistinguishable from a revoked key, while that key kept working on every content command. The
+  key-management API only ever accepted a personal login; a key hitting it gets a refusal it can do
+  nothing about. These commands now detect the credential class up front and say so: the key is
+  fine, key management needs `pagespace login`, and `keys describe` is what a key can ask about
+  itself. No round trip, no re-mint. (#2464)
+- **`pagespace roles get <driveId> member` now explains itself.** It answered "not found in this
+  drive", which reads as "no such role" — but `member`/`admin`/`owner` are system roles held per
+  member on the drive membership, not rows in a drive's role list, so that lookup can only ever
+  miss. The error now names where they live and points at `keys describe`. (#2470)
+
+## [1.7.1] — 2026-08-10
+
+### Fixed
+
+- **The MCP config printed after `pagespace keys` / `pagespace keys create` no longer assumes a
+  global install.** It emitted only `{"command": "pagespace", "args": ["mcp"]}`, which needs
+  `pagespace` on the PATH of whatever launches the MCP client — not the case if you minted the key
+  through `npx -y -p @pagespace/cli pagespace keys`, and frequently not the case for GUI clients
+  (Claude Desktop, Cursor) that launch without your shell's PATH. It now prints the zero-install
+  `npx -y -p @pagespace/cli pagespace-mcp` form, matching the README, and offers the global-install
+  shorthand on a following line.
+
+## [1.6.1] — 2026-07-08
+
+### Fixed
+
+- **`pagespace keys create --name X` now actually names the key `X`.** Every key minted via the
+  browser-consent flow was previously hardcoded server-side to `"pagespace CLI"` regardless of
+  the name given, making every CLI-minted key indistinguishable in `keys list` and the wizard's
+  "Set active key" picker. The CLI now sends the chosen name as part of the OAuth authorization
+  request; older CLI versions still mint successfully (server-side compatibility fallback), just
+  without a distinguishing name — upgrade to get real names on new keys.
+- **The wizard's "Set active key" flow no longer fails on a key you just created.** It used to
+  reverse-match your selection against every locally stored credential via the OS keychain's
+  list-all API, which on real keychains truncates every stored name at an internal separator
+  byte — making it unable to tell any two named keys apart, so a freshly minted key's own
+  credential was often invisible to it. It now checks for the exact name first, which is both
+  faster and immune to that keychain quirk.
+
+## [1.6.0] — 2026-07-08
+
+### Added
+
+- **`pagespace keys create --all-drives`** — mints an unrestricted key with access to every drive
+  you own, including ones created later, equivalent to the web Settings > MCP "Clear selection
+  (allow all drives)" control. Requires `--name` (there's no single drive id to default a name
+  from), rejects being combined with `--drive`, and is gated behind `--yes` (or an interactive
+  TTY confirm) since it mints the maximum-privilege key type. Backed by a new `all_drives` OAuth
+  scope — deliberately not the `account` scope, which would silently mint a full personal login
+  session instead of a revocable, listable mcp key.
+- The interactive wizard's Create flow now asks up front whether to grant specific drives or all
+  drives (unrestricted), instead of only offering a per-drive picker. Edit gains a confirm guard
+  when narrowing an existing all-drives key down to specific drives; converting an existing key
+  *to* all-drives is out of scope for Edit — mint a new key with `keys create --all-drives`
+  instead.
+- `keys list`/the wizard's key table now distinguish an all-drives key from an orphaned key (one
+  whose scoped drives were all deleted) — both used to render identically as `(unscoped)`.
+
+## [1.5.1] — 2026-07-08
+
+### Changed
+
+- **Requires `@pagespace/sdk` `^2.0.0`** (was `^1.5.0`). The SDK's `deriveCodeChallenge` — used
+  internally by `pagespace login`'s loopback flow — became `async` in the SDK's `2.0.0` release
+  (browser-compat fix; see `@pagespace/sdk`'s changelog), so `loopback-flow.ts` now `await`s it.
+  No user-facing behavior change.
+
+## [1.5.0] — 2026-07-07
+
+### Added
+
+- **The active key: `pagespace keys use <name>`.** Activate one of your stored keys as this
+  machine's ambient default — gated by the same browser consent screen that mints keys (a new
+  `activate_key` OAuth ceremony that grants nothing and changes nothing server-side). Once
+  active, content commands run without `--key`/env: `pagespace drives list` just works, for you
+  and for coding agents driving the CLI in bash. Explicit credentials always override it;
+  `keys use --off` deactivates; `whoami` shows it. `pagespace mcp` deliberately ignores the
+  active key so MCP configs stay explicit and portable. Also available as a wizard menu item.
+- **`keys create --show-token`** *(landed pre-release, documented now)* — prints the minted
+  `mcp_` token exactly once as the only stdout line, for `.env`/CI/other-machine use.
+
+### Changed
+
+- **One concept, one name: keys.** The stored named credential *is* the mcp key, and every
+  surface now says so: global flag `--profile` → `--key`, env `PAGESPACE_PROFILE` →
+  `PAGESPACE_KEY` (old env still honored as a deprecated alias with a stderr notice),
+  `keys create --save-as-profile` → `--name`. The old flags error with a pointer to the new
+  name. Stored credentials are untouched — every key and login minted by 0.1.x keeps working.
+- Content-command credential precedence is now: `--token`/`--key` flags →
+  `PAGESPACE_TOKEN`/`PAGESPACE_KEY` env → the active key → loud refusal (never your login
+  credential, which has no content access).
+
+### Fixed
+
+- **`pagespace mcp` no longer introduces itself as version 0.1.0.** The MCP initialize
+  handshake now reports the real CLI release version (drift-guarded by tests, like every other
+  version constant in 1.5.0).
+- `CLI_VERSION` is drift-guarded against package.json — bumping either alone fails the suite
+  (the published 0.1.x artifacts self-reported stale versions).
+
+## [0.1.2] — 2026-07-04
+
+Keys wizard, key-management-only login scope, `pagespace-mcp` compatibility bin.
+
+## [0.1.1] / [0.1.0] — 2026-07-04
+
+Initial publishes.

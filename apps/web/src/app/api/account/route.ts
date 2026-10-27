@@ -1,21 +1,21 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
+import { userEmailMatch, prepareUserWrite, decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { accountRepository } from '@pagespace/lib/repositories/account-repository';
-import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
-import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
-import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
 import { isValidEmail } from '@pagespace/lib/validators/email';
-import { isCloud } from '@pagespace/lib/deployment-mode';
-import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
 import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
-import { stripe } from '@/lib/stripe/client';
+import { planDriveDisposition } from '@pagespace/lib/compliance/erasure/drive-disposition';
+import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
+import { sendVerificationEmail } from '@/lib/auth/send-verification-email';
+import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const patchBodySchema = z
   .object({
@@ -52,11 +52,14 @@ export async function GET(req: Request) {
     return Response.json({ error: 'Invalid token version' }, { status: 401 });
   }
 
+  // Decrypt PII at the edge so the account view shows plaintext email/name.
+  const decrypted = await decryptUserRow(user);
+
   return Response.json({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    image: user.image,
+    id: decrypted.id,
+    name: decrypted.name,
+    email: decrypted.email,
+    image: decrypted.image,
   });
 }
 
@@ -81,23 +84,44 @@ export async function PATCH(req: Request) {
       return Response.json({ error: 'Invalid email format' }, { status: 400 });
     }
 
-    if (email !== undefined) {
-      const existingUser = await db.query.users.findFirst({
-        where: eq(users.email, email),
+    const normalizedEmail = email !== undefined ? email.toLowerCase().trim() : undefined;
+    let emailChanged = false;
+    if (normalizedEmail !== undefined) {
+      // Decide "changed" by comparing against the caller's CURRENT stored
+      // address (case-insensitively). Inferring it from a uniqueness miss is
+      // unsound: emails are not guaranteed lowercase at rest (OAuth stores the
+      // provider value verbatim), so a case-sensitive lookup would miss the
+      // user's own row and spuriously de-verify them on a no-op resubmit.
+      const current = await db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { email: true },
       });
+      // Decrypt the stored email before the case-insensitive comparison so a
+      // ciphertext value is compared as plaintext (legacy plaintext passes through).
+      const currentEmailPlain = current ? await decryptField(current.email) : '';
+      emailChanged = (currentEmailPlain ?? '').toLowerCase() !== normalizedEmail;
 
-      if (existingUser && existingUser.id !== userId) {
-        return Response.json({ error: 'Email is already in use' }, { status: 400 });
+      if (emailChanged) {
+        const existingUser = await db.query.users.findFirst({
+          where: userEmailMatch(normalizedEmail),
+        });
+        if (existingUser && existingUser.id !== userId) {
+          return Response.json({ error: 'Email is already in use' }, { status: 400 });
+        }
       }
     }
 
-    const updates: { name?: string; email?: string } = {};
+    const updates: { name?: string; email?: string; emailVerified?: Date | null } = {};
     if (name !== undefined) updates.name = name;
-    if (email !== undefined) updates.email = email.toLowerCase();
+    if (normalizedEmail !== undefined) updates.email = normalizedEmail;
+    // A new address must be re-verified — the old verification proved ownership
+    // of a different inbox. Verification is re-issued via the email below.
+    if (emailChanged) updates.emailVerified = null;
 
-    const [updatedUser] = await db
+    const [updatedRow] = await db
       .update(users)
-      .set(updates)
+      // Encrypt email/name + recompute emailBidx (when email present) per the flag.
+      .set(await prepareUserWrite(updates))
       .where(eq(users.id, userId))
       .returning({
         id: users.id,
@@ -106,8 +130,30 @@ export async function PATCH(req: Request) {
         image: users.image,
       });
 
-    if (!updatedUser) {
+    if (!updatedRow) {
       return Response.json({ error: 'Failed to update user' }, { status: 500 });
+    }
+
+    // Decrypt PII at the edge so the response, verification email, and activity
+    // log all see plaintext email/name.
+    const updatedUser = await decryptUserRow(updatedRow);
+
+    // Send a verification email to the NEW address. Best-effort: a delivery
+    // failure must not fail the profile update — the user can resend from the
+    // account banner.
+    if (emailChanged) {
+      try {
+        await sendVerificationEmail({
+          userId,
+          email: updatedUser.email,
+          userName: updatedUser.name,
+        });
+      } catch (error) {
+        loggers.auth.warn('Failed to send verification email after email change', {
+          userId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     // Log activity for audit trail (profile updates may be security-relevant)
@@ -135,29 +181,12 @@ export async function PATCH(req: Request) {
   }
 }
 
-// Processor service URL
-const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
-
-const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
-
-async function createAvatarServiceToken(
-  userId: string,
-  expirationTime: string
-): Promise<{ token: string }> {
-  // createUserServiceToken validates that the user is accessing their own resources
-  const { token } = await createUserServiceToken(
-    userId,
-    REQUIRED_AVATAR_SCOPES,
-    expirationTime
-  );
-  return { token };
-}
-
 export async function DELETE(req: Request) {
   const auth = await authenticateRequestWithOptions(req, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) {
     return auth.error;
   }
+  const actor = actorFromAuth(auth);
   const userId = auth.userId;
 
   try {
@@ -176,142 +205,89 @@ export async function DELETE(req: Request) {
       return Response.json({ error: 'Email confirmation does not match your account email' }, { status: 400 });
     }
 
-    // Check and categorize owned drives via repository seam
-    const ownedDrives = await accountRepository.getOwnedDrives(userId);
-
-    if (ownedDrives.length > 0) {
-      const driveIds = ownedDrives.map(d => d.id);
-
-      // Count members for each drive via repository seam
-      const memberCounts = await Promise.all(
-        driveIds.map(async (driveId) => ({
-          driveId,
-          memberCount: await accountRepository.getDriveMemberCount(driveId),
-        }))
+    // Idempotency: surface an in-flight erasure rather than enqueuing a second.
+    const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
+    if (existing) {
+      return Response.json(
+        {
+          message: 'Account erasure already in progress',
+          requestId: existing.id,
+          status: existing.status,
+          slaDeadline: existing.slaDeadline,
+          // The first request's revocation outcome isn't re-derivable here; the
+          // manual steps are harmless if it did revoke, and required if not.
+          appleSignIn: user.appleId !== null ? 'manual' : 'none',
+        },
+        { status: 202 }
       );
-
-      // Categorize into solo and multi-member drives
-      const soloDriveIds = [];
-      const multiMemberDrives = [];
-
-      for (const drive of ownedDrives) {
-        const memberCountData = memberCounts.find(mc => mc.driveId === drive.id);
-        const memberCount = memberCountData?.memberCount || 0;
-
-        if (memberCount <= 1) {
-          soloDriveIds.push(drive.id);
-        } else {
-          multiMemberDrives.push(drive);
-        }
-      }
-
-      // Block deletion if multi-member drives still exist
-      if (multiMemberDrives.length > 0) {
-        return Response.json(
-          {
-            error: 'You must transfer ownership or delete all drives with other members before deleting your account',
-            multiMemberDrives: multiMemberDrives.map(d => d.name),
-          },
-          { status: 400 }
-        );
-      }
-
-      // Auto-delete solo drives via repository seam
-      if (soloDriveIds.length > 0) {
-        for (const driveId of soloDriveIds) {
-          await accountRepository.deleteDrive(driveId);
-        }
-        loggers.auth.info(`Auto-deleted ${soloDriveIds.length} solo drives for user ${userId}`);
-      }
     }
 
-    // Delete user's avatar if it exists and is a local file
-    if (user.image && !user.image.startsWith('http://') && !user.image.startsWith('https://')) {
-      try {
-        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
-
-        await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${serviceToken}`
-          }
-        });
-      } catch (error) {
-        // Log error but don't fail the deletion
-        loggers.auth.error('Could not delete user avatar during account deletion:', error as Error);
-      }
+    // An org Owner cannot delete their account (ORG-6); refuse before queueing anything.
+    const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+    if (ownedOrganizations.length > 0) {
+      return Response.json(
+        {
+          error: 'Transfer ownership of your organizations or delete them before deleting your account',
+          ownedOrganizations,
+        },
+        { status: 400 }
+      );
     }
 
-    // CRITICAL: Log account deletion BEFORE anonymization (required for GDPR compliance)
-    // This ensures we have an audit record of who deleted their account and when
-    const actorInfo = await getActorInfo(userId);
-    logUserActivity(userId, 'account_delete', {
-      targetUserId: userId,
-      targetUserEmail: user.email,
-    }, actorInfo);
-
-    // Anonymize activity logs before user deletion (GDPR compliance + SOX audit trail)
-    // This preserves the audit trail while removing PII
-    const anonymizeResult = await activityLogRepository.anonymizeForUser(
-      userId,
-      createAnonymizedActorEmail(userId)
+    // Self-service cannot orphan co-owned drives. Multi-member ownership blocks
+    // with guidance; the admin force-delete route is the escalation path (#908).
+    const ownedDrives = await accountRepository.getOwnedDrives(userId);
+    const drivesWithMembers = await Promise.all(
+      ownedDrives.map(async (drive) => ({
+        id: drive.id,
+        name: drive.name,
+        memberCount: await accountRepository.getDriveMemberCount(drive.id),
+      }))
     );
-    if (anonymizeResult.success) {
-      loggers.auth.info(`Anonymized activity logs for user ${userId}`);
-    } else {
-      // Log error but don't fail the deletion - user has right to delete their account
-      loggers.auth.error('Could not anonymize activity logs during account deletion:', new Error(anonymizeResult.error));
+    const disposition = planDriveDisposition(drivesWithMembers, { forceDelete: false });
+    if (disposition.blocked) {
+      return Response.json(
+        {
+          error:
+            'You must transfer ownership or delete all drives with other members before deleting your account',
+          multiMemberDrives: disposition.multiMemberDriveNames,
+        },
+        { status: 400 }
+      );
     }
 
-    // Clean up AI usage logs (no FK cascade exists for this table)
-    try {
-      await deleteAiUsageLogsForUser(userId);
-    } catch (error) {
-      loggers.auth.error('Could not delete AI usage logs during account deletion:', error as Error);
-    }
+    // Evidence the request receipt (best-effort) — the SLA clock starts now.
+    auditRequest(req, {
+      eventType: 'data.delete',
+      userId,
+      resourceType: 'account',
+      resourceId: userId,
+      details: { operation: 'erasure_request', requestedByType: 'self' },
+    });
 
-    // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
-    // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
-    // (tamper-evident hash chain must remain intact for compliance)
-    try {
-      await deleteMonitoringDataForUser(userId);
-    } catch (error) {
-      loggers.auth.error('Could not delete monitoring data during account deletion:', error as Error);
-    }
+    const { requestId, slaDeadline, appleSignIn } = await lodgeAndEnqueueErasure({
+      subjectUserId: userId,
+      subjectEmail: user.email,
+      stripeCustomerId: user.stripeCustomerId,
+      caller: actor,
+      requestedByType: 'self',
+      forceDelete: false,
+      subjectAppleLinked: user.appleId !== null,
+    });
 
-    // Revoke all OAuth integration tokens BEFORE user deletion (Art. 17 GDPR — #911)
-    // Best-effort: log failures but never block the right to erasure
-    try {
-      const { revoked, failed } = await revokeUserIntegrationTokens(userId);
-      loggers.auth.info(`OAuth token revocation complete for user ${userId}: revoked=${revoked}, failed=${failed}`);
-    } catch (error) {
-      loggers.auth.error('Could not revoke OAuth tokens during account deletion:', error as Error);
-    }
+    loggers.auth.info(`Account erasure queued for user ${userId} (request ${requestId})`);
 
-    // Log security audit BEFORE user deletion so the userId FK is still valid.
-    // Timeout prevents stalling account deletion if the advisory lock hangs.
-    auditRequest(req, { eventType: 'admin.user.deleted', userId, resourceType: 'account', resourceId: userId });
-
-    // Delete the user via repository seam (FK set null will preserve activity logs with userId = null)
-    await accountRepository.deleteUser(userId);
-
-    // Delete Stripe customer AFTER user deletion (Art. 17 GDPR — #910)
-    // Cloud-only: on-prem and tenant deployments don't use Stripe
-    // Right to erasure cannot be gated on Stripe API availability — log failures only
-    if (user.stripeCustomerId && isCloud()) {
-      try {
-        await stripe.customers.del(user.stripeCustomerId);
-        loggers.auth.info(`Stripe customer deleted: ${user.stripeCustomerId}`);
-      } catch (error) {
-        loggers.auth.error('Could not delete Stripe customer during account deletion:', error as Error);
-      }
-    }
-
-    loggers.auth.info(`User account deleted: ${userId}`);
-
-    return Response.json({ message: 'Account deleted successfully' }, { status: 200 });
+    return Response.json(
+      // appleSignIn: 'manual' means the client must show the "Stop Using Sign in
+      // with Apple" steps (TN3194) — no token on file, or revocation failed.
+      { message: 'Account erasure queued', requestId, status: 'queued', slaDeadline, appleSignIn },
+      { status: 202 }
+    );
   } catch (error) {
-    loggers.auth.error('Account deletion error:', error as Error);
-    return Response.json({ error: 'Failed to delete account' }, { status: 500 });
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
+    loggers.auth.error('Account erasure request error:', error as Error);
+    return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }
 }

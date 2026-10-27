@@ -15,14 +15,18 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { getRoleColorClasses } from '@/lib/utils';
 
 export interface PendingInvite {
   id: string;
   email: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  customRoleId?: string | null;
+  customRoleName?: string | null;
+  customRoleColor?: string | null;
   invitedByName: string;
   createdAt: string;
-  expiresAt: string;
+  expiresAt: string | null;
 }
 
 interface PendingInviteRowProps {
@@ -44,27 +48,40 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
     }
   };
 
-  const roleBadge =
-    invite.role === 'ADMIN'
-      ? (
-          <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
-            Admin
-          </Badge>
-        )
-      : invite.role === 'OWNER'
-      ? (
-          <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
-            Owner
-          </Badge>
-        )
-      : (
-          <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
-            Member
-          </Badge>
-        );
+  const roleBadge = (() => {
+    if (invite.role === 'ADMIN') {
+      return (
+        <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+          Admin
+        </Badge>
+      );
+    }
+    if (invite.role === 'OWNER') {
+      return (
+        <Badge className="bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300">
+          Owner
+        </Badge>
+      );
+    }
+    if (invite.customRoleName) {
+      return (
+        <Badge className={getRoleColorClasses(invite.customRoleColor ?? undefined)}>
+          {invite.customRoleName}
+        </Badge>
+      );
+    }
+    return (
+      <Badge className="bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+        Member
+      </Badge>
+    );
+  })();
 
-  const expiresAt = new Date(invite.expiresAt);
-  const isExpired = expiresAt.getTime() < Date.now();
+  const isExpired = invite.expiresAt !== null && new Date(invite.expiresAt).getTime() < Date.now();
+  const expiryLabel =
+    invite.expiresAt !== null && !isExpired
+      ? `Expires ${new Date(invite.expiresAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : null;
 
   return (
     <div
@@ -93,6 +110,9 @@ export function PendingInviteRow({ invite, canRevoke = false, onRevoke }: Pendin
           </div>
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Invited by {invite.invitedByName}
+            {expiryLabel && (
+              <span className="ml-2 text-gray-400 dark:text-gray-500">· {expiryLabel}</span>
+            )}
           </p>
         </div>
       </div>

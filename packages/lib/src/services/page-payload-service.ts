@@ -13,9 +13,10 @@
  * single-tx app shell), or opens its own transaction otherwise.
  */
 import { db } from '@pagespace/db/db';
-import { and, eq, desc, sql } from '@pagespace/db/operators';
+import { and, eq, ne, desc, sql } from '@pagespace/db/operators';
 import { channelMessages } from '@pagespace/db/schema/chat';
-import { pages, chatMessages } from '@pagespace/db/schema/core';
+import { pages } from '@pagespace/db/schema/core';
+import { conversations, messages } from '@pagespace/db/schema/conversations';
 import type {
   PagePayload,
   BreadcrumbEntry,
@@ -25,6 +26,11 @@ import type {
   Page,
 } from '../types';
 import { PageType } from '../utils/enums';
+import { readSheetDocument } from '../sheets/store';
+import { auditOrgPowerAccess, type OrgPowerRow } from '../permissions/accessible-page-ids';
+import { accessiblePageIdsSource } from '../permissions/accessible-page-ids-source';
+import { checkActorResourceAuthentication } from '../permissions/actor-authentication';
+import type { AccessActor } from '../permissions/access-actor';
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Runner = typeof db | Tx;
@@ -44,10 +50,12 @@ async function ensurePageAccessible(
   userId: string,
   pageId: string,
 ): Promise<void> {
-  const result = await runner.execute<{ allowed: boolean }>(
-    sql`SELECT EXISTS(SELECT 1 FROM accessible_page_ids_for_user(${userId}) WHERE page_id = ${pageId}) AS allowed`,
+  const result = await runner.execute<OrgPowerRow>(
+    sql`SELECT org_power_drive_id, org_power_org_id, org_power_role FROM ${accessiblePageIdsSource(userId)} WHERE page_id = ${pageId}`,
   );
-  const allowed = result.rows[0]?.allowed ?? false;
+  const allowed = result.rows.length > 0;
+  // ORG-4: opening a PRIVATE drive's page through org power is audited here as on every other path.
+  auditOrgPowerAccess(userId, result.rows);
   if (!allowed) {
     throw new Error(`loadPagePayload: page ${pageId} is not accessible to user ${userId}`);
   }
@@ -128,7 +136,7 @@ async function fetchBreadcrumb(
       WHERE c.depth < 128
     ),
     allowed AS (
-      SELECT page_id FROM accessible_page_ids_for_user(${userId})
+      SELECT page_id FROM ${accessiblePageIdsSource(userId)}
     )
     SELECT
       c.id,
@@ -182,26 +190,40 @@ async function fetchChatMessages(
   runner: Runner,
   pageId: string,
 ): Promise<ChatMessageSummary[]> {
+  // Excludes 'streaming' placeholders — this is a model-facing AI-payload context bag, not a
+  // client history view, so an empty mid-flight row would be pure noise. See Server Stream
+  // Durability epic PR 2.
+  //
+  // One `messages` table since the message-table merge (epic "Agent-Session
+  // Single Source of Truth", Phase 4 / D6). Page scope is the JOIN —
+  // `conversations.type = 'page'` AND `conversations.contextId = pageId` —
+  // because a row's page is its CONVERSATION's page. The emitted `pageId` is
+  // therefore the argument itself, which is what the join proves it equals.
   const rows = await runner
     .select({
-      id: chatMessages.id,
-      pageId: chatMessages.pageId,
-      conversationId: chatMessages.conversationId,
-      role: chatMessages.role,
-      content: chatMessages.content,
-      createdAt: chatMessages.createdAt,
-      isActive: chatMessages.isActive,
-      userId: chatMessages.userId,
+      id: messages.id,
+      conversationId: messages.conversationId,
+      role: messages.role,
+      content: messages.content,
+      createdAt: messages.createdAt,
+      isActive: messages.isActive,
+      userId: messages.userId,
     })
-    .from(chatMessages)
-    .where(and(eq(chatMessages.pageId, pageId), eq(chatMessages.isActive, true)))
-    .orderBy(desc(chatMessages.createdAt))
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .where(and(
+      eq(conversations.type, 'page'),
+      eq(conversations.contextId, pageId),
+      eq(messages.isActive, true),
+      ne(messages.status, 'streaming')
+    ))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(RECENT_MESSAGE_LIMIT);
 
   return rows
     .map((row) => ({
       id: row.id,
-      pageId: row.pageId,
+      pageId,
       conversationId: row.conversationId,
       role: row.role,
       content: row.content,
@@ -241,16 +263,35 @@ async function buildContext(runner: Runner, page: Page): Promise<PagePayloadCont
 }
 
 export async function loadPagePayload(
-  userId: string,
+  actor: AccessActor,
   pageId: string,
   tx?: Tx,
 ): Promise<PagePayload> {
+  const { userId } = actor;
   if (!userId) throw new Error('loadPagePayload: userId is required');
   if (!pageId) throw new Error('loadPagePayload: pageId is required');
+  // SEC-2/3 (D-OW-45): the visibility function knows nothing of the credential. A page and its breadcrumb live in one
+  // drive, so one org sign-in check covers the whole payload.
+  if (!(await checkActorResourceAuthentication(actor, pageId)).allowed) {
+    throw new Error(`loadPagePayload: page ${pageId} is not accessible to user ${userId}`);
+  }
 
   const run = async (runner: Runner): Promise<PagePayload> => {
     await ensurePageAccessible(runner, userId, pageId);
     const page = await fetchPageRow(runner, pageId);
+
+    // A sheet's content is generated from its rows, not read from the column.
+    //
+    // Rows are the source of truth for sheets; `pages.content` is a fallback
+    // that only matters until a sheet has been materialised. Serving the
+    // projection here is what lets the editor — and everything else that speaks
+    // the document format — keep working unchanged while writes go to rows. It
+    // also closes the split where a form submission landed in rows and was
+    // invisible to the person who owned the sheet.
+    if (page.type === PageType.SHEET) {
+      const projected = await readSheetDocument(pageId, runner as never);
+      if (projected !== null) page.content = projected;
+    }
     const [breadcrumb, context] = await Promise.all([
       fetchBreadcrumb(runner, userId, pageId),
       buildContext(runner, page),

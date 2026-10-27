@@ -9,7 +9,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail } from 'lucide-react';
+import { UserPlus, UserMinus, UserCheck, UserX, MessageSquare, MoreVertical, User, Mail, Ban } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,6 +23,7 @@ import { VerificationRequiredAlert } from '@/components/VerificationRequiredAler
 import { post, patch, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from '@/hooks/useSocket';
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { BlockedUsersList } from '@/components/moderation/BlockedUsersList';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -105,15 +106,12 @@ export default function ConnectionsPage() {
       const data = await response.json();
 
       if (!data.user) {
-        const errorMsg: string = data.error || '';
-        // Only surface the invite CTA for true "user not found" — not for
-        // self-search or existing PENDING/ACCEPTED/BLOCKED relationships,
-        // which also return user: null but with a specific reason.
-        if (errorMsg.toLowerCase().includes('no user found')) {
-          setInvitableEmail(trimmedEmail);
-        } else {
-          toast.error(errorMsg || 'No user found with this email address');
-        }
+        // The search endpoint now returns a single generic `{ user: null }` for
+        // every non-actionable case (no account, self-search, or an existing
+        // PENDING/ACCEPTED/BLOCKED relationship) so relationship state cannot be
+        // enumerated. Offer the invite path uniformly; /api/connections/invite
+        // enforces the real rules (dedupe, blocks, self) when a request is sent.
+        setInvitableEmail(trimmedEmail);
         return;
       }
 
@@ -137,26 +135,50 @@ export default function ConnectionsPage() {
     }
   };
 
-  const handleInviteToPageSpace = async () => {
+  const handleSendRequestOrInvite = async () => {
     if (!invitableEmail) return;
+    const targetEmail = invitableEmail;
 
     setIsInviting(true);
     try {
-      await post('/api/connections/invite', { email: invitableEmail });
-      toast.success(`Connection invite sent to ${invitableEmail}`);
+      try {
+        await post('/api/connections/invite', { email: targetEmail });
+      } catch (error) {
+        const errorMessage = (error as Error).message ?? '';
+        // Only caller-side conditions are safe to surface — they reveal nothing
+        // about the target's account or relationship state.
+        if (/verification|requiresEmailVerification/i.test(errorMessage)) {
+          setShowVerificationAlert(true);
+          return;
+        }
+        if (/too many/i.test(errorMessage)) {
+          toast.error('Too many requests right now. Please try again later.');
+          return;
+        }
+        // Everything else — already connected / pending / blocked / self / "invite
+        // already pending" / generic failure — falls through to the SAME uniform
+        // confirmation below. The connections/search response is intentionally
+        // generic (L2); surfacing these distinguishing outcomes here would let a
+        // user recover the existence/relationship state it conceals.
+      }
+      toast.success(`If ${targetEmail} can be reached, your connection request is on its way.`);
       setEmail('');
       setInvitableEmail(null);
-    } catch (error) {
-      const errorMessage = (error as Error).message;
-      if (errorMessage.includes('already pending')) {
-        toast.error(`You already have a pending connection invite for ${invitableEmail}`);
-      } else if (errorMessage.includes('requiresEmailVerification') || errorMessage.includes('verification')) {
-        setShowVerificationAlert(true);
-      } else {
-        toast.error(errorMessage || 'Failed to send invite');
-      }
     } finally {
       setIsInviting(false);
+    }
+  };
+
+  const handleBlockUser = async (userId: string, name: string) => {
+    if (!window.confirm(`Block ${name}? Neither of you will be able to send the other direct messages.`)) return;
+    try {
+      await post(`/api/users/${encodeURIComponent(userId)}/block`);
+      toast.success(`${name} is blocked`);
+      mutate('/api/connections?status=ACCEPTED');
+      mutate('/api/connections?status=BLOCKED');
+    } catch (error) {
+      toast.error('Failed to block user');
+      console.error('Block user error:', error);
     }
   };
 
@@ -298,6 +320,13 @@ export default function ConnectionsPage() {
                                 <UserMinus className="h-4 w-4 mr-2" />
                                 Remove Connection
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void handleBlockUser(connection.user.id, displayName)}
+                                className="text-destructive"
+                              >
+                                <Ban className="h-4 w-4 mr-2" />
+                                Block
+                              </DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -306,6 +335,9 @@ export default function ConnectionsPage() {
                   })}
                 </div>
               )}
+              <div className="mt-6">
+                <BlockedUsersList />
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -428,18 +460,18 @@ export default function ConnectionsPage() {
                   <div className="flex items-start gap-3 rounded-lg border border-dashed p-4">
                     <Mail className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium">User not found</p>
+                      <p className="text-sm font-medium">Send a connection request</p>
                       <p className="text-sm text-muted-foreground truncate">
-                        {invitableEmail} is not on PageSpace yet.
+                        We&apos;ll reach {invitableEmail} — inviting them to PageSpace if they&apos;re not a member yet.
                       </p>
                     </div>
                     <Button
                       size="sm"
-                      onClick={handleInviteToPageSpace}
+                      onClick={handleSendRequestOrInvite}
                       disabled={isInviting}
                     >
                       <Mail className="h-4 w-4 mr-2" />
-                      {isInviting ? 'Sending...' : 'Invite to PageSpace'}
+                      {isInviting ? 'Sending...' : 'Send request'}
                     </Button>
                   </div>
                 )}

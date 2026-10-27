@@ -95,11 +95,15 @@ vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => 
   updateConnectionStatus: mockUpdateConnectionStatus,
 }));
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn(async () => null) }));
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: mockGetDriveAccess,
 }));
 
 import { GET } from '../route';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 // Test fixtures
 const BASE_URL = 'http://localhost:3000';
@@ -320,6 +324,30 @@ describe('GET /api/user/integrations/callback', () => {
 
       expect(mockExchangeOAuthCode).toHaveBeenCalled();
     });
+
+    it('exchanges the code using the canonical builtin token endpoint, not a stale persisted copy', async () => {
+      mockGetProviderById.mockResolvedValueOnce({
+        id: 'provider-1',
+        slug: 'github',
+        providerType: 'builtin',
+        config: {
+          authMethod: {
+            type: 'oauth2',
+            // Persisted tokenUrl has drifted from what's shipped in code.
+            config: { authUrl: 'https://stale.example.com/authorize', tokenUrl: 'https://stale.example.com/token', scopes: [] },
+          },
+        },
+      });
+
+      const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
+      await GET(request);
+
+      const canonicalAuthMethod = builtinProviders.github.authMethod;
+      expect(mockExchangeOAuthCode).toHaveBeenCalledWith(
+        canonicalAuthMethod.type === 'oauth2' ? canonicalAuthMethod.config : undefined,
+        expect.anything()
+      );
+    });
   });
 
   // ── Configuration errors ─────────────────────────────────────────
@@ -471,7 +499,7 @@ describe('GET /api/user/integrations/callback', () => {
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       await GET(request);
 
-      expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-456', 'user-123');
+      expect(mockGetDriveAccess).toHaveBeenCalledWith('drive-456', expect.objectContaining({ userId: 'user-123' }));
     });
 
     it('rejects when user lacks admin access to drive', async () => {
@@ -482,6 +510,18 @@ describe('GET /api/user/integrations/callback', () => {
       expect(response.status).toBe(307);
       const url = getRedirectUrl(response);
       expect(url.searchParams.get('error')).toBe('access_denied');
+    });
+
+    it('POL-11 refuses, stores nothing and re-activates nothing when the org no longer allows the service', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValueOnce({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
+      mockGetDriveAccess.mockResolvedValueOnce({ isOwner: false, isAdmin: true });
+      mockFindDriveConnection.mockResolvedValueOnce({ id: 'suspended-conn' });
+      const response = await GET(createCallbackRequest({ code: 'auth-code', state: 'valid-state' }));
+
+      expect(getRedirectUrl(response).searchParams.get('error')).toBe('org_policy');
+      expect(mockCreateConnection).not.toHaveBeenCalled();
+      expect(mockUpdateConnectionCredentials).not.toHaveBeenCalled();
+      expect(mockUpdateConnectionStatus).not.toHaveBeenCalled();
     });
 
     it('creates drive-scoped connection for admin users', async () => {
@@ -564,10 +604,13 @@ describe('GET /api/user/integrations/callback', () => {
       expect(url.pathname).toBe(DEFAULT_RETURN);
     });
 
-    it('rejects returnUrl containing encoded protocol like javascript:', async () => {
+    it('rejects returnUrl with a javascript: scheme smuggled into the path', async () => {
+      // A colon in a QUERY VALUE is data and now passes validation (the OAuth
+      // consent redirect_uri fix) — the scheme-smuggling shape that must stay
+      // rejected is a colon in the PATH portion.
       mockVerifySignedState.mockReturnValueOnce({
         ...mockStateData,
-        returnUrl: '/redirect?to=javascript:alert(1)',
+        returnUrl: '/javascript:alert(1)',
       });
       const request = createCallbackRequest({ code: 'auth-code', state: 'valid-state' });
       const response = await GET(request);

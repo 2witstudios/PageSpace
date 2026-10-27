@@ -1,0 +1,128 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { canConsumeAI, type GateOptions, type SpendRefusal } from '@pagespace/lib/billing/credit-gate';
+import { automationSpend, personTriggeredSpend } from '@pagespace/lib/billing/spend-target';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { CREDIT_HOLD_ESTIMATE_CENTS, MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import { creditDeniedError } from '@pagespace/lib/billing/automation-run-record';
+import { resolveSteps, hasAiStep, countAiSteps } from './core/step-plan';
+import type { RunAdmission, RunCreditSpend, WorkflowExecutionInput } from './workflow-executor';
+
+/**
+ * How a run was started, which decides the gate's caps:
+ *   - interactive: a user pressed Run. Same bounds as chat — the per-user/day
+ *     exposure cap applies and the in-flight cap stops a click-storm fan-out.
+ *   - scheduled: a cron fired it. Like the calendar/zoom trigger executors, the
+ *     interactive daily backstop does not apply (one fire per schedule tick).
+ */
+type WorkflowRunMode = 'interactive' | 'scheduled';
+
+type WorkflowCreditHold =
+  | { allowed: true; release: () => void; creditSpend: RunCreditSpend }
+  | { allowed: false; reason: GateReason; refusal?: SpendRefusal };
+
+/** The parts of a run's input the gate reads: where it spends, who it is recorded against, and what will run. */
+type GatedRunInput = Pick<WorkflowExecutionInput, 'driveId' | 'createdBy' | 'steps' | 'prompt' | 'agentPageId'>;
+
+/**
+ * The run error for a denied gate — the same text the trigger executors return. A refused
+ * source adds why, so a skipped automation's run row says its drive wallet was empty,
+ * paused, or missing (SPEND-6). Written and read back by one lib module (automation-run-record),
+ * which the workflow and trigger surfaces use to show why a run was skipped.
+ */
+export { creditDeniedError };
+
+/**
+ * Credit gate for a workflow run, taken BEFORE executeWorkflow builds a model.
+ * A run has no person present, so its consumer is the drive it runs in: it
+ * reserves on the drive wallet or is skipped, never on its creator's credits or
+ * allowance (SPEND-6). `createdBy` is only who the hold and usage are recorded
+ * against. The reservation is sized from the steps that will actually execute.
+ * Callers pass it to the executor through `creditAdmission` rather than calling
+ * it before the run. executeWorkflow debits real usage itself
+ * (AIMonitoring.trackUsage → consumeCredits, no holdId) on the wallet named in
+ * `creditSpend`, so the hold only reserves headroom while the run is in flight:
+ * the caller must call `release` once the run settles, in a `finally`.
+ * `release` is idempotent — the hold is freed exactly once.
+ *
+ * One hold covers the whole run, sized by its ai-step count (a step chain bills
+ * once per ai step). A deterministic-only chain runs no model: no gate, no hold.
+ */
+export async function acquireWorkflowCreditHold(
+  input: GatedRunInput,
+  mode: WorkflowRunMode,
+  /**
+   * The person who pressed Run, for a manual run. A manual run is that person's spend (the actor
+   * pays, as for a channel @mention): it is gated as them under personTriggeredSpend, so THEIR
+   * per-consumer caps on the drive wallet bind (WAL-7). Still the drive wallet or a refusal —
+   * never their own credits or seat. Absent for a scheduled run or an event trigger: no person is
+   * present: the drive wallet spends, gated as the workflow's creator, whose caps bind ([D-OW-34]).
+   */
+  triggeredBy?: string,
+): Promise<WorkflowCreditHold> {
+  const userId = triggeredBy ?? input.createdBy;
+  // SPEND-6: a scheduled or triggered run has no person present; it spends the drive wallet or is
+  // skipped — never its creator's credits or allowance — and runs on behalf of its creator, so the
+  // creator's per-consumer caps on that wallet bind it ([D-OW-34]).
+  const target = triggeredBy ? personTriggeredSpend(input.driveId) : automationSpend(input.driveId);
+  const steps = resolveSteps({ steps: input.steps ?? null, prompt: input.prompt, agentPageId: input.agentPageId });
+  if (!hasAiStep(steps)) return { allowed: true, release: () => {}, creditSpend: { spend: target, userId } };
+
+  const [user] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, userId));
+
+  const estCostCents = CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps);
+  const opts: GateOptions = mode === 'interactive'
+    ? { spend: target, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
+    : { spend: target, estCostCents, skipDailyCap: true };
+
+  const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), opts);
+  if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
+
+  // The run settles on the wallet the gate reserved on (WAL-5): the drive wallet. Its usage is
+  // recorded as the person the gate bound — the presser of a manual Run, else the creator — so
+  // the spend counts toward the same cap that admitted it (review #2817 P2-3).
+  const creditSpend: RunCreditSpend = { spend: target, walletId: gate.walletId, userId };
+  const holdId = gate.holdId;
+  if (!holdId) return { allowed: true, release: () => {}, creditSpend };
+
+  let released = false;
+  return {
+    allowed: true,
+    creditSpend,
+    release: () => {
+      if (released) return;
+      released = true;
+      void releaseHold(holdId).catch(() => {});
+    },
+  };
+}
+
+/**
+ * The credit gate as executeWorkflow's `admit` hook, so it runs INSIDE the
+ * run's atomic claim: an overlapping fire of the same workflow loses the claim
+ * and never gates, and a refused fire is finalized by the executor as a
+ * `cancelled` run whose error names the reason (a skip, not a failure). The
+ * executor calls `release` exactly once when an admitted run settles.
+ * `onDenied` hands the raw gate reason to a caller that maps it (the manual
+ * Run route's 402/429).
+ */
+export function creditAdmission(
+  input: GatedRunInput,
+  mode: WorkflowRunMode,
+  onDenied?: (reason: GateReason) => void,
+  /** The person who pressed Run (a manual run only): their caps bind (see acquireWorkflowCreditHold). */
+  triggeredBy?: string,
+): () => Promise<RunAdmission> {
+  return async () => {
+    const hold = await acquireWorkflowCreditHold(input, mode, triggeredBy);
+    if (hold.allowed) return { admitted: true, release: hold.release, creditSpend: hold.creditSpend };
+    onDenied?.(hold.reason);
+    return { admitted: false, error: creditDeniedError(hold.reason, hold.refusal) };
+  };
+}

@@ -27,6 +27,11 @@ vi.mock('@/lib/auth', () => ({
   verifyAuth: vi.fn(),
 }));
 
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: { API: { maxAttempts: 100, windowMs: 60000 } },
+}));
+
 // Track all chained query builder calls
 const mockLimit = vi.fn();
 const mockWhere = vi.fn();
@@ -74,6 +79,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
   isNotNull: vi.fn((col: unknown) => ({ _isNotNull: true, col })),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ _inArray: true, col, vals })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
@@ -98,12 +104,19 @@ vi.mock('@/lib/utils/query-params', () => ({
   parseBoundedIntParam: vi.fn((_raw: string | null, opts: { defaultValue: number }) => opts.defaultValue),
 }));
 
+vi.mock('@/lib/users/visibility', () => ({
+  searchRelatedProfilesByName: vi.fn(),
+}));
+
 import { GET } from '../route';
+import { searchRelatedProfilesByName } from '@/lib/users/visibility';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, isNotNull } from '@pagespace/db/operators';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // ============================================================================
 // Test Helpers
@@ -144,6 +157,10 @@ function setupDbChains(
   });
 }
 
+// The related-profiles branch is delegated to `searchRelatedProfilesByName`
+// (mocked here), so it issues no `db.select` of its own — the route's own select
+// order stays: 1. public profiles  2. email  3. profile lookup.
+
 // ============================================================================
 // GET /api/users/search
 // ============================================================================
@@ -156,6 +173,10 @@ describe('GET /api/users/search', () => {
       // @ts-expect-error - test mock with extra properties
       hasSessionBearerToken: false,
     });
+    vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    // Default: no related matches; tests that exercise the related branch set a
+    // return value on this mock. It never issues a db.select of its own.
+    vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
     setupDbChains();
   });
 
@@ -202,7 +223,9 @@ describe('GET /api/users/search', () => {
   });
 
   describe('profile search results', () => {
-    it('should return profile results when found', async () => {
+    it('should return profile results WITHOUT an email (M3 — email harvest)', async () => {
+      // The DB row deliberately still carries an email to prove the route drops
+      // it: a 2-char substring match must never surface a public profile's email.
       const profileResults = [
         {
           userId: 'user_456',
@@ -227,8 +250,31 @@ describe('GET /api/users/search', () => {
         displayName: 'Test User',
         bio: 'A bio',
         avatarUrl: 'https://example.com/avatar.png',
-        email: 'test@example.com',
       });
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+  });
+
+  describe('rate limiting (M3)', () => {
+    it('should return 429 when the per-user rate limit is exceeded', async () => {
+      vi.mocked(checkDistributedRateLimit).mockResolvedValue({
+        allowed: false,
+        retryAfter: 42,
+      });
+
+      const request = new Request('https://example.com/api/users/search?q=test');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get('Retry-After')).toBe('42');
+      expect(body.error).toBe('Too many requests');
+    });
+
+    it('should NOT count too-short queries against the rate limit', async () => {
+      const request = new Request('https://example.com/api/users/search?q=a');
+      await GET(request);
+      expect(checkDistributedRateLimit).not.toHaveBeenCalled();
     });
   });
 
@@ -352,6 +398,97 @@ describe('GET /api/users/search', () => {
     });
   });
 
+  describe('related profiles (find friends/collaborators by name)', () => {
+    it('finds a PRIVATE friend/collaborator by name via the related branch', async () => {
+      // searchRelatedProfilesByName returns a row that would NOT appear in the
+      // public profile query (isPublic = false). It must still surface by name.
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        {
+          userId: 'friend_1',
+          username: 'privfriend',
+          displayName: 'Private Friend',
+          bio: 'hidden bio',
+          avatarUrl: null,
+        },
+      ]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=priv');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'friend_1',
+        username: 'privfriend',
+        displayName: 'Private Friend',
+        bio: 'hidden bio',
+        avatarUrl: null,
+      });
+      // Same public-profile shape — the related branch NEVER carries an email.
+      expect(body.users[0]).not.toHaveProperty('email');
+      // The route delegates the relationship scoping to the helper, passing the
+      // caller id, an escaped LIKE pattern, and the result limit.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%priv%', 10);
+    });
+
+    it('passes a LIKE-escaped pattern to the related branch so wildcards are literal', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=' + encodeURIComponent('%%'));
+      await GET(request);
+
+      // `%%` must be escaped to `\%\%`, not passed through as a match-all wildcard.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_123' }), '%\\%\\%%', 10);
+    });
+
+    it('de-dupes a user who is both a public match and a related match', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null, email: 'x@y.com' },
+      ];
+      setupDbChains(profileResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=shared');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('shared_1');
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+
+    it('preserves the exact-email match ahead of name matches (email-first, survives the limit)', async () => {
+      // A related and a public name match, plus an exact-email match for a THIRD
+      // user. With limit=1 the email match must win (highest intent).
+      vi.mocked(parseBoundedIntParam).mockReturnValueOnce(1);
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'rel', username: 'rel', displayName: 'Related One', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'pub', username: 'pub', displayName: 'Public One', bio: null, avatarUrl: null },
+      ];
+      const emailResults = [
+        { userId: 'mail', email: 'exact@example.com', name: 'Exact Mail' },
+      ];
+      setupDbChains(profileResults, emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=exact@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('mail');
+      expect(body.users[0].email).toBe('exact@example.com');
+    });
+  });
+
   describe('emailVerified gate (Review C1: temp-user-via-search re-invite path)', () => {
     it('given an email-shaped query, the email-match where-clause MUST compose isNotNull(users.emailVerified) so temp users (emailVerified IS NULL) cannot surface in search results', async () => {
       const request = new Request('https://example.com/api/users/search?q=temp@example.com');
@@ -362,10 +499,14 @@ describe('GET /api/users/search', () => {
       // fall through to the userId-path which auto-accepts. See Review 1
       // finding C1 / Review 2 §1.
       expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
+      // The email arg now flows through the encryption-aware dual-lookup edge
+      // (`userEmailMatch`), so it is an opaque Drizzle SQL condition rather than a
+      // mock-inspectable `eq`. Anchor on the verified-gate marker instead: the
+      // email lookup's and(...) MUST still compose isNotNull(emailVerified).
       const emailWhereCall = vi.mocked(and).mock.calls.find((args) =>
-        args.some((a) => (a as { _eq?: true; col?: unknown }).col === 'users.email')
+        args.some((a) => (a as { _isNotNull?: true; col?: unknown }).col === 'users.emailVerified')
       );
-      expect(emailWhereCall, 'email lookup should use and(eq(email,...), isNotNull(emailVerified))').toBeDefined();
+      expect(emailWhereCall, 'email lookup should compose isNotNull(emailVerified)').toBeDefined();
       expect(emailWhereCall).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ _isNotNull: true, col: 'users.emailVerified' }),

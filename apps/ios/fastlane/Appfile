@@ -1,0 +1,8 @@
+app_identifier("ai.pagespace.ios")
+team_id("M96WTV3CKX")
+
+# Interactive Apple ID login is not used. Authentication is via an App Store Connect
+# API key, configured in the Fastfile from these environment variables:
+#   ASC_KEY_ID       - the key's Key ID
+#   ASC_ISSUER_ID    - the App Store Connect issuer ID
+#   ASC_KEY_PATH     - path to the .p8 private key file (kept out of git)

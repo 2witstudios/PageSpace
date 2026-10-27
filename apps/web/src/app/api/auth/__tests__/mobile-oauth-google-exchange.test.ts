@@ -155,7 +155,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       success: true,
       userInfo: mockUserInfo,
     } as never);
-    vi.mocked(createOrLinkOAuthUser).mockResolvedValue(mockUser as never);
+    vi.mocked(createOrLinkOAuthUser).mockResolvedValue({ status: 'linked', user: mockUser } as never);
     vi.mocked(validateOrCreateDeviceToken).mockResolvedValue({
       deviceToken: 'mock-device-token',
     } as never);
@@ -232,6 +232,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockUser.id,
         deviceId: 'ios-device-789',
@@ -354,6 +355,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockUser.id,
         deviceId: 'ios-device-789',
@@ -622,7 +624,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
   });
 
   describe('session creation', () => {
-    it('creates 90-day session for mobile OAuth', async () => {
+    it('SEC-2 (partial) creates a 90-day session for mobile OAuth carrying Google single-factor evidence (D-OW-45)', async () => {
       const request = new Request('http://localhost/api/auth/mobile/oauth/google/exchange', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -632,6 +634,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockUser.id,
         type: 'user',
         scopes: ['*'],
@@ -748,6 +751,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: existingDeviceToken,
         userId: mockUser.id,
         deviceId: 'ios-device-789',
@@ -769,6 +773,7 @@ describe('/api/auth/mobile/oauth/google/exchange', () => {
       await POST(request);
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: mockUser.id,
         deviceId: 'ios-device-789',

@@ -32,6 +32,11 @@ vi.mock('@pagespace/lib/compliance/export/gdpr-export', () => ({
   collectAllUserData: vi.fn(),
 }));
 
+const mockGate = { derivedContent: vi.fn(), refusedDrives: vi.fn(), refusedDerivedPages: vi.fn() };
+vi.mock('@pagespace/lib/compliance/export/export-sign-in-gate', () => ({
+  credentialExportGate: vi.fn(() => mockGate),
+}));
+
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: vi.fn(),
   resetDistributedRateLimit: vi.fn(),
@@ -58,6 +63,8 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
+import { credentialExportGate } from '@pagespace/lib/compliance/export/export-sign-in-gate';
+import { buildNativeExportFiles, EXPORT_SCHEMA_VERSION } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
@@ -82,15 +89,46 @@ const mockUserData = {
   profile: { id: 'user-1', email: 'test@example.com' },
   drives: [{ id: 'drive-1', name: 'My Drive' }],
   pages: [{ id: 'page-1', title: 'Page 1' }],
+  sheets: [],
   messages: [],
   files: [],
   activity: [],
+  systemLogs: [],
+  apiMetrics: [],
+  errorLogs: [],
   aiUsage: [],
   tasks: [],
   sessions: [],
   notifications: [],
   displayPreferences: [],
+  settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
   personalization: null,
+  personalizationCandidates: [],
+  pulseSummaries: [],
+  withheld: [],
+  // The categories the "Agent-Session Single Source of Truth" epic added. They
+  // were missing from the export for the whole epic, and THIS FILE is why
+  // nobody noticed: the category assertion below used to be a hand-written list
+  // that agreed with whatever the route already emitted, so an absent category
+  // could never fail it. It is now derived — see the test.
+  agentWorkspaces: [{ id: 'ws-1', role: 'owner', name: 'Working context', shells: [] }],
+  agentAccounts: { accounts: [{ id: 'acct-1', kind: 'api_key', name: 'Weather', allowedOrigins: ['https://api.weather.example:443'], status: 'active' }], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] },
+  streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
+  contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
+  localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
+  // Spec X-2 (Organizations & Wallets): the subject's org life and their own money.
+  organizations: [{ id: 'org-1', name: 'Northwind', slug: 'northwind', createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+  orgMembership: {
+    memberships: [{ orgId: 'org-1', orgName: 'Northwind', role: 'MEMBER', joinedAt: new Date('2026-09-04T00:00:00.000Z'), seatAllowanceCents: 3000 }],
+    departures: [],
+    joinRequests: [],
+    guestHolds: [],
+  },
+  wallet: {
+    wallet: { id: 'w-1', monthlyRemainingCents: 1234, monthlyAllowanceCents: 900, spentCents: 0, topupRemainingCents: 0, debtCents: 0, status: 'active', fallbackRule: null, defaultSpendSource: null, alwaysOwnCredits: false, monthlyPeriodStart: null, monthlyPeriodEnd: null, createdAt: new Date('2026-09-04T00:00:00.000Z') },
+    fundingLegs: [{ id: 'leg-1', walletId: 'w-drive', walletOwnerType: 'org', walletSubjectType: 'drive', walletSubjectDriveName: 'Product', funderKind: 'donation', originalCents: 500, remainingCents: 200, nonRefundable: true, createdAt: new Date('2026-09-04T00:00:00.000Z') }],
+    spendOverrides: [],
+  },
 };
 
 describe('GET /api/account/export', () => {
@@ -185,28 +223,104 @@ describe('GET /api/account/export', () => {
       expect(response.body).toBeInstanceOf(ReadableStream);
     });
 
-    it('appends all data categories to archive', async () => {
+    /**
+     * DERIVED, NOT HAND-WRITTEN.
+     *
+     * This assertion used to be a literal list of the fourteen file names the
+     * route happened to emit, plus a hardcoded `toHaveBeenCalledTimes(15)`. A
+     * list like that agrees with the code by construction: when the
+     * agent-session epic moved a large amount of user work into
+     * `agent_workspaces` / `agent_workspace_shells` / `ai_stream_sessions` and
+     * grew no collector for any of it, this test stayed green — it was PINNING
+     * the omission rather than catching it.
+     *
+     * So it now derives the expectation from `buildNativeExportFiles`, the same
+     * function the route calls, and asserts the archive carries exactly that
+     * inventory. The list can never again lag the bundle. Catching the missing
+     * COLLECTOR is a different job, done at the schema level by
+     * `packages/lib/src/compliance/export/gdpr-export-coverage.test.ts`.
+     */
+    it('appends every file the native bundle defines, and nothing else', async () => {
       vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
 
       await GET(createRequest());
 
-      // Should append 11 JSON files (sessions, notifications, displayPreferences added; personalization omitted when null)
-      expect(mockArchive.append).toHaveBeenCalledTimes(11);
-      // Verify each data category name pattern
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );
-      expect(appendCalls.some((n: string) => n.includes('profile.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('drives.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('pages.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('messages.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('files-metadata.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('activity.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('ai-usage.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('tasks.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('sessions.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('notifications.json'))).toBe(true);
-      expect(appendCalls.some((n: string) => n.includes('display-preferences.json'))).toBe(true);
+      const basenames = appendCalls.map((n: string) => n.split('/').pop()!);
+      const expected = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
+
+      // manifest.json is always present (Art 20 self-describing bundle).
+      expect(basenames.sort()).toEqual([...expected, 'manifest.json'].sort());
+      expect(mockArchive.append).toHaveBeenCalledTimes(expected.length + 1);
+    });
+
+    it('carries the agent-session categories the epic left out of the export', () => {
+      // Regression pins, named individually so a future edit that drops one
+      // fails with the category rather than as a set difference.
+      const names = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
+      expect(names).toContain('agent-workspaces.json');
+      expect(names).toContain('stream-state.json');
+      // The machines the subject enrolled as local environments are a first-class category.
+      expect(names).toContain('local-environments.json');
+    });
+
+    it('manifest.json documents the schema version and file inventory', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(createRequest());
+
+      const manifestCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('manifest.json')
+      );
+      expect(manifestCall).toBeDefined();
+      const manifest = JSON.parse(manifestCall![0] as string);
+      // Against the exported constant, not a hardcoded literal. A pinned
+      // version string turns every LEGITIMATE bump into a red test here, which
+      // is pressure not to bump — and the manifest's whole job is to let a
+      // recipient tell one bundle inventory from another. The substance is
+      // asserted below: that the manifest actually lists the files shipped.
+      expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
+      expect(manifest.schemaVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(manifest.format).toBe('native');
+      expect(Array.isArray(manifest.files)).toBe(true);
+      expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);
+    });
+
+    it('SEC-2 (partial) collects through the requesting session credential, and the manifest names what an org sign-in policy left out', async () => {
+      const withheld = [{ category: 'pulseSummaries', count: 1, code: 'org_strong_sign_in_required', orgIds: ['org-1'] }];
+      vi.mocked(collectAllUserData).mockResolvedValue({ ...mockUserData, withheld } as never);
+
+      await GET(createRequest());
+
+      expect(credentialExportGate).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1', via: 'credential' }));
+      expect(collectAllUserData).toHaveBeenCalledWith(expect.anything(), 'user-1', mockGate);
+      const manifestCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('manifest.json')
+      );
+      const manifest = JSON.parse(manifestCall![0] as string);
+      expect(manifest.withheld).toEqual([expect.objectContaining({ ...withheld[0], note: expect.stringContaining('passkey') })]);
+    });
+
+    it('format=portable emits a single schema.org data.json plus manifest', async () => {
+      vi.mocked(collectAllUserData).mockResolvedValue(mockUserData as never);
+
+      await GET(new Request('http://localhost/api/account/export?format=portable'));
+
+      const appendCalls = mockArchive.append.mock.calls.map(
+        (call: unknown[]) => (call[1] as { name: string }).name
+      );
+      // portable = data.json + manifest.json only
+      expect(mockArchive.append).toHaveBeenCalledTimes(2);
+      expect(appendCalls.some((n: string) => n.includes('data.json'))).toBe(true);
+      expect(appendCalls.some((n: string) => n.includes('manifest.json'))).toBe(true);
+
+      const dataCall = mockArchive.append.mock.calls.find(
+        (call: unknown[]) => (call[1] as { name: string }).name.includes('data.json')
+      );
+      const portable = JSON.parse(dataCall![0] as string);
+      expect(portable['@context']).toBe('https://schema.org');
     });
 
     it('appends personalization.json when personalization data exists', async () => {
@@ -217,11 +331,15 @@ describe('GET /api/account/export', () => {
 
       await GET(createRequest());
 
-      expect(mockArchive.append).toHaveBeenCalledTimes(12);
       const appendCalls = mockArchive.append.mock.calls.map(
         (call: unknown[]) => (call[1] as { name: string }).name
       );
       expect(appendCalls.some((n: string) => n.includes('personalization.json'))).toBe(true);
+      // One more file than the null-personalization case — asserted as a
+      // DELTA rather than a hardcoded total, so a category added to the bundle
+      // does not silently re-pin this count either.
+      const withoutPersonalization = buildNativeExportFiles(mockUserData as never).length;
+      expect(mockArchive.append).toHaveBeenCalledTimes(withoutPersonalization + 1 + 1);
     });
 
     it('calls archive.finalize()', async () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams, usePathname } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { formatDistanceToNow } from 'date-fns';
@@ -9,20 +9,16 @@ import { Search, Hash } from 'lucide-react';
 
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
-import { cn, isElectron } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
-import DriveSwitcher from '@/components/layout/navbar/DriveSwitcher';
-import DashboardFooter from './DashboardFooter';
-import DriveFooter from './DriveFooter';
-import PrimaryNavigation from './PrimaryNavigation';
+import SidebarShell from './SidebarShell';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
-import { isEditingActive } from '@/stores/useEditingStore';
-import { useDriveStore } from '@/hooks/useDrive';
-import { canManageDrive } from '@/hooks/usePermissions';
+import { useEditingStore } from '@/stores/useEditingStore';
 import type { InboxItem, InboxResponse } from '@pagespace/lib/types';
+import { focusDriveId, useFocus } from '@/lib/dashboard/focus';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -33,35 +29,28 @@ const fetcher = async (url: string) => {
 };
 
 export default function ChannelsSidebar({ className }: SidebarProps) {
-  const params = useParams();
   const pathname = usePathname();
   const [searchQuery, setSearchQuery] = useState('');
   const [allItems, setAllItems] = useState<InboxItem[]>([]);
   const [pagination, setPagination] = useState<{ hasMore: boolean; nextCursor: string | null } | null>(null);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasLoadedMore, setHasLoadedMore] = useState(false);
-  const [isElectronMac, setIsElectronMac] = useState(false);
   const isSheetBreakpoint = useBreakpoint('(max-width: 1023px)');
   const setLeftSheetOpen = useLayoutStore((state) => state.setLeftSheetOpen);
 
-  const driveIdParams = params.driveId;
-  const driveId = Array.isArray(driveIdParams) ? driveIdParams[0] : driveIdParams;
-
-  const drives = useDriveStore((state) => state.drives);
-  const drive = drives.find((d) => d.id === driveId);
-  const canManage = canManageDrive(drive);
+  const driveId = focusDriveId(useFocus());
 
   const apiUrl = driveId
     ? `/api/inbox?type=channel&driveId=${driveId}&limit=20`
     : '/api/inbox?type=channel&limit=20';
 
-  const { hasLoadedRef } = useInboxSocket({ driveId });
+  const { hasLoadedRef } = useInboxSocket({ cacheKey: apiUrl, scope: 'channel', driveId });
 
   const { data, error } = useSWR<InboxResponse>(apiUrl, fetcher, {
     refreshInterval: 0,
-    isPaused: () => hasLoadedRef.current && isEditingActive(),
+    isPaused: () => hasLoadedRef.current && useEditingStore.getState().isAnyEditing(),
     onSuccess: () => { hasLoadedRef.current = true; },
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
   });
 
   // Reset state on driveId change BEFORE the data-sync effect so that an
@@ -95,9 +84,6 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
     }
   }, [data, hasLoadedMore]);
 
-  useEffect(() => {
-    setIsElectronMac(isElectron() && /Mac/.test(navigator.platform));
-  }, []);
 
   const loadMore = async () => {
     if (!pagination?.hasMore || !pagination?.nextCursor || isLoadingMore) return;
@@ -139,18 +125,8 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
   };
 
   return (
-    <aside
-      className={cn(
-        'flex h-full w-full flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground liquid-glass-regular rounded-tr-lg border border-[var(--separator)] shadow-[var(--shadow-elevated)] dark:shadow-none overflow-hidden',
-        className
-      )}
-    >
-      <div className="flex h-full flex-col px-3 py-3">
-        <div className={cn('mb-3', isElectronMac && isSheetBreakpoint && 'pl-[60px]')}>
-          <DriveSwitcher />
-        </div>
-
-        <PrimaryNavigation driveId={driveId} />
+    <SidebarShell className={className}>
+      <div className="flex flex-1 min-h-0 flex-col px-3">
 
         <div className="relative mb-3">
           <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -191,7 +167,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
                   onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
                   className={cn(
                     'flex items-start gap-3 p-2 rounded-lg hover:bg-accent transition-colors cursor-pointer',
-                    isActive && 'bg-accent'
+                    isActive && 'bg-primary-soft'
                   )}
                 >
                   <div className="h-9 w-9 flex-shrink-0 rounded-full bg-muted flex items-center justify-center">
@@ -247,8 +223,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
           </div>
         </ScrollArea>
 
-        {driveId ? <DriveFooter canManage={canManage} /> : <DashboardFooter />}
       </div>
-    </aside>
+    </SidebarShell>
   );
 }

@@ -1,11 +1,27 @@
-import { pgTable, text, timestamp, boolean, pgEnum, index, unique, integer, jsonb } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
-import { users } from './auth';
+import { pgTable, text, timestamp, boolean, pgEnum, index, unique, uniqueIndex, integer, jsonb } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { users, mcpTokens } from './auth';
 import { drives, pages } from './core';
+import type { SuspensionKind } from './organizations';
 import { createId } from '@paralleldrive/cuid2';
 
-// Drive member roles
-export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER']);
+// Drive member roles. GUEST is the row a page share link creates: it carries the
+// pages the guest was given and nothing drive-wide (no rule-4 reads, no channel
+// posting, not a member for listings, DMs or seats).
+export const memberRole = pgEnum('MemberRole', ['OWNER', 'ADMIN', 'MEMBER', 'GUEST']);
+
+// The roles a grant can carry everywhere EXCEPT drive_members. GUEST is only ever
+// written to drive_members (by redeemPageShareLink); the other columns that share
+// the MemberRole enum — agent memberships, MCP token scopes, drive share links,
+// pending invites — are typed without it, so it cannot flow through them.
+export type GrantableMemberRole = 'OWNER' | 'ADMIN' | 'MEMBER';
+
+// How a drive_members row came to exist (D-OW-6): 'invite' is a person added to the drive
+// directly (including guests, DRV-8); 'org' is a row materialized from org membership and
+// maintained by the org membership sync. Existing rows are all invites.
+export const DRIVE_MEMBER_SOURCES = ['invite', 'org'] as const;
+export const driveMemberSource = pgEnum('DriveMemberSource', DRIVE_MEMBER_SOURCES);
+export type DriveMemberSource = (typeof DRIVE_MEMBER_SOURCES)[number];
 
 // Custom roles for permission templates
 export const driveRoles = pgTable('drive_roles', {
@@ -18,6 +34,9 @@ export const driveRoles = pgTable('drive_roles', {
   permissions: jsonb('permissions').notNull().$type<
     Record<string, { canView: boolean; canEdit: boolean; canShare: boolean }>
   >(),
+  driveWidePermissions: jsonb('drive_wide_permissions')
+    .$type<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>()
+    .default(sql`NULL`),
   position: integer('position').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -52,19 +71,40 @@ export const driveMembers = pgTable('drive_members', {
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
   role: memberRole('role').default('MEMBER').notNull(),
   customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  source: driveMemberSource('source').default('invite').notNull(),
   invitedBy: text('invitedBy').references(() => users.id, { onDelete: 'set null' }),
   invitedAt: timestamp('invitedAt', { mode: 'date' }).defaultNow().notNull(),
   acceptedAt: timestamp('acceptedAt', { mode: 'date' }),
   lastAccessedAt: timestamp('lastAccessedAt', { mode: 'date' }),
+  // DEPRECATED, unused: milestone 1 marked guest rows here, but a marker cannot make a row grant nothing (page grants
+  // are read without it), so guests are PARKED in org_guest_holds instead. Kept, not dropped, so no data is lost.
+  suspendedByPolicy: text('suspendedByPolicy').$type<SuspensionKind>(),
 }, (table) => {
   return {
     driveUserKey: unique('drive_members_drive_user_key').on(table.driveId, table.userId),
+    suspendedIdx: index('drive_members_suspended_by_policy_idx').on(table.driveId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
     driveIdx: index('drive_members_drive_id_idx').on(table.driveId),
     userIdx: index('drive_members_user_id_idx').on(table.userId),
     roleIdx: index('drive_members_role_idx').on(table.role),
     customRoleIdx: index('drive_members_custom_role_id_idx').on(table.customRoleId),
   }
 });
+
+// Drive agent members - AI agent pages with drive-scoped RBAC roles
+export const driveAgentMembers = pgTable('drive_agent_members', {
+  id:             text('id').primaryKey().$defaultFn(() => createId()),
+  driveId:        text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  agentPageId:    text('agentPageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
+  role:           memberRole('role').$type<GrantableMemberRole>().default('MEMBER').notNull(),
+  customRoleId:   text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  includeContext: boolean('includeContext').default(false).notNull(), // Whether to inject this drive's drivePrompt into the agent's system prompt
+  addedBy:        text('addedBy').references(() => users.id, { onDelete: 'set null' }),
+  addedAt:        timestamp('addedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  driveAgentKey: unique('drive_agent_members_drive_agent_key').on(table.driveId, table.agentPageId),
+  driveIdx:  index('drive_agent_members_drive_id_idx').on(table.driveId),
+  agentIdx:  index('drive_agent_members_agent_page_id_idx').on(table.agentPageId),
+}));
 
 // Enhanced permissions with boolean flags
 export const pagePermissions = pgTable('page_permissions', {
@@ -136,4 +176,53 @@ export const pagePermissionsRelations = relations(pagePermissions, ({ one }) => 
     fields: [pagePermissions.grantedBy],
     references: [users.id],
   }),
+}));
+
+export const driveAgentMembersRelations = relations(driveAgentMembers, ({ one }) => ({
+  drive: one(drives, {
+    fields: [driveAgentMembers.driveId],
+    references: [drives.id],
+  }),
+  agentPage: one(pages, {
+    fields: [driveAgentMembers.agentPageId],
+    references: [pages.id],
+  }),
+  customRole: one(driveRoles, {
+    fields: [driveAgentMembers.customRoleId],
+    references: [driveRoles.id],
+  }),
+  addedByUser: one(users, {
+    fields: [driveAgentMembers.addedBy],
+    references: [users.id],
+  }),
+}));
+
+// MCP token drive scopes with RBAC roles — tokens as first-class drive members ("apps")
+export const mcpTokenDrives = pgTable('mcp_token_drives', {
+  id:           text('id').primaryKey().$defaultFn(() => createId()),
+  tokenId:      text('tokenId').notNull().references(() => mcpTokens.id, { onDelete: 'cascade' }),
+  driveId:      text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  // NULL = inherit: the token acts with its OWNER's access in this drive.
+  // An explicit role is an opt-in downgrade/override and means exactly what
+  // the same role means for a human drive member.
+  role:         memberRole('role').$type<GrantableMemberRole>(),
+  customRoleId: text('customRoleId').references(() => driveRoles.id, { onDelete: 'set null' }),
+  addedBy:      text('addedBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt:    timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  tokenIdx:         index('mcp_token_drives_token_id_idx').on(table.tokenId),
+  driveIdx:         index('mcp_token_drives_drive_id_idx').on(table.driveId),
+  tokenDriveUnique: uniqueIndex('mcp_token_drives_token_drive_unique').on(table.tokenId, table.driveId),
+}));
+
+export const mcpTokensRelations = relations(mcpTokens, ({ one, many }) => ({
+  user:        one(users,         { fields: [mcpTokens.userId], references: [users.id] }),
+  driveScopes: many(mcpTokenDrives),
+}));
+
+export const mcpTokenDrivesRelations = relations(mcpTokenDrives, ({ one }) => ({
+  token:       one(mcpTokens,  { fields: [mcpTokenDrives.tokenId],      references: [mcpTokens.id] }),
+  drive:       one(drives,     { fields: [mcpTokenDrives.driveId],      references: [drives.id] }),
+  customRole:  one(driveRoles, { fields: [mcpTokenDrives.customRoleId], references: [driveRoles.id] }),
+  addedByUser: one(users,      { fields: [mcpTokenDrives.addedBy],      references: [users.id] }),
 }));

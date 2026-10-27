@@ -6,7 +6,6 @@ vi.mock('../../deployment-mode', () => ({
 }));
 
 import {
-  getStorageTierFromSubscription,
   getStorageQuotaFromSubscription,
   getStorageConfigFromSubscription,
   subscriptionAllows,
@@ -21,21 +20,10 @@ describe('subscription-utils', () => {
     vi.mocked(isTenantMode).mockReturnValue(false);
   });
 
-  describe('getStorageTierFromSubscription', () => {
-    it('should return business for business tier', () => {
-      expect(getStorageTierFromSubscription('business')).toBe('business');
-    });
-
-    it('should return founder for founder tier', () => {
-      expect(getStorageTierFromSubscription('founder')).toBe('founder');
-    });
-
-    it('should return pro for pro tier', () => {
-      expect(getStorageTierFromSubscription('pro')).toBe('pro');
-    });
-
-    it('should return free for free tier', () => {
-      expect(getStorageTierFromSubscription('free')).toBe('free');
+  describe('unknown stored tier coercion', () => {
+    it('should fall back to free-tier config for values outside the vocabulary', () => {
+      expect(getStorageConfigFromSubscription('enterprise').tier).toBe('free');
+      expect(getStorageQuotaFromSubscription('garbage')).toBe(500 * 1024 * 1024);
     });
   });
 
@@ -44,12 +32,8 @@ describe('subscription-utils', () => {
       expect(getStorageQuotaFromSubscription('business')).toBe(50 * 1024 * 1024 * 1024);
     });
 
-    it('should return 10GB for founder', () => {
-      expect(getStorageQuotaFromSubscription('founder')).toBe(10 * 1024 * 1024 * 1024);
-    });
-
-    it('should return 2GB for pro', () => {
-      expect(getStorageQuotaFromSubscription('pro')).toBe(2 * 1024 * 1024 * 1024);
+    it('should return 10GB for pro', () => {
+      expect(getStorageQuotaFromSubscription('pro')).toBe(10 * 1024 * 1024 * 1024);
     });
 
     it('should return 500MB for free', () => {
@@ -76,26 +60,20 @@ describe('subscription-utils', () => {
     it('should return business config', () => {
       const config = getStorageConfigFromSubscription('business');
       expect(config.tier).toBe('business');
-      expect(config.maxFileSize).toBe(100 * 1024 * 1024);
-      expect(config.maxFileCount).toBe(5000);
-    });
-
-    it('should return founder config', () => {
-      const config = getStorageConfigFromSubscription('founder');
-      expect(config.tier).toBe('founder');
-      expect(config.quotaBytes).toBe(10 * 1024 * 1024 * 1024);
+      expect(config.maxFileSize).toBe(1024 * 1024 * 1024);
+      expect(config.maxFileCount).toBe(0);
     });
 
     it('should return pro config', () => {
       const config = getStorageConfigFromSubscription('pro');
       expect(config.tier).toBe('pro');
-      expect(config.quotaBytes).toBe(2 * 1024 * 1024 * 1024);
+      expect(config.quotaBytes).toBe(10 * 1024 * 1024 * 1024);
     });
 
     it('should return free config', () => {
       const config = getStorageConfigFromSubscription('free');
       expect(config.tier).toBe('free');
-      expect(config.maxFileSize).toBe(20 * 1024 * 1024);
+      expect(config.maxFileSize).toBe(50 * 1024 * 1024);
       expect(config.maxFileCount).toBe(100);
     });
   });

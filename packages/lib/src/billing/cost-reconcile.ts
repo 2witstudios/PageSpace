@@ -1,0 +1,367 @@
+/**
+ * cost-reconcile — async correction of AI-call billing against OpenRouter's authoritative
+ * cost. We bill at stream finish on the cost OpenRouter returns inline, but its
+ * `/api/v1/generation?id=` endpoint reports the FINAL reconciled `total_cost` once native
+ * cache/discount pricing settles, which can differ. A cron runs this shell: for each
+ * OpenRouter usage row still 'pending' reconcile, fetch the authoritative cost for every
+ * generation id, compare to what we billed (pure computeCostDrift), and write a correcting
+ * 'adjustment' ledger row + balance delta when the drift clears tolerance.
+ *
+ * Correctness mirrors credit-consume:
+ *   - Idempotent: the adjustment row carries a unique reconcileGenerationKey (the sorted
+ *     generation ids); onConflictDoNothing makes a re-run / overlapping cron a no-op, and
+ *     the balance delta is applied ONLY when the claim row is freshly inserted.
+ *   - Atomic: claim + balance update commit in one transaction under a balance row lock.
+ *   - Bounded: BATCH/MAX_PASSES like credit-backfill, and each row is fetched at most once
+ *     per run (a `seen` set) so a not-yet-resolved generation isn't re-hit in the same run.
+ *   - Safe: never throws into the cron; a failed row is left 'pending' for the next run.
+ */
+
+import { db } from '@pagespace/db/db';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
+import { and, eq, lt, sql } from '@pagespace/db/operators';
+import { isBillingEnabled } from '../deployment-mode';
+import { computeCostDrift } from './credit-core';
+import { centsFromDollars } from './money-model';
+import { chargeWallet, recordSeatOvershoot, refundWalletCharge } from './credit-consume';
+import {
+  MARKUP_BPS,
+  COST_RECONCILE_TOLERANCE_CENTS,
+  COST_RECONCILE_TOLERANCE_BPS,
+  COST_RECONCILE_MAX_ATTEMPTS,
+  openRouterBaseUrl,
+} from './credit-pricing';
+import { emitCreditsUpdated } from './credit-emit';
+import { notifyFunderOfWalletDebt } from './wallet-debt-notifier';
+import { loggers } from '../logging/logger-config';
+import { errorLogFields } from '../logging/error-cause';
+
+const BATCH = 200;
+const MAX_PASSES = 50;
+// Let the generation settle on OpenRouter's side before we ask for its final cost; a
+// freshly-finished call's /generation row may not carry total_cost immediately.
+const GRACE_MS = 2 * 60 * 1000;
+
+/** Result of fetching one generation's authoritative cost. */
+export type GenerationFetchResult = { totalCost: number } | 'not_found' | 'error';
+/** Injectable so tests stub the OpenRouter call and the e2e base-URL override applies. */
+export type GenerationFetcher = (id: string) => Promise<GenerationFetchResult>;
+
+export interface CostReconcileResult {
+  /** Rows whose authoritative cost resolved and drift was evaluated (corrected or not). */
+  fetched: number;
+  /** Rows that needed and received a correcting adjustment. */
+  corrected: number;
+  /** Rows whose generation never resolved within COST_RECONCILE_MAX_ATTEMPTS. */
+  unavailable: number;
+  /** Rows marked 'skipped' (no generation ids — defensive; shouldn't normally occur). */
+  skipped: number;
+}
+
+/** Read generationIds out of the aiUsageLogs.metadata jsonb defensively. */
+function extractGenerationIds(metadata: unknown): string[] {
+  if (typeof metadata !== 'object' || metadata === null) return [];
+  const ids = (metadata as Record<string, unknown>).generationIds;
+  if (!Array.isArray(ids)) return [];
+  return ids.filter((x): x is string => typeof x === 'string' && x.length > 0);
+}
+
+/** Default fetcher: GET {base}/generation?id= with the managed OpenRouter key. */
+async function defaultFetcher(id: string): Promise<GenerationFetchResult> {
+  const apiKey = process.env.OPENROUTER_DEFAULT_API_KEY;
+  if (!apiKey) return 'error';
+  try {
+    const res = await fetch(`${openRouterBaseUrl()}/generation?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    // 404 = generation not (yet) available; retry on a later run.
+    if (res.status === 404) return 'not_found';
+    if (!res.ok) return 'error';
+    const json = (await res.json()) as { data?: { total_cost?: unknown } };
+    const totalCost = json?.data?.total_cost;
+    if (typeof totalCost !== 'number' || !Number.isFinite(totalCost)) return 'not_found';
+    return { totalCost };
+  } catch {
+    return 'error';
+  }
+}
+
+interface PendingRow {
+  id: string;
+  userId: string;
+  cost: number | null;
+  metadata: unknown;
+  reconcileAttempts: number;
+}
+
+async function markStatus(
+  aiUsageLogId: string,
+  status: 'reconciled' | 'unavailable' | 'skipped',
+  now: Date,
+): Promise<void> {
+  await db
+    .update(aiUsageLogs)
+    .set({ reconcileStatus: status, reconciledAt: now })
+    .where(eq(aiUsageLogs.id, aiUsageLogId));
+}
+
+async function bumpAttempts(aiUsageLogId: string): Promise<void> {
+  await db
+    .update(aiUsageLogs)
+    .set({ reconcileAttempts: sql`${aiUsageLogs.reconcileAttempts} + ${1}` })
+    .where(eq(aiUsageLogs.id, aiUsageLogId));
+}
+
+/**
+ * Whether the base `usage` ledger row for this call has been written yet. Reconcile only
+ * CORRECTS an existing charge; it must never run before the base charge exists. If
+ * consumeCredits hasn't run (or died) there is no usage row, and inserting an adjustment
+ * keyed to the same aiUsageLogId would also mask the row from credit-backfill's orphan
+ * sweep (which left-joins creditLedger by aiUsageLogId), leaving the BASE charge unbilled.
+ * So we defer until a usage row exists (any status — a 'pending' one is settled by the
+ * backfill pending sweep, an absent one is billed by its orphan sweep).
+ *
+ * Returns the wallet that base charge was billed to (WAL-5: reconciliation is keyed on
+ * the wallet), the automation it ran for (SPEND-10, so the correction stays attributed) and the
+ * fallback origin its claim recorded (WAL-6b), or null when there is no base charge yet.
+ */
+async function usageLedgerCharge(aiUsageLogId: string): Promise<{ walletId: string; automationRef: string | null; fallbackFromWalletId: string | null } | null> {
+  const rows = await db
+    .select({ walletId: creditLedger.walletId, automationRef: creditLedger.automationRef, fallbackFromWalletId: creditLedger.fallbackFromWalletId })
+    .from(creditLedger)
+    .where(and(eq(creditLedger.aiUsageLogId, aiUsageLogId), eq(creditLedger.entryType, 'usage')))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/**
+ * Apply the drift correction in one transaction: claim an adjustment row keyed by the
+ * generation set (idempotent: the claim IS the correction's key, so a re-run or an
+ * overlapping cron never moves money twice), then — only if the claim was fresh — move the
+ * signed delta through credit-consume's shared paths. Positive delta (we undercharged) is
+ * charged exactly as the settle charges (chargeWallet); negative delta (we overcharged) is
+ * returned to where the call's cents came from (refundWalletCharge), which on a drive
+ * wallet includes its funding legs. Returns true when a balance change was applied.
+ */
+async function applyCorrection(
+  userId: string,
+  // WAL-6b: `fallbackFromWalletId` is the chosen wallet the call fell back off, so an undercharge's overshoot lands
+  // where the original settle's would have — never on the consumer who did not choose own credits.
+  charge: { walletId: string; automationRef: string | null; fallbackFromWalletId: string | null },
+  drift: ReturnType<typeof computeCostDrift>,
+  aiUsageLogId: string,
+  generationIds: string[],
+): Promise<{ applied: boolean; debtWalletId: string | null }> {
+  const reconcileKey = [...generationIds].sort().join(',');
+  // Signed nominal cents for the adjustment row: positive delta = more spend = negative
+  // amount; negative delta (refund) = positive amount. `|| 0` avoids storing -0.
+  const amountCents = -Math.round(drift.deltaChargeMillicents / 1000) || 0;
+  const { walletId, fallbackFromWalletId } = charge;
+
+  return db.transaction(async (tx) => {
+    const claimed = await tx
+      .insert(creditLedger)
+      .values({
+        userId,
+        // WAL-5: the correction lands on the same wallet as the charge it corrects, and
+        // the buckets below are that wallet's, locked by its id.
+        walletId,
+        entryType: 'adjustment',
+        bucket: 'monthly',
+        amountCents,
+        chargeMillicents: drift.deltaChargeMillicents,
+        realCostCents: drift.deltaRealCostCents,
+        aiUsageLogId,
+        reconcileGenerationKey: reconcileKey,
+        markupBps: MARKUP_BPS,
+        consumeStatus: 'applied',
+        automationRef: charge.automationRef,
+      })
+      .onConflictDoNothing({
+        target: creditLedger.reconcileGenerationKey,
+        where: sql`${creditLedger.reconcileGenerationKey} IS NOT NULL`,
+      })
+      .returning({ id: creditLedger.id });
+    // Already corrected by a prior/overlapping run — do NOT touch the balance again.
+    if (claimed.length === 0) return { applied: false, debtWalletId: null };
+    const ledgerId = claimed[0].id;
+
+    let appliedCents = 0;
+    let debtWalletId: string | null = null;
+    if (drift.deltaChargeMillicents > 0) {
+      // Undercharge → charge the extra through the SAME path as the settle (credit-consume
+      // chargeWallet): monthly-first with debt on shortfall on a root wallet; on a drive
+      // wallet, allocation from the parent, then the locked funding legs, then overshoot
+      // per D20.2 — never a direct write of topupRemainingCents past the legs.
+      // Rollover: carry balance is always spendable; no period-expiry exclusion here.
+      const charged = await chargeWallet(tx, walletId, drift.deltaChargeMillicents, aiUsageLogId, { userId, spendKind: 'ai' }, fallbackFromWalletId);
+      // No balance row to move (rare — reconcile runs on billed rows). Record the
+      // correction row with no applied delta so a later run doesn't re-correct.
+      if (!charged) {
+        await tx.update(creditLedger).set({ appliedCents: 0 }).where(eq(creditLedger.id, ledgerId));
+        return { applied: false, debtWalletId: null };
+      }
+      appliedCents = -charged.appliedCents || 0; // negative: decremented
+      // WAL-5: uncovered cost lands as debt (on this wallet or the one its funder chose); ledger it
+      // there, as the settle does, so every wallet still reconciles against its own rows.
+      if (charged.debt) {
+        debtWalletId = charged.debt.walletId;
+        await tx.insert(creditLedger).values({
+          userId, walletId: charged.debt.walletId, entryType: 'adjustment', bucket: 'monthly',
+          amountCents: -charged.debt.cents, aiUsageLogId, consumeStatus: 'applied', spendKind: 'ai',
+        });
+      }
+      // WAL-2: an undercharge on a seat is charged like a settle, so it is capped like one.
+      // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
+      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
+    } else if (drift.deltaChargeMillicents < 0) {
+      // Overcharge → refund to where the call's cents came from (credit-consume
+      // refundWalletCharge): debt first, then the top-up on a root wallet; on a drive
+      // wallet, the call's recorded draws in the inverse order, legs included.
+      const refundCents = Math.round(Math.abs(drift.deltaChargeMillicents) / 1000);
+      appliedCents = await refundWalletCharge(tx, walletId, refundCents, aiUsageLogId, { userId, spendKind: 'ai' }); // positive: credited back
+      // WAL-2: a refund on a seat gives back forgiveness that no longer applies, window by window.
+      // The cost reconcile corrects OpenRouter AI calls only: always an AI charge.
+      await recordSeatOvershoot(tx, { walletId, userId, aiUsageLogId, claimLedgerId: ledgerId, spendKind: 'ai' });
+    }
+
+    await tx.update(creditLedger).set({ appliedCents }).where(eq(creditLedger.id, ledgerId));
+    return { applied: true, debtWalletId };
+  });
+}
+
+type RowOutcome = 'corrected' | 'reconciled' | 'unavailable' | 'pending' | 'skipped';
+
+async function reconcileRow(row: PendingRow, fetcher: GenerationFetcher, now: Date): Promise<RowOutcome> {
+  const ids = extractGenerationIds(row.metadata);
+  if (ids.length === 0) {
+    await markStatus(row.id, 'skipped', now);
+    return 'skipped';
+  }
+
+  // Defer until the base usage charge exists: correcting drift before the base is billed
+  // would leave it unbilled AND mask the orphan from credit-backfill (see usageLedgerCharge).
+  // Bump attempts so a row whose base never materializes eventually drops to 'unavailable'
+  // rather than retrying forever. No /generation fetch is spent while deferred.
+  const charge = await usageLedgerCharge(row.id);
+  if (charge === null) {
+    if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
+      await markStatus(row.id, 'unavailable', now);
+      return 'unavailable';
+    }
+    await bumpAttempts(row.id);
+    return 'pending';
+  }
+
+  let total = 0;
+  for (const id of ids) {
+    const r = await fetcher(id);
+    if (r === 'not_found' || r === 'error') {
+      // Not resolved (or transient) — bump attempts and retry on a later run; give up
+      // (mark 'unavailable') once we've exhausted the attempt budget.
+      if (row.reconcileAttempts + 1 >= COST_RECONCILE_MAX_ATTEMPTS) {
+        await markStatus(row.id, 'unavailable', now);
+        return 'unavailable';
+      }
+      await bumpAttempts(row.id);
+      return 'pending';
+    }
+    total += r.totalCost;
+  }
+
+  const drift = computeCostDrift(
+    {
+      billedRealCostCents: centsFromDollars(row.cost ?? 0),
+      authoritativeRealCostDollars: total,
+      toleranceCents: COST_RECONCILE_TOLERANCE_CENTS,
+      toleranceBps: COST_RECONCILE_TOLERANCE_BPS,
+    },
+    MARKUP_BPS,
+  );
+
+  if (!drift.shouldCorrect) {
+    await markStatus(row.id, 'reconciled', now);
+    return 'reconciled';
+  }
+
+  const applied = await applyCorrection(row.userId, charge, drift, row.id, ids);
+  await markStatus(row.id, 'reconciled', now);
+  if (applied.applied) void emitCreditsUpdated(row.userId);
+  // HIST-01 (#2760), after the correction committed: a correction that left the wallet in
+  // debt tells its funder, through the same period-deduplicated seam the settle uses. It
+  // runs outside the transaction and never throws (the notifier owns both).
+  if (applied.debtWalletId) {
+    await notifyFunderOfWalletDebt({ debtWalletId: applied.debtWalletId, chargedWalletId: charge.walletId });
+  }
+  return 'corrected';
+}
+
+export async function reconcileOpenRouterCosts(
+  opts: { fetcher?: GenerationFetcher; now?: Date } = {},
+): Promise<CostReconcileResult> {
+  if (!isBillingEnabled()) return { fetched: 0, corrected: 0, unavailable: 0, skipped: 0 };
+
+  const fetcher = opts.fetcher ?? defaultFetcher;
+  const now = opts.now ?? new Date();
+  const cutoff = new Date(now.getTime() - GRACE_MS);
+
+  let fetched = 0;
+  let corrected = 0;
+  let unavailable = 0;
+  let skipped = 0;
+  // Bound each row to one fetch attempt per run: rows that stay 'pending' (generation not
+  // ready) don't drop out of the query, so without this they'd be re-hit every pass.
+  const seen = new Set<string>();
+
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const rows = (await db
+      .select({
+        id: aiUsageLogs.id,
+        userId: aiUsageLogs.userId,
+        cost: aiUsageLogs.cost,
+        metadata: aiUsageLogs.metadata,
+        reconcileAttempts: aiUsageLogs.reconcileAttempts,
+      })
+      .from(aiUsageLogs)
+      .where(
+        and(
+          eq(aiUsageLogs.reconcileStatus, 'pending'),
+          lt(aiUsageLogs.timestamp, cutoff),
+          lt(aiUsageLogs.reconcileAttempts, COST_RECONCILE_MAX_ATTEMPTS),
+        ),
+      )
+      .limit(BATCH)) as PendingRow[];
+
+    const fresh = rows.filter((r) => !seen.has(r.id));
+    if (fresh.length === 0) break;
+
+    for (const row of fresh) {
+      seen.add(row.id);
+      try {
+        const outcome = await reconcileRow(row, fetcher, now);
+        if (outcome === 'corrected') {
+          corrected++;
+          fetched++;
+        } else if (outcome === 'reconciled') {
+          fetched++;
+        } else if (outcome === 'unavailable') {
+          unavailable++;
+        } else if (outcome === 'skipped') {
+          skipped++;
+        }
+        // 'pending': attempts bumped; retried next run.
+      } catch (error) {
+        loggers.ai.warn('cost reconcile row failed', {
+          ...errorLogFields(error),
+          aiUsageLogId: row.id,
+        });
+      }
+    }
+
+    // A short batch means there's nothing more to fetch this run.
+    if (rows.length < BATCH) break;
+  }
+
+  return { fetched, corrected, unavailable, skipped };
+}

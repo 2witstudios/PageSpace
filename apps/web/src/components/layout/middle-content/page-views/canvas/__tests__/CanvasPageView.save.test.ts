@@ -45,16 +45,12 @@ vi.mock('@/stores/useEditingStore', () => ({
   ),
 }));
 
-vi.mock('@/components/canvas/ShadowCanvas', () => ({
-  ShadowCanvas: () => null,
+vi.mock('@/components/canvas/CanvasFrame', () => ({
+  CanvasFrame: () => null,
 }));
 
 vi.mock('@/components/ai/shared', () => ({
   ErrorBoundary: ({ children }: { children: ReactNode }) => children,
-}));
-
-vi.mock('@/lib/navigation/app-navigation', () => ({
-  openExternalUrl: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({}));

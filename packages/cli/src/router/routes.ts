@@ -1,0 +1,309 @@
+/**
+ * The single source of truth for the CLI's command tree — path segments,
+ * handler, and a one-line summary. `run.ts` routes against this table;
+ * `helpHandler` (built here, not in `commands/help.ts`) renders it verbatim,
+ * so the built-in help can never drift from what's actually registered
+ * (previously `help.ts` hardcoded a stale list of only 5 of the 40+
+ * registered commands).
+ *
+ * `createHelpHandler` lives in `commands/help.ts` and takes the descriptor
+ * list as a parameter rather than importing it, specifically so that module
+ * never depends on this one — this module already depends on it (for the
+ * `help` route's own handler), and a two-way dependency between them would
+ * be an import cycle.
+ *
+ * Adding a route here also means deciding whether its handler belongs in
+ * `run.ts`'s `AUTH_EXEMPT_HANDLERS` — see that set's doc comment. The default
+ * (not adding it) is safe: an omitted handler is simply gated and fails
+ * closed, so forgetting this only breaks that command for users who expect
+ * it to manage its own credentials, never leaks a credential.
+ */
+import { activityHandler } from '../commands/activity.js';
+import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';
+import { channelsSendHandler } from '../commands/channels.js';
+import { conversationsListHandler, conversationsReadHandler } from '../commands/conversations.js';
+import {
+  drivesCreateHandler,
+  drivesListHandler,
+  drivesRenameHandler,
+  drivesRestoreHandler,
+  drivesSetHomePageHandler,
+  drivesTrashHandler,
+  drivesUpdateContextHandler,
+} from '../commands/drives.js';
+import { pagesReadHandler, pagesReplaceLinesHandler } from '../commands/content.js';
+import { pagesExportHandler } from '../commands/export.js';
+import { filesUploadHandler } from '../commands/files.js';
+import { createHelpHandler } from '../commands/help.js';
+import { loginHandler } from '../commands/login.js';
+import { logoutHandler } from '../commands/logout.js';
+import { mcpHandler } from '../commands/mcp.js';
+import {
+  orgsDrivesHandler,
+  orgsGetHandler,
+  orgsListHandler,
+  orgsMembersHandler,
+  orgsPoliciesHandler,
+} from '../commands/orgs.js';
+import {
+  rolesCreateHandler,
+  rolesDeleteHandler,
+  rolesGetHandler,
+  rolesListHandler,
+  rolesRemovePagePermissionsHandler,
+  rolesSetDriveWidePermissionsHandler,
+  rolesSetPagePermissionsHandler,
+  rolesUpdateHandler,
+} from '../commands/roles.js';
+import { searchGlobHandler, searchRegexHandler, searchTextHandler } from '../commands/search.js';
+import {
+  pagesCreateHandler,
+  pagesListHandler,
+  pagesMoveHandler,
+  pagesReadDetailsHandler,
+  pagesRenameHandler,
+  pagesRestoreHandler,
+  pagesTrashHandler,
+  pagesTreeHandler,
+} from '../commands/pages.js';
+import {
+  sheetsAppendHandler,
+  sheetsDeleteRowsHandler,
+  sheetsDescribeHandler,
+  sheetsEditCellsHandler,
+  sheetsFormatHandler,
+  sheetsFormattingHandler,
+  sheetsQueryHandler,
+  sheetsRowsHandler,
+  sheetsUpdateCellsHandler,
+} from '../commands/sheets.js';
+import {
+  tasksAssignedHandler,
+  tasksCreateHandler,
+  tasksCreateStatusHandler,
+  tasksDeleteHandler,
+  tasksListHandler,
+  tasksReorderHandler,
+  tasksStatusesHandler,
+  tasksUpdateHandler,
+} from '../commands/tasks.js';
+import { trashListHandler } from '../commands/trash.js';
+import { workspacesExecHandler, workspacesListHandler } from '../commands/workspaces.js';
+import { walletsAlwaysOwnCreditsHandler, walletsDriveHandler, walletsDriveSourceHandler, walletsListHandler, walletsSourceHandler } from '../commands/wallets.js';
+import {
+  orgsAcceptInviteHandler,
+  orgsActivityHandler,
+  orgsAddDomainHandler,
+  orgsAnswerGuestHandler,
+  orgsAuditExportHandler,
+  orgsAuditHandler,
+  orgsAutomationsHandler,
+  orgsClearSuppressionHandler,
+  orgsConfirmDomainHandler,
+  orgsDeleteAutomationHandler,
+  orgsDomainsHandler,
+  orgsDriveUsageHandler,
+  orgsGuestApprovalsHandler,
+  orgsGuestsHandler,
+  orgsInvitationsHandler,
+  orgsInviteHandler,
+  orgsLeaveHandler,
+  orgsReassignAutomationHandler,
+  orgsRemoveDomainHandler,
+  orgsRemoveMemberHandler,
+  orgsResendInviteHandler,
+  orgsRevokeInviteHandler,
+  orgsSetPoliciesHandler,
+  orgsSetRoleHandler,
+  orgsSignInPreviewHandler,
+  orgsSuspendedHandler,
+  orgsTrashedDrivesHandler,
+  orgsUpdateHandler,
+  orgsVerifyDomainHandler,
+} from '../commands/org-writes.js';
+import {
+  drivesAnswerJoinHandler,
+  drivesJoinRequestsHandler,
+  drivesMoveOutOfOrgHandler,
+  drivesMoveToOrgHandler,
+  drivesRequestJoinHandler,
+  drivesSetLeadHandler,
+  drivesSetVisibilityHandler,
+  drivesWithdrawJoinHandler,
+} from '../commands/drive-org.js';
+import { whoamiHandler } from '../commands/whoami.js';
+import { tokensCreateHandler } from '../commands/keys/create.js';
+import { keysDescribeHandler } from '../commands/keys/describe.js';
+import { tokensListHandler } from '../commands/keys/list.js';
+import { tokensRevokeHandler } from '../commands/keys/revoke.js';
+import { keysUseHandler } from '../commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
+import { envConnectHandler } from '../commands/env/connect.js';
+import { envDisconnectHandler } from '../commands/env/disconnect.js';
+import { envPolicyHandler } from '../commands/env/policy.js';
+import { keysHandler } from '../commands/keys/wizard.js';
+import type { Route } from './router.js';
+
+export interface RouteEntry extends Route {
+  readonly summary: string;
+}
+
+const OTHER_ROUTES: readonly RouteEntry[] = [
+  { path: ['login'], handler: loginHandler, summary: 'Log in via the browser, or --device for a headless machine' },
+  { path: ['logout'], handler: logoutHandler, summary: 'Revoke and remove a stored credential' },
+  { path: ['whoami'], handler: whoamiHandler, summary: 'Show the currently authenticated identity' },
+  // `keys` (Phase 9 task 5, consolidated Phase 9 follow-up) is the sole
+  // surface for minting/listing/revoking/activating scoped access keys — the
+  // earlier `tokens create/list/revoke` command family was folded into it.
+  // Every keys route below is ambient-credential-eligible (see `run.ts`'s
+  // `AUTH_EXEMPT_HANDLERS`): a bare `pagespace login` (manage_keys-scoped,
+  // zero extra setup) can drive every one of them end-to-end. There is no
+  // `keys edit`/`update` flag subcommand — per this phase's plan,
+  // scope-editing is wizard-only.
+  { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
+  { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key (--device for a headless machine)' },
+  { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
+  // The one keys verb a KEY itself can run: it describes the credential this
+  // machine would use, never the other keys its owner holds — so it resolves
+  // like a content command (active key included) rather than riding the
+  // ambient login the management verbs need.
+  { path: ['keys', 'describe'], handler: keysDescribeHandler, summary: "Show this credential's drives, role and effective permissions" },
+  { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
+  { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
+  { path: ['env', 'enroll'], handler: envEnrollHandler, summary: 'Enroll this machine as a local environment with a one-time code' },
+  { path: ['env', 'token'], handler: envTokenHandler, summary: 'Prove this machine holds its key and receive a short-lived bridge token' },
+  // The bridge daemon: resolves once the first connect is under way and lives
+  // on the socket (the `mcp` pattern), so `bin.ts` must not force-exit it.
+  { path: ['env', 'connect'], handler: envConnectHandler, longRunning: true, summary: 'Run the bridge daemon: serve this machine as a local environment (exec + files)' },
+  { path: ['env', 'disconnect'], handler: envDisconnectHandler, summary: 'Stop a running env connect for an enrollment' },
+  { path: ['env', 'policy'], handler: envPolicyHandler, summary: "Print and validate this machine's local policy file" },
+  { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
+  { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
+  { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
+  { path: ['drives', 'rename'], handler: drivesRenameHandler, summary: 'Rename a drive' },
+  { path: ['drives', 'update-context'], handler: drivesUpdateContextHandler, summary: "Update a drive's AI context prompt" },
+  { path: ['drives', 'set-home-page'], handler: drivesSetHomePageHandler, summary: "Set (or --clear) a drive's landing page" },
+  { path: ['drives', 'trash'], handler: drivesTrashHandler, summary: 'Trash a drive' },
+  { path: ['drives', 'restore'], handler: drivesRestoreHandler, summary: 'Restore a trashed drive' },
+  // Org ownership of a drive (X-1; DRV-1..DRV-4, DRV-6). Unscoped key; the org's sign-in policy applies.
+  { path: ['drives', 'move-to-org'], handler: drivesMoveToOrgHandler, summary: 'Move a personal drive you own into an organization' },
+  { path: ['drives', 'move-out-of-org'], handler: drivesMoveOutOfOrgHandler, summary: 'Move a drive out of its organization (Owner/Admin; keep|remove members)' },
+  { path: ['drives', 'set-visibility'], handler: drivesSetVisibilityHandler, summary: "Set an org drive's visibility: OPEN, RESTRICTED or PRIVATE" },
+  { path: ['drives', 'set-lead'], handler: drivesSetLeadHandler, summary: 'Hand an org drive to a new lead' },
+  { path: ['drives', 'join-requests'], handler: drivesJoinRequestsHandler, summary: "List a Restricted drive's pending join requests (lead/Owner/Admin)" },
+  { path: ['drives', 'request-join'], handler: drivesRequestJoinHandler, summary: 'Ask to join a Restricted org drive' },
+  { path: ['drives', 'answer-join'], handler: drivesAnswerJoinHandler, summary: 'Approve or deny a join request' },
+  { path: ['drives', 'withdraw-join'], handler: drivesWithdrawJoinHandler, summary: 'Withdraw your own join request' },
+  { path: ['roles', 'list'], handler: rolesListHandler, summary: 'List custom roles in a drive' },
+  { path: ['roles', 'get'], handler: rolesGetHandler, summary: 'Get a role and its permissions' },
+  { path: ['roles', 'create'], handler: rolesCreateHandler, summary: 'Create a custom role' },
+  { path: ['roles', 'update'], handler: rolesUpdateHandler, summary: "Update a role's fields and drive-wide permissions" },
+  { path: ['roles', 'delete'], handler: rolesDeleteHandler, summary: 'Delete a role' },
+  { path: ['roles', 'set-page-permissions'], handler: rolesSetPagePermissionsHandler, summary: "Grant a role's permissions on a page" },
+  {
+    path: ['roles', 'set-drive-wide-permissions'],
+    handler: rolesSetDriveWidePermissionsHandler,
+    summary: "Set a role's drive-wide baseline permissions",
+  },
+  {
+    path: ['roles', 'remove-page-permissions'],
+    handler: rolesRemovePagePermissionsHandler,
+    summary: "Remove a role's per-page permission override",
+  },
+  { path: ['pages', 'list'], handler: pagesListHandler, summary: 'List pages in a drive' },
+  { path: ['pages', 'tree'], handler: pagesTreeHandler, summary: 'Show a page subtree' },
+  { path: ['pages', 'read-details'], handler: pagesReadDetailsHandler, summary: 'Read page metadata' },
+  { path: ['pages', 'create'], handler: pagesCreateHandler, summary: 'Create a page' },
+  { path: ['pages', 'rename'], handler: pagesRenameHandler, summary: 'Rename a page' },
+  { path: ['pages', 'move'], handler: pagesMoveHandler, summary: 'Move a page' },
+  { path: ['pages', 'trash'], handler: pagesTrashHandler, summary: 'Trash a page' },
+  { path: ['pages', 'restore'], handler: pagesRestoreHandler, summary: 'Restore a trashed page' },
+  { path: ['pages', 'read'], handler: pagesReadHandler, summary: 'Read page content' },
+  { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler, summary: 'Replace a line range in a page' },
+  { path: ['pages', 'export'], handler: pagesExportHandler, summary: 'Export a page to a file' },
+  { path: ['files', 'upload'], handler: filesUploadHandler, summary: 'Upload a local file into a drive' },
+  { path: ['sheets', 'describe'], handler: sheetsDescribeHandler, summary: 'Show a sheet\'s tabs and dimensions' },
+  { path: ['sheets', 'query'], handler: sheetsQueryHandler, summary: 'Filter and sort sheet rows' },
+  { path: ['sheets', 'rows'], handler: sheetsRowsHandler, summary: 'Read sheet rows by position' },
+  { path: ['sheets', 'append'], handler: sheetsAppendHandler, summary: 'Append rows to a sheet' },
+  { path: ['sheets', 'update-cells'], handler: sheetsUpdateCellsHandler, summary: 'Write sheet cells by address (supports --tab)' },
+  { path: ['sheets', 'delete-rows'], handler: sheetsDeleteRowsHandler, summary: 'Delete a range of sheet rows' },
+  { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler, summary: 'Edit sheet cells' },
+  { path: ['sheets', 'formatting'], handler: sheetsFormattingHandler, summary: 'Show how a sheet is styled (regions, rules, freezes, formats)' },
+  { path: ['sheets', 'format'], handler: sheetsFormatHandler, summary: 'Apply formatting ops to a sheet (regions, formats, rules, freezes)' },
+  { path: ['trash', 'list'], handler: trashListHandler, summary: 'List trashed pages/drives' },
+  { path: ['tasks', 'list'], handler: tasksListHandler, summary: 'List tasks' },
+  { path: ['tasks', 'create'], handler: tasksCreateHandler, summary: 'Create a task' },
+  { path: ['tasks', 'update'], handler: tasksUpdateHandler, summary: 'Update a task' },
+  { path: ['tasks', 'delete'], handler: tasksDeleteHandler, summary: 'Delete a task' },
+  { path: ['tasks', 'reorder'], handler: tasksReorderHandler, summary: 'Reorder a task' },
+  { path: ['tasks', 'statuses'], handler: tasksStatusesHandler, summary: 'List task statuses' },
+  { path: ['tasks', 'create-status'], handler: tasksCreateStatusHandler, summary: 'Create a task status' },
+  { path: ['tasks', 'assigned'], handler: tasksAssignedHandler, summary: 'List tasks assigned to you' },
+  { path: ['search', 'text'], handler: searchTextHandler, summary: 'Full-text search' },
+  { path: ['search', 'regex'], handler: searchRegexHandler, summary: 'Regex search' },
+  { path: ['search', 'glob'], handler: searchGlobHandler, summary: 'Glob path search' },
+  { path: ['agents', 'list'], handler: agentsListHandler, summary: 'List agents' },
+  { path: ['agents', 'ask'], handler: agentsAskHandler, summary: 'Ask an agent' },
+  { path: ['agents', 'config'], handler: agentsConfigHandler, summary: 'Read/update agent config' },
+  { path: ['models', 'list'], handler: modelsListHandler, summary: 'List available AI models' },
+  { path: ['conversations', 'list'], handler: conversationsListHandler, summary: 'List an agent\'s conversations' },
+  { path: ['conversations', 'read'], handler: conversationsReadHandler, summary: 'Read a conversation\'s messages' },
+  { path: ['activity'], handler: activityHandler, summary: 'Show recent activity' },
+  { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
+  { path: ['workspaces', 'list'], handler: workspacesListHandler, summary: 'List your agent workspaces (each has one sandbox)' },
+  { path: ['workspaces', 'exec'], handler: workspacesExecHandler, summary: "Run a shell command in a workspace's sandbox" },
+  // Organizations (Spec X-1, ORG-5). Every verb needs an unscoped key (the drive directory also
+  // serves a scoped key, filtered) and is authorized by the web's requireOrgRole; the org's sign-in
+  // policy applies to the key. Creating or deleting an org, transferring ownership, seat caps, the
+  // pool and billing need a signed-in session ([D-OW-26]) and are not verbs.
+  { path: ['orgs', 'list'], handler: orgsListHandler, summary: 'List the organizations you belong to, with your role (unscoped key)' },
+  { path: ['orgs', 'get'], handler: orgsGetHandler, summary: 'Show one organization: identity, owner, your role (unscoped key)' },
+  { path: ['orgs', 'update'], handler: orgsUpdateHandler, summary: "Rename an organization or change its slug/avatar (Owner/Admin)" },
+  { path: ['orgs', 'members'], handler: orgsMembersHandler, summary: 'List an organization\'s members and roles (unscoped key)' },
+  { path: ['orgs', 'activity'], handler: orgsActivityHandler, summary: "Each member's drive count and last activity (Owner/Admin)" },
+  { path: ['orgs', 'set-role'], handler: orgsSetRoleHandler, summary: 'Make a member an ADMIN or MEMBER (Owner/Admin)' },
+  { path: ['orgs', 'remove-member'], handler: orgsRemoveMemberHandler, summary: 'Remove a member from an organization (Owner/Admin)' },
+  { path: ['orgs', 'leave'], handler: orgsLeaveHandler, summary: 'Leave an organization' },
+  { path: ['orgs', 'invitations'], handler: orgsInvitationsHandler, summary: "List an organization's open invitations (Owner/Admin)" },
+  { path: ['orgs', 'invite'], handler: orgsInviteHandler, summary: 'Invite someone to an organization by email' },
+  { path: ['orgs', 'resend-invite'], handler: orgsResendInviteHandler, summary: 'Resend an invitation with a new link' },
+  { path: ['orgs', 'revoke-invite'], handler: orgsRevokeInviteHandler, summary: 'Revoke an open invitation (Owner/Admin)' },
+  { path: ['orgs', 'accept-invite'], handler: orgsAcceptInviteHandler, summary: 'Accept an organization invitation by its token' },
+  { path: ['orgs', 'drives'], handler: orgsDrivesHandler, summary: "List an organization's drive directory, incl. Restricted (unscoped key)" },
+  { path: ['orgs', 'trashed-drives'], handler: orgsTrashedDrivesHandler, summary: "List an organization's trashed drives (Owner/Admin)" },
+  { path: ['orgs', 'drive-usage'], handler: orgsDriveUsageHandler, summary: 'People, guests and storage per org drive (Owner/Admin)' },
+  { path: ['orgs', 'policies'], handler: orgsPoliciesHandler, summary: "Read an organization's policies (Owner/Admin; unscoped key)" },
+  { path: ['orgs', 'set-policies'], handler: orgsSetPoliciesHandler, summary: 'Change organization policies, key=value (Owner/Admin)' },
+  { path: ['orgs', 'suspended'], handler: orgsSuspendedHandler, summary: "List what an organization's policies hold suspended (Owner/Admin)" },
+  { path: ['orgs', 'sign-in-preview'], handler: orgsSignInPreviewHandler, summary: 'Count the members and credentials a sign-in policy would refuse now (Owner/Admin)' },
+  { path: ['orgs', 'audit'], handler: orgsAuditHandler, summary: "Read an organization's audit log (Owner/Admin)" },
+  { path: ['orgs', 'audit-export'], handler: orgsAuditExportHandler, summary: "Export an organization's audit log as CSV (Owner/Admin)" },
+  { path: ['orgs', 'automations'], handler: orgsAutomationsHandler, summary: 'List automations whose creator left (Owner/Admin)' },
+  { path: ['orgs', 'delete-automation'], handler: orgsDeleteAutomationHandler, summary: 'Delete an automation whose creator left (Owner/Admin)' },
+  { path: ['orgs', 'reassign-automation'], handler: orgsReassignAutomationHandler, summary: 'Hand an automation whose creator left to a member (Owner/Admin)' },
+  { path: ['orgs', 'guests'], handler: orgsGuestsHandler, summary: "List an organization's guests (Owner/Admin)" },
+  { path: ['orgs', 'guest-approvals'], handler: orgsGuestApprovalsHandler, summary: 'List guests waiting for approval (Owner/Admin)' },
+  { path: ['orgs', 'answer-guest'], handler: orgsAnswerGuestHandler, summary: 'Approve or decline a waiting guest (Owner/Admin)' },
+  { path: ['orgs', 'domains'], handler: orgsDomainsHandler, summary: "List an organization's domain claims (Owner/Admin)" },
+  { path: ['orgs', 'add-domain'], handler: orgsAddDomainHandler, summary: 'Claim a domain for an organization (Owner/Admin)' },
+  { path: ['orgs', 'remove-domain'], handler: orgsRemoveDomainHandler, summary: 'Remove a domain claim (Owner/Admin)' },
+  { path: ['orgs', 'verify-domain'], handler: orgsVerifyDomainHandler, summary: 'Verify a domain claim by DNS or a mailed link (Owner/Admin)' },
+  { path: ['orgs', 'confirm-domain'], handler: orgsConfirmDomainHandler, summary: 'Confirm a mailed domain verification link by its token' },
+  { path: ['orgs', 'clear-suppression'], handler: orgsClearSuppressionHandler, summary: "Let a departed member's address auto-join again (Owner/Admin)" },
+  // Wallet READS only ([D-OW-26]): a key never moves money or changes a spend source.
+  { path: ['wallets', 'drive'], handler: walletsDriveHandler, summary: "Show a drive's wallet: remaining credits and your own cap" },
+  { path: ['wallets', 'list'], handler: walletsListHandler, summary: 'List the wallets you spend from and fund (unscoped key)' },
+  { path: ['wallets', 'source'], handler: walletsSourceHandler, summary: 'Show which wallet a conversation spends from (unscoped key)' },
+  { path: ['wallets', 'drive-source'], handler: walletsDriveSourceHandler, summary: 'Show which wallet a new conversation in a drive would spend from' },
+  { path: ['wallets', 'always-own-credits'], handler: walletsAlwaysOwnCreditsHandler, summary: 'Read your "Always my own credits" switches (unscoped key)' },
+];
+
+const HELP_DESCRIPTOR = { path: ['help'], summary: 'Show this help message' };
+
+// RouteEntry is structurally a superset of HelpCommandDescriptor (path +
+// summary), so OTHER_ROUTES can be passed straight through — no projection
+// needed to drop the `handler` field.
+export const helpHandler = createHelpHandler([HELP_DESCRIPTOR, ...OTHER_ROUTES]);
+
+export const ROUTES: readonly RouteEntry[] = [{ ...HELP_DESCRIPTOR, handler: helpHandler }, ...OTHER_ROUTES];

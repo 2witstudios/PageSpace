@@ -1,10 +1,13 @@
 import { ReactRenderer } from '@tiptap/react';
-import { Mention } from '@tiptap/extension-mention';
 import { useDriveStore } from '@/hooks/useDrive';
 import { MentionSuggestion, PageMentionData } from '@/types/mentions';
 import tippy, { Instance } from 'tippy.js';
 import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { cn } from '@/lib/utils';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TAB_TYPES, type TabType } from '@/components/mentions/MentionPicker';
+import { PageMentionNode, getMentionAttrs } from '@pagespace/editor/page-mention-node';
 
 interface SuggestionListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
@@ -16,120 +19,131 @@ interface TiptapSuggestionListProps {
   command: (item: MentionSuggestion) => void;
 }
 
-// Simple suggestion list component for Tiptap mentions
 const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListProps>(function TiptapSuggestionList(props, ref) {
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [activeTab, setActiveTab] = useState<TabType>('all');
 
-  const selectItem = (index: number) => {
-    console.log('[TiptapSuggestionList] selectItem called with index:', index);
-    console.log('[TiptapSuggestionList] items count:', props.items.length);
-    
-    if (props.items.length === 0) {
-      console.log('[TiptapSuggestionList] No items to select');
-      return;
-    }
-    
-    const item = props.items[index];
-    console.log('[TiptapSuggestionList] Selected item:', item);
-    
-    if (item) {
-      console.log('[TiptapSuggestionList] Calling command with selected item');
-      props.command(item);
-    }
-  };
+  const items = props.items.filter(item => TAB_TYPES[activeTab].includes(item.type));
+
+  useEffect(() => setSelectedIndex(0), [props.items, activeTab]);
 
   useImperativeHandle(ref, () => ({
     onKeyDown: ({ event }: { event: KeyboardEvent }) => {
-      console.log('[TiptapSuggestionList] onKeyDown called with key:', event.key);
-      console.log('[TiptapSuggestionList] Current selectedIndex:', selectedIndex);
-      console.log('[TiptapSuggestionList] Items length:', props.items.length);
-      
-      // Don't handle keys if no items available
-      if (props.items.length === 0) {
-        console.log('[TiptapSuggestionList] No items available, not handling key');
-        return false;
-      }
-      
-      // Prevent default behavior and stop propagation for handled keys
+      if (items.length === 0) return false;
+
       if (event.key === 'ArrowUp') {
-        console.log('[TiptapSuggestionList] Handling ArrowUp');
         event.preventDefault();
         event.stopPropagation();
-        const newIndex = (selectedIndex + props.items.length - 1) % props.items.length;
-        console.log('[TiptapSuggestionList] Setting selectedIndex to:', newIndex);
-        setSelectedIndex(newIndex);
+        setSelectedIndex((i) => (i + items.length - 1) % items.length);
         return true;
       }
       if (event.key === 'ArrowDown') {
-        console.log('[TiptapSuggestionList] Handling ArrowDown');
-        event.preventDefault();  
+        event.preventDefault();
         event.stopPropagation();
-        const newIndex = (selectedIndex + 1) % props.items.length;
-        console.log('[TiptapSuggestionList] Setting selectedIndex to:', newIndex);
-        setSelectedIndex(newIndex);
+        setSelectedIndex((i) => (i + 1) % items.length);
         return true;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
-        console.log('[TiptapSuggestionList] Handling Enter/Tab - calling selectItem');
         event.preventDefault();
         event.stopPropagation();
-        selectItem(selectedIndex);
+        const item = items[selectedIndex];
+        if (item) props.command(item);
         return true;
       }
       if (event.key === 'Escape') {
-        console.log('[TiptapSuggestionList] Handling Escape - letting parent handle');
         event.preventDefault();
         event.stopPropagation();
-        // Let the parent handle escape (will trigger cleanup)
-        return false; 
+        return false;
       }
-      
-      console.log('[TiptapSuggestionList] Key not handled:', event.key);
+
       return false;
     },
   }));
 
-  useEffect(() => setSelectedIndex(0), [props.items]);
-
   return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-md shadow-lg min-w-48 max-w-sm">
-      {props.items.length ? (
-        <ul className="max-h-60 overflow-y-auto">
-          {props.items.map((item, index) => (
-            <li
-              key={item.id}
-              className={`px-3 py-2 cursor-pointer transition-colors duration-150 ease-in-out hover:bg-gray-100 hover:dark:bg-gray-700 ${
-                index === selectedIndex ? 'bg-gray-100 dark:bg-gray-700 border-l-2 border-blue-500' : ''
-              }`}
-              onClick={() => selectItem(index)}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {item.label}
-                </span>
-                <span className="text-xs text-gray-500 ml-auto">
-                  {item.type}
-                </span>
-              </div>
-              {item.description && (
-                <div className="text-xs text-gray-500 mt-1 truncate">
-                  {item.description}
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="p-3 text-sm text-gray-500">No results found</div>
-      )}
+    <div className="bg-popover border border-border rounded-md shadow-md overflow-hidden min-w-64 max-w-sm">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => { setActiveTab(v as TabType); setSelectedIndex(0); }}
+      >
+        <TabsList className="w-full grid grid-cols-4 h-auto p-1 bg-muted/30">
+          <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
+          <TabsTrigger value="people" className="text-xs">People</TabsTrigger>
+          <TabsTrigger value="pages" className="text-xs">Pages</TabsTrigger>
+          <TabsTrigger value="groups" className="text-xs">Groups</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <div className="max-h-64 overflow-y-auto overscroll-contain">
+        {items.length === 0 ? (
+          <div className="p-3 text-sm text-muted-foreground">No results found</div>
+        ) : (
+          <ul role="listbox">
+            {items.map((item, index) => {
+              const isGroup = item.type === 'everyone' || item.type === 'role';
+              return (
+                <li
+                  key={`${item.id}-${index}`}
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                  onClick={() => props.command(item)}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  className={cn(
+                    'px-3 py-2 cursor-pointer flex items-center gap-2',
+                    'hover:bg-muted/50 transition-colors',
+                    index === selectedIndex && 'bg-muted/50',
+                  )}
+                >
+                  {isGroup && (
+                    <span className="text-xs font-bold text-white bg-indigo-500 rounded px-1 py-0.5 shrink-0">
+                      @
+                    </span>
+                  )}
+                  <span className={cn(
+                    'text-sm font-medium',
+                    isGroup ? 'text-indigo-600 dark:text-indigo-400' : 'text-foreground',
+                  )}>
+                    {item.label}
+                  </span>
+                  {!isGroup && (
+                    <span className="text-xs text-muted-foreground ml-auto">{item.type}</span>
+                  )}
+                  {item.description && (
+                    <span className="text-xs text-muted-foreground truncate">{item.description}</span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </div>
   );
 });
 
 /**
- * Dispatch a navigation event for internal links
- * This allows parent React components to handle navigation with router.push()
+ * Where a click on a page mention goes, in the editor's node view.
+ *
+ * With a driveId, the direct dashboard URL. Without one — the AI-authored shape
+ * carries `data-page-id` and nothing else — the `/p/{pageId}` resolver, which
+ * exists precisely so "mentions [can] link directly to a page ID without
+ * knowing the driveId" (`app/p/[pageId]/page.tsx`). Null when there is no id,
+ * so the chip simply does not navigate, rather than following the bare
+ * `/dashboard/` this used to fall back to, which landed on the dashboard root
+ * instead of the mentioned page.
+ *
+ * Deliberately NOT used by `renderHTML`. That output is stored and published,
+ * and `neutralizeDashboardLinks` (`packages/lib/src/publish/`) makes a mention
+ * inert on a published page by rewriting hrefs that start with `/dashboard/`.
+ * A `/p/{pageId}` href would slip past it and publish as a live link into an
+ * auth-gated route, so stored HTML gets the dashboard href or no href at all.
  */
+function pageMentionNavigationHref(id: string, driveId: string | null): string | null {
+  if (!id) {
+    return null;
+  }
+  return driveId ? `/dashboard/${driveId}/${id}` : `/p/${id}`;
+}
+
 function dispatchInternalNavigation(href: string): void {
   const event = new CustomEvent('pagespace:navigate', {
     detail: { href },
@@ -139,105 +153,84 @@ function dispatchInternalNavigation(href: string): void {
   document.dispatchEvent(event);
 }
 
-const PageMentionNode = Mention.extend({
-  name: 'pageMention',
-
-  inline: true,
-  atom: true,
-  selectable: false,
-
-  addAttributes() {
-    return {
-      id: { default: null },
-      label: { default: null },
-      driveId: { default: null },
-      driveSlug: { default: null },
-    };
-  },
-
+/**
+ * The client's `pageMention`: `PageMentionNode`'s frozen schema plus the node
+ * view (DOM click/navigation chip) and the suggestion picker (tippy/React
+ * fetch against `/api/mentions/search`). Neither addition is schema-affecting
+ * — `addNodeView` and the `suggestion` option don't touch `NodeSpec` — but
+ * both need `document`/React/fetch, which is why they stay out of the
+ * Node-safe `page-mention-node.ts`.
+ */
+const PageMentionWithView = PageMentionNode.extend({
   addNodeView() {
-    return ({ node }: { node: { attrs: { id: string; label: string; driveId: string; driveSlug: string } } }) => {
-      const dom = document.createElement('a');
-      const href = node.attrs.driveId
-        ? `/dashboard/${node.attrs.driveId}/${node.attrs.id}`
-        : `/dashboard/`;
+    return ({ node }: { node: { attrs: { [key: string]: unknown } } }) => {
+      const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
+      const isGroup = mentionType === 'everyone' || mentionType === 'role';
 
-      // Set up link attributes - NO target="_blank" to stay in WebView on Capacitor
-      dom.href = href;
+      if (isGroup) {
+        const dom = document.createElement('span');
+        dom.className = 'mention mention--group';
+        dom.contentEditable = 'false';
+        dom.setAttribute('data-mention-type', mentionType);
+        if (mentionType === 'role') dom.setAttribute('data-role-id', id);
+        if (driveId) dom.setAttribute('data-drive-id', driveId);
+        dom.textContent = `@${label}`;
+        dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
+        return { dom, contentDOM: null };
+      }
+
+      // A user mention has no page to navigate to. It used to build
+      // `/dashboard/{driveId}/{userId}`, which resolves to nothing — match
+      // renderHTML and emit an inert chip carrying `data-user-id`.
+      if (mentionType === 'user') {
+        const dom = document.createElement('a');
+        dom.className = 'mention';
+        dom.contentEditable = 'false';
+        dom.setAttribute('data-mention-type', 'user');
+        dom.setAttribute('data-user-id', id);
+        if (driveId) dom.setAttribute('data-drive-id', driveId);
+        dom.textContent = `@${label}`;
+        dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
+        return { dom, contentDOM: null };
+      }
+
+      const dom = document.createElement('a');
+      const href = pageMentionNavigationHref(id, driveId);
+
+      // NO target="_blank" - stays in WebView on Capacitor
+      if (href) dom.href = href;
       dom.rel = 'noopener noreferrer nofollow';
       dom.className = 'mention';
       dom.contentEditable = 'false';
       dom.setAttribute('data-mention-type', 'page');
-      dom.setAttribute('data-page-id', node.attrs.id);
+      dom.setAttribute('data-page-id', id);
+      dom.textContent = `@${label}`;
 
-      // Set content
-      dom.textContent = `@${node.attrs.label}`;
+      if (href) {
+        dom.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dispatchInternalNavigation(href);
+        });
+      }
+      dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
 
-      // Handle click events - dispatch navigation event for React router handling
-      // Falls back to window.location for non-React contexts
-      dom.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        // Dispatch event for parent component to handle with router.push()
-        dispatchInternalNavigation(href);
-      });
-
-      // Prevent selection on click
-      dom.addEventListener('mousedown', (event) => {
-        event.preventDefault();
-      });
-
-      return {
-        dom,
-        contentDOM: null, // No content DOM since this is atomic
-      };
+      return { dom, contentDOM: null };
     };
   },
 });
 
-export const PageMention = PageMentionNode.configure({
-  HTMLAttributes: {
-    class: 'mention',
-    contenteditable: 'false',
-  },
-  renderHTML({ options, node }) {
-    const href = node.attrs.driveId
-      ? `/dashboard/${node.attrs.driveId}/${node.attrs.id}`
-      : `/dashboard/`;
-    return [
-      'a',
-      {
-        ...options.HTMLAttributes,
-        href: href,
-        // NO target="_blank" - stays in WebView on Capacitor iOS
-        rel: 'noopener noreferrer nofollow',
-        'data-mention-type': 'page',
-        'data-page-id': node.attrs.id,
-        contenteditable: 'false',
-      },
-      `@${node.attrs.label}`,
-    ];
-  },
+export const PageMention = PageMentionWithView.configure({
   suggestion: {
     allowSpaces: true,
     items: async ({ query }) => {
-      console.log('[TipTap] items called with query:', query);
       const { currentDriveId } = useDriveStore.getState();
-      console.log('[TipTap] currentDriveId:', currentDriveId);
+      if (!currentDriveId) return [];
 
-      if (!currentDriveId) {
-        console.log('[TipTap] No currentDriveId, returning empty array');
-        return [];
-      }
-
-      const types = ['page', 'user'].join(',');
+      const types = ['page', 'user', 'everyone', 'role'].join(',');
       const url = `/api/mentions/search?q=${encodeURIComponent(query)}&driveId=${encodeURIComponent(currentDriveId)}&types=${types}`;
-      console.log('[TipTap] Fetching suggestions from:', url);
-
       const response = await fetchWithAuth(url);
       const suggestions: MentionSuggestion[] = await response.json();
-      console.log('[TipTap] Got suggestions:', suggestions);
-
       return suggestions;
     },
     render: () => {
@@ -246,18 +239,16 @@ export const PageMention = PageMentionNode.configure({
 
       return {
         onStart: (props) => {
-          console.log('[TipTap] onStart called with props:', props);
-          console.log('[TipTap] items count:', props.items?.length || 0);
-          
           component = new ReactRenderer(TiptapSuggestionList, {
             props: {
               items: props.items,
               command: (item: MentionSuggestion) => {
-                console.log('[TipTap] command called with item:', item);
                 const { drives } = useDriveStore.getState();
-                const drive = drives.find(d => d.id === (item.data as PageMentionData).driveId);
-                
-                console.log('[TipTap] Executing mention insertion command');
+                const isGroup = item.type === 'everyone' || item.type === 'role';
+                const itemDriveId = isGroup
+                  ? (item.data as { driveId: string }).driveId
+                  : (item.data as PageMentionData).driveId;
+                const drive = drives.find(d => d.id === itemDriveId);
                 const { editor, range } = props;
                 editor
                   .chain()
@@ -269,34 +260,23 @@ export const PageMention = PageMentionNode.configure({
                       attrs: {
                         id: item.id,
                         label: item.label,
-                        driveId: (item.data as PageMentionData).driveId,
+                        driveId: itemDriveId,
                         driveSlug: drive?.slug || '',
+                        mentionType: item.type,
                       },
                     },
-                    {
-                      type: 'text',
-                      text: '\u00A0', // Add a non-breaking space right after
-                    },
+                    { type: 'text', text: '\u00A0' },
                   ])
                   .run();
-                
-                console.log('[TipTap] Mention insertion command completed');
               },
             },
             editor: props.editor,
           });
 
-          if (!props.clientRect) {
-            return;
-          }
+          if (!props.clientRect) return;
+          const rect = props.clientRect();
+          if (!rect) return;
 
-          const rect = props.clientRect ? props.clientRect() : null;
-          if (!rect) {
-            console.log('[TipTap] No clientRect, aborting popup creation');
-            return;
-          }
-
-          console.log('[TipTap] Creating tippy popup at rect:', rect);
           popup = tippy(document.body, {
             getReferenceClientRect: () => rect,
             appendTo: () => document.body,
@@ -306,18 +286,17 @@ export const PageMention = PageMentionNode.configure({
             trigger: 'manual',
             placement: 'bottom-start',
           }) as Instance;
-          console.log('[TipTap] Tippy popup created');
         },
         onUpdate(props) {
-          console.log('[TipTap] onUpdate called with props:', props);
-          console.log('[TipTap] updated items count:', props.items?.length || 0);
-          
           component.updateProps({
             items: props.items,
             command: (item: MentionSuggestion) => {
               const { drives } = useDriveStore.getState();
-              const drive = drives.find(d => d.id === (item.data as PageMentionData).driveId);
-              
+              const isGroup = item.type === 'everyone' || item.type === 'role';
+              const itemDriveId = isGroup
+                ? (item.data as { driveId: string }).driveId
+                : (item.data as PageMentionData).driveId;
+              const drive = drives.find(d => d.id === itemDriveId);
               const { editor, range } = props;
               editor
                 .chain()
@@ -329,41 +308,40 @@ export const PageMention = PageMentionNode.configure({
                     attrs: {
                       id: item.id,
                       label: item.label,
-                      driveId: (item.data as PageMentionData).driveId,
+                      driveId: itemDriveId,
                       driveSlug: drive?.slug || '',
+                      mentionType: item.type,
                     },
                   },
-                  {
-                    type: 'text',
-                    text: '\u00A0', // Add a non-breaking space right after
-                  },
+                  { type: 'text', text: '\u00A0' },
                 ])
                 .run();
             },
           });
-          
+
           const rect = props.clientRect ? props.clientRect() : null;
-          if (popup && rect) {
-            popup.setProps({
+          if (!popup && rect) {
+            popup = tippy(document.body, {
               getReferenceClientRect: () => rect,
-            });
+              appendTo: () => document.body,
+              content: component.element,
+              showOnCreate: true,
+              interactive: true,
+              trigger: 'manual',
+              placement: 'bottom-start',
+            }) as Instance;
+          } else if (popup && rect) {
+            popup.setProps({ getReferenceClientRect: () => rect });
           }
         },
         onKeyDown(props) {
-          console.log('[TipTap] onKeyDown called with key:', props.event.key);
-          
           if (props.event.key === 'Escape') {
-            console.log('[TipTap] Escape pressed, hiding popup');
             popup?.hide();
             return true;
           }
-          
-          const handled = component.ref?.onKeyDown(props) || false;
-          console.log('[TipTap] Key handled by component:', handled);
-          return handled;
+          return component.ref?.onKeyDown(props) || false;
         },
         onExit() {
-          console.log('[TipTap] onExit called, cleaning up');
           popup?.destroy();
           component.destroy();
         },

@@ -1,0 +1,374 @@
+/**
+ * Execute shell.
+ *
+ * Orchestrates a rollback: previews, then dispatches to the rollback/redo
+ * executors by resource type, logs the rollback activity, and fires mention
+ * notifications. The activity and its content snapshot are fetched exactly once
+ * and threaded through preview, the handler, and the audit log. When options.tx
+ * is provided it becomes deps.db (via withTx) so one transaction threads through
+ * every handler, createPageVersion, and logRollbackActivity.
+ */
+import type { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import type { ActivityAction, ActivityActionResult, ActivityActionPreview } from '@/types/activity-actions';
+import type { DeferredWorkflowTrigger, ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
+import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
+import { withTx, type RollbackDeps, type PageUpdateContext, type PageMutationMeta } from './deps';
+import type { DriveAccessScope } from '@pagespace/lib/permissions/org-lapse-guard';
+import { guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
+import { AGENT_CONFIG_ROLLBACK_FIELDS } from './operations';
+import { isRollingBackRollback } from './target-values';
+import { getActivityById } from './activity-repo';
+import { resolveActivityContentSnapshot } from './content-snapshot';
+import { previewFromActivity, previewActivityAction } from './preview';
+import {
+  rollbackPageChange,
+  rollbackDriveChange,
+  rollbackPermissionChange,
+  rollbackAgentConfigChange,
+  rollbackMemberChange,
+  rollbackRoleChange,
+  rollbackMessageChange,
+} from './rollback-executors';
+import {
+  redoPageChange,
+  redoDriveChange,
+  redoPermissionChange,
+  redoAgentConfigChange,
+  redoMemberChange,
+  redoRoleChange,
+  redoMessageChange,
+} from './redo-executors';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+
+/**
+ * Result of executing a rollback
+ */
+export interface RollbackResult extends ActivityActionResult {
+  success: boolean;
+  rollbackActivityId?: string;
+  restoredValues?: Record<string, unknown>;
+  deferredWorkflowTrigger?: DeferredWorkflowTrigger;
+}
+
+export async function previewRollback(
+  deps: RollbackDeps,
+  activityId: string,
+  actor: AccessActor,
+  context: RollbackContext,
+  options?: { force?: boolean; undoGroupActivityIds?: string[] }
+): Promise<ActivityActionPreview> {
+  return previewActivityAction(deps, 'rollback', activityId, actor, context, options);
+}
+
+/** [D-OW-33] a page undo/redo can only change that page's privacy: snapshot just it. */
+const PAGE_SCOPE = (pageId: string): DriveAccessScope => ({ members: false, grants: false, agents: false, tokens: false, pages: [pageId] });
+
+/**
+ * [D-OW-33] a member or grant undo/redo touches one person: snapshot just them (P3). The person is the activity's
+ * target; with none recorded, the whole drive (fail closed: a full snapshot judges everything).
+ */
+function personScope(activity: { metadata: unknown; previousValues: unknown; newValues: unknown }): DriveAccessScope {
+  const pick = (v: unknown): string | null =>
+    v && typeof v === 'object' && typeof (v as Record<string, unknown>).userId === 'string' ? ((v as Record<string, unknown>).userId as string) : null;
+  const meta = activity.metadata && typeof activity.metadata === 'object' ? (activity.metadata as Record<string, unknown>) : null;
+  const target = (typeof meta?.targetUserId === 'string' ? meta.targetUserId : null) ?? pick(activity.previousValues) ?? pick(activity.newValues);
+  return target ? { users: [target] } : {};
+}
+
+/** POL-6's floor guard around a role write, when the role belongs to a drive. */
+function guardOpenRoleFloorIfDrive<T>(d: RollbackDeps, driveId: string | null, write: () => Promise<T>): Promise<T> {
+  return driveId === null ? write() : guardOpenRoleFloor(d.db, driveId, write);
+}
+
+/** The drive an access write lands in: the activity's, or (a page permission) its page's drive. */
+async function accessDriveId(deps: RollbackDeps, activity: { driveId: string | null; pageId?: string | null }): Promise<string | null> {
+  if (activity.driveId) return activity.driveId;
+  if (!activity.pageId) return null;
+  const [row] = await deps.db.select({ driveId: pages.driveId }).from(pages).where(eq(pages.id, activity.pageId)).limit(1);
+  return row?.driveId ?? null;
+}
+
+export async function executeRollback(
+  deps: RollbackDeps,
+  activityId: string,
+  actor: AccessActor,
+  context: RollbackContext,
+  options?: { tx?: typeof db; force?: boolean; undoGroupActivityIds?: string[] }
+): Promise<RollbackResult> {
+  const userId = actor.userId;
+  const { tx, force, undoGroupActivityIds } = options ?? {};
+  deps.logger.debug('[Rollback:Execute] Starting execution', { activityId, userId, context, usingTransaction: !!tx, force });
+
+  const action: ActivityAction = 'rollback';
+
+  // Fetch the activity and its content snapshot exactly once, then reuse them
+  // for the preview, the handler, and the audit log.
+  const activity = await getActivityById(deps, activityId);
+  if (!activity) {
+    deps.logger.debug('[Rollback:Execute] Aborting - activity not found', { activityId });
+    return {
+      success: false,
+      action,
+      status: 'failed',
+      message: 'Activity not found',
+      warnings: [],
+      changesApplied: [],
+    };
+  }
+
+  const resolvedContentSnapshot = await resolveActivityContentSnapshot(deps, activity);
+  const preview = await previewFromActivity(deps, action, activity, resolvedContentSnapshot, actor, context, { force, undoGroupActivityIds });
+
+  if (!preview.canExecute) {
+    deps.logger.debug('[Rollback:Execute] Aborting - preview check failed', {
+      canExecute: preview.canExecute,
+      reason: preview.reason,
+      isNoOp: preview.isNoOp,
+    });
+    return {
+      success: preview.isNoOp,
+      action,
+      status: preview.isNoOp ? 'no_op' : 'failed',
+      message: preview.reason || 'Cannot rollback this activity',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+
+  const warnings: string[] = [...preview.warnings];
+  const txDeps = withTx(deps, tx);
+  /** Run a write in the caller's transaction, or in one of its own when there is none. */
+  const inTransaction = <T>(run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+    tx ? run(txDeps) : deps.db.transaction((t) => run(withTx(deps, t as unknown as typeof db)));
+  /**
+   * [D-OW-33] Run an access write (member, permission, role, drive) under the lapse guard: in a savepoint of the
+   * caller's transaction (or a transaction of its own), undone with OrgLapsedError when it gave anyone more on the
+   * drive while the drive's org is lapsed. Restoring LESS access (undoing a grant, re-removing a member) still applies.
+   * `scope` narrows what the snapshots read (one person for a member or grant change, one page for a page change).
+   */
+  const guardedAccessWrite = <T>(driveId: string | null, scope: DriveAccessScope, run: (d: RollbackDeps) => Promise<T>): Promise<T> =>
+    driveId === null
+      ? inTransaction(run)
+      : deps.guardDriveAccess(tx ?? deps.db, driveId, scope, (t) => run(withTx(deps, t)));
+  const changeGroupId = deps.genChangeGroupId();
+  const changeGroupType = deps.inferChangeGroupType({ isAiGenerated: false });
+
+  const rollingBackRollback = isRollingBackRollback(activity);
+  if (rollingBackRollback && !activity.rollbackSourceOperation) {
+    return {
+      success: false,
+      action,
+      status: 'failed',
+      message: 'Rollback source operation not available for this activity',
+      warnings: preview.warnings,
+      changesApplied: preview.changes,
+    };
+  }
+  const effectiveSourceOperation = rollingBackRollback
+    ? activity.rollbackSourceOperation as ActivityOperation
+    : activity.operation as ActivityOperation;
+
+  const pageUpdateContext: PageUpdateContext = {
+    userId,
+    changeGroupId,
+    changeGroupType,
+    source: 'restore',
+    metadata: {
+      action: 'rollback',
+      rollbackFromActivityId: activityId,
+      rollbackSourceOperation: effectiveSourceOperation,
+      rollbackSourceTimestamp: activity.timestamp,
+    },
+  };
+
+  try {
+    const actorInfo = await deps.getActorInfo(userId);
+
+    let restoredValues: Record<string, unknown> = {};
+    let pageMutationMeta: PageMutationMeta | undefined;
+
+    deps.logger.debug('[Rollback:Execute] Executing handler', {
+      resourceType: activity.resourceType,
+      operation: activity.operation,
+      effectiveSourceOperation,
+      rollingBackRollback,
+      resourceId: activity.resourceId,
+    });
+
+    switch (activity.resourceType) {
+      case 'page': {
+        // [D-OW-33] a page undo or redo can restore `isPrivate: false` (undoing "made private", redoing "made public"):
+        // the page's privacy is in the snapshot, so a page made readable by the whole drive is refused while lapsed.
+        const pageId = activity.pageId ?? activity.resourceId;
+        const result = await guardedAccessWrite(await accessDriveId(deps, { driveId: activity.driveId, pageId }), PAGE_SCOPE(pageId), (d) => rollingBackRollback
+          ? redoPageChange(d, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
+          : rollbackPageChange(d, activity, resolvedContentSnapshot, pageUpdateContext));
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
+        break;
+      }
+
+      case 'drive':
+        restoredValues = await guardedAccessWrite(activity.driveId, {}, (d) => rollingBackRollback
+          ? redoDriveChange(d, activity, preview.targetValues, effectiveSourceOperation, pageUpdateContext)
+          : rollbackDriveChange(d, activity, pageUpdateContext));
+        break;
+
+      case 'permission':
+        // POL-2: a re-entering grant is decided by the org's guests policy inside a transaction (deps.admitReentry).
+        restoredValues = await guardedAccessWrite(await accessDriveId(deps, activity), personScope(activity), (d) => rollingBackRollback
+          ? redoPermissionChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackPermissionChange(d, activity));
+        break;
+
+      case 'agent': {
+        const result = rollingBackRollback
+          ? await redoAgentConfigChange(txDeps, activity, preview.targetValues, pageUpdateContext, AGENT_CONFIG_ROLLBACK_FIELDS)
+          : await rollbackAgentConfigChange(txDeps, activity, pageUpdateContext, AGENT_CONFIG_ROLLBACK_FIELDS);
+        restoredValues = result.restoredValues;
+        pageMutationMeta = result.pageMutationMeta;
+        break;
+      }
+
+      case 'member':
+        // POL-2: a re-entering member row is decided by the org's guests policy inside a transaction.
+        restoredValues = await guardedAccessWrite(activity.driveId, personScope(activity), (d) => rollingBackRollback
+          ? redoMemberChange(d, activity, preview.targetValues, effectiveSourceOperation)
+          : rollbackMemberChange(d, activity));
+        break;
+
+      case 'role': {
+        // POL-6: undoing or redoing a role change may change an Open org drive's default role; it is judged against
+        // the org's floor like any role write, inside a transaction so a refusal writes nothing. [D-OW-33] and under
+        // the lapse guard, like every access write.
+        const roleDriveId = activity.driveId;
+        restoredValues = await guardedAccessWrite(roleDriveId, { grants: false }, (d) =>
+          guardOpenRoleFloorIfDrive(d, roleDriveId, () => rollingBackRollback
+            ? redoRoleChange(d, activity, preview.targetValues, effectiveSourceOperation)
+            : rollbackRoleChange(d, activity)));
+        break;
+      }
+
+      case 'message':
+        restoredValues = rollingBackRollback
+          ? await redoMessageChange(txDeps, activity, preview.targetValues, effectiveSourceOperation)
+          : await rollbackMessageChange(txDeps, activity);
+        break;
+
+      case 'conversation':
+        deps.logger.debug('[Rollback:Execute] Conversation undo cannot be rolled back', {
+          activityId: activity.id,
+          operation: activity.operation,
+        });
+        return {
+          success: false,
+          action,
+          status: 'failed',
+          message: 'Conversation undo operations cannot be rolled back. The affected messages remain soft-deleted and can be restored individually if needed.',
+          warnings,
+          changesApplied: preview.changes,
+        };
+
+      default:
+        deps.logger.debug('[Rollback:Execute] Unsupported resource type', { resourceType: activity.resourceType });
+        return {
+          success: false,
+          action,
+          status: 'failed',
+          message: `Rollback not supported for resource type: ${activity.resourceType}`,
+          warnings,
+          changesApplied: preview.changes,
+        };
+    }
+
+    deps.logger.debug('[Rollback:Execute] Handler completed', {
+      resourceType: activity.resourceType,
+      restoredFieldsCount: Object.keys(restoredValues).length,
+    });
+
+    // Reuse the snapshot resolved once at the top of this function.
+    const logOptions: Parameters<RollbackDeps['logRollbackActivity']>[4] = {
+      restoredValues,
+      replacedValues: preview.currentValues ?? undefined,
+      contentSnapshot: resolvedContentSnapshot ?? undefined,
+      contentFormat: pageMutationMeta?.contentFormatAfter ?? activity.contentFormat ?? undefined,
+      rollbackSourceOperation: effectiveSourceOperation,
+      rollbackSourceTimestamp: rollingBackRollback
+        ? (activity.rollbackSourceTimestamp ?? activity.timestamp)
+        : activity.timestamp,
+      rollbackSourceTitle: activity.resourceTitle ?? undefined,
+      metadata: activity.metadata ? { sourceMetadata: activity.metadata } : undefined,
+      changeGroupId,
+      changeGroupType,
+      tx,
+    };
+
+    if (pageMutationMeta) {
+      logOptions.streamId = activity.pageId ?? activity.resourceId;
+      logOptions.streamSeq = pageMutationMeta.nextRevision;
+      logOptions.stateHashBefore = pageMutationMeta.stateHashBefore;
+      logOptions.stateHashAfter = pageMutationMeta.stateHashAfter;
+      logOptions.contentRef = pageMutationMeta.contentRefAfter ?? undefined;
+      logOptions.contentSize = pageMutationMeta.contentSizeAfter ?? undefined;
+    }
+
+    const deferredWorkflowTrigger = await deps.logRollbackActivity(
+      userId,
+      activityId,
+      {
+        resourceType: activity.resourceType,
+        resourceId: activity.resourceId,
+        resourceTitle: activity.resourceTitle ?? undefined,
+        driveId: activity.driveId,
+        pageId: activity.pageId ?? undefined,
+      },
+      actorInfo,
+      logOptions
+    );
+
+    deps.logger.debug('[Rollback:Execute] Rollback completed successfully', {
+      activityId,
+      resourceType: activity.resourceType,
+      resourceId: activity.resourceId,
+    });
+
+    // Send notifications for newly mentioned users after all operations complete (fire-and-forget)
+    const mentionsResult = pageMutationMeta?.mentionsResult;
+    if (mentionsResult && mentionsResult.mentionedByUserId && mentionsResult.newlyMentionedUserIds.length > 0) {
+      for (const targetUserId of mentionsResult.newlyMentionedUserIds) {
+        deps.createMentionNotification(targetUserId, mentionsResult.sourcePageId, mentionsResult.mentionedByUserId)
+          .catch((error: unknown) => {
+            deps.logger.error('Failed to send mention notification:', error as Error);
+          });
+      }
+    }
+
+    return {
+      success: true,
+      action,
+      status: 'success',
+      restoredValues,
+      message: 'Change undone',
+      warnings,
+      changesApplied: preview.changes,
+      deferredWorkflowTrigger,
+    };
+  } catch (error) {
+    deps.logger.error('[RollbackService] Error executing rollback', {
+      activityId,
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    return {
+      success: false,
+      action,
+      status: 'failed',
+      message: error instanceof Error ? error.message : 'Failed to execute rollback',
+      warnings,
+      changesApplied: preview.changes,
+    };
+  }
+}

@@ -35,17 +35,19 @@ describe('QueueManager type contracts', () => {
   it('given QueueStats record, should be keyed by QueueName', () => {
     const status: Record<QueueName, QueueStats> = {
       'ingest-file': { active: 0, pending: 0, completed: 0, failed: 0 },
+      'pull-verify': { active: 0, pending: 0, completed: 0, failed: 0 },
       'image-optimize': { active: 0, pending: 0, completed: 0, failed: 0 },
       'text-extract': { active: 0, pending: 0, completed: 0, failed: 0 },
       'ocr-process': { active: 0, pending: 0, completed: 0, failed: 0 },
+      'video-process': { active: 0, pending: 0, completed: 0, failed: 0 },
       'siem-delivery': { active: 0, pending: 0, completed: 0, failed: 0 },
     };
 
     assert({
       given: 'a Record<QueueName, QueueStats>',
-      should: 'have 5 queue keys',
+      should: 'have 7 queue keys',
       actual: Object.keys(status).length,
-      expected: 5,
+      expected: 7,
     });
   });
 });

@@ -14,10 +14,8 @@ vi.mock('google-auth-library', () => ({
   })),
 }));
 
-vi.mock('apple-signin-auth', () => ({
-  default: {
-    verifyIdToken: vi.fn(),
-  },
+vi.mock('../apple/apple-jwt', () => ({
+  verifyAppleJwt: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -54,7 +52,7 @@ vi.mock('../../logging/logger-config', () => ({
 import { verifyGoogleIdToken, verifyAppleIdToken, verifyOAuthIdToken, createOrLinkOAuthUser } from '../oauth-utils';
 import { OAuthProvider } from '../oauth-types';
 import { OAuth2Client } from 'google-auth-library';
-import appleSignIn from 'apple-signin-auth';
+import { verifyAppleJwt } from '../apple/apple-jwt';
 import { db } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 
@@ -146,53 +144,61 @@ describe('oauth-utils', () => {
       expect(result.error).toContain('not configured');
     });
 
-    it('should return error when payload missing', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue(null as never);
+    it('should return error when claims are missing', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({ ok: true, claims: {} });
       const result = await verifyAppleIdToken('some-token');
       expect(result.success).toBe(false);
     });
 
     it('should return user info on success', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-123',
-        email: 'user@icloud.com',
-        email_verified: 'true',
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', email: 'user@icloud.com', email_verified: 'true' },
+      });
 
       const result = await verifyAppleIdToken('valid-token');
       expect(result.success).toBe(true);
       expect(result.userInfo?.provider).toBe(OAuthProvider.APPLE);
     });
 
+    it('given a verified token, should return the audience it was issued for so its code is exchanged with that client', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', aud: 'apple-service-id', email: 'user@icloud.com', email_verified: 'true' },
+      });
+
+      const result = await verifyAppleIdToken('valid-token');
+
+      expect(result.audience).toBe('apple-service-id');
+    });
+
     it('should handle boolean email_verified', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: 'apple-123',
-        email: 'user@icloud.com',
-        email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: 'apple-123', email: 'user@icloud.com', email_verified: true },
+      });
 
       const result = await verifyAppleIdToken('valid-token');
       expect(result.success).toBe(true);
       expect(result.userInfo?.emailVerified).toBe(true);
     });
 
-    it('should handle verification errors', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockRejectedValue(new Error('Bad token'));
+    it('should handle verification failures', async () => {
+      vi.mocked(verifyAppleJwt).mockResolvedValue({ ok: false, reason: 'invalid_signature' });
       const result = await verifyAppleIdToken('bad-token');
       expect(result.success).toBe(false);
+      expect(result.error).toBe('invalid_signature');
     });
 
     it('should include service ID when set', async () => {
       process.env.APPLE_SERVICE_ID = 'apple-service-id';
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: '1', email: 'u@a.com', email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: '1', email: 'u@a.com', email_verified: true },
+      });
 
       await verifyAppleIdToken('token');
-      expect(appleSignIn.verifyIdToken).toHaveBeenCalledWith('token', {
-        audience: ['apple-client-id', 'apple-service-id'],
-        ignoreExpiration: false,
-      });
+      expect(verifyAppleJwt).toHaveBeenCalledWith('token', { audience: ['apple-client-id', 'apple-service-id'] });
     });
   });
 
@@ -208,9 +214,10 @@ describe('oauth-utils', () => {
     });
 
     it('should route to Apple verification', async () => {
-      vi.mocked(appleSignIn.verifyIdToken).mockResolvedValue({
-        sub: '1', email: 'u@a.com', email_verified: true,
-      } as never);
+      vi.mocked(verifyAppleJwt).mockResolvedValue({
+        ok: true,
+        claims: { sub: '1', email: 'u@a.com', email_verified: true },
+      });
 
       const result = await verifyOAuthIdToken(OAuthProvider.APPLE, 'token');
       expect(result.success).toBe(true);
@@ -252,6 +259,47 @@ describe('oauth-utils', () => {
       expect(db.update).toHaveBeenCalledWith(users);
     });
 
+    // SECURITY (M5): an unverified provider email that collides with an existing
+    // account must be rejected — never linked, never authenticated.
+    it('rejects when an unverified email matches an existing account and there is no subject match', async () => {
+      vi.mocked(db.query.users.findFirst)
+        .mockResolvedValueOnce(undefined as never) // subject-id lookup: no match
+        .mockResolvedValueOnce({ id: 'victim', email: 'victim@test.com', googleId: 'other' } as never); // email lookup: existing account
+
+      const result = await createOrLinkOAuthUser({
+        providerId: 'attacker-sub',
+        email: 'victim@test.com',
+        emailVerified: false,
+        name: 'Attacker',
+        picture: undefined,
+        provider: OAuthProvider.GOOGLE,
+      });
+
+      expect(result).toEqual({ status: 'rejected', reason: 'unverified_email_conflict' });
+      // No write side effects.
+      expect(db.update).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
+    it('links by email when an unverified email has no existing match (fresh signup)', async () => {
+      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
+      const mockReturning = vi.fn().mockResolvedValue([{ id: 'new-user', name: 'New', email: 'new@test.com' }]);
+      vi.mocked(db.insert).mockReturnValue({ values: vi.fn(() => ({ returning: mockReturning })) } as never);
+      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 1 }]);
+      vi.mocked(db.select).mockReturnValue({ from: vi.fn(() => ({ where: mockCountWhere })) } as never);
+
+      const result = await createOrLinkOAuthUser({
+        providerId: 'fresh-sub',
+        email: 'new@test.com',
+        emailVerified: false,
+        name: 'New',
+        picture: undefined,
+        provider: OAuthProvider.GOOGLE,
+      });
+
+      expect(result.status).toBe('linked');
+    });
+
     it('should create new user when not found', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
       const mockReturning = vi.fn().mockResolvedValue([{
@@ -275,16 +323,13 @@ describe('oauth-utils', () => {
       expect(result).toBeDefined();
     });
 
-    it('should create personal drive for new user with no drives', async () => {
+    it('does NOT create any drive for a new user — provisioning is the caller\'s job', async () => {
       vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
       const mockReturning = vi.fn().mockResolvedValue([{
         id: 'new-user', name: 'New User', email: 'new@test.com',
       }]);
       const mockValues = vi.fn(() => ({ returning: mockReturning }));
       vi.mocked(db.insert).mockReturnValue({ values: mockValues } as never);
-      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 0 }]); // 0 drives
-      const mockCountFrom = vi.fn(() => ({ where: mockCountWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockCountFrom } as never);
 
       await createOrLinkOAuthUser({
         providerId: 'apple-789',
@@ -295,36 +340,10 @@ describe('oauth-utils', () => {
         provider: OAuthProvider.APPLE,
       });
 
-      // insert called twice: once for user, once for drive
-      expect(db.insert).toHaveBeenCalledTimes(2);
-    });
-
-    it('should surface personal drive creation failure for new user', async () => {
-      vi.mocked(db.query.users.findFirst).mockResolvedValue(undefined as never);
-      const mockUserReturning = vi.fn().mockResolvedValue([{
-        id: 'new-user', name: 'New User', email: 'new@test.com',
-      }]);
-      vi.mocked(db.insert)
-        .mockReturnValueOnce({ values: vi.fn(() => ({ returning: mockUserReturning })) } as never)
-        .mockReturnValueOnce({
-          values: vi.fn(() => {
-            throw new Error('drive insert failed');
-          }),
-        } as never);
-      const mockCountWhere = vi.fn().mockResolvedValue([{ count: 0 }]);
-      const mockCountFrom = vi.fn(() => ({ where: mockCountWhere }));
-      vi.mocked(db.select).mockReturnValue({ from: mockCountFrom } as never);
-
-      await expect(
-        createOrLinkOAuthUser({
-          providerId: 'apple-789',
-          email: 'new@test.com',
-          emailVerified: false,
-          name: undefined,
-          picture: undefined,
-          provider: OAuthProvider.APPLE,
-        }),
-      ).rejects.toThrow('drive insert failed');
+      // insert called exactly once: the user row. Home-drive provisioning
+      // happens in the auth routes via provisionHomeDriveIfNeeded.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+      expect(db.select).not.toHaveBeenCalled();
     });
   });
 });

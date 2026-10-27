@@ -1,11 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, and, isNull, lte } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { subscriptions, stripeEvents } from '@pagespace/db/schema/subscriptions';
-import { stripe, Stripe, getTierFromPrice } from '@/lib/stripe';
+import { stripe, Stripe, getPersonalTierFromPrice } from '@/lib/stripe';
+import { isStorageAddonConfigured, isStorageAddonPrice, personalSubscriptionItems, planPaidCentsFromInvoiceLines, tierFromInvoiceLines, toPersonalSubscriptionItems } from '@/lib/stripe/price-config';
+import { completeInvoiceLines } from '@/lib/stripe/invoice-lines';
+import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { deriveTierFromSubscriptions } from '@pagespace/lib/billing/subscription-tier-sync';
+import { combineTiers } from '@pagespace/lib/billing/apple/apple-core';
+import { appleEntitledTier } from '@pagespace/lib/billing/apple/apple-entitlement';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
+import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
+import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
+import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
+import { emitCreditsUpdated } from '@/lib/subscription/credit-balance';
+import { sendSubscriptionReceiptEmail, sendTopupReceiptEmail } from '@/lib/billing/send-payment-receipt-email';
+import { classifyDedupeOutcome, DEFAULT_LEASE_MS, type DedupeOutcome } from './dedupe';
+import { invoiceSubscriptionId, routeInvoice, routeSubscription } from './dedicated-routing';
+import { handleDedicatedSubscriptionEvent } from './dedicated-handlers';
+import {
+  orgForStripeCustomer,
+  routeOrgInvoicePaid,
+  routeOrgInvoicePaymentFailed,
+  routeOrgSubscriptionEvent,
+} from './org-handlers';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 
 export async function POST(request: NextRequest) {
   try {
@@ -36,41 +59,320 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
     }
 
-    // Check for idempotency - insert event ID first
+    // Idempotency: claim this event id BEFORE processing. onConflictDoNothing().returning()
+    // distinguishes a TRUE duplicate (conflict → no row returned) from a transient DB fault
+    // (throws) — so we never silently ack (200) an event we actually failed to record, which
+    // would let Stripe drop the redelivery and permanently lose paid funding. The decision is
+    // a pure function (classifyDedupeOutcome) so every outcome is unit-tested without a DB.
+    const now = new Date();
+    let outcome: DedupeOutcome;
     try {
-      await db.insert(stripeEvents).values({
-        id: event.id,
-        type: event.type,
+      const insertedRows = await db
+        .insert(stripeEvents)
+        // createdAt is the lease anchor: written from the same clock the lease cutoff is read
+        // against, never the column's session-local now() (a non-UTC session would age it by hours).
+        .values({ id: event.id, type: event.type, createdAt: now })
+        .onConflictDoNothing({ target: stripeEvents.id })
+        .returning({ id: stripeEvents.id });
+
+      let existingProcessedAt: Date | null | undefined;
+      let existingClaimedAt: Date | null | undefined;
+      if (insertedRows.length === 0) {
+        // Lost the race / redelivery: inspect the prior row. processedAt is null until
+        // processing completes; createdAt is the lease anchor (when the id was claimed).
+        const existing = await db
+          .select({
+            processedAt: stripeEvents.processedAt,
+            createdAt: stripeEvents.createdAt,
+          })
+          .from(stripeEvents)
+          .where(eq(stripeEvents.id, event.id))
+          .limit(1);
+        existingProcessedAt = existing[0]?.processedAt ?? null;
+        existingClaimedAt = existing[0]?.createdAt ?? null;
+      }
+
+      outcome = classifyDedupeOutcome({
+        inserted: insertedRows.length > 0,
+        existingProcessedAt,
+        existingClaimedAt,
+        now,
       });
-    } catch {
-      // Event already processed
+
+      if (outcome === 'reclaim') {
+        // Atomic takeover of an abandoned marker (worker died after claiming but before
+        // finishing). The WHERE guard — still unprocessed AND claimed before the lease
+        // cutoff — lets exactly one concurrent redelivery win; it re-leases the row
+        // (createdAt = now) and reprocesses. Losers match zero rows and fall back to retry.
+        // The `lte` cutoff mirrors classifyDedupeOutcome's `age >= leaseMs` boundary exactly.
+        const leaseCutoff = new Date(now.getTime() - DEFAULT_LEASE_MS);
+        const reclaimed = await db
+          .update(stripeEvents)
+          .set({ createdAt: now, error: null })
+          .where(
+            and(
+              eq(stripeEvents.id, event.id),
+              isNull(stripeEvents.processedAt),
+              lte(stripeEvents.createdAt, leaseCutoff)
+            )
+          )
+          .returning({ id: stripeEvents.id });
+        if (reclaimed.length > 0) {
+          loggers.api.warn('Reclaimed abandoned Stripe event marker; reprocessing', {
+            eventId: event.id,
+          });
+          outcome = 'process';
+        } else {
+          // Another delivery reclaimed it first, or it just finished — let Stripe redeliver.
+          outcome = 'retry';
+        }
+      }
+    } catch (insertError) {
+      // A genuine DB fault (pool timeout, connection drop) — never a duplicate, since
+      // onConflictDoNothing absorbs the unique violation. Force Stripe to redeliver.
+      loggers.api.error(
+        'Stripe webhook idempotency insert failed',
+        insertError instanceof Error ? insertError : undefined,
+        { eventId: event.id }
+      );
+      outcome = classifyDedupeOutcome({ inserted: false, error: insertError });
+    }
+
+    if (outcome === 'duplicate-ack') {
+      // A prior delivery already processed this event to completion.
       loggers.api.info('Event already processed', { eventId: event.id });
       return NextResponse.json({ received: true }, { status: 200 });
     }
+    if (outcome === 'retry') {
+      // Either a transient insert failure, or a prior attempt that claimed the id but has
+      // not finished (in flight or failed mid-way). 500 so Stripe redelivers instead of
+      // dropping funding. Funding is idempotent on creditLedger.stripeRef, so reprocessing
+      // credits the balance exactly once.
+      loggers.api.warn('Stripe webhook signaling retry (insert fault or unfinished prior attempt)', {
+        eventId: event.id,
+      });
+      return NextResponse.json({ error: 'Event not yet processed' }, { status: 500 });
+    }
+    // outcome === 'process' — first recording of this event; handle it below.
 
     // Process the event
     try {
       switch (event.type) {
         case 'customer.subscription.created':
-        case 'customer.subscription.updated':
-          await handleSubscriptionChange(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.updated': {
+          // FORKED ON `metadata.kind`. A dedicated-hosting subscription must never
+          // reach `handleSubscriptionChange`, which would derive an account tier of
+          // `free` from its unmapped price and write it over a paying customer's
+          // tier — permanently, because the reconcile cron then reads that entitled
+          // unmapped row as `indeterminate` and refuses to repair it. See
+          // `dedicated-routing.ts` for why an absent or unrecognised kind still
+          // takes the path below.
+          const subscription = event.data.object as Stripe.Subscription;
+          if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
+            // RETRYABLE, through the same marker-deleting wrapper the funding
+            // paths use. Without it a throwing hosting event is still marked
+            // processed, so Stripe's redelivery classifies as a duplicate and is
+            // acked — and an app that had just been set `dedicated` would stay
+            // that way forever with no paying subscription behind it and nothing
+            // left to repair it. The handler is idempotent (an upsert plus a tier
+            // write guarded on the tier it planned against), so reprocessing is
+            // safe.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
+            );
+            break;
+          }
+          // ORG BEFORE PERSON (SEAT-7): an org customer's subscription is mirrored onto
+          // org_subscriptions and never reaches the personal tier handler; an org-tagged
+          // one on no org's customer is logged and applied nowhere (org-handlers.ts).
+          // Retryable, the owner lookup included: a throw outside the wrapper would mark
+          // the event processed and lose it.
+          if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
+          await withFundingRetry(event.id, () => handleSubscriptionChange(subscription));
           break;
+        }
 
-        case 'customer.subscription.deleted':
-          await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        case 'customer.subscription.deleted': {
+          // Same fork. A cancelled hosting subscription downgrades ONE APP back to
+          // metered; it says nothing about the account's plan, and running it
+          // through `handleSubscriptionDeleted` would set the customer's tier to
+          // `free` because a hosting subscription ended.
+          const subscription = event.data.object as Stripe.Subscription;
+          if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
+            // Retryable for the same reason as the created/updated fork above, and
+            // more urgently: this is the event that takes an app OFF the dedicated
+            // tier, so losing it to a duplicate-ack leaves an always-on machine
+            // running for a customer who has stopped paying.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
+            );
+            break;
+          }
+          // Same org fork: an org subscription ending lapses the ORG (SEAT-9) and never
+          // sets a person's tier to free.
+          if (await withFundingRetry(event.id, () => routeOrgSubscriptionEvent(subscription, event.id))) break;
+          await withFundingRetry(event.id, () => handleSubscriptionDeleted(subscription));
           break;
+        }
 
-        case 'checkout.session.completed':
-          await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
-          break;
+        case 'checkout.session.completed': {
+          // Whole path is retryable: a transient failure in EITHER the handler or
+          // funding clears the idempotency marker so Stripe redelivers (see below).
+          const session = event.data.object as Stripe.Checkout.Session;
+          await withFundingRetry(event.id, async () => {
+            await handleCheckoutCompleted(session);
+            // Fund the top-up bucket from a credit-pack purchase (no-op for other modes).
+            await applyStripeFunding(event);
+          });
+          // Push the buyer's new balance to their open tabs so the top-up appears
+          // live, and send a payment receipt. Both best-effort, post-commit; never
+          // block the webhook ack (see sendTopupReceiptEmail's own try/catch).
+          // The whole block is wrapped in its own try/catch: this runs AFTER funding
+          // already committed, so a failure here (e.g. the name lookup) must never
+          // escape to the outer catch — that would mark the event processedAt/error
+          // and make a Stripe redelivery classify as duplicate-ack, permanently
+          // skipping the receipt with no retry path even though funding succeeded.
+          if (
+            session.mode === 'payment' &&
+            session.metadata?.kind === 'credit_pack' &&
+            session.metadata?.userId
+          ) {
+            void emitCreditsUpdated(session.metadata.userId);
 
-        case 'invoice.payment_failed':
-          await handlePaymentFailed(event.data.object as Stripe.Invoice);
+            try {
+              const buyerEmail = session.customer_details?.email;
+              if (buyerEmail) {
+                const packLabel = getCreditPack(session.metadata.packId ?? '')?.label ?? 'Credit top-up';
+                const buyer = await db
+                  .select({ name: users.name })
+                  .from(users)
+                  .where(eq(users.id, session.metadata.userId))
+                  .limit(1);
+                void sendTopupReceiptEmail({
+                  session,
+                  packLabel,
+                  email: buyerEmail,
+                  userName: buyer[0]?.name ?? 'there',
+                  eventId: event.id,
+                });
+              }
+            } catch (error) {
+              loggers.api.warn('Could not look up buyer for top-up receipt', {
+                eventId: event.id,
+                ...errorLogFields(error),
+              });
+            }
+          }
           break;
+        }
 
-        case 'invoice.paid':
-          await handleInvoicePaid(event.data.object as Stripe.Invoice);
+        case 'invoice.payment_failed': {
+          const invoice = event.data.object as Stripe.Invoice;
+          if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
+            // Logged and left to Stripe's dunning. The app is NOT downgraded on a
+            // failed payment: Stripe retries for days, and taking an always-on app
+            // to scale-to-zero over a card that will probably work on the next
+            // attempt is an outage caused by a temporary decline. Entitlement ends
+            // when the subscription's STATUS ends (`canceled` / `unpaid`), which
+            // arrives as a subscription event and is handled there.
+            loggers.api.info('Dedicated hosting invoice payment failed; awaiting Stripe dunning', {
+              eventId: event.id,
+              invoiceId: invoice.id,
+              stripeSubscriptionId: invoiceSubscriptionId(invoice),
+            });
+            break;
+          }
+          // An org's failed payment mirrors its subscription: past_due lapses the org at
+          // once (SEAT-9) and Owner and Admins see the reactivate banner.
+          if (await withFundingRetry(event.id, () => routeOrgInvoicePaymentFailed(invoice, event.id))) break;
+          await handlePaymentFailed(invoice);
           break;
+        }
+
+        case 'invoice.paid': {
+          let invoice = event.data.object as Stripe.Invoice;
+          // FORKED BEFORE FUNDING, and this fork is as load-bearing as the
+          // subscription one. `applyStripeFunding` refills the customer's monthly
+          // AI-credit bucket on recognized personal subscription invoices. Hosting
+          // invoices also bypass personal payment-state updates and receipt handling.
+          if (routeInvoice(invoice, event.id) === 'published_app_dedicated') {
+            loggers.api.info('Dedicated hosting invoice paid', {
+              eventId: event.id,
+              invoiceId: invoice.id,
+              stripeSubscriptionId: invoiceSubscriptionId(invoice),
+              amountPaid: invoice.amount_paid,
+            });
+            break;
+          }
+          // ORG BEFORE PERSON (SEAT-7, MON-3): an org customer's invoice refills that
+          // org's pool and never the personal path; an org-tagged invoice on no org's
+          // customer funds nobody. A person's invoice (no org customer) never reaches the
+          // org path, so it can never fund an org pool. Once per invoice (ledger
+          // stripeRef); a failure rethrows so Stripe redelivers.
+          const fundedOrg = await withFundingRetry(event.id, async () => {
+            // Stripe embeds only the first page. Resolve identity and funding from
+            // the complete invoice; a failed page fetch must release the event claim.
+            invoice = await completeInvoiceLines(invoice);
+            if (await routeOrgInvoicePaid(invoice, event.id)) return true;
+            await handleInvoicePaid(invoice);
+            // Grant the monthly credit on each renewal. The grant is sized from what
+            // this invoice actually PAID (invoice.amount_paid × the tier's included-
+            // credit ratio, Spec MON-2) — a promo, a proration,
+            // or a price change flows through with no table edit, and a $0 invoice
+            // grants nothing. The funding shell reads amount_paid off the event; the
+            // ledger row records it as paidCents. Derive the tier from the PAID invoice
+            // line so a refill that races ahead of the subscription webhook still
+            // applies the correct (paid) tier's ratio. Replays are dedupe'd twice: the
+            // stripe_events marker above short-circuits a redelivered event, and the
+            // ledger's stripeRef unique index makes the grant itself exactly-once.
+            // Storage add-on lines on the same invoice never size the AI-credit grant.
+            await applyStripeFunding(
+              { ...event, data: { ...event.data, object: invoice } },
+              {
+                tier: tierFromInvoice(invoice),
+                planPaidCents: planPaidCentsFromInvoiceLines(invoice.lines?.data ?? [], invoice.amount_paid),
+              },
+            );
+            return false;
+          });
+          if (fundedOrg) break;
+          // Push the refilled balance to the user's open tabs, and send a payment
+          // receipt. Both best-effort, post-commit — a receipt-send failure must
+          // never affect funding that already succeeded (see
+          // sendSubscriptionReceiptEmail's own try/catch) or force a Stripe retry.
+          // Skipped for $0 invoices (proration/trial) — nothing to receipt.
+          // The lookup itself is also wrapped: it runs AFTER funding already
+          // committed, so letting it escape to the outer catch would mark the event
+          // processedAt/error and make a Stripe redelivery classify as duplicate-ack,
+          // permanently skipping the receipt with no retry path.
+          try {
+            const customerId = invoice.customer as string | null;
+            if (customerId) {
+              const refilled = await db
+                .select({ id: users.id, name: users.name, email: users.email })
+                .from(users)
+                .where(eq(users.stripeCustomerId, customerId))
+                .limit(1);
+              if (refilled[0]) {
+                void emitCreditsUpdated(refilled[0].id);
+                if (invoice.amount_paid > 0) {
+                  void sendSubscriptionReceiptEmail({
+                    invoice,
+                    email: refilled[0].email,
+                    userName: refilled[0].name,
+                    eventId: event.id,
+                  });
+                }
+              }
+            }
+          } catch (error) {
+            loggers.api.warn('Could not look up refilled user for subscription receipt', {
+              eventId: event.id,
+              ...errorLogFields(error),
+            });
+          }
+          break;
+        }
 
         default:
           loggers.api.info('Unhandled webhook event type', { eventType: event.type, eventId: event.id });
@@ -109,6 +411,59 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Run a funding-relevant event path with RETRYABLE failure semantics.
+ *
+ * The stripeEvents idempotency marker is committed BEFORE processing, so any error
+ * in this path would otherwise be lost forever: Stripe's redelivery short-circuits
+ * as "already processed" (the insert above conflicts and returns 200), and the local
+ * backfill cron reconciles only usage rows, not Stripe funding. To keep paid credit
+ * from vanishing on a transient DB error, we delete that marker on ANY failure and
+ * rethrow — the webhook then returns 500 and Stripe redelivers, reprocessing the
+ * whole path. Funding is idempotent on creditLedger.stripeRef, so the balance is
+ * credited exactly once even though the event is processed twice.
+ *
+ * The cleanup must wrap the WHOLE path, not just the funding call: the pre-funding
+ * handler also does DB I/O (handleInvoicePaid looks the user up; handleCheckoutCompleted
+ * links the customer), and a transient failure there must be retryable too — otherwise
+ * the event is marked processed and funding never runs on redelivery.
+ *
+ * Safe to reprocess: on these events the pre-funding handlers are log-only/idempotent
+ * (handleInvoicePaid only logs; handleCheckoutCompleted's sole throwable is an
+ * idempotent customer-link upsert, and acts only for mode 'subscription' — a credit-pack
+ * top-up is mode 'payment'; its provisioning POST swallows its own errors).
+ */
+async function withFundingRetry<T>(eventId: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    await db.delete(stripeEvents).where(eq(stripeEvents.id, eventId));
+    throw err;
+  }
+}
+
+/**
+ * Invoice price identity is authoritative even when the user cache still names a paid tier.
+ * An absent or unrecognized price explicitly has no paid entitlement.
+ */
+function tierFromInvoice(invoice: Stripe.Invoice): SubscriptionTier {
+  return tierFromInvoiceLines(invoice.lines?.data ?? []);
+}
+
+/**
+ * The storage add-on item as Stripe holds it NOW. Subscription events can arrive
+ * out of order (a multi-step quantity change emits one per step, and a snapshot from
+ * before the item was created can land after it), so the item is re-read from the
+ * live subscription rather than taken from the event snapshot.
+ */
+async function currentStorageItem(subscriptionId: string): Promise<{ id: string; quantity: number } | null> {
+  const items = await stripe.subscriptionItems.list({ subscription: subscriptionId, limit: 100 });
+  const storage = items.data.filter((item) => isStorageAddonPrice(item.price.id));
+  if (storage.length !== 1) return null;
+  const quantity = storage[0].quantity ?? 0;
+  return { id: storage[0].id, quantity: Number.isSafeInteger(quantity) && quantity > 0 ? quantity : 0 };
+}
+
 async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   const customerId = subscription.customer as string;
 
@@ -133,24 +488,34 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
     throw new Error(`Subscription ${subscription.id} has no items`);
   }
 
-  // Determine subscription tier based on price or subscription status
-  const isEntitled = ['active', 'trialing'].includes(subscription.status);
+  // A personal subscription has exactly one plan item, plus at most one storage
+  // add-on item. The empty identity marks an ambiguous/truncated collection in the
+  // mirror so reconciliation cannot resurrect access from its first item.
+  const shape = personalSubscriptionItems(
+    toPersonalSubscriptionItems(subscription.items.data),
+    subscription.items.has_more,
+  );
+  const planItem = shape
+    ? subscription.items.data.find((item) => item.id === shape.planItem.id) ?? firstItem
+    : firstItem;
+  const stripePriceId = shape ? shape.planItem.priceId : '';
+  // Re-read even when the snapshot has no storage item: an event from before the item
+  // existed can arrive after the purchase, and must not erase the paid blocks.
+  const storage = shape && isStorageAddonConfigured() ? await currentStorageItem(subscription.id) : null;
 
-  let subscriptionTier: 'free' | 'pro' | 'founder' | 'business';
+  // Derive the tier through the single canonical resolver (subscription-tier-sync.ts):
+  // an entitled (active/trialing) row maps through the price→tier map; anything
+  // else derives to 'free'. The periodic reconciler (reconcile-subscription-tiers
+  // cron) uses this same function across the whole subscriptions table, so there
+  // is exactly one rule for what a subscription state implies about the tier.
+  const subscriptionTier = deriveTierFromSubscriptions(
+    [{ status: subscription.status, stripePriceId }],
+    getPersonalTierFromPrice,
+  ).tier;
 
-  if (!isEntitled) {
-    // If not active/trialing, set to free regardless of price
-    subscriptionTier = 'free';
-  } else {
-    // Use centralized price → tier mapping
-    const priceId = firstItem.price.id;
-    const priceAmount = firstItem.price.unit_amount;
-    subscriptionTier = getTierFromPrice(priceId, priceAmount);
-  }
-
-  // Get period from the first subscription item (API version 2025-08-27 change)
+  // Get period from the plan item (API version 2025-08-27 change)
   // Use intersection type to safely extend SubscriptionItem with the new fields
-  const itemWithPeriod = firstItem as Stripe.SubscriptionItem & {
+  const itemWithPeriod = planItem as Stripe.SubscriptionItem & {
     current_period_start: number;
     current_period_end: number;
   };
@@ -161,7 +526,7 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
   if (!currentPeriodStartTs || !currentPeriodEndTs) {
     loggers.api.error('Missing period dates for subscription (checked item-level)', undefined, {
       subscriptionId: subscription.id,
-      itemId: firstItem.id,
+      itemId: planItem.id,
       start: currentPeriodStartTs,
       end: currentPeriodEndTs
     });
@@ -184,26 +549,39 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
 
   // Use transaction to ensure subscription and user updates are atomic
   await db.transaction(async (tx) => {
+    // Shared order with reconciliation, deletion and cutover: user, then mirror.
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     // Upsert subscription record
+    const isGifted = subscription.metadata?.type === GIFT_SUBSCRIPTION_METADATA_TYPE;
     await tx.insert(subscriptions).values({
       userId,
       stripeSubscriptionId: subscription.id,
-      stripePriceId: firstItem.price.id,
+      stripePriceId,
       status: subscription.status,
       currentPeriodStart,
       currentPeriodEnd,
       cancelAtPeriodEnd: subscription.cancel_at_period_end,
+      gifted: isGifted,
       // Clear schedule fields on insert (schedule details set by update-subscription route)
       stripeScheduleId: subscription.schedule ? String(subscription.schedule) : null,
       scheduledPriceId: null,
       scheduledChangeDate: null,
+      stripeStorageItemId: storage?.id ?? null,
+      storageBlocks: storage?.quantity ?? 0,
     }).onConflictDoUpdate({
       target: subscriptions.stripeSubscriptionId,
       set: {
+        stripePriceId,
         status: subscription.status,
         currentPeriodStart,
         currentPeriodEnd,
         cancelAtPeriodEnd: subscription.cancel_at_period_end,
+        gifted: isGifted,
+        // The storage item as Stripe holds it now. Grace (blocks paid through period
+        // end) and the revision are app-owned: every app-side change bumps the revision,
+        // so a Stripe-side change here can never make the next app key collide.
+        stripeStorageItemId: storage?.id ?? null,
+        storageBlocks: storage?.quantity ?? 0,
         // Clear schedule fields if schedule was released/completed
         ...(subscription.schedule === null && {
           stripeScheduleId: null,
@@ -214,10 +592,11 @@ async function handleSubscriptionChange(subscription: Stripe.Subscription) {
       }
     });
 
-    // Update user subscription tier
+    // Update user subscription tier — merged with any App Store plan, so a Stripe event
+    // never demotes a plan the user bought on iOS (one plan, whichever store sold it).
     await tx.update(users)
       .set({
-        subscriptionTier,
+        subscriptionTier: combineTiers(subscriptionTier, await appleEntitledTier(tx, userId, new Date())),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
@@ -247,10 +626,12 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   // Use transaction to ensure user and subscription updates are atomic
   await db.transaction(async (tx) => {
-    // Downgrade to free tier
+    // Downgrade off the Stripe plan — to free, or to the tier an App Store subscription
+    // still entitles (a Stripe cancellation never takes away a plan bought on iOS).
+    await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update');
     await tx.update(users)
       .set({
-        subscriptionTier: 'free',
+        subscriptionTier: await appleEntitledTier(tx, userId, new Date()),
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId));
@@ -274,14 +655,20 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     const customerId = session.customer as string;
     const customerEmail = session.customer_details?.email;
 
-    if (customerEmail) {
+    // An org's customer is never linked to a person (SEAT-1, SEAT-7): the payer's email
+    // would otherwise make the ORG's customer that person's, and the personal handlers
+    // would then read the org's subscription as the person's plan.
+    const customerOrgId = await orgForStripeCustomer(customerId);
+    if (customerOrgId) {
+      loggers.api.info('Checkout completed for an org customer; not linking it to a person', { customerId, orgId: customerOrgId });
+    } else if (customerEmail) {
       // Update user with stripe customer ID
       await db.update(users)
         .set({
           stripeCustomerId: customerId,
           updatedAt: new Date(),
         })
-        .where(eq(users.email, customerEmail));
+        .where(userEmailMatch(customerEmail));
 
       loggers.api.info('Linked Stripe customer to user', { customerId, email: maskEmail(customerEmail) });
     }
@@ -294,7 +681,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
         loggers.api.warn('CONTROL_PLANE_URL not set, skipping tenant provisioning', { slug });
       } else {
         try {
-          const tier = session.metadata?.tier || 'pro';
+          const tier = resolveWebhookMetadataTierForControlPlane(session.metadata?.tier);
           const ownerEmail = session.customer_details?.email || '';
           const response = await fetch(`${controlPlaneUrl}/api/tenants`, {
             method: 'POST',

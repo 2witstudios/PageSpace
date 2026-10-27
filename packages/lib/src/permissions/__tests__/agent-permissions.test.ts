@@ -1,0 +1,375 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('@pagespace/db/db', () => ({
+  db: { select: vi.fn() },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({
+  pages: { id: 'id', driveId: 'driveId', isPrivate: 'isPrivate', isTrashed: 'isTrashed', type: 'type' },
+  drives: { id: 'id', ownerId: 'ownerId' },
+}));
+vi.mock('@pagespace/db/schema/members', () => ({
+  driveAgentMembers: {
+    id: 'id',
+    agentPageId: 'agentPageId',
+    driveId: 'driveId',
+    role: 'role',
+    customRoleId: 'customRoleId',
+  },
+  driveRoles: {
+    id: 'id',
+    driveId: 'driveId',
+    permissions: 'permissions',
+  },
+}));
+vi.mock('../../organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: vi.fn((_a: unknown, _b: unknown) => 'eq'),
+  and: vi.fn((...args: unknown[]) => ({ and: args })),
+  inArray: vi.fn((_a: unknown, _b: unknown) => 'inArray'),
+}));
+
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
+import { getAgentAccessLevel, getAgentAccessiblePagesInDrive, hasAgentDriveMembership, hasAgentDriveAdminRole } from '../agent-permissions';
+import { db } from '@pagespace/db/db';
+import { getDrivePolicies } from '../../organizations/policy-reader';
+import { eq } from '@pagespace/db/operators';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const AGENT_PAGE_ID = 'agent_aaaaaaaaaaaaaaaaaaaaaa';
+const TARGET_PAGE_ID = 'page_bbbbbbbbbbbbbbbbbbbbbbb';
+const DRIVE_ID = 'drive_cccccccccccccccccccccc';
+const CUSTOM_ROLE_ID = 'role_dddddddddddddddddddddd';
+
+function stubSelect(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        limit: vi.fn().mockResolvedValue(rows),
+      }),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
+
+// Stub for queries that resolve directly from .where() (no .limit()), e.g. the
+// page-enumeration queries in getAgentAccessiblePagesInDrive.
+// Membership lookups join the agent's page (for its home drive): rows come back as
+// { membership, homeDriveId }. The home drive equals the drive asked about unless a test says otherwise.
+function stubMembership(rows: Record<string, unknown>[], homeDriveId: string = DRIVE_ID) {
+  const joined = rows.map((membership) => ({ membership, homeDriveId }));
+  return {
+    from: vi.fn().mockReturnValue({
+      innerJoin: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(joined) }),
+      }),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
+
+function stubSelectList(rows: unknown[]) {
+  return {
+    from: vi.fn().mockReturnValue({
+      where: vi.fn().mockResolvedValue(rows),
+    }),
+  } as unknown as ReturnType<typeof db.select>;
+}
+
+// ---------------------------------------------------------------------------
+// getAgentAccessLevel — existing page-level behaviour
+// ---------------------------------------------------------------------------
+
+describe('getAgentAccessLevel — page targets', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns null when agent has no membership in the drive', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))   // page lookup
+      .mockReturnValueOnce(stubMembership([]));                         // membership lookup
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('returns full access for ADMIN role agent', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('returns view-only for MEMBER agent with no custom role', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('grants a plain MEMBER agent canEdit on a non-private CHANNEL so it can post (parity with users and apps)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('keeps a plain MEMBER agent view-only on a non-channel page type', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: false, type: 'DOCUMENT' }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('still denies a plain MEMBER agent a PRIVATE channel', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true, type: 'CHANNEL' }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('returns custom role permissions for MEMBER agent with custom role', async () => {
+    const perms = { [TARGET_PAGE_ID]: { canView: true, canEdit: true, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('denies a plain MEMBER agent access to a private page (mirrors plain-member user)', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))   // page lookup → private
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));  // membership
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('still grants an ADMIN agent access to a private page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('honours an explicit custom-role grant on a private page', async () => {
+    const perms = { [TARGET_PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('denies agent with driveWidePermissions:{canView:true} and no per-page entry access to a PRIVATE page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('grants agent with driveWidePermissions AND explicit per-page entry access to a PRIVATE page', async () => {
+    const perms = { [TARGET_PAGE_ID]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([{ driveId: DRIVE_ID, isPrivate: true }]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, TARGET_PAGE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAgentAccessLevel — drive-as-root-node
+// ---------------------------------------------------------------------------
+
+describe('getAgentAccessLevel — drive targets (drive-as-root-node)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns null when agent has no membership in the drive', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))   // page lookup → not a page
+      .mockReturnValueOnce(stubMembership([]));  // membership lookup → none
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toBeNull();
+  });
+
+  it('returns full access for ADMIN role agent on a drive ID', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))                                        // page lookup → not a page
+      .mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }])); // membership
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+
+  it('returns view-only for MEMBER agent with no custom role on a drive ID', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('returns canEdit: true when MEMBER agent custom role grants drive-level canEdit', async () => {
+    const perms = { [DRIVE_ID]: { canView: true, canEdit: true, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
+  });
+
+  it('returns canEdit: false when MEMBER agent custom role denies drive-level canEdit', async () => {
+    const perms = { [DRIVE_ID]: { canView: true, canEdit: false, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('returns all-false when MEMBER agent custom role has no drive-level entry', async () => {
+    const perms = { 'some-other-page': { canView: true, canEdit: true, canShare: false } };
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubSelect([]))
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
+      .mockReturnValueOnce(stubSelect([{ permissions: perms, driveWidePermissions: null }]));
+
+    const result = await getAgentAccessLevel(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasAgentDriveMembership
+// ---------------------------------------------------------------------------
+
+describe('hasAgentDriveMembership', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns true when membership row exists', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ id: 'member-1' }]));
+    expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
+  });
+
+  it('returns false when no membership row', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([]));
+    expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAgentAccessiblePagesInDrive — enumeration by role
+// ---------------------------------------------------------------------------
+
+describe('getAgentAccessiblePagesInDrive', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns [] when the agent has no membership', async () => {
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([])); // membership lookup
+    expect(await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID)).toEqual([]);
+  });
+
+  it('grants a plain MEMBER (no custom role) view-only access to non-private pages only, channels editable', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }])) // membership
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+        { id: 'p2', title: 'B', type: 'DOCUMENT', parentId: null, position: 1, isTrashed: false },
+        { id: 'p3', title: 'general', type: 'CHANNEL', parentId: null, position: 2, isTrashed: false },
+      ])); // page enumeration (non-private only)
+
+    const result = await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toHaveLength(3);
+    expect(result.every((p) => p.permissions.canView)).toBe(true);
+    // Mirrors app-permissions: a plain member can post in channels, nowhere else.
+    expect(result.map((p) => p.permissions.canEdit)).toEqual([false, false, true]);
+    expect(result.every((p) => !p.permissions.canShare && !p.permissions.canDelete)).toBe(true);
+    // The enumeration filters out private pages, so the agent never out-reads the
+    // plain member who granted it.
+    expect(eq).toHaveBeenCalledWith('isPrivate', false);
+  });
+
+  it('grants an ADMIN full access to every page', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }]))
+      .mockReturnValueOnce(stubSelectList([
+        { id: 'p1', title: 'A', type: 'DOCUMENT', parentId: null, position: 0, isTrashed: false },
+      ]));
+
+    const result = await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID);
+    expect(result).toHaveLength(1);
+    expect(result[0].permissions).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POL-9 (partial): an agent attached from another drive is read against the LIVE org policy
+// ---------------------------------------------------------------------------
+
+describe('cross-drive agent memberships follow the live org policy', () => {
+  const HOME = 'drive_homeeeeeeeeeeeeeeeeeeee';
+  const policies = (crossDriveAgents: boolean) => ({ policies: { crossDriveAgents } }) as never;
+  beforeEach(() => vi.clearAllMocks());
+
+  it('POL-9 an agent from another drive keeps its access while the org allows cross-drive agents', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue(policies(true));
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }], HOME));
+    expect(await hasAgentDriveAdminRole(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
+  });
+
+  it('POL-9 the same membership stops acting the moment the org turns cross-drive agents off', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue(policies(false));
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }], HOME));
+    expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(false);
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'ADMIN', customRoleId: null }], HOME));
+    expect(await getAgentAccessiblePagesInDrive(AGENT_PAGE_ID, DRIVE_ID)).toEqual([]);
+  });
+
+  it('POL-9 an agent in its own home drive is never affected, and the policy is not even read', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue(policies(false));
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }], DRIVE_ID));
+    expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
+    expect(getDrivePolicies).not.toHaveBeenCalled();
+  });
+
+  it('POL-9 a drive with no org (personal) is unrestricted', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue(null);
+    vi.mocked(db.select).mockReturnValueOnce(stubMembership([{ role: 'MEMBER', customRoleId: null }], HOME));
+    expect(await hasAgentDriveMembership(AGENT_PAGE_ID, DRIVE_ID)).toBe(true);
+  });
+});

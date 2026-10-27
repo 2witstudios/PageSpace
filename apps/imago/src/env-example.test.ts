@@ -1,0 +1,80 @@
+import { readFileSync } from 'fs';
+import path from 'path';
+import { describe, test } from 'vitest';
+import { assert } from 'riteway/vitest';
+
+const appsDir = path.resolve(__dirname, '../..');
+const readEnvExample = (app: string) =>
+  readFileSync(path.join(appsDir, app, '.env.example'), 'utf8');
+
+// A documented variable is an assignment line, live or commented out.
+const documents = (envExample: string, name: string) =>
+  new RegExp(`^#?\\s*${name}=`, 'm').test(envExample);
+
+const IMAGO_DEV_ORIGIN = 'http://localhost:3006';
+
+describe('.env.example documentation for the imago dev topology', () => {
+  for (const app of ['web', 'realtime', 'imago']) {
+    test(`apps/${app}/.env.example`, () => {
+      const envExample = readEnvExample(app);
+
+      for (const name of ['WEB_APP_INTERNAL_URL', 'NEXT_PUBLIC_REALTIME_URL']) {
+        assert({
+          given: `apps/${app}/.env.example`,
+          should: `document ${name}`,
+          actual: documents(envExample, name),
+          expected: true,
+        });
+      }
+
+      assert({
+        given: `apps/${app}/.env.example`,
+        should: 'document the imago dev origin',
+        actual: envExample.includes(IMAGO_DEV_ORIGIN),
+        expected: true,
+      });
+    });
+  }
+
+  for (const app of ['web', 'realtime']) {
+    test(`apps/${app} allowed origins`, () => {
+      assert({
+        given: `apps/${app}/.env.example`,
+        should: 'show the imago origin as an ADDITIONAL_ALLOWED_ORIGINS value',
+        actual: new RegExp(`^#?\\s*ADDITIONAL_ALLOWED_ORIGINS=.*${IMAGO_DEV_ORIGIN}`, 'm').test(
+          readEnvExample(app),
+        ),
+        expected: true,
+      });
+    });
+  }
+
+  test('apps/imago sign-in origin under next dev', () => {
+    assert({
+      given: 'apps/imago/.env.example',
+      should: "document NEXT_PUBLIC_WEB_APP_URL as apps/web's dev origin",
+      actual: /^#?\s*NEXT_PUBLIC_WEB_APP_URL=http:\/\/localhost:3000$/m.test(readEnvExample('imago')),
+      expected: true,
+    });
+  });
+
+  test('apps/imago redirect origin', () => {
+    assert({
+      given: 'apps/imago/.env.example',
+      should: 'document WEB_APP_URL, the configured origin server redirects are built on',
+      actual: /^#?\s*WEB_APP_URL=http:\/\/localhost:3000$/m.test(readEnvExample('imago')),
+      expected: true,
+    });
+  });
+
+  test('the imago compose service', () => {
+    const compose = readFileSync(path.join(appsDir, '..', 'docker-compose.yml'), 'utf8');
+    const imago = compose.slice(compose.indexOf('\n  imago:'), compose.indexOf('\n  processor:'));
+    assert({
+      given: 'the imago service in docker-compose.yml',
+      should: 'pass WEB_APP_URL, without which a signed-out redirect cannot be built',
+      actual: /- WEB_APP_URL=\$\{WEB_APP_URL:-http:\/\/localhost:3000\}/.test(imago),
+      expected: true,
+    });
+  });
+});

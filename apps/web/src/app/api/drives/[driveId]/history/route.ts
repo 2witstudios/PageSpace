@@ -1,20 +1,24 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { getDriveVersionHistory, getUserRetentionDays } from '@/services/api';
 import { isActivityEligibleForRollback } from '@pagespace/lib/permissions/rollback-permissions';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
 const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  startDate: z.coerce.date().optional(),
-  endDate: z.coerce.date().optional(),
+  // Absolute instants, not wall-clock times — see optionalAbsoluteInstant.
+  startDate: optionalAbsoluteInstant,
+  endDate: optionalAbsoluteInstant,
   actorId: z.string().optional(),
   operation: z.string().optional(),
   resourceType: z.string().optional(),
@@ -45,13 +49,13 @@ export async function GET(
   });
 
   // Check if user is drive owner or admin
-  const isAdmin = await isDriveOwnerOrAdmin(userId, driveId);
+  const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
   if (!isAdmin) {
     loggers.api.debug('[History:Route] Permission denied - not drive admin');
-    return NextResponse.json(
+    return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
       { error: 'Unauthorized - only drive owners and admins can view drive history' },
       { status: 403 }
-    );
+    ));
   }
 
   // Parse query params
@@ -74,8 +78,8 @@ export async function GET(
 
   const params = parseResult.data;
 
-  // Get user's retention limit
-  const retentionDays = await getUserRetentionDays(userId);
+  // Resolve history retention for the requested resource.
+  const retentionDays = await getUserRetentionDays(userId, { driveId });
 
   // Apply retention limit to startDate if not unlimited (-1)
   let effectiveStartDate = params.startDate;

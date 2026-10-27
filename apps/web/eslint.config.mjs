@@ -9,6 +9,29 @@ const compat = new FlatCompat({
   baseDirectory: __dirname,
 });
 
+// Matches `<anything>.query.<table>.findMany(...)` — not hard-coded to a `db` identifier, so it
+// also catches the transaction/injected handles this codebase actually uses for the same
+// Drizzle relational query API (e.g. `tx.query.pages.findMany`, `database.query.pages.findMany`).
+// `ObjectExpression.arguments` uses esquery's field-name qualifier to anchor the object to the
+// call's own `arguments` position (i.e. its options object), so `:has(ObjectExpression.arguments
+// > Property[key.name='limit'])` only matches a `limit` that is a DIRECT key of that options
+// object — a `limit` nested inside a `with: { children: { limit } }` relation, or anywhere else
+// in the subtree, does not falsely satisfy the root query's own boundedness.
+//
+// Known limitation: this is a syntactic AST pattern, not a type-aware check, so it only
+// catches the call written out as `<handle>.query.<table>.findMany(...)` at the call site.
+// Aliasing the query object first (`const q = db.query.taskItems; q.findMany(...)`) evades
+// it, the same way the original `db`-only selector missed `tx`/`database` until reviewed.
+// If that pattern shows up in practice, the durable fix is a typed wrapper in packages/db
+// that makes `limit` a required parameter — immune to call-shape variation entirely — not
+// another AST special case here.
+const unboundedFindManyRule = {
+  selector:
+    "CallExpression[callee.property.name='findMany'][callee.object.object.property.name='query']:not(:has(ObjectExpression.arguments > Property[key.name='limit']))",
+  message:
+    "<handle>.query.<table>.findMany(...) needs a `limit` as a direct key of its options object — unbounded findMany() OOM-crashed prod on 2026-07-18. Add `limit: <n>`, or use findFirst() if you only need one row.",
+};
+
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
@@ -112,6 +135,218 @@ const eslintConfig = [
           ],
         },
       ],
+    },
+  },
+  {
+    // Unbounded <handle>.query.<table>.findMany() calls: production Postgres OOM-crashed on
+    // 2026-07-18 because a task-list route called findMany() with no `limit`, on a table
+    // that grows without bound. This flags any NEW findMany() call whose options object
+    // (or lack of one) has no direct `limit` key. findFirst() is exempt — it's inherently
+    // single-row. Pre-existing violations are suppressed with a per-call-site
+    // `eslint-disable-next-line`, NOT a file- or severity-level override — so a new unbounded
+    // findMany added anywhere, including in an already-flagged file, still errors.
+    rules: {
+      "no-restricted-syntax": ["error", unboundedFindManyRule],
+    },
+  },
+  {
+    // Edge-runtime import graph: middleware.ts and every module it
+    // (transitively) imports compiles for the Edge runtime, where db access
+    // and @pagespace/lib's Node-only logger crash at request time — the
+    // 2026-07-07 prod outage. The next.config.ts edge build guard is the
+    // backstop; this rule surfaces the mistake in the editor/lint instead of
+    // at build. Keep this file list in sync with middleware.ts's imports.
+    files: [
+      "src/middleware.ts",
+      "src/middleware/monitoring.ts",
+      "src/middleware/security-headers.ts",
+      "src/lib/auth/origin-validation.ts",
+      "src/lib/auth/cookie-config.ts",
+      "src/lib/auth/token-prefixes.ts",
+      "src/lib/logging/edge-logger.ts",
+      "src/lib/request-id/request-id.ts",
+      "src/lib/monitoring/ingest-sanitizer.ts",
+      "src/lib/well-known/rewrites.ts",
+      "src/lib/security/edge-client-ip.ts",
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          // `paths` entries match the exact specifier only — required for the
+          // @/lib/auth barrel ban, since a gitignore-style `group` pattern
+          // would also match the allowed leaf modules under @/lib/auth/*.
+          paths: [
+            {
+              name: "@/lib/auth",
+              message:
+                "Edge-runtime middleware graph: the @/lib/auth barrel drags in db + sessions + permissions. Import the specific leaf (e.g. @/lib/auth/token-prefixes, @/lib/auth/origin-validation).",
+            },
+            {
+              name: "@/lib/auth/index",
+              message:
+                "Edge-runtime middleware graph: the @/lib/auth barrel drags in db + sessions + permissions. Import the specific leaf (e.g. @/lib/auth/token-prefixes, @/lib/auth/origin-validation).",
+            },
+          ],
+          patterns: [
+            {
+              group: ["@pagespace/db", "@pagespace/db/*"],
+              message:
+                "Edge-runtime middleware graph: no database access. Persist via the /api/internal/monitoring/ingest route (Node runtime) instead.",
+            },
+            {
+              // Everything under @pagespace/lib except the pure leaves the
+              // edge build legitimately bundles: api-contract-version (a
+              // constant, security-headers.ts) and the two dev-preview leaves
+              // middleware.ts / security-headers.ts read to recognise a
+              // preview host — preview-host (string functions only) and
+              // dev-preview-env (process.env reads only; no logger, no db).
+              // Anything new added here must stay import-free of Node APIs;
+              // next.config.ts's edgeNodeOnlyGuard is the build-time backstop.
+              regex: "^@pagespace/lib(?!/api-contract-version$)(?!/services/sandbox/preview/preview-host$)(?!/services/sandbox/preview/dev-preview-env$)(/.*)?$",
+              message:
+                "Edge-runtime middleware graph: @pagespace/lib is Node-only (logger uses os/process.on; many leaves import the db). Use edge-safe leaf modules under apps/web/src, e.g. @/lib/logging/edge-logger.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // AI stream surfaces: a stale closure here is not a re-render bug, it is a RUNAWAY AGENT.
+    //
+    // Streams are server-owned and deliberately survive a client disconnect, so the only thing
+    // that stops a generation is an explicit abort naming it correctly. Every stale value in
+    // these files — a captured conversationId, a captured messageId, a captured isStreaming —
+    // means Stop names the wrong stream (or nothing), the fetch is cancelled, the button flips
+    // back to Send, and the server keeps generating, keeps running write tools, and KEEPS
+    // BILLING while the user believes it stopped. That has now happened repeatedly.
+    //
+    // `react-hooks/exhaustive-deps` catches exactly this, and it was already enabled — as a
+    // WARNING, via next/core-web-vitals. `bun run lint` exits 0 on warnings, so CI reported
+    // "14/14 successful" while the rule was pointing straight at a missing dep in handleStop.
+    // The signal existed and was wired to nothing.
+    //
+    // Scoped to the files that own stream identity, and verified to be at ZERO violations and
+    // ZERO suppressions when added — so this costs nothing today and fails CI on the next one.
+    // If it fires, do not silence it: a dep you are tempted to omit here is a stop button you
+    // are about to break.
+    files: [
+      "src/hooks/useChannelStreamSocket.ts",
+      "src/hooks/useAgentChannelMultiplayer.ts",
+      "src/hooks/useAppStateRecovery.ts",
+      "src/contexts/GlobalChatContext.tsx",
+      "src/components/layout/middle-content/page-views/dashboard/GlobalAssistantView.tsx",
+      "src/components/layout/middle-content/page-views/dashboard/useGlobalEffectiveStream.ts",
+      "src/components/layout/middle-content/page-views/ai-page/AiChatView.tsx",
+      "src/components/layout/right-sidebar/ai-assistant/SidebarChatTab.tsx",
+      "src/lib/ai/shared/hooks/useChatStop.ts",
+      "src/lib/ai/shared/hooks/useChatTransport.ts",
+    ],
+    rules: {
+      "react-hooks/exhaustive-deps": "error",
+    },
+  },
+  {
+    // Functional-core purity boundary: src/lib/workflows/core/ holds the pure
+    // decision logic for workflow steps (arg templating, step planning,
+    // validation, budget selection). Purity is a hard contract, not a
+    // convention — these modules take everything they need (schema maps,
+    // payloads, timestamps) as arguments and perform no I/O, so their tests
+    // need no mocks and their behavior is fully specified by inputs. Runtime
+    // imports of the db, services, AI tool modules, or Node builtins would
+    // silently break that contract; `import type` is fine (erased at compile
+    // time). Sibling core modules and zod are the only runtime dependencies.
+    files: ["src/lib/workflows/core/**/*.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@pagespace/db", "@pagespace/db/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no database access. Take data as function arguments; the shell (workflow-executor.ts, API routes) owns I/O.",
+            },
+            {
+              group: ["@pagespace/lib", "@pagespace/lib/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: @pagespace/lib leaves may perform I/O (db, logger, env). Inject what you need as arguments.",
+            },
+            {
+              group: ["ai", "next", "next/*"],
+              allowTypeImports: true,
+              message: "Pure core: no AI SDK or framework dependencies.",
+            },
+            {
+              group: ["node:*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: no Node builtins (fs, http, crypto). Randomness/time/IDs are injected by the shell.",
+            },
+            {
+              group: ["../*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: runtime imports may only come from sibling core modules (./x) or zod. Anything outside core/ is shell territory — inject it as an argument.",
+            },
+            {
+              // The `@/*` workspace alias resolves anywhere under apps/web/src
+              // — API routes, the tool registry, the executor itself — all of
+              // which do real I/O. The bare `../*` ban above only stops
+              // relative parent-traversal; without this, `@/lib/workflows/
+              // workflow-executor` (db, generateText, fetch) or any other
+              // absolute-aliased shell module imports into core/ completely
+              // silently, no matter how deep or unrelated to workflows it is.
+              group: ["@/*"],
+              allowTypeImports: true,
+              message:
+                "Pure core: the @/ alias reaches shell code anywhere in apps/web/src. Runtime imports may only come from sibling core modules (./x) or zod — inject anything else as an argument.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Pure core: no network I/O. The shell owns all fetches.",
+        },
+        {
+          name: "process",
+          message:
+            "Pure core: no environment access. Pass configuration in as arguments.",
+        },
+      ],
+      "no-restricted-properties": [
+        "error",
+        {
+          object: "Date",
+          property: "now",
+          message:
+            "Pure core: no ambient clock. Take the timestamp as an argument.",
+        },
+        {
+          object: "Math",
+          property: "random",
+          message:
+            "Pure core: no ambient randomness. Take random values/IDs as arguments.",
+        },
+      ],
+    },
+  },
+  {
+    // Core tests live beside the modules they specify and may use anything
+    // (test harness, fixtures, node builtins) — the purity contract applies
+    // to the modules under test, not the tests.
+    files: ["src/lib/workflows/core/**/*.test.ts"],
+    rules: {
+      "@typescript-eslint/no-restricted-imports": "off",
+      "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
     },
   },
 ];

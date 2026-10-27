@@ -2,7 +2,7 @@
 
 /**
  * Aggregates coverage-summary.json from all packages into a unified monorepo table.
- * Run after `pnpm test:coverage` to see a combined view.
+ * Run after `bun run test:coverage` to see a combined view.
  */
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -18,6 +18,8 @@ const packages = [
   { name: 'apps/realtime', path: 'apps/realtime/coverage/coverage-summary.json' },
   { name: 'packages/db', path: 'packages/db/coverage/coverage-summary.json' },
   { name: 'packages/lib', path: 'packages/lib/coverage/coverage-summary.json' },
+  { name: 'packages/editor', path: 'packages/editor/coverage/coverage-summary.json' },
+  { name: 'packages/browser-worker', path: 'packages/browser-worker/coverage/coverage-summary.json' },
 ];
 
 const pad = (str, len) => String(str).padStart(len);

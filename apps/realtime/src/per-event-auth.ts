@@ -14,6 +14,7 @@
  */
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import type { Socket } from 'socket.io';
 
@@ -32,17 +33,6 @@ export type SensitiveEventType =
   | 'task_create'
   | 'task_update'
   | 'task_delete';
-
-/**
- * Events that are read-only and don't require re-authorization.
- * Room membership is sufficient for these.
- */
-export type ReadOnlyEventType =
-  | 'cursor_move'
-  | 'presence_update'
-  | 'typing_indicator'
-  | 'selection_change'
-  | 'activity_logged';
 
 const SENSITIVE_EVENTS = new Set<string>([
   'document_update',
@@ -100,17 +90,18 @@ interface AuthCheckResult {
  * Re-check authorization for a sensitive event.
  * Goes directly to Postgres to verify current access.
  *
- * @param userId - The user attempting the action
+ * @param actor - The socket's credential (its user and ceremony evidence; the org sign-in policy is asked of it)
  * @param pageId - The page being accessed
  * @param requiredLevel - The minimum access level required ('view' | 'edit' | 'share' | 'delete')
  */
 export async function reauthorizePageAccess(
-  userId: string,
+  actor: AccessActor,
   pageId: string,
   requiredLevel: 'view' | 'edit' = 'edit'
 ): Promise<AuthCheckResult> {
+  const { userId } = actor;
   try {
-    const accessLevel = await getUserAccessLevel(userId, pageId);
+    const accessLevel = await getUserAccessLevel(actor, pageId);
 
     if (!accessLevel) {
       loggers.realtime.warn('Per-event auth: Access denied (no permission)', {
@@ -175,6 +166,11 @@ export interface AuthSocket extends Socket {
       name: string;
       avatarUrl: string | null;
     };
+    /**
+     * The connecting credential as the permission layer's actor (D-OW-45): its user and the ceremony evidence the
+     * socket's session carried at connect. Every join and per-event check asks the org sign-in policy of it.
+     */
+    actor?: AccessActor;
   };
 }
 
@@ -208,7 +204,8 @@ export function withPerEventAuth(
 
   return async (payload: unknown) => {
     const userId = socket.data.user?.id;
-    if (!userId) return;
+    const actor = socket.data.actor;
+    if (!userId || !actor) return;
 
     if (!isSensitiveEvent(eventType)) {
       return handler(socket, payload);
@@ -223,7 +220,7 @@ export function withPerEventAuth(
       return;
     }
 
-    const result = await reauthorizePageAccess(userId, pageId, requiredLevel);
+    const result = await reauthorizePageAccess(actor, pageId, requiredLevel);
 
     if (!result.authorized) {
       loggers.realtime.warn('Per-event auth middleware: access denied', {

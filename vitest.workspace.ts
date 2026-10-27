@@ -1,4 +1,5 @@
 import { defineWorkspace } from 'vitest/config'
+import path from 'path'
 
 export default defineWorkspace([
   {
@@ -18,13 +19,42 @@ export default defineWorkspace([
       globals: true,
     },
   },
+  './packages/editor/vitest.config.ts',
+  './packages/browser-worker/vitest.config.ts',
   {
+    resolve: {
+      alias: {
+        '@': path.resolve(__dirname, 'apps/web/src'),
+        'server-only': path.resolve(__dirname, 'apps/web/src/test/server-only-stub.ts'),
+      },
+    },
     test: {
       name: 'web',
       root: './apps/web',
       environment: 'jsdom',
       globals: true,
+      css: false,
       setupFiles: ['./src/test/setup.ts'],
+      coverage: {
+        provider: 'v8',
+        reporter: ['text', 'json', 'html', 'json-summary'],
+        reportsDirectory: './apps/web/coverage',
+        exclude: [
+          '**/*.d.ts',
+          '**/*.config.*',
+          '**/.next/**',
+          '**/dist/**',
+          '**/test/**',
+          '**/drizzle/**',
+          '**/node_modules/**',
+        ],
+        thresholds: {
+          lines: 44,
+          branches: 85,
+          functions: 56,
+          statements: 44,
+        },
+      },
     },
   },
   {

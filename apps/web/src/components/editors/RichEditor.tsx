@@ -1,26 +1,18 @@
 "use client";
 
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
+import { clientExtensions } from '@/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
-import StarterKit from '@tiptap/starter-kit';
-import { Markdown } from 'tiptap-markdown';
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Bold, Italic, Strikethrough, Code, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
-import { Placeholder, CharacterCount } from '@tiptap/extensions';
-import { TextStyleKit } from '@tiptap/extension-text-style';
-import { TableKit } from '@tiptap/extension-table';
-import { PageMention } from '@/lib/editor/tiptap-mention-config';
-import { PaginationPlus } from '@/lib/editor/pagination';
-import { CodeBlockShiki } from '@/lib/editor/code-block';
-import { FontFormatting } from '@/lib/editor/font-formatting';
 import { subscribeToNavigationEvents } from '@/lib/navigation/app-navigation';
 import LinkButton from './LinkButton';
 
 interface RichEditorProps {
   value: string;
-  onChange: (value: string) => void;
-  onEditorChange: (editor: Editor | null) => void;
+  onChange?: (value: string) => void;
+  onEditorChange?: (editor: Editor | null) => void;
   readOnly?: boolean;
   isPaginated?: boolean;
   contentMode?: 'html' | 'markdown';
@@ -65,60 +57,14 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: [
-      StarterKit.configure({
-        heading: {
-          levels: [1, 2, 3],
-        },
-        link: {
-          openOnClick: true,
-          autolink: true,
-          linkOnPaste: true,
-          defaultProtocol: 'https',
-        },
-        codeBlock: false,
-      }),
-      CodeBlockShiki,
-      Markdown,
-      ...(readOnly ? [] : [Placeholder.configure({
-        placeholder: 'Start writing...',
-      })]),
-      TextStyleKit,
-      FontFormatting,
-      TableKit,
-      CharacterCount,
-      PageMention,
-      // Conditionally add pagination based on isPaginated flag
-      ...(isPaginated ? [
-        PaginationPlus.configure({
-          pageHeight: 1056, // US Letter height: 11" × 96 DPI
-          pageWidth: 816,   // US Letter width: 8.5" × 96 DPI
-          marginTop: 96,    // 1 inch
-          marginBottom: 96, // 1 inch
-          marginLeft: 96,   // 1 inch
-          marginRight: 96,  // 1 inch
-          pageGap: 50,      // Gap between pages
-          pageHeaderHeight: 30,
-          pageFooterHeight: 30,
-          footerRight: 'Page {page}',
-          footerLeft: '',
-          headerRight: '',
-          headerLeft: '',
-          contentMarginTop: 10,
-          contentMarginBottom: 10,
-          pageBreakBackground: '#ffffff',
-          pageGapBorderColor: '#e5e5e5',
-          pageGapBorderSize: 1,
-        }),
-      ] : []),
-    ],
+    extensions: clientExtensions({ readOnly, isPaginated }),
     content: value,
     editable: !readOnly,
     autofocus: readOnly ? false : undefined,
     onUpdate: ({ editor }) => {
       if (!readOnly) {
         const serialized = serializeEditorContent(editor, isMarkdownMode);
-        onChange(serialized);
+        onChange?.(serialized);
       }
     },
     editorProps: {
@@ -176,7 +122,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [editor]);
 
   useEffect(() => {
-    if (editor) {
+    if (editor && !editor.isDestroyed) {
       const currentSerialized = serializeEditorContent(editor, isMarkdownMode);
       // Check if value is empty and current content is just the default empty state
       const isEmptyValue = !value || value.trim() === '';
@@ -252,19 +198,19 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
   }, [value, editor, isMarkdownMode]);
 
   useEffect(() => {
-    onEditorChange(editor);
+    onEditorChange?.(editor);
     // Blur the editor if it's read-only to prevent focus
-    if (editor && readOnly && isEditorViewMounted) {
+    if (editor && !editor.isDestroyed && readOnly && isEditorViewMounted) {
       editor.commands.blur();
     }
     return () => {
-      onEditorChange(null);
+      onEditorChange?.(null);
     };
   }, [editor, onEditorChange, readOnly, isEditorViewMounted]);
 
   return (
     <div className="relative flex flex-col w-full h-full">
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <BubbleMenu
           editor={editor}
           pluginKey="bubbleMenu"
@@ -285,7 +231,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded ${editor.isActive('heading', { level: 3 }) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Heading3 size={16} /></button>
         </BubbleMenu>
       )}
-      {editor && isEditorViewMounted && !readOnly && (
+      {editor && !editor.isDestroyed && isEditorViewMounted && !readOnly && (
         <FloatingMenu
           editor={editor}
           pluginKey="floatingMenu"
@@ -305,13 +251,15 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
           <button onClick={() => editor.chain().focus().toggleBlockquote().run()} className={`flex items-center gap-2 p-2 rounded ${editor.isActive('blockquote') ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}><Quote size={16} /><span>Quote</span></button>
         </FloatingMenu>
       )}
-      <div className={`flex-1 overflow-y-auto ${readOnly ? 'opacity-95' : ''}`}>
+      <div className="flex-1 overflow-y-auto">
         <EditorContent editor={editor} />
         {isPaginated && <div className="print-page-number hidden print:block" />}
       </div>
-      <div className="flex justify-end p-2 text-sm text-muted-foreground">
-        {editor?.storage.characterCount.characters()} characters
-      </div>
+      {!readOnly && (
+        <div className="flex justify-end p-2 text-sm text-muted-foreground">
+          {editor?.storage.characterCount.characters()} characters
+        </div>
+      )}
     </div>
   );
 };

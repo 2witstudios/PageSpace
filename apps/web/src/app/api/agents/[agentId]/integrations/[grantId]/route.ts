@@ -1,11 +1,15 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
+
 import { getGrantById, updateGrant, deleteGrant } from '@pagespace/lib/integrations/repositories/grant-repository';
+import { broadcastAgentGrantChanged } from '@/lib/websocket/socket-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -26,14 +30,15 @@ export async function PUT(
   request: Request,
   context: { params: Promise<{ agentId: string; grantId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { agentId, grantId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grant = await getGrantById(db, grantId);
@@ -51,6 +56,9 @@ export async function PUT(
     }
 
     const updated = await updateGrant(db, grantId, validation.data);
+
+    void broadcastAgentGrantChanged({ agentId, triggeredBy: { userId: auth.userId } });
+
     return NextResponse.json({ grant: updated });
   } catch (error) {
     loggers.api.error('Error updating agent integration grant:', error as Error);
@@ -66,14 +74,15 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ agentId: string; grantId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { agentId, grantId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const canEdit = await canUserEditPage(auth.userId, agentId);
+    const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const grant = await getGrantById(db, grantId);
@@ -84,6 +93,8 @@ export async function DELETE(
     await deleteGrant(db, grantId);
 
     auditRequest(request, { eventType: 'data.delete', userId: auth.userId, resourceType: 'agent_grant', resourceId: grantId });
+
+    void broadcastAgentGrantChanged({ agentId, triggeredBy: { userId: auth.userId } });
 
     return NextResponse.json({ success: true });
   } catch (error) {

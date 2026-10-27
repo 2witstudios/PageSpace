@@ -25,6 +25,7 @@ import {
   isFetchResponseErrorMessage,
 } from '@/lib/websocket';
 import { sessionService, type SessionClaims } from '@pagespace/lib/auth/session-service';
+import { WS_TOKEN_SCOPE } from '@pagespace/lib/auth/token-lifecycle-policy';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // Initialize cleanup interval on module load
@@ -122,8 +123,14 @@ export async function UPGRADE(
 
   const userId = claims.userId;
 
-  // SECURITY CHECK 3: Verify scope allows MCP operations
-  if (!claims.scopes.includes('mcp:*') && !claims.scopes.includes('*')) {
+  // SECURITY CHECK 3: Verify scope allows MCP operations.
+  // Accepts the narrow ws-token scope (WS_TOKEN_SCOPE = 'mcp:ws') as well as the
+  // broader 'mcp:*'/'*' wildcards used by other MCP-capable sessions.
+  if (
+    !claims.scopes.includes(WS_TOKEN_SCOPE) &&
+    !claims.scopes.includes('mcp:*') &&
+    !claims.scopes.includes('*')
+  ) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
       userId,

@@ -13,14 +13,16 @@
  * - Overscan for smooth scrolling
  */
 
-import React, { forwardRef, useImperativeHandle, useState, useCallback, useMemo } from 'react';
+import React, { forwardRef, useImperativeHandle, useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { UIMessage } from 'ai';
 import { SkeletonMessageBubble } from '@/components/ui/skeleton';
 import { Loader2 } from 'lucide-react';
 import { MessageRenderer } from './MessageRenderer';
+import { synthesizeAssistantMessage } from '@/lib/ai/streams/synthesizeAssistantMessage';
+import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { StreamingIndicator } from './StreamingIndicator';
 import { UndoAiChangesDialog } from './UndoAiChangesDialog';
-import { VirtualizedMessageList } from './VirtualizedMessageList';
+import { VirtualizedMessageList, VirtualizedMessageListRef } from './VirtualizedMessageList';
 import {
   Conversation,
   ConversationContent,
@@ -66,6 +68,8 @@ interface ChatMessagesAreaProps {
   onPullUpRefresh?: () => Promise<void>;
   /** Remote in-progress streams from other users (or other tabs) — rendered as synthesized assistant messages */
   remoteStreams?: PendingStream[];
+  findMatchSet?: Set<string>;
+  findCurrentMessageId?: string | null;
 }
 
 export interface ChatMessagesAreaRef {
@@ -92,12 +96,15 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       isLoadingOlder = false,
       onPullUpRefresh,
       remoteStreams,
+      findMatchSet,
+      findCurrentMessageId,
     },
     ref
   ) => {
     const [undoDialogMessageId, setUndoDialogMessageId] = useState<string | null>(null);
     const { scrollToBottom } = useStickToBottomContext();
     const scrollRef = useConversationScrollRef();
+    const virtualizerRef = useRef<VirtualizedMessageListRef>(null);
 
     // Pull-up refresh for checking missed messages
     const {
@@ -138,6 +145,18 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       scrollToBottom: () => scrollToBottom(),
     }), [scrollToBottom]);
 
+    // Scroll to the current find match
+    useEffect(() => {
+      if (!findCurrentMessageId) return;
+      if (shouldVirtualize) {
+        const index = messages.findIndex((m) => m.id === findCurrentMessageId);
+        if (index >= 0) virtualizerRef.current?.scrollToIndex(index, { align: 'center' });
+      } else {
+        document.querySelector(`[data-message-id="${findCurrentMessageId}"]`)
+          ?.scrollIntoView({ block: 'center' });
+      }
+    }, [findCurrentMessageId, messages, shouldVirtualize]);
+
     // Dedup remote streams whose messageId has already landed in `messages`
     // (handles the brief frame at completion when the real message has been
     // pushed but `removeStream` has not yet fired).
@@ -154,6 +173,12 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       [remoteStreams]
     );
 
+    const areaMode = selectMessagesAreaMode({
+      isLoading,
+      messageCount: messages.length,
+      streamCount: visibleRemoteStreams.length,
+    });
+
     // Memoized render function for virtualized list
     const renderMessage = useCallback((message: UIMessage, _idx: number) => (
       <MessageRenderer
@@ -162,10 +187,17 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         onEdit={!isReadOnly ? onEdit : undefined}
         onDelete={!isReadOnly ? onDelete : undefined}
         onRetry={!isReadOnly ? onRetry : undefined}
+        // A retry is a send: the moment one is issued this surface's streaming flag goes true
+        // (wrapSend registers the pendingSend synchronously), so this both disables the button
+        // in flight and keeps it disabled for the whole generation. Without it a second click
+        // fired a second, double-billed regeneration.
+        retryDisabled={isStreaming}
         onUndoFromHere={!isReadOnly ? handleUndoFromHere : undefined}
         isLastAssistantMessage={message.id === lastAssistantMessageId}
         isLastUserMessage={message.id === lastUserMessageId}
         isStreaming={isStreaming && message.id === lastAssistantMessageId && message.role === 'assistant'}
+        isHighlighted={findMatchSet?.has(message.id)}
+        isCurrentMatch={findCurrentMessageId === message.id}
       />
     ), [
       isReadOnly,
@@ -175,12 +207,14 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
       handleUndoFromHere,
       lastAssistantMessageId,
       lastUserMessageId,
-      isStreaming
+      isStreaming,
+      findMatchSet,
+      findCurrentMessageId,
     ]);
 
     // Loading skeleton
     const LoadingSkeleton = useMemo(() => (
-      <div className="space-y-4">
+      <div data-testid="chat-loading-skeleton" className="space-y-4">
         <div className="flex items-center justify-center h-32 text-muted-foreground">
           <div className="flex items-center space-x-2">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -212,6 +246,7 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
     return (
       <>
         <ConversationContent
+          data-testid="chat-messages-area"
           className="max-w-4xl mx-auto w-full px-4 gap-2 pt-3 pb-44 sm:pb-34"
           onTouchStart={touchHandlers.onTouchStart}
           onTouchMove={touchHandlers.onTouchMove}
@@ -220,13 +255,14 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
         >
           {isLoadingOlder && LoadingOlderIndicator}
 
-          {isLoading ? (
+          {areaMode === 'skeleton' ? (
             LoadingSkeleton
           ) : messages.length === 0 && visibleRemoteStreams.length === 0 ? (
             EmptyState
           ) : shouldVirtualize ? (
             // Virtualized rendering for large conversations
             <VirtualizedMessageList
+              ref={virtualizerRef}
               messages={messages}
               renderMessage={renderMessage}
               scrollRef={scrollRef}
@@ -241,20 +277,18 @@ const ChatMessagesAreaInner = forwardRef<ChatMessagesAreaRef, ChatMessagesAreaPr
             messages.map((message, idx) => renderMessage(message, idx))
           )}
 
-          {!isLoading && visibleRemoteStreams.map((stream) => (
+          {areaMode !== 'skeleton' && visibleRemoteStreams.map((stream) => (
             <MessageRenderer
               key={stream.messageId}
               message={{
-                id: stream.messageId,
-                role: 'assistant',
-                parts: stream.parts,
+                ...synthesizeAssistantMessage(stream.messageId, stream.parts, stream.startedAt),
                 messageType: 'standard',
               }}
               isStreaming
             />
           ))}
 
-          {(isStreaming || hasRemoteStream) && !isLoading && (
+          {(isStreaming || hasRemoteStream) && areaMode !== 'skeleton' && (
             <StreamingIndicator />
           )}
         </ConversationContent>

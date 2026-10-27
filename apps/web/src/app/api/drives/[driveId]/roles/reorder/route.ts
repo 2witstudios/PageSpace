@@ -6,6 +6,11 @@ import { db } from '@pagespace/db/db'
 import { eq, asc } from '@pagespace/db/operators'
 import { driveRoles } from '@pagespace/db/schema/members';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -22,14 +27,14 @@ export async function PATCH(
     const { driveId } = await context.params;
 
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can reorder roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can reorder roles' }, { status: 403 }));
     }
 
     const body = await request.json();
@@ -49,6 +54,14 @@ export async function PATCH(
 
     await reorderDriveRoles(driveId, roleIds);
 
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role reorder event for drive', driveId, broadcastError);
+    }
+
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
     logRoleActivity(userId, 'role_reorder', {
@@ -63,6 +76,8 @@ export async function PATCH(
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error reordering roles:', error);
+    // [D-OW-33] a reorder that changes which default role members follow, to a wider one, while lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     if (error instanceof Error && error.message === 'Invalid role IDs') {
       return NextResponse.json({ error: 'Invalid role IDs' }, { status: 400 });
     }

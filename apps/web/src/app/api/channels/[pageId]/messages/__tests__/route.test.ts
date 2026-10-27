@@ -23,35 +23,48 @@ vi.mock('@/lib/auth', () => ({
     (r: unknown) => typeof r === 'object' && r !== null && 'error' in r
   ),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
+  canPrincipalEditPage: vi.fn().mockResolvedValue(true),
 }));
 
 // --- Permissions ---------------------------------------------------------------
+// The drive's members, from the one org-aware enumeration (the lead included).
+vi.mock('@pagespace/lib/services/drive-member-service', () => ({
+  getDriveRecipientUserIds: vi.fn(async () => ['owner-1']),
+}));
+
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
+  // Inbox fan-out asks the centralized helper which candidates can view the
+  // channel. Default to all of them, matching canUserViewPage's default above.
+  getUsersWhoCanViewPage: vi.fn(
+    async (_pageId: string, candidateUserIds: string[]) => new Set(candidateUserIds)
+  ),
 }));
 
 // --- Channel repository seam --------------------------------------------------
 const mockListChannelMessages = vi.fn();
 const mockListChannelThreadReplies = vi.fn();
 const mockFindChannelMessageInPage = vi.fn();
-const mockInsertChannelMessage = vi.fn();
+const mockInsertChannelMessageWithAttachment = vi.fn();
 const mockInsertChannelThreadReply = vi.fn();
 const mockUpsertChannelReadStatus = vi.fn();
 const mockLoadChannelMessageWithRelations = vi.fn();
-const mockFileExists = vi.fn();
 const mockListChannelThreadFollowers = vi.fn();
+const mockFindChannelLastReadAt = vi.fn();
 vi.mock('@pagespace/lib/services/channel-message-repository', () => ({
   channelMessageRepository: {
     listChannelMessages: (...args: unknown[]) => mockListChannelMessages(...args),
     listChannelThreadReplies: (...args: unknown[]) => mockListChannelThreadReplies(...args),
     findChannelMessageInPage: (...args: unknown[]) => mockFindChannelMessageInPage(...args),
-    insertChannelMessage: (...args: unknown[]) => mockInsertChannelMessage(...args),
+    insertChannelMessageWithAttachment: (...args: unknown[]) => mockInsertChannelMessageWithAttachment(...args),
     insertChannelThreadReply: (...args: unknown[]) => mockInsertChannelThreadReply(...args),
     upsertChannelReadStatus: (...args: unknown[]) => mockUpsertChannelReadStatus(...args),
     loadChannelMessageWithRelations: (...args: unknown[]) => mockLoadChannelMessageWithRelations(...args),
-    fileExists: (...args: unknown[]) => mockFileExists(...args),
     listChannelThreadFollowers: (...args: unknown[]) => mockListChannelThreadFollowers(...args),
+    findChannelLastReadAt: (...args: unknown[]) => mockFindChannelLastReadAt(...args),
   },
 }));
 
@@ -112,9 +125,19 @@ vi.mock('@/lib/channels/agent-mention-responder', () => ({
   triggerMentionedAgentResponses: vi.fn(),
 }));
 
+const mockCreateMentionNotification = vi.fn();
+vi.mock('@pagespace/lib/notifications/notifications', () => ({
+  createMentionNotification: (...args: unknown[]) => mockCreateMentionNotification(...args),
+}));
+
+const mockNotifyMentionedUsers = vi.fn();
+vi.mock('@/lib/channels/notify-mentioned-users', () => ({
+  notifyMentionedUsers: (...args: unknown[]) => mockNotifyMentionedUsers(...args),
+}));
+
 // --- Imports under test --------------------------------------------------------
 import { GET, POST } from '../route';
-import { authenticateRequestWithOptions } from '@/lib/auth';
+import { authenticateRequestWithOptions, canPrincipalViewPage } from '@/lib/auth';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // --- Fixtures ------------------------------------------------------------------
@@ -151,6 +174,19 @@ function makePostRequest(body: unknown): Request {
 
 const callGet = (qs = '') =>
   GET(makeGetRequest(qs), { params: Promise.resolve({ pageId: PAGE_ID }) });
+
+/**
+ * Both send routes now validate attachmentMeta's shape per attachment — the
+ * channel route previously accepted any JSON here, or none at all. A body
+ * carrying a fileId with no metadata is rejected at the door, so tests that
+ * mean to exercise the repository must supply it.
+ */
+const IMAGE_META = {
+  originalName: 'photo.png',
+  size: 1024,
+  mimeType: 'image/png',
+  contentHash: 'a'.repeat(64),
+};
 
 const callPost = (body: unknown) =>
   POST(makePostRequest(body), { params: Promise.resolve({ pageId: PAGE_ID }) });
@@ -246,6 +282,35 @@ describe('GET /api/channels/[pageId]/messages', () => {
     );
     expect(mockListChannelThreadReplies).not.toHaveBeenCalled();
   });
+
+  it('top-level GET returns the requesting user\'s read watermark as lastReadAt', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(new Date('2026-10-05T09:30:00.000Z'));
+
+    const res = await callGet();
+    const body = await res.json();
+
+    expect(mockFindChannelLastReadAt).toHaveBeenCalledWith({ userId: USER_ID, channelId: PAGE_ID });
+    expect(body).toEqual({ messages: [], nextCursor: null, hasMore: false, lastReadAt: '2026-10-05T09:30:00.000Z' });
+  });
+
+  it('top-level GET returns lastReadAt null when the user has never read the channel', async () => {
+    mockListChannelMessages.mockResolvedValueOnce([]);
+    mockFindChannelLastReadAt.mockResolvedValueOnce(null);
+
+    const body = await (await callGet()).json();
+
+    expect(body.lastReadAt).toBeNull();
+  });
+
+  it('top-level GET denied by view permission never reads the watermark', async () => {
+    vi.mocked(canPrincipalViewPage).mockResolvedValueOnce(false);
+
+    const res = await callGet();
+
+    expect(res.status).toBe(403);
+    expect(mockFindChannelLastReadAt).not.toHaveBeenCalled();
+  });
 });
 
 // --- POST thread reply ---------------------------------------------------------
@@ -262,6 +327,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
     mockListChannelThreadFollowers.mockResolvedValue([]);
     mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockCreateMentionNotification.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -306,7 +372,7 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
         alsoSendToParent: false,
       })
     );
-    expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
     // Replying in a thread is NOT the same as reading the channel — the
     // thread path must NOT upsert channelReadStatus (which would silently
     // mark unread top-level messages as read).
@@ -384,6 +450,19 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     const res = await callPost({ content: 'x', parentId: 'reply-as-parent' });
 
     expect(res.status).toBe(400);
+  });
+
+  // insertChannelThreadReply now validates+locks the fileId inside its own
+  // transaction (issue #1865) instead of a separate pre-check — mirrors the
+  // top-level path's "rejects with not_found" coverage.
+  it('returns 400 when the reply fileId does not exist', async () => {
+    mockInsertChannelThreadReply.mockResolvedValueOnce({ kind: 'not_found' });
+
+    const res = await callPost({ content: 'x', parentId: PARENT_ID, fileId: 'file-1', attachmentMeta: IMAGE_META });
+
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/file not found/i);
   });
 
   it('fans out thread_updated to followers but EXCLUDES the reply author', async () => {
@@ -574,6 +653,8 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       {}
     );
     expect(recipientCounts['user-bob'] ?? 0).toBeLessThanOrEqual(1);
+    // Mention notification also suppressed — broad fan-out already covers everyone
+    expect(mockCreateMentionNotification).not.toHaveBeenCalled();
   });
 
   it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {
@@ -603,9 +684,9 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
       title: 'General',
       drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
     });
-    // Sender (USER_ID) passes; the mentioned outsider does not.
-    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    vi.mocked(canUserViewPage).mockImplementation(async (uid) => uid === USER_ID);
+    // Sender (USER_ID) can view; the mentioned outsider cannot (a third-party audience question).
+    const { getUsersWhoCanViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(getUsersWhoCanViewPage).mockImplementationOnce(async (_pageId, ids) => new Set(ids.filter((id) => id === USER_ID)));
 
     await callPost({
       content: 'hey @[Stranger](user-outsider:user)',
@@ -630,7 +711,7 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
-    mockInsertChannelMessage.mockResolvedValue({ id: 'msg-1' });
+    mockInsertChannelMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: { id: 'msg-1' } });
     mockUpsertChannelReadStatus.mockResolvedValue(undefined);
     mockLoadChannelMessageWithRelations.mockResolvedValue({
       id: 'msg-1',
@@ -638,17 +719,18 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
       createdAt: new Date('2026-05-04T12:00:00Z'),
       user: { id: USER_ID, name: 'Test', image: null },
     });
+    mockCreateMentionNotification.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('routes top-level posts through insertChannelMessage (no thread helper)', async () => {
+  it('routes top-level posts through insertChannelMessageWithAttachment (no thread helper)', async () => {
     const res = await callPost({ content: 'hi' });
 
     expect(res.status).toBe(201);
-    expect(mockInsertChannelMessage).toHaveBeenCalledWith(
+    expect(mockInsertChannelMessageWithAttachment).toHaveBeenCalledWith(
       expect.objectContaining({ pageId: PAGE_ID, userId: USER_ID, content: 'hi' })
     );
     expect(mockInsertChannelThreadReply).not.toHaveBeenCalled();
@@ -661,6 +743,257 @@ describe('POST /api/channels/[pageId]/messages (top-level — existing path)', (
     const res = await callPost({ content: 'hi' });
 
     expect(res.status).toBe(401);
-    expect(mockInsertChannelMessage).not.toHaveBeenCalled();
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('rejects a fileId sent without its metadata', async () => {
+    // Behaviour change: this route previously accepted a fileId with no
+    // attachmentMeta (it validated nothing at all), which stored an attachment
+    // that could only half-render. The DM route always rejected it; both now
+    // share one validator.
+    const res = await callPost({ content: 'hi', fileId: 'file-1' });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('rejects metadata whose fields are the wrong type', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: { ...IMAGE_META, size: '1024' },
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('accepts several attachments on one message and passes them through in order', async () => {
+    mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({
+      kind: 'ok',
+      message: { id: 'msg-multi' },
+    });
+
+    const res = await callPost({
+      content: 'look at these',
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: IMAGE_META },
+        { fileId: 'file-2', attachmentMeta: IMAGE_META },
+        { fileId: 'file-3', attachmentMeta: IMAGE_META },
+      ],
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockInsertChannelMessageWithAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attachments: [
+          { fileId: 'file-1', attachmentMeta: IMAGE_META },
+          { fileId: 'file-2', attachmentMeta: IMAGE_META },
+          { fileId: 'file-3', attachmentMeta: IMAGE_META },
+        ],
+      }),
+    );
+  });
+
+  it('refuses a body carrying both the array and the legacy pair', async () => {
+    const res = await callPost({
+      content: 'hi',
+      fileId: 'file-1',
+      attachmentMeta: IMAGE_META,
+      attachments: [{ fileId: 'file-2', attachmentMeta: IMAGE_META }],
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockInsertChannelMessageWithAttachment).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when insertChannelMessageWithAttachment rejects with not_found (fileId vanished inside the tx)', async () => {
+    mockInsertChannelMessageWithAttachment.mockResolvedValueOnce({ kind: 'not_found' });
+
+    const res = await callPost({ content: 'hi', fileId: 'file-1', attachmentMeta: IMAGE_META });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'File not found' });
+    expect(mockUpsertChannelReadStatus).not.toHaveBeenCalled();
+  });
+});
+
+// --- Top-level POST: mention notifications ------------------------------------
+describe('POST /api/channels/[pageId]/messages (top-level — mention notifications)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const originalRealtimeUrl = process.env.INTERNAL_REALTIME_URL;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockInsertChannelMessageWithAttachment.mockResolvedValue({ kind: 'ok', message: { id: 'msg-1' } });
+    mockUpsertChannelReadStatus.mockResolvedValue(undefined);
+    mockLoadChannelMessageWithRelations.mockResolvedValue({
+      id: 'msg-1',
+      content: '',
+      createdAt: new Date('2026-05-04T12:00:00Z'),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    mockCreateMentionNotification.mockResolvedValue(undefined);
+    mockNotifyMentionedUsers.mockResolvedValue(undefined);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValue({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalRealtimeUrl === undefined) {
+      delete process.env.INTERNAL_REALTIME_URL;
+    } else {
+      process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
+    }
+  });
+
+  it('fires notifyMentionedUsers for a @mentioned user', async () => {
+    const res = await callPost({ content: 'hello @[Alice](user-alice:user)' });
+
+    expect(res.status).toBe(201);
+    expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'hello @[Alice](user-alice:user)',
+        pageId: PAGE_ID,
+        driveId: 'drive-1',
+        triggeredByUserId: USER_ID,
+      })
+    );
+  });
+
+  it('does not notify the sender even if they @mention themselves', async () => {
+    const res = await callPost({ content: `hello @[Me](${USER_ID}:user)` });
+
+    expect(res.status).toBe(201);
+    // notifyMentionedUsers handles invoker exclusion internally;
+    // the route still fires it (the helper silently drops self-mentions).
+    // No regression: the test verifies the route does not pass an override name.
+    expect(mockNotifyMentionedUsers).toHaveBeenCalledWith(
+      expect.objectContaining({ triggeredByUserId: USER_ID })
+    );
+  });
+
+  it('returns 201 even when notifyMentionedUsers rejects', async () => {
+    mockNotifyMentionedUsers.mockRejectedValue(new Error('notification service down'));
+
+    const res = await callPost({ content: 'hello @[Alice](user-alice:user)' });
+
+    expect(res.status).toBe(201);
+  });
+});
+
+// --- Thread reply POST: mention notifications ---------------------------------
+describe('POST /api/channels/[pageId]/messages (thread reply — mention notifications)', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const originalRealtimeUrl = process.env.INTERNAL_REALTIME_URL;
+
+  function makeThreadReplyScenario(content: string) {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content,
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    // USER_ID is a follower; other mentioned users are not
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    return replyCreatedAt;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(sessionAuth());
+    mockBroadcastThreadReplyCountUpdated.mockResolvedValue(undefined);
+    mockBroadcastInboxEvent.mockResolvedValue(undefined);
+    mockCreateMentionNotification.mockResolvedValue(undefined);
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValue({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalRealtimeUrl === undefined) {
+      delete process.env.INTERNAL_REALTIME_URL;
+    } else {
+      process.env.INTERNAL_REALTIME_URL = originalRealtimeUrl;
+    }
+  });
+
+  it('fires createMentionNotification for a @mentioned non-follower who can view the channel', async () => {
+    makeThreadReplyScenario('hey @[Bob](user-bob:user)');
+
+    await callPost({ content: 'hey @[Bob](user-bob:user)', parentId: PARENT_ID });
+
+    expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-bob', PAGE_ID, USER_ID);
+  });
+
+  it('fires createMentionNotification for a @mentioned user who is already a thread follower', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Alice](user-alice:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Sender', image: null },
+    });
+    // user-alice is already a thread follower — they should still get a MENTION notification
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID, 'user-alice']);
+
+    await callPost({ content: 'hey @[Alice](user-alice:user)', parentId: PARENT_ID });
+
+    expect(mockCreateMentionNotification).toHaveBeenCalledWith('user-alice', PAGE_ID, USER_ID);
+  });
+
+  it('returns 201 even when mention notification throws in a thread reply', async () => {
+    makeThreadReplyScenario('hey @[Bob](user-bob:user)');
+    mockCreateMentionNotification.mockRejectedValue(new Error('notification failed'));
+
+    const res = await callPost({ content: 'hey @[Bob](user-bob:user)', parentId: PARENT_ID });
+
+    expect(res.status).toBe(201);
   });
 });

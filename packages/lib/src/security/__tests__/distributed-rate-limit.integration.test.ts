@@ -1,7 +1,9 @@
 /**
  * Distributed Rate Limit Integration Tests
  *
- * Tests against a real Postgres database. Skips gracefully when DB is unavailable.
+ * Tests against a real Postgres database. FAILS LOUDLY when no DB is reachable — a silent skip
+ * would be a green, zero-assertion pass. Local runs without Docker opt out
+ * explicitly with ALLOW_SKIP_DB_TESTS=1.
  * Exercises the Postgres-backed (key, window_start) bucket implementation.
  */
 
@@ -15,6 +17,7 @@ import {
   shutdownRateLimiting,
   type RateLimitConfig,
 } from '../distributed-rate-limit';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 let dbAvailable = false;
 const TEST_KEY_PREFIX = 'itest:rl:';
@@ -23,7 +26,8 @@ beforeAll(async () => {
   try {
     await db.execute(sql`SELECT 1`);
     dbAvailable = true;
-  } catch {
+  } catch (error) {
+    requireDb('distributed-rate-limit.integration.test.ts', error);
     dbAvailable = false;
   }
 });
@@ -44,12 +48,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * Park us safely inside a single bucket before sequential checks. The limiter
+ * is a weighted *sliding* window keyed on wall-clock-aligned buckets
+ * (windowStart = floor(now/windowMs)*windowMs). If back-to-back checks straddle
+ * a bucket boundary, the previous bucket still contributes a fractional weight
+ * (1 - msIntoBucket/windowMs) just under 1, so effectiveCount lands at e.g.
+ * 1.9999 and `ceil(maxAttempts - effectiveCount)` rounds attemptsRemaining up by
+ * one. Waiting out the tail of the current window keeps every check in one
+ * bucket, where the counts are integers.
+ */
+async function alignToFreshBucket(windowMs: number): Promise<void> {
+  const msIntoBucket = Date.now() % windowMs;
+  const msUntilNextBucket = windowMs - msIntoBucket;
+  if (msUntilNextBucket < 1_000) {
+    await new Promise((r) => setTimeout(r, msUntilNextBucket + 50));
+  }
+}
+
 describe('distributed-rate-limit integration (Postgres)', () => {
   it('allows requests under the limit', async () => {
     if (!dbAvailable) return;
 
     const cfg: RateLimitConfig = { maxAttempts: 3, windowMs: 60_000 };
     const key = TEST_KEY_PREFIX + 'under-limit';
+
+    await alignToFreshBucket(cfg.windowMs);
 
     const r1 = await checkDistributedRateLimit(key, cfg);
     const r2 = await checkDistributedRateLimit(key, cfg);
@@ -65,6 +89,8 @@ describe('distributed-rate-limit integration (Postgres)', () => {
 
     const cfg: RateLimitConfig = { maxAttempts: 2, windowMs: 60_000 };
     const key = TEST_KEY_PREFIX + 'at-limit';
+
+    await alignToFreshBucket(cfg.windowMs);
 
     await checkDistributedRateLimit(key, cfg);
     await checkDistributedRateLimit(key, cfg);
@@ -128,22 +154,29 @@ describe('distributed-rate-limit integration (Postgres)', () => {
     expect(atBoundary.allowed).toBe(false);
   }, 10_000); // bucket alignment + 1 window + DB round-trips can exceed default 5s
 
-  it('fails closed in production when DB is unavailable', async () => {
+  it('enforces a conservative in-memory limit in production when DB is unavailable', async () => {
     if (!dbAvailable) return;
 
     process.env.NODE_ENV = 'production';
     const cfg: RateLimitConfig = { maxAttempts: 5, windowMs: 60_000 };
-    const key = TEST_KEY_PREFIX + 'fail-closed';
+    const key = TEST_KEY_PREFIX + 'pg-down-fallback';
 
     vi.spyOn(db, 'insert').mockImplementation(() => {
       throw new Error('DB unavailable');
     });
 
-    const result = await checkDistributedRateLimit(key, cfg);
+    // Conservative threshold is floor(5/2) = 2 per instance: availability is
+    // preserved for legitimate users, but the limit still binds — and tighter
+    // than the configured one.
+    const first = await checkDistributedRateLimit(key, cfg);
+    expect(first.allowed).toBe(true);
 
-    expect(result.allowed).toBe(false);
-    expect(result.retryAfter).toBe(60);
-    expect(result.attemptsRemaining).toBe(0);
+    const second = await checkDistributedRateLimit(key, cfg);
+    expect(second.allowed).toBe(true);
+
+    const third = await checkDistributedRateLimit(key, cfg);
+    expect(third.allowed).toBe(false);
+    expect(third.retryAfter).toBeGreaterThan(0);
   });
 
   it('concurrent increments against the same bucket are atomic (final count === N)', async () => {
@@ -172,7 +205,10 @@ describe('distributed-rate-limit integration (Postgres)', () => {
 
     const total = rows.reduce((s, r) => s + r.count, 0);
     expect(total).toBe(N);
-  });
+    // 50 upserts contend for one row lock and serialize, and the bucket-edge
+    // guard above can sleep up to ~1s; on a loaded CI runner that legitimately
+    // exceeds vitest's 5s default. This test asserts atomicity, not latency.
+  }, 30_000);
 
   it('resetDistributedRateLimit clears counters for the identifier', async () => {
     if (!dbAvailable) return;

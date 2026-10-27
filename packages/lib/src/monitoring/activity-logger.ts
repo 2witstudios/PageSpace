@@ -14,6 +14,9 @@ import { createId } from '@paralleldrive/cuid2';
 import { createHash, randomBytes } from 'crypto';
 import { desc, isNotNull, sql } from 'drizzle-orm';
 import { stableStringify } from '../utils/stable-stringify';
+import { classifyProcessing } from '../compliance/art30/classify-processing';
+import { decryptField } from '../encryption/field-crypto';
+import { isPageIdForeignKeyError } from './activity-log-errors';
 
 /**
  * Advisory lock key for serializing activity log hash chain writes.
@@ -34,10 +37,15 @@ export interface ActorInfo {
  * Fetch actor info from database for audit logging.
  * Returns email and display name for the given user ID.
  * Falls back to 'unknown@system' if user not found (shouldn't happen).
+ *
+ * Pass `client` when calling from inside a transaction: reading through the
+ * global pool there needs a second connection while the transaction holds one,
+ * which under pool pressure times out and writes the fallback actor into the
+ * hash-chained log.
  */
-export async function getActorInfo(userId: string): Promise<ActorInfo> {
+export async function getActorInfo(userId: string, client: typeof db = db): Promise<ActorInfo> {
   try {
-    const user = await db.query.users.findFirst({
+    const user = await client.query.users.findFirst({
       where: eq(users.id, userId),
       columns: { email: true, name: true },
     });
@@ -47,9 +55,20 @@ export async function getActorInfo(userId: string): Promise<ActorInfo> {
       return { actorEmail: 'unknown@system' };
     }
 
+    // Decrypt PII at the edge (GDPR #965): `activity_logs.actorEmail` /
+    // `actorDisplayName` are denormalized plaintext snapshots (NOT encrypted
+    // columns), so the actor email/name must be decrypted before being persisted
+    // here — otherwise a profile update during the cutover would write ciphertext
+    // blobs that activity views / Pulse summaries surface verbatim. Legacy
+    // plaintext passes through unchanged.
+    const [actorEmail, actorDisplayName] = await Promise.all([
+      decryptField(user.email),
+      decryptField(user.name),
+    ]);
+
     return {
-      actorEmail: user.email,
-      actorDisplayName: user.name ?? undefined,
+      actorEmail,
+      actorDisplayName: actorDisplayName ?? undefined,
     };
   } catch (error) {
     console.error('[ActivityLogger] Failed to fetch actor info:', error);
@@ -254,6 +273,7 @@ export type ActivityOperation =
   | 'email_change'
   | 'token_create'
   | 'token_revoke'
+  | 'token_update'
   // File operations
   | 'upload'
   | 'convert'
@@ -272,7 +292,9 @@ export type ActivityOperation =
   | 'rollback'
   // AI conversation undo operations
   | 'conversation_undo'
-  | 'conversation_undo_with_changes';
+  | 'conversation_undo_with_changes'
+  // Agent code execution (sandbox runs)
+  | 'code_execution';
 
 export type ActivityResourceType =
   | 'page'
@@ -428,6 +450,12 @@ function prepareActivityInsert(input: ActivityLogInput) {
     };
   }
 
+  // GDPR Art 30 record-of-processing classification (#980). Derived from the
+  // operation + resourceType via a pure classifier. These fields are NOT part
+  // of the tamper-evident hash chain (serializeLogDataForHash excludes them),
+  // so stamping them here does not affect chain verification.
+  const art30 = classifyProcessing(input.operation, input.resourceType);
+
   return {
     id: createId(),
     timestamp: new Date(),
@@ -436,6 +464,10 @@ function prepareActivityInsert(input: ActivityLogInput) {
     actorDisplayName: input.actorDisplayName,
     operation: input.operation,
     resourceType: input.resourceType,
+    dataCategory: art30.dataCategory,
+    legalBasis: art30.legalBasis,
+    retentionPolicy: art30.retentionPolicy,
+    recipients: art30.recipients,
     resourceId: input.resourceId,
     resourceTitle: input.resourceTitle,
     driveId: input.driveId,
@@ -536,15 +568,10 @@ export async function logActivity(input: ActivityLogInput): Promise<void> {
   try {
     await insertActivityLog(input.pageId);
   } catch (error) {
-    // Check for FK constraint violation on pageId (page was deleted during async logging)
-    const isPageIdFkError =
-      error instanceof Error &&
-      'code' in error &&
-      (error as { code: string }).code === '23503' &&
-      'constraint' in error &&
-      (error as { constraint: string }).constraint === 'activity_logs_pageId_pages_id_fk';
-
-    if (isPageIdFkError && input.pageId) {
+    // Check for FK constraint violation on pageId (page was deleted during async logging).
+    // Drizzle wraps the driver error, so the pg fields live under `.cause` - see
+    // isPageIdForeignKeyError.
+    if (isPageIdForeignKeyError(error) && input.pageId) {
       // Retry without pageId - the page was deleted but we still want to log the activity
       try {
         await insertActivityLog(undefined);
@@ -933,6 +960,8 @@ export function logRoleActivity(
     driveName?: string;
     permissions?: Record<string, boolean>;
     previousPermissions?: Record<string, boolean>;
+    driveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
+    previousDriveWidePermissions?: { canView: boolean; canEdit: boolean; canShare: boolean } | null;
     // For reorder operations
     previousOrder?: string[];
     newOrder?: string[];
@@ -950,10 +979,15 @@ export function logRoleActivity(
     previousValues = data.previousOrder ? { order: data.previousOrder } : undefined;
     newValues = data.newOrder ? { order: data.newOrder } : undefined;
   } else {
-    previousValues = data.previousPermissions
-      ? { permissions: data.previousPermissions }
-      : undefined;
-    newValues = data.permissions ? { permissions: data.permissions } : undefined;
+    const newValuesObj: Record<string, unknown> = {};
+    if (data.permissions !== undefined) newValuesObj.permissions = data.permissions;
+    if (data.driveWidePermissions !== undefined) newValuesObj.driveWidePermissions = data.driveWidePermissions;
+    newValues = Object.keys(newValuesObj).length > 0 ? newValuesObj : undefined;
+
+    const prevValuesObj: Record<string, unknown> = {};
+    if (data.previousPermissions !== undefined) prevValuesObj.permissions = data.previousPermissions;
+    if (data.previousDriveWidePermissions !== undefined) prevValuesObj.driveWidePermissions = data.previousDriveWidePermissions;
+    previousValues = Object.keys(prevValuesObj).length > 0 ? prevValuesObj : undefined;
   }
 
   logActivity({
@@ -1029,7 +1063,7 @@ export function logUserActivity(
  */
 export function logTokenActivity(
   userId: string,
-  operation: 'token_create' | 'token_revoke',
+  operation: 'token_create' | 'token_revoke' | 'token_update',
   data: {
     tokenId: string;
     tokenType: 'device' | 'mcp' | 'api';
@@ -1111,7 +1145,7 @@ export function logMessageActivity(
   operation: 'create' | 'message_update' | 'message_delete',
   message: {
     id: string;
-    pageId: string;
+    pageId: string | null; // null for conversations that aren't page-backed (global assistant)
     driveId: string | null; // null for user-level conversations (global assistant)
     conversationType: 'ai_chat' | 'global' | 'channel';
   },
@@ -1134,7 +1168,7 @@ export function logMessageActivity(
     resourceType: 'message',
     resourceId: message.id,
     driveId: message.driveId,
-    pageId: message.pageId,
+    pageId: message.pageId ?? undefined,
     previousValues: options?.previousContent ? { content: options.previousContent } : undefined,
     newValues: options?.newContent ? { content: options.newContent } : undefined,
     isAiGenerated: options?.isAiGenerated ?? false,

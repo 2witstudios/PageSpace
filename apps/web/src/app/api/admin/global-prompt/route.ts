@@ -10,27 +10,26 @@
  */
 
 import { withAdminAuth } from '@/lib/auth';
-import {
-  buildCompleteRequest,
-  type CompletePayloadResult,
-  type LocationContext,
-  type ToolDefinitionForExtraction,
-  getToolsSummary,
-  pageSpaceTools,
-  extractToolSchemas,
-  calculateTotalToolTokens,
-  buildSystemPrompt,
-  buildAgentAwarenessPrompt,
-  getPageTreeContext,
-  getDriveListSummary,
-  buildInlineInstructions,
-  buildGlobalAssistantInstructions,
-} from '@/lib/ai/core';
+import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { buildAdminReadAuditEvent } from '@pagespace/lib/audit/admin-read-audit';
+import { buildCompleteRequest, type CompletePayloadResult, type LocationContext } from '@/lib/ai/core/complete-request-builder';
+import { type ToolDefinitionForExtraction, extractToolSchemas, calculateTotalToolTokens } from '@/lib/ai/core/schema-introspection';
+import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { buildSystemPrompt } from '@/lib/ai/core/system-prompt';
+import { buildAgentAwarenessPrompt } from '@/lib/ai/core/agent-awareness';
+import { getPageTreeContext, getDriveListSummary } from '@/lib/ai/core/page-tree-context';
+import { buildInlineInstructions, buildGlobalAssistantInstructions } from '@/lib/ai/core/inline-instructions';
+import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
+import { CORE_TOOL_NAMES } from '@/lib/ai/core/stub-tools';
 import { db } from '@pagespace/db/db'
 import { eq, and, asc } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { EXECUTE_TOOL_DESCRIPTION } from '@/lib/ai/tools/execute-tool';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 interface PromptSection {
   name: string;
@@ -47,6 +46,7 @@ interface ModePromptData {
   totalTokens: number;
   toolsAllowed: string[];
   toolsDenied: string[];
+  nonCoreToolNames: string[];
   permissions: {
     canRead: boolean;
     canWrite: boolean;
@@ -57,8 +57,29 @@ interface ModePromptData {
   completePayload: CompletePayloadResult;
 }
 
-export const GET = withAdminAuth(async (adminUser, request) => {
+async function handleGlobalPrompt(
+  userId: string,
+  request: Request,
+  opts?: { impersonated?: boolean }
+): Promise<Response> {
+  // Adapter: the inner logic expects an object with an `id` field
+  const adminUser = { id: userId };
   try {
+    // GDPR Art 32(1)(b) (#954): operator read of a user's workspace (drives,
+    // page titles, drive list) — emit an immutable admin.data.read audit event.
+    // On the service path the actor is the service token (not the impersonated
+    // subject), so attribute it via serviceId and leave userId unset; on the
+    // admin path the admin reads their own workspace (actor == subject).
+    const isService = opts?.impersonated === true;
+    auditRequest(request, buildAdminReadAuditEvent({
+      adminUserId: isService ? undefined : userId,
+      serviceId: isService ? 'service-token' : undefined,
+      resourceType: 'admin_global_prompt',
+      targetUserId: userId,
+      accessedDataCategories: ['workspace_structure', 'drive_list', 'page_titles'],
+      impersonated: isService,
+    }));
+
     // Parse query params for context selection
     const { searchParams } = new URL(request.url);
     const selectedDriveId = searchParams.get('driveId'); // null = dashboard context
@@ -67,6 +88,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
 
     // Get all drives the user has access to (for the picker)
     // 1. Get drives owned by the user
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const ownedDrives = await db.query.drives.findMany({
       where: and(eq(drives.ownerId, adminUser.id), eq(drives.isTrashed, false)),
     });
@@ -201,12 +223,21 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     // If no drive selected (or invalid), locationContext remains undefined (dashboard context)
 
     // Build async context sections (require DB queries, shared across modes)
-    const agentAwarenessPrompt = await buildAgentAwarenessPrompt(adminUser.id);
+    // Same gate as the live chat route (`canDelegate: !readOnlyMode` — the
+    // chat-only session family registers regardless of the CODE_EXECUTION
+    // kill-switch, but read-only strips spawn_session as a write tool): this
+    // preview must show the operator the prompt the model will ACTUALLY
+    // receive, delegation line included or not. Both variants are built here,
+    // and each mode in the loop below picks its own.
+    const [agentAwarenessPromptFull, agentAwarenessPromptReadOnly] = await Promise.all([
+      buildAgentAwarenessPrompt(actorFromVerifiedUser(adminUser), { canDelegate: true }),
+      buildAgentAwarenessPrompt(actorFromVerifiedUser(adminUser), { canDelegate: false }),
+    ]);
 
     let pageTreePrompt = '';
     if (showPageTree) {
       if (selectedDriveId) {
-        const treeContext = await getPageTreeContext(adminUser.id, {
+        const treeContext = await getPageTreeContext(actorFromVerifiedUser(adminUser), {
           scope: 'drive',
           driveId: selectedDriveId,
         });
@@ -215,7 +246,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         }
       } else {
         // Dashboard context - show drive list summary
-        const driveSummary = await getDriveListSummary(adminUser.id);
+        const driveSummary = await getDriveListSummary(actorFromVerifiedUser(adminUser));
         if (driveSummary) {
           pageTreePrompt = `\n\n## ACCESSIBLE WORKSPACES\n\n${driveSummary}`;
         }
@@ -230,6 +261,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     const promptData: Record<string, ModePromptData> = {};
 
     for (const { key, isReadOnly } of modes) {
+      const agentAwarenessPrompt = isReadOnly ? agentAwarenessPromptReadOnly : agentAwarenessPromptFull;
       // Build complete payload using shared module (EXACT match with chat route)
       const completePayload = buildCompleteRequest({
         isReadOnly,
@@ -238,43 +270,26 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         includeExampleMessage: true,
       });
 
-      // Build system prompt for sections display
-      const systemPrompt = buildSystemPrompt(
-        contextType,
-        locationContext?.currentDrive ? {
-          driveName: locationContext.currentDrive.name,
-          driveSlug: locationContext.currentDrive.slug,
-          driveId: locationContext.currentDrive.id,
-          pagePath: locationContext.currentPage?.path,
-          pageType: locationContext.currentPage?.type,
-          breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
-        } : undefined,
-        isReadOnly
-      );
+      // Build system prompt for sections display. Location is turn-volatile —
+      // shown as its own "Location Context (volatile)" section below, not
+      // baked into this stable system prompt (mirrors production routes).
+      const systemPrompt = buildSystemPrompt(isReadOnly);
 
       // Build inline instructions based on context type
-      let inlineInstructions: string;
-      if (contextType === 'page' && locationContext?.currentPage) {
-        inlineInstructions = buildInlineInstructions({
-          pageTitle: locationContext.currentPage.title,
-          pageType: locationContext.currentPage.type,
-          isTaskLinked: locationContext.currentPage.isTaskLinked,
-          driveName: locationContext.currentDrive?.name,
-          pagePath: locationContext.currentPage.path,
-          driveSlug: locationContext.currentDrive?.slug,
-          driveId: locationContext.currentDrive?.id,
-        });
-      } else {
-        inlineInstructions = buildGlobalAssistantInstructions(
-          locationContext?.currentDrive
-            ? {
-                driveName: locationContext.currentDrive.name,
-                driveSlug: locationContext.currentDrive.slug,
-                driveId: locationContext.currentDrive.id,
-              }
-            : undefined
-        );
-      }
+      const inlineInstructions =
+        contextType === 'page' && locationContext?.currentPage
+          ? buildInlineInstructions()
+          : buildGlobalAssistantInstructions();
+
+      const locationPrompt = buildLocationTurnPrompt(
+        locationContext
+          ? {
+              currentPage: locationContext.currentPage,
+              currentDrive: locationContext.currentDrive,
+              breadcrumbs: locationContext.breadcrumbs?.map(b => b.title),
+            }
+          : undefined
+      );
 
       // Build detailed sections with source annotations for the breakdown view
       const sections: PromptSection[] = [
@@ -289,6 +304,12 @@ export const GET = withAdminAuth(async (adminUser, request) => {
           content: inlineInstructions,
           source: 'apps/web/src/lib/ai/core/inline-instructions.ts',
           tokens: estimateSystemPromptTokens(inlineInstructions),
+        },
+        {
+          name: 'Location Context (volatile)',
+          content: locationPrompt,
+          source: 'apps/web/src/lib/ai/core/location-prompt.ts',
+          tokens: estimateSystemPromptTokens(locationPrompt),
         },
       ];
 
@@ -311,8 +332,7 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         });
       }
 
-      // Get tool permissions summary
-      const toolsSummary = getToolsSummary(isReadOnly);
+      // Tool summary comes from completePayload (core tools + tool_search + execute_tool)
 
       // Append async context sections to the full prompt
       const fullPromptWithAsyncContext =
@@ -338,8 +358,9 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         fullPrompt: fullPromptWithAsyncContext,
         sections,
         totalTokens: completePayload.tokenEstimates.total,
-        toolsAllowed: toolsSummary.allowed,
-        toolsDenied: toolsSummary.denied,
+        toolsAllowed: completePayload.toolsSummary.allowed,
+        toolsDenied: completePayload.toolsSummary.denied,
+        nonCoreToolNames: completePayload.nonCoreToolNames,
         permissions: {
           canRead: true,
           canWrite: !isReadOnly,
@@ -350,34 +371,90 @@ export const GET = withAdminAuth(async (adminUser, request) => {
       };
     }
 
-    // Extract full tool schemas for display (all tools, not filtered by mode)
-    const toolsForExtraction: Record<string, ToolDefinitionForExtraction> = {};
+    // Extract core tool schemas only (what's sent upfront in the Global Assistant)
+    const coreToolsForDisplay: Record<string, ToolDefinitionForExtraction> = {};
     for (const [name, tool] of Object.entries(pageSpaceTools)) {
-      toolsForExtraction[name] = {
-        description: tool.description,
-        parameters: tool.inputSchema,
-      };
+      if (CORE_TOOL_NAMES.has(name)) {
+        coreToolsForDisplay[name] = {
+          description: tool.description,
+          parameters: tool.inputSchema,
+        };
+      }
     }
-    const allToolSchemas = extractToolSchemas(toolsForExtraction);
+    const coreToolSchemas = extractToolSchemas(coreToolsForDisplay);
+
+    // Add tool_search and execute_tool (dynamic at runtime, static schemas for display)
+    const toolSearchJsonSchema = {
+      type: 'object' as const,
+      properties: {
+        query: {
+          type: 'string' as const,
+          description: 'Either "select:name1,name2" for specific tools or a search keyword',
+        },
+      },
+      required: ['query'],
+    };
+    const executeToolJsonSchema = {
+      type: 'object' as const,
+      properties: {
+        tool_name: { type: 'string' as const },
+        parameters: { type: 'object' as const, properties: {}, required: [] },
+      },
+      required: ['tool_name'],
+    };
+
+    const allToolSchemas = [
+      ...coreToolSchemas,
+      {
+        name: 'tool_search',
+        description:
+          'Get full parameter schemas for any PageSpace tool before calling it. Use "select:name1,name2" for specific tools by name, or a keyword like "calendar", "agent", "task", "channel", "drive" to find all tools in that area.',
+        parameters: toolSearchJsonSchema,
+        tokenEstimate: estimateSystemPromptTokens(
+          JSON.stringify({ name: 'tool_search', parameters: toolSearchJsonSchema })
+        ),
+      },
+      {
+        name: 'execute_tool',
+        description: EXECUTE_TOOL_DESCRIPTION,
+        parameters: executeToolJsonSchema,
+        tokenEstimate: estimateSystemPromptTokens(
+          JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })
+        ),
+      },
+    ];
     const totalToolTokens = calculateTotalToolTokens(allToolSchemas);
 
-    // Build experimental context (what gets passed to tool execute functions)
+    // Non-core tool names (accessible via execute_tool, not sent upfront)
+    const allNonCoreToolNames = Object.keys(pageSpaceTools).filter(
+      n => !CORE_TOOL_NAMES.has(n)
+    );
+
+    // Build experimental context matching the real chat route shape (preview values shown)
     const experimentalContext = {
       userId: adminUser.id,
-      chatId: '[chat-id-placeholder]',
+      timezone: undefined,
+      aiProvider: '[varies by chat]',
+      aiModel: '[varies by chat]',
+      conversationId: '[generated per conversation]',
       modelCapabilities: {
-        supportsStreaming: true,
-        supportsToolCalling: true,
-        hasVision: false, // Varies by model
-        maxTokens: 128000, // Example value
+        hasVision: false,
+        hasTools: true,
+        model: '[varies by chat]',
+        provider: '[varies by chat]',
       },
-      locationContext: locationContext || null,
+      locationContext: locationContext ?? null,
+      chatSource: {
+        type: 'global' as const,
+      },
+      enabledTools: null,
     };
 
     return Response.json({
       promptData,
       toolSchemas: allToolSchemas,
       totalToolTokens,
+      nonCoreToolNames: allNonCoreToolNames,
       experimentalContext,
       availableDrives,
       availablePages: availablePages.map(p => ({
@@ -391,7 +468,6 @@ export const GET = withAdminAuth(async (adminUser, request) => {
         generatedAt: new Date().toISOString(),
         adminUser: {
           id: adminUser.id,
-          role: adminUser.role,
         },
         locationContext,
         selectedDriveId,
@@ -402,7 +478,27 @@ export const GET = withAdminAuth(async (adminUser, request) => {
     });
 
   } catch (error) {
-    console.error('Error generating global prompt data:', error);
+    loggers.api.error('Error generating global prompt data', error as Error);
     return new Response('Internal Server Error', { status: 500 });
   }
-});
+}
+
+export async function GET(request: Request): Promise<Response> {
+  const serviceSecret = request.headers.get('x-service-secret');
+  // A present header (even empty) is an explicit service-auth attempt: validate
+  // it fail-closed rather than silently falling through to the admin path.
+  if (serviceSecret !== null) {
+    const expectedSecret = process.env.SERVICE_API_SECRET;
+    // Fail closed when the secret is unset/empty, and compare in timing-safe
+    // fashion: SERVICE_API_SECRET is an unhashed shared secret, and a successful
+    // match lets the caller impersonate ANY user via x-service-user-id, so a raw
+    // `!==` would leak the secret one byte at a time under timing analysis.
+    if (!expectedSecret || !secureCompare(serviceSecret, expectedSecret)) {
+      return Response.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    const userId = request.headers.get('x-service-user-id');
+    if (!userId) return Response.json({ error: 'Missing user context' }, { status: 400 });
+    return handleGlobalPrompt(userId, request, { impersonated: true });
+  }
+  return withAdminAuth(async (adminUser, req) => handleGlobalPrompt(adminUser.id, req, { impersonated: false }))(request);
+}

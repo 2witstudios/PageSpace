@@ -48,7 +48,8 @@ vi.mock('@pagespace/lib/integrations/repositories/connection-repository', () => 
   deleteConnection: mockDeleteConnection,
 }));
 
-import { DELETE } from '../route';
+import { DELETE, PATCH } from '../route';
+import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
@@ -85,5 +86,35 @@ describe('DELETE /api/user/integrations/[connectionId] audit', () => {
       request,
       { eventType: 'auth.token.revoked', userId: mockUserId, details: { tokenType: 'integration', reason: 'user_disconnect' } }
     );
+  });
+});
+
+describe('PATCH /api/user/integrations/[connectionId] base URL guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    mockGetConnectionById.mockResolvedValue({ id: mockConnectionId, userId: mockUserId, name: 'X' });
+  });
+
+  it('given only a private baseUrlOverride, should not accept the field and should write nothing', async () => {
+    const request = new Request(`http://localhost/api/user/integrations/${mockConnectionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ baseUrlOverride: 'http://127.0.0.1:9000/hook' }),
+    });
+    const response = await PATCH(request, { params: Promise.resolve({ connectionId: mockConnectionId }) });
+
+    expect(response.status).toBe(400);
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('given a name plus a private baseUrlOverride, should update the name only', async () => {
+    const request = new Request(`http://localhost/api/user/integrations/${mockConnectionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: 'Renamed', baseUrlOverride: 'http://127.0.0.1:9000/hook' }),
+    });
+    await PATCH(request, { params: Promise.resolve({ connectionId: mockConnectionId }) });
+
+    const setFn = vi.mocked(db.update).mock.results[0]?.value.set;
+    expect(setFn).toHaveBeenCalledWith({ name: 'Renamed' });
   });
 });

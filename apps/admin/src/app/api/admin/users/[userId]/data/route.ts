@@ -1,0 +1,172 @@
+import { withAdminAuth } from '@/lib/auth/auth';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { accountRepository } from '@pagespace/lib/repositories/account-repository';
+import { activityLogRepository } from '@pagespace/lib/repositories/activity-log-repository';
+import { revokeUserIntegrationTokens } from '@pagespace/lib/compliance/erasure/revoke-integration-tokens';
+import { revokeAndDiscardAppleTokens, appleSignInDeletionOutcome, type AppleRevocationSummary } from '@pagespace/lib/auth/apple/revoke-apple-tokens';
+import { deleteAiUsageLogsForUser } from '@pagespace/lib/logging/ai-usage-purge';
+import { deleteMonitoringDataForUser } from '@pagespace/lib/logging/monitoring-purge';
+import { isCloud } from '@pagespace/lib/deployment-mode';
+import { createAnonymizedActorEmail } from '@pagespace/lib/compliance/anonymize';
+import { getActorInfo, logUserActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { stripe } from '@/lib/stripe/client';
+
+type DataRouteContext = { params: Promise<{ userId: string }> };
+
+function maskEmail(email: string): string {
+  const [localPart, domain] = email.split('@');
+  if (!domain) return '***';
+  return `${localPart.slice(0, 3)}***@${domain}`;
+}
+
+/**
+ * DELETE /api/admin/users/[userId]/data
+ *
+ * Admin DSAR deletion endpoint — anonymizes and deletes user data.
+ * Used for data subject erasure requests (GDPR Article 17).
+ * Requires CSRF token (state-changing admin operation).
+ */
+export const DELETE = withAdminAuth<DataRouteContext>(
+  async (adminUser, request, context) => {
+    const { userId } = await context.params;
+
+    if (userId === adminUser.id) {
+      return Response.json(
+        { error: 'Cannot delete your own account via admin endpoint. Use /api/account instead.' },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+      const reason = (typeof body.reason === 'string' ? body.reason.trim() : '').substring(0, 200);
+      if (!reason) {
+        return Response.json(
+          { error: 'A non-empty reason is required for GDPR erasure' },
+          { status: 400 }
+        );
+      }
+
+      const user = await accountRepository.findById(userId);
+      if (!user) {
+        return Response.json({ error: 'User not found' }, { status: 404 });
+      }
+
+      // An org Owner cannot be erased (ORG-6); refuse before deleting anything.
+      const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+      if (ownedOrganizations.length > 0) {
+        return Response.json(
+          {
+            error: 'User owns organizations. Transfer organization ownership first.',
+            ownedOrganizations,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Atomically check for multi-member drives and delete solo ones
+      const { multiMemberDriveNames } = await accountRepository.checkAndDeleteSoloDrives(userId);
+      if (multiMemberDriveNames.length > 0) {
+        return Response.json(
+          {
+            error: 'User owns drives with other members. Transfer ownership first.',
+            multiMemberDrives: multiMemberDriveNames,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Log BEFORE anonymization (GDPR compliance)
+      const actorInfo = await getActorInfo(adminUser.id);
+      logUserActivity(adminUser.id, 'account_delete', {
+        targetUserId: userId,
+        targetUserEmail: maskEmail(user.email),
+      }, actorInfo);
+
+      // Anonymize activity logs
+      await activityLogRepository.anonymizeForUser(
+        userId,
+        createAnonymizedActorEmail(userId)
+      );
+
+      // Clean up AI usage logs (fail-closed: error surfaces to caller)
+      await deleteAiUsageLogsForUser(userId);
+
+      // Clean up monitoring tables (systemLogs, apiMetrics, errorLogs, userActivities)
+      // Note: security_audit_log is intentionally NOT deleted — legal retention requirement
+      await deleteMonitoringDataForUser(userId);
+
+      // Revoke OAuth integration tokens BEFORE user deletion (Art. 17 GDPR — #911)
+      try {
+        const { revoked, failed } = await revokeUserIntegrationTokens(userId);
+        loggers.api.info(`Admin DSAR: OAuth token revocation for ${userId}: revoked=${revoked}, failed=${failed}`);
+      } catch (error) {
+        loggers.api.error('Admin DSAR: Could not revoke OAuth tokens:', error as Error);
+      }
+
+      // Revoke Sign in with Apple tokens BEFORE user deletion (Guideline 5.1.1(v),
+      // TN3194). Best-effort: without the Apple signing key configured on this
+      // app the tokens are discarded unrevoked, and the users cascade removes any
+      // row left behind either way.
+      let appleSummary: AppleRevocationSummary | null = null;
+      try {
+        const apple = await revokeAndDiscardAppleTokens(userId);
+        appleSummary = apple;
+        loggers.api.info(
+          `Admin DSAR: Apple token revocation for ${userId}: revoked=${apple.revoked}, failed=${apple.failed}, unconfigured=${apple.unconfigured}`
+        );
+      } catch (error) {
+        loggers.api.error('Admin DSAR: Could not revoke Apple tokens:', error as Error);
+      }
+
+      // Delete user record
+      await accountRepository.deleteUser(userId);
+
+      // Delete Stripe customer AFTER user deletion (Art. 17 GDPR — #910)
+      if (user.stripeCustomerId && isCloud()) {
+        try {
+          await stripe.customers.del(user.stripeCustomerId);
+          loggers.api.info(`Admin DSAR: Stripe customer deleted: ${user.stripeCustomerId}`);
+        } catch (error) {
+          loggers.api.error('Admin DSAR: Could not delete Stripe customer:', error as Error);
+        }
+      }
+
+      loggers.api.info(`Admin DSAR deletion: admin=${adminUser.id} target=${userId} reason="${reason}"`);
+
+      auditRequest(request, { eventType: 'data.delete', userId: adminUser.id, resourceType: 'user', resourceId: userId, details: {
+        source: 'admin',
+        operation: 'dsar-deletion',
+        reason,
+      } });
+
+      // 'manual': tell the user to stop using Sign in with Apple for PageSpace
+      // themselves (not revoked — no token, no signing key here, or Apple failed).
+      const appleSignIn = appleSignInDeletionOutcome({ appleLinked: user.appleId !== null, summary: appleSummary });
+      if (appleSignIn === 'manual') {
+        // Durable record: the user's Sign in with Apple authorization was NOT
+        // revoked (no token, no signing key on this app, or Apple failed), so
+        // someone must tell them to stop using Sign in with Apple for PageSpace.
+        loggers.api.warn(`Admin DSAR: Sign in with Apple needs manual follow-up for ${userId}`);
+        auditRequest(request, {
+          eventType: 'data.delete',
+          userId: adminUser.id,
+          resourceType: 'user',
+          resourceId: userId,
+          details: {
+            operation: 'apple_sign_in_manual_followup',
+            subjectUserId: userId,
+            revoked: appleSummary?.revoked ?? 0,
+            failed: appleSummary?.failed ?? 0,
+            unconfigured: appleSummary?.unconfigured ?? false,
+          },
+        });
+      }
+      return Response.json({ message: 'User data deleted and anonymized', appleSignIn });
+    } catch (error) {
+      loggers.api.error('Admin DSAR deletion error:', error as Error);
+      return Response.json({ error: 'Failed to delete user data' }, { status: 500 });
+    }
+  }
+);

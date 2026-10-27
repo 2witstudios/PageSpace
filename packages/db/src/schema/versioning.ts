@@ -40,6 +40,12 @@ export const driveBackupStatusEnum = pgEnum('drive_backup_status', [
   'failed',
 ]);
 
+export const driveBackupScheduleFrequencyEnum = pgEnum('drive_backup_schedule_frequency', [
+  'daily',
+  'weekly',
+  'monthly',
+]);
+
 // ============================================================================
 // Retention Policy Configuration
 // ============================================================================
@@ -167,6 +173,17 @@ export const pageVersions = pgTable('page_versions', {
 export const driveBackups = pgTable('drive_backups', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  // [Spec X-3] The drive's org context AT SNAPSHOT TIME, recorded so a backup
+  // says where the drive stood when it was taken (and a restore can be judged
+  // against it). Plain snapshot columns like the drive_backup_* tables' own ids
+  // — no foreign key, both nullable: pre-org backups have no org, and a
+  // historical fact must not cascade when the org later goes. The restore
+  // deliberately does NOT write these back onto the drive: a drive that moved
+  // orgs since the backup must not be pulled back by restoring an older
+  // snapshot (a move that re-admits members is governed by the POL-2
+  // admission guards, not by the backup).
+  orgId: text('orgId'),
+  orgVisibility: text('orgVisibility'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
   source: driveBackupSourceEnum('source').notNull().default('manual'),
@@ -248,6 +265,9 @@ export const driveBackupRoles = pgTable('drive_backup_roles', {
   color: text('color'),
   isDefault: boolean('isDefault').default(false).notNull(),
   permissions: jsonb('permissions'),
+  driveWidePermissions: jsonb('drive_wide_permissions')
+    .$type<{ canView: boolean; canEdit: boolean; canShare: boolean } | null>()
+    .default(sql`NULL`),
   position: real('position'),
 }, (table) => ({
   pk: primaryKey({ columns: [table.backupId, table.roleId] }),
@@ -291,5 +311,26 @@ export const driveBackupsRelations = relations(driveBackups, ({ one }) => ({
   creator: one(users, {
     fields: [driveBackups.createdBy],
     references: [users.id],
+  }),
+}));
+
+export const driveBackupSchedules = pgTable('drive_backup_schedules', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  driveId: text('driveId').notNull().unique().references(() => drives.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  frequency: driveBackupScheduleFrequencyEnum('frequency').notNull().default('daily'),
+  timezone: text('timezone').notNull().default('UTC'),
+  nextRunAt: timestamp('nextRunAt', { mode: 'date' }),
+  lastRunAt: timestamp('lastRunAt', { mode: 'date' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull(),
+}, (table) => ({
+  enabledNextRunIdx: index('drive_backup_schedules_enabled_next_run_idx').on(table.enabled, table.nextRunAt),
+}));
+
+export const driveBackupSchedulesRelations = relations(driveBackupSchedules, ({ one }) => ({
+  drive: one(drives, {
+    fields: [driveBackupSchedules.driveId],
+    references: [drives.id],
   }),
 }));

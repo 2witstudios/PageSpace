@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { getConnectionById, getConnectionWithProvider, deleteConnection } from '@pagespace/lib/integrations/repositories/connection-repository';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -17,14 +19,15 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ driveId: string; connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { driveId, connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isMember) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     const connection = await getConnectionWithProvider(db, connectionId);
@@ -65,14 +68,15 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ driveId: string; connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { driveId, connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const access = await getDriveAccess(driveId, auth.userId);
+    const access = await getDriveAccess(driveId, actorFromAuth(auth));
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Admin access required' }, { status: 403 }));
     }
 
     const connection = await getConnectionById(db, connectionId);

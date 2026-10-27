@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
 import { z } from "zod/v4";
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { kickForPagePermissionRevocation } from '@pagespace/lib/permissions/revocation-kick';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
-import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, isMCPAuthResult, canPrincipalSharePage, canPrincipalViewPage, canPrincipalEditPage, canPrincipalDeletePage } from '@/lib/auth';
 import { jsonResponse } from '@pagespace/lib/utils/api-utils';
 import { pageService } from '@/services/api';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { getUsersWhoCanViewPage } from '@pagespace/lib/permissions/permissions';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -25,10 +34,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const userId = auth.userId;
 
   try {
-    const result = await pageService.getPage(pageId, userId);
+    // Scoped MCP tokens authorize with their OWN drive-membership role.
+    const result = await pageService.getPage(pageId, actorFromAuth(auth), {
+      authorizeView: (id) => canPrincipalViewPage(auth, id),
+    });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'read' } });
@@ -47,6 +60,7 @@ const patchSchema = z.object({
   aiModel: z.string().optional(),
   parentId: z.string().nullable().optional(),
   isPaginated: z.boolean().optional(),
+  isPrivate: z.boolean().optional(),
   expectedRevision: z.number().int().min(0).optional(),
   changeGroupId: z.string().optional(), // Groups related edits in activity log
 });
@@ -67,7 +81,17 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
   try {
     const body = await req.json();
     const safeBody = patchSchema.parse(body);
-    const { expectedRevision, changeGroupId, ...updates } = safeBody;
+    const { expectedRevision, changeGroupId, isPrivate: isPrivateUpdate, ...contentUpdates } = safeBody;
+
+    // isPrivate is a visibility-level change — requires share permission, NOT edit permission.
+    // Apply it through the service with skipPermissionCheck so users with canShare but not
+    // canEdit (e.g. page creator) can still toggle privacy.
+    if (isPrivateUpdate !== undefined) {
+      const canShare = await canPrincipalSharePage(auth, pageId);
+      if (!canShare) {
+        return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only page owners and drive admins can change page visibility' }, { status: 403 }));
+      }
+    }
 
     const isMCP = isMCPAuthResult(auth);
     const mcpMeta = isMCP ? { source: 'mcp' as const } : undefined;
@@ -75,13 +99,31 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       ? { changeGroupId, metadata: mcpMeta }
       : undefined;
 
-    const result = await pageService.updatePage(pageId, userId, updates, {
+    // Capture current isPrivate before the update so we can detect false→true transitions
+    let previousIsPrivate: boolean | undefined;
+    if (isPrivateUpdate !== undefined) {
+      const currentPage = await db.query.pages.findFirst({
+        where: eq(pages.id, pageId),
+        columns: { isPrivate: true },
+      });
+      previousIsPrivate = currentPage?.isPrivate;
+    }
+
+    // Build the full updates object, applying isPrivate with skipPermissionCheck when present
+    const updates = isPrivateUpdate !== undefined
+      ? { ...contentUpdates, isPrivate: isPrivateUpdate }
+      : contentUpdates;
+
+    const result = await pageService.updatePage(pageId, actorFromAuth(auth), updates, {
       expectedRevision,
       context,
+      skipPermissionCheck: isPrivateUpdate !== undefined && Object.keys(contentUpdates).length === 0,
+      // Scoped MCP tokens authorize with their OWN drive-membership role.
+      authorizeEdit: (id) => canPrincipalEditPage(auth, id),
     });
 
     if (!result.success) {
-      return NextResponse.json(
+      const refused = NextResponse.json(
         {
           error: result.error,
           currentRevision: result.currentRevision,
@@ -89,6 +131,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
         },
         { status: result.status }
       );
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast
@@ -108,7 +151,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
     }
 
     // Broadcast content update (for document synchronization)
-    if (safeBody.content) {
+    // `!== undefined`, not truthiness: deleting all text saves '' and must still broadcast.
+    if (safeBody.content !== undefined) {
       await broadcastPageEvent(
         createPageEventPayload(driveId, pageId, 'content-updated', {
           title: result.page.title ?? undefined,
@@ -118,10 +162,34 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
       );
     }
 
+    // Instant revocation: kick the drive's members (the org-aware enumeration) whom the canonical
+    // viewer check no longer lets see the page now that it is private.
+    if (isPrivateUpdate === true && previousIsPrivate === false) {
+      const members = await getDriveRecipientUserIds(result.driveId);
+      const stillViewing = await getUsersWhoCanViewPage(pageId, members);
+      const membersLosingAccess = members.filter((memberId) => !stillViewing.has(memberId));
+
+      await Promise.all(
+        membersLosingAccess.map((memberId) =>
+          kickForPagePermissionRevocation({ userId: memberId, pageId, reason: 'page_private' })
+        )
+      );
+    }
+
+    // Broadcast privacy change so connected clients revalidate their tree
+    if (isPrivateUpdate !== undefined) {
+      await broadcastPageEvent(
+        createPageEventPayload(result.driveId, pageId, 'updated', {
+          isPrivate: isPrivateUpdate,
+          socketId,
+        })
+      );
+    }
+
     // Track page update
     trackPageOperation(userId, 'update', pageId, {
       updatedFields: result.updatedFields,
-      hasContentUpdate: !!safeBody.content,
+      hasContentUpdate: safeBody.content !== undefined,
       hasTitleUpdate: !!safeBody.title
     });
 
@@ -129,6 +197,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
     return jsonResponse(result.page);
   } catch (error) {
+    // [D-OW-33] the page was private and its drive's org is lapsed: making it readable by the drive is refused.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error updating page:', error as Error);
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
@@ -164,16 +234,19 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
       body = null;
     }
     const parsedBody = deleteSchema.parse(body);
-    const trashChildren = parsedBody?.trash_children ?? false;
+    const trashChildren = parsedBody?.trash_children ?? true;
 
     const isMCP = isMCPAuthResult(auth);
-    const result = await pageService.trashPage(pageId, userId, {
+    const result = await pageService.trashPage(pageId, actorFromAuth(auth), {
       trashChildren,
       metadata: isMCP ? { source: 'mcp' } : undefined,
+      // Scoped MCP tokens authorize with their OWN drive-membership role.
+      authorizeDelete: (id) => canPrincipalDeletePage(auth, id),
     });
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: result.status });
+      const refused = NextResponse.json({ error: result.error }, { status: result.status });
+      return result.status === 403 ? deniedResponse(actorFromAuth(auth), pageId, refused) : refused;
     }
 
     // Side effects: broadcast

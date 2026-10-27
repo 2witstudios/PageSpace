@@ -1,20 +1,59 @@
-import { eq, inArray, or, and, ne } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, gt, asc, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
-import { drives, pages, chatMessages } from '@pagespace/db/schema/core';
-import { aiUsageLogs, activityLogs } from '@pagespace/db/schema/monitoring';
-import { files, filePages } from '@pagespace/db/schema/storage';
+import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
+import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
+import { drives, pages, tags } from '@pagespace/db/schema/core';
+import { contentTags } from '@pagespace/db/schema/content-tags';
+import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
+import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
+import { files, filePages, type AttachmentMeta } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
-import { channelMessages } from '@pagespace/db/schema/chat';
+import { channelMessages, channelMessageAttachments } from '@pagespace/db/schema/chat';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
-import { directMessages, dmConversations } from '@pagespace/db/schema/social';
+import { directMessages, dmConversations, directMessageAttachments } from '@pagespace/db/schema/social';
 import { taskLists, taskItems } from '@pagespace/db/schema/tasks';
 import { sessions } from '@pagespace/db/schema/sessions';
 import { notifications } from '@pagespace/db/schema/notifications';
 import { displayPreferences } from '@pagespace/db/schema/display-preferences';
-import { userPersonalization } from '@pagespace/db/schema/personalization';
+import { userPersonalization, personalizationCandidates } from '@pagespace/db/schema/personalization';
+import { pulseSummaries } from '@pagespace/db/schema/dashboard';
+import { userHotkeyPreferences } from '@pagespace/db/schema/hotkeys';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { imagoDriveAccess } from '@pagespace/db/schema/imago-drive-access';
+import { userToastNotificationPreferences } from '@pagespace/db/schema/toast-notification-preferences';
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
+import { decryptUserRow } from '../../auth/user-repository';
+import { agentAccounts, agentAccountApprovals, agentAccountBindings, agentAccountDelegations } from '@pagespace/db/schema/agent-accounts';
+import { organizations, orgMembers, orgMemberDepartures } from '@pagespace/db/schema/organizations';
+import { driveJoinRequests } from '@pagespace/db/schema/drive-join-requests';
+import { orgGuestHolds } from '@pagespace/db/schema/org-guest-holds';
+import { wallets, walletFundingLegs, driveSpendOverrides, walletConsumerCaps } from '@pagespace/db/schema/wallets';
+import { getClickHouseGdprClient } from '../../observability/clickhouse-client';
+import { isGuestRole } from '../../permissions/guest-role';
+import type { OrgAuthenticationDenialCode } from '../../permissions/access-actor';
+import type { ExportSignInGate } from './export-sign-in-gate';
+import {
+  collectChUserSystemLogs,
+  collectChUserApiMetrics,
+  collectChUserErrorLogs,
+} from '../../observability/analytics-gdpr';
 
 type DB = NodePgDatabase<Record<string, unknown>>;
+
+/**
+ * Analytics collectors below export the UNION of both stores. The CH leg
+ * gates on CH being configured at ALL (getClickHouseGdprClient), not on the
+ * write-cutover flag — a flag rollback after rows landed in CH must not omit
+ * them from an Art 15 export (#890 Phase 3). No dedup is needed: at any
+ * moment the flag routes each new row to exactly one store, and ids are
+ * per-store cuid2s. CH read failures propagate (including the misconfigured
+ * throw): an Art 15 export must be complete or fail.
+ */
+const clickHouseClientOrNull = () => getClickHouseGdprClient();
 
 export interface UserProfileExport {
   id: string;
@@ -31,6 +70,16 @@ export interface UserDriveExport {
   name: string;
   slug: string;
   role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  /**
+   * The org this drive belongs to (Spec X-2), or null for a personal drive.
+   * Which container a drive sits in is a fact about the subject's own
+   * membership map — a member of an org drive knows where they are — and it is
+   * what makes the rest of the bundle readable: `pages.json` and `sheets.json`
+   * key on driveId, and without the org pointer an org drive is
+   * indistinguishable from a personal one in the subject's own export.
+   * The org's OTHER facts (policies, billing, domains) stay the org's data.
+   */
+  orgId: string | null;
   createdAt: Date;
 }
 
@@ -44,6 +93,45 @@ export interface UserPageExport {
   updatedAt: Date;
 }
 
+/**
+ * One tab of a spreadsheet, with its cells.
+ *
+ * Sheets stopped living in `pages.content` when they moved to a row store, so
+ * the `pages` collector — which reads that column — now returns an empty body
+ * for every SHEET page. Without this collector a subject access request would
+ * silently answer LESS than before the change, which is exactly the Art 15
+ * failure `gdpr-export-coverage.ts` was written to prevent.
+ *
+ * Both halves of each cell are carried: `raw` is what the person authored (a
+ * literal, or a formula) and `value` is what it evaluated to. Exporting only
+ * one would either hide their work or hide its result.
+ */
+export interface UserSheetExport {
+  pageId: string;
+  pageTitle: string;
+  driveId: string;
+  tabIndex: number;
+  tabName: string;
+  rowCount: number;
+  columnCount: number;
+  /**
+   * Tab-level state the subject authored: frozen panes, column formats and
+   * widths, row heights, named ranges. It is as much their work as the cell
+   * contents, and an export that returned only cells would be answering less
+   * than the sheet actually holds.
+   */
+  frozenRows: number | null;
+  frozenColumns: number | null;
+  columnFormats: unknown;
+  columnWidths: unknown;
+  rowHeights: unknown;
+  ranges: unknown;
+  rows: {
+    rowIndex: number;
+    cells: Record<string, { raw: string; value?: string | number | boolean; error?: string }>;
+  }[];
+}
+
 export interface UserMessageExport {
   id: string;
   source: 'ai_chat' | 'channel' | 'conversation' | 'direct_message';
@@ -55,6 +143,21 @@ export interface UserMessageExport {
   isActive?: boolean;
   deletedAt?: Date | null;
   createdAt: Date;
+  /** Assistant-row lifecycle state ('ai_chat'/'conversation' sources only) — explains an
+   * empty-content row as a still-streaming or interrupted placeholder rather than data loss. */
+  status?: 'streaming' | 'complete' | 'interrupted';
+  /**
+   * Files the subject attached to this message ('channel'/'direct_message'
+   * sources). The filename a person chose is their data, and a message can
+   * carry several, so exporting only the message body would leave the batch
+   * out of a subject access request entirely.
+   */
+  attachments?: Array<{
+    fileId: string | null;
+    originalName: string | null;
+    mimeType: string | null;
+    size: number | null;
+  }>;
 }
 
 export interface UserFileExport {
@@ -73,6 +176,48 @@ export interface UserActivityExport {
   resourceId: string;
   timestamp: Date;
   metadata: Record<string, unknown> | null;
+}
+
+// Excludes errorStack/ip/userAgent/sessionId/requestId/metadata — internal
+// diagnostic and network telemetry, not data about the subject's own activity.
+export interface UserSystemLogExport {
+  id: string;
+  timestamp: Date;
+  level: string;
+  message: string;
+  category: string | null;
+  endpoint: string | null;
+  method: string | null;
+  duration: number | null;
+}
+
+// Excludes ip/userAgent/sessionId/requestId/error/cache fields — internal
+// diagnostic and network telemetry, not data about the subject's own activity.
+export interface UserApiMetricExport {
+  id: string;
+  timestamp: Date;
+  endpoint: string;
+  method: string;
+  statusCode: number;
+  duration: number;
+  requestSize: number | null;
+  responseSize: number | null;
+}
+
+// Excludes stack/ip/userAgent/sessionId/requestId/metadata/resolvedBy —
+// internal diagnostic telemetry and internal admin references, not data
+// about the subject's own activity.
+export interface UserErrorLogExport {
+  id: string;
+  timestamp: Date;
+  name: string;
+  message: string;
+  endpoint: string | null;
+  method: string | null;
+  file: string | null;
+  line: number | null;
+  column: number | null;
+  resolved: boolean | null;
 }
 
 export interface UserAiUsageExport {
@@ -128,6 +273,26 @@ export interface UserDisplayPreferenceExport {
   updatedAt: Date;
 }
 
+/**
+ * The subject's own SETTINGS — hotkey bindings, automation opt-ins, toast level
+ * and per-type email opt-ins.
+ *
+ * These were excluded, on the reasoning that the subject "can read them in
+ * Settings at any time" (review finding). In-app visibility is not an Art 15
+ * basis: Art 15(3) gives a right to a COPY of the personal data undergoing
+ * processing, and being able to look at a screen does not discharge it. They
+ * are small, they are unambiguously the subject's, and exporting them removes
+ * the question entirely — which is cheaper than defending it.
+ */
+export interface UserSettingsExport {
+  hotkeys: { hotkeyId: string; binding: string; updatedAt: Date }[];
+  automation: { pulseEnabled: boolean; updatedAt: Date } | null;
+  toastNotifications: { level: string; updatedAt: Date } | null;
+  emailNotifications: { notificationType: string; emailEnabled: boolean; updatedAt: Date }[];
+  /** The subject's per-drive Imago access choices (the toggle), one row per drive they set it for. */
+  imagoDriveAccess: { driveId: string; enabled: boolean; updatedAt: Date }[];
+}
+
 export interface UserPersonalizationExport {
   bio: string | null;
   writingStyle: string | null;
@@ -137,19 +302,341 @@ export interface UserPersonalizationExport {
   updatedAt: Date;
 }
 
+/**
+ * One INFERENCE the memory cron drew about the subject, and the words of theirs
+ * it drew it from.
+ *
+ * This is the most sensitive row shape in the personalization area and the one
+ * a subject is most likely to be surprised by, so it is exported in full rather
+ * than summarised. `claim` is a machine-authored assertion ABOUT the person —
+ * derived personal data under Art 4(1), which Art 15(1)(a)-(b) covers whether
+ * or not it was ever promoted into the profile — and `evidence` is a verbatim
+ * quote of their own message that the system retained as its justification.
+ *
+ * Candidates that were rejected, or that are still awaiting corroboration, are
+ * included deliberately. "We inferred this about you, and did not act on it"
+ * is precisely the processing a subject access request exists to disclose, and
+ * withholding it would disclose only the flattering half of the record.
+ *
+ * `claimKey` is omitted: it is a lowercased, punctuation-stripped derivative of
+ * `claim` that exists solely for deduplication, so it carries no information
+ * the subject cannot already read in `claim`.
+ */
+/**
+ * One Pulse summary the AI wrote for the subject: a digest of their own workspace activity, addressed to them.
+ * `contextData` (the raw activity snapshot it was generated from) is not carried: everything in it is exported under
+ * its own category (pages, tasks, messages, notifications, calendar), and the generation metadata names no one.
+ */
+export interface UserPulseSummaryExport {
+  summary: string;
+  greeting: string | null;
+  type: string;
+  periodStart: Date;
+  periodEnd: Date;
+  generatedAt: Date;
+}
+
+/**
+ * Content the export left out because an org's sign-in policy refuses the credential that requested it (SEC-2/3,
+ * D-OW-62). Recorded in the manifest so the subject knows to sign in again (or with a passkey) and export again.
+ *
+ *   - `orgDriveContent`: the pages, sheets and tags of org drives (`count` = drives).
+ *   - `orgDriveMessages`, `orgDriveFiles`, `orgDriveTasks`, `orgDriveActivity`: what the subject wrote, uploaded, listed
+ *     or did in such a drive (`count` = messages, files, task lists, activity entries). Global AI conversations and
+ *     direct messages belong to no drive and are always carried.
+ *   - `memoryPages`: memory pages restating content distilled from org drives (`count` = pages).
+ *   - `pulseSummaries`, `personalizationCandidates`: rows derived from org drives (`count` = rows).
+ *   - `personalization`: the distilled memory (About You, Communication, Rules) in personalization.json (`count` = 1).
+ */
+export type ExportWithheldCategory =
+  | 'orgDriveContent'
+  | 'orgDriveMessages'
+  | 'orgDriveFiles'
+  | 'orgDriveTasks'
+  | 'orgDriveActivity'
+  | 'memoryPages'
+  | 'pulseSummaries'
+  | 'personalization'
+  | 'personalizationCandidates';
+
+export interface ExportWithheld {
+  category: ExportWithheldCategory;
+  count: number;
+  code: OrgAuthenticationDenialCode;
+  /** The refusing orgs, sorted. */
+  orgIds: string[];
+}
+
+export interface UserPersonalizationCandidateExport {
+  /** Which profile page this claim was staged for. */
+  field: string;
+  /** The inference itself, as written by the model. */
+  claim: string;
+  /** The subject's own words that the system retained as support for the claim. */
+  evidence: string;
+  /** Distinct days the claim was re-observed on. */
+  occurrences: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+  /** Set when the claim was written into the subject's profile. */
+  promotedAt: Date | null;
+  /** Set when the claim was evaluated and declined. */
+  rejectedAt: Date | null;
+}
+
+/**
+ * One PTY the subject opened inside a workspace.
+ *
+ * `spriteExecId` is deliberately absent: it names an exec session on a VM in
+ * OUR fleet, which is infrastructure identity rather than data about the
+ * subject — the same posture the log collectors take toward
+ * `sessionId`/`requestId`. `coldTail` IS carried: it is the subject's own
+ * terminal scrollback, i.e. their work.
+ */
+export interface UserAgentWorkspaceShellExport {
+  id: string;
+  name: string;
+  agentType: string;
+  command: string | null;
+  /** Tail of the last dead incarnation's scrollback — the subject's own terminal output. */
+  coldTail: string | null;
+  coldTailAt: Date | null;
+  /** Distinguishes "was silent" from "output overflowed the ring and left an empty tail". */
+  coldTailHasOutput: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * A working context (`agent_workspaces`) — the drive-level workspace that owns
+ * one sandbox and hosts the subject's conversations and shells.
+ *
+ * Excludes the whole Sprite identity block (`spriteKey`, `sandboxId`,
+ * `spriteInstanceId`, `egressPolicyToken`, `teardownRequestedAt`,
+ * `spriteTornDownAt`) and the storage-billing block (`storageLastBilledAt`,
+ * `storageMeasuredBytes`, `storageMeasuredAt`): every one of them describes a
+ * VM in OUR fleet and our accounting against it, not the subject's own
+ * activity. Same exclusion set, for the same reason, as the tenant migration's
+ * `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`.
+ */
+export interface UserAgentWorkspaceExport {
+  id: string;
+  /**
+   * `owner` — the subject's own workspace, carried whole.
+   *
+   * `participant` — a workspace someone ELSE owns, in which the subject ran
+   * shells of their own. The shells are the subject's data and travel; the
+   * workspace's own descriptive fields (`name`, `driveId`, its lifecycle
+   * timestamps) describe the OWNER's working context and are withheld under
+   * Art 15(4).
+   */
+  role: 'owner' | 'participant';
+  driveId: string | null;
+  name: string | null;
+  lastActiveAt: Date | null;
+  endedAt: Date | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  shells: UserAgentWorkspaceShellExport[];
+  /**
+   * The workspace's NODES — its membership and its layout, which are one thing
+   * (`agent_workspace_nodes`).
+   *
+   * Carried for an `owner` entry only, and empty for a `participant` one, under
+   * the same Art 15(4) line the shells draw: a workspace's tree says which
+   * threads and terminals it holds and where each one sits, which describes the
+   * OWNER's working context. The subject's own conversations inside someone
+   * else's workspace still travel — `collectUserMessages` exports them under
+   * its own boundary — but the other person's arrangement of them does not.
+   */
+  nodes: UserAgentWorkspaceNodeExport[];
+}
+
+/**
+ * One node of a workspace's tree: what it is, where it sits, and what it shows.
+ *
+ * `targetKind`/`targetId` are the polymorphic binding — a conversation, a
+ * shell, or a page. The ids travel because they are how the rest of the bundle
+ * joins up: without them a reader could see that a workspace held four panes
+ * and not which of their own exported conversations were in them.
+ */
+export interface UserAgentWorkspaceNodeExport {
+  id: string;
+  parentId: string | null;
+  position: number;
+  nodeType: string;
+  axis: string | null;
+  fraction: number | null;
+  targetKind: string | null;
+  targetId: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+/**
+ * A generation's checkpointed stream state (`ai_stream_sessions`).
+ *
+ * `parts` is the reason this category exists: it is a periodic snapshot of the
+ * generated `UIMessagePart[]` buffer — message CONTENT — and it is the only
+ * record of a generation that was interrupted before its assistant row was
+ * materialized.
+ *
+ * `frames` is that same content in its successor form. `ai_stream_frames` is
+ * the durable, append-only log of the raw `UIMessageChunk`s the generation
+ * emitted, and it is what `parts` becomes once the frame-log writer lands and
+ * the `parts` column is dropped. Both are carried here for exactly the span in
+ * which both can hold rows: a subject access request answered mid-migration
+ * must not depend on which side of that rollout the generation ran on.
+ *
+ * Excludes `channelId`, `browserSessionId`, `streamId`, `rawPartsCount`,
+ * `lastHeartbeatAt` and `abortRequestedAt`: multicast routing keys, client
+ * session telemetry, replay bookkeeping and liveness plumbing — the same
+ * category of internal transport detail the log collectors already strip.
+ * `displayName` is excluded too: it is the subject's own name, already carried
+ * verbatim by `profile`.
+ */
+export interface UserStreamStateExport {
+  messageId: string;
+  conversationId: string;
+  status: 'streaming' | 'complete' | 'aborted';
+  /** Checkpointed generation content. */
+  parts: unknown[];
+  /**
+   * The raw frame log for this generation, flattened into seq order across the
+   * batch rows that hold it. Empty for a generation whose frames were already
+   * swept, and — until the frame-log writer lands — for every generation.
+   */
+  frames: unknown[];
+  startedAt: Date;
+  completedAt: Date | null;
+}
+
+/**
+ * One tag the subject APPLIED — `content_tags.createdBy = userId`.
+ *
+ * The tag's `name` is joined in rather than its id: the vocabulary row belongs
+ * to the drive (`tags` is ORGANISATION_OWNED in the coverage registry), so an
+ * opaque `tagId` would disclose the act without disclosing what was said. What
+ * is the subject's here is the ACT of classification — this person said this
+ * thing is a `#risk` — and that only means anything with the word attached.
+ *
+ * The anchor is carried verbatim. For a `text` tag it holds the quoted text the
+ * subject selected, which is their own content and has no other home in the
+ * bundle.
+ */
+export interface UserContentTagExport {
+  tagName: string | null;
+  pageId: string;
+  pageTitle: string | null;
+  targetKind: string;
+  anchor: unknown;
+  anchorStatus: string | null;
+  channelMessageId: string | null;
+  aiMessageId: string | null;
+  source: string;
+  confidence: number | null;
+  createdAt: Date;
+}
+
 export interface AllUserData {
   profile: UserProfileExport;
   drives: UserDriveExport[];
   pages: UserPageExport[];
+  sheets: UserSheetExport[];
   messages: UserMessageExport[];
   files: UserFileExport[];
   activity: UserActivityExport[];
+  systemLogs: UserSystemLogExport[];
+  apiMetrics: UserApiMetricExport[];
+  errorLogs: UserErrorLogExport[];
   aiUsage: UserAiUsageExport[];
   tasks: UserTaskExport[];
   sessions: UserSessionExport[];
   notifications: UserNotificationExport[];
   displayPreferences: UserDisplayPreferenceExport[];
+  settings: UserSettingsExport;
   personalization: UserPersonalizationExport | null;
+  personalizationCandidates: UserPersonalizationCandidateExport[];
+  pulseSummaries: UserPulseSummaryExport[];
+  /** What this bundle left out under an org sign-in policy (SEC-2/3); written to the manifest, never a file. */
+  withheld: ExportWithheld[];
+  agentWorkspaces: UserAgentWorkspaceExport[];
+  agentAccounts: UserAgentAccountsExport;
+  streamState: UserStreamStateExport[];
+  contentTags: UserContentTagExport[];
+  /** Machines the subject enrolled as local environments — their own devices. */
+  localEnvironments: UserLocalEnvironmentExport[];
+  /** Orgs the subject OWNS (X-2). */
+  organizations: UserOrganizationExport[];
+  /** The subject's org life: memberships, departures, join requests, guest holds (X-2). */
+  orgMembership: UserOrgMembershipExportFile;
+  /** The subject's wallet: personal root balance, legs they funded, spend switches (X-2). */
+  wallet: UserWalletExport;
+}
+
+/**
+ * The subject's AGENT ACCOUNTS (L2·G2): the accounts they own (metadata only —
+ * the credential itself lives in the credential plane and is never exported,
+ * exactly as it is never shown), and the approvals, bindings and delegations
+ * they themselves gave. An agent page's own accounts belong to the drive, not
+ * to the person who added them, so they travel with the drive's data, not here
+ * (the Art 15(4) boundary `collectUserMessages` settled: rows the subject
+ * authored or owns).
+ */
+export type UserAgentAccountsExport = {
+  accounts: {
+    id: string;
+    kind: string;
+    name: string;
+    providerSlug: string | null;
+    allowedOrigins: string[];
+    acknowledgment: string;
+    status: string;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+    revokedAt: Date | null;
+  }[];
+  approvalsGiven: { id: string; accountId: string; outcome: string; createdAt: Date; expiresAt: Date; consumedAt: Date | null }[];
+  bindingsMade: { accountId: string; agentPageId: string; boundAt: Date; revokedAt: Date | null }[];
+  delegationsGiven: { id: string; accountId: string; agentPageId: string | null; expiresAt: Date; createdAt: Date; revokedAt: Date | null }[];
+};
+
+/** Bounded like every other collector's worst case; a person's accounts and decisions are few. */
+const AGENT_ACCOUNT_EXPORT_LIMIT = 10_000;
+
+export async function collectUserAgentAccounts(database: DB, userId: string): Promise<UserAgentAccountsExport> {
+  const accounts = await database
+    .select({
+      id: agentAccounts.id,
+      kind: agentAccounts.kind,
+      name: agentAccounts.name,
+      providerSlug: agentAccounts.providerSlug,
+      allowedOrigins: agentAccounts.allowedOrigins,
+      acknowledgment: agentAccounts.acknowledgment,
+      status: agentAccounts.status,
+      lastUsedAt: agentAccounts.lastUsedAt,
+      createdAt: agentAccounts.createdAt,
+      revokedAt: agentAccounts.revokedAt,
+    })
+    .from(agentAccounts)
+    .where(eq(agentAccounts.ownerUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const approvalsGiven = await database
+    .select({ id: agentAccountApprovals.id, accountId: agentAccountApprovals.accountId, outcome: agentAccountApprovals.outcome, createdAt: agentAccountApprovals.createdAt, expiresAt: agentAccountApprovals.expiresAt, consumedAt: agentAccountApprovals.consumedAt })
+    .from(agentAccountApprovals)
+    .where(eq(agentAccountApprovals.approvedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const bindingsMade = await database
+    .select({ accountId: agentAccountBindings.accountId, agentPageId: agentAccountBindings.agentPageId, boundAt: agentAccountBindings.boundAt, revokedAt: agentAccountBindings.revokedAt })
+    .from(agentAccountBindings)
+    .where(eq(agentAccountBindings.boundByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  const delegationsGiven = await database
+    .select({ id: agentAccountDelegations.id, accountId: agentAccountDelegations.accountId, agentPageId: agentAccountDelegations.agentPageId, expiresAt: agentAccountDelegations.expiresAt, createdAt: agentAccountDelegations.createdAt, revokedAt: agentAccountDelegations.revokedAt })
+    .from(agentAccountDelegations)
+    .where(eq(agentAccountDelegations.delegatedByUserId, userId))
+    .limit(AGENT_ACCOUNT_EXPORT_LIMIT);
+  return { accounts: accounts.map((row) => ({ ...row, allowedOrigins: [...row.allowedOrigins] })), approvalsGiven, bindingsMade, delegationsGiven };
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -167,7 +654,8 @@ export async function collectUserProfile(database: DB, userId: string): Promise<
     .where(eq(users.id, userId))
     .limit(1);
 
-  return result[0] ?? null;
+  // Decrypt PII at the edge so the export contains plaintext email/name.
+  return result[0] ? decryptUserRow(result[0]) : null;
 }
 
 export async function collectUserDrives(database: DB, userId: string): Promise<UserDriveExport[]> {
@@ -177,6 +665,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       createdAt: drives.createdAt,
     })
     .from(drives)
@@ -193,6 +682,7 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
       id: drives.id,
       name: drives.name,
       slug: drives.slug,
+      orgId: drives.orgId,
       role: driveMembers.role,
       createdAt: drives.createdAt,
     })
@@ -200,13 +690,19 @@ export async function collectUserDrives(database: DB, userId: string): Promise<U
     .innerJoin(drives, eq(driveMembers.driveId, drives.id))
     .where(eq(driveMembers.userId, userId));
 
-  const members: UserDriveExport[] = memberDrives.map(d => ({
-    id: d.id,
-    name: d.name,
-    slug: d.slug,
-    role: d.role,
-    createdAt: d.createdAt,
-  }));
+  // A GUEST row (redeemed page share link) is not a drive the subject belongs
+  // to: every drive listed here has its pages, sheets and tags exported below,
+  // and a guest was given single pages of it, not its content.
+  const members: UserDriveExport[] = memberDrives
+    .filter((d): d is typeof d & { role: UserDriveExport['role'] } => !isGuestRole(d.role))
+    .map(d => ({
+      id: d.id,
+      name: d.name,
+      slug: d.slug,
+      orgId: d.orgId,
+      role: d.role,
+      createdAt: d.createdAt,
+    }));
 
   // Deduplicate (owner is also a member)
   const seen = new Set(owned.map(d => d.id));
@@ -243,33 +739,160 @@ export async function collectUserPages(
     .where(inArray(pages.driveId, driveIds));
 }
 
-export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
-  const result: UserMessageExport[] = [];
+/**
+ * Every sheet in the subject's drives, tab by tab.
+ *
+ * Rows are read in pages rather than one query: a sheet is now allowed to hold
+ * hundreds of thousands of rows, and an unbounded select over all of them would
+ * be the kind of memory spike that takes the export down. Nothing is truncated
+ * — an Art 15 response that silently drops rows is worse than a slow one.
+ */
+export async function collectUserSheets(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserSheetExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+  if (driveIds.length === 0) return [];
 
-  // AI chat messages (chatMessages table)
-  const aiChats = await database
+  const tabs = await database
     .select({
-      id: chatMessages.id,
-      content: chatMessages.content,
-      role: chatMessages.role,
-      pageId: chatMessages.pageId,
-      conversationId: chatMessages.conversationId,
-      createdAt: chatMessages.createdAt,
+      tabId: sheetTabs.id,
+      pageId: sheetTabs.pageId,
+      pageTitle: pages.title,
+      driveId: pages.driveId,
+      tabIndex: sheetTabs.tabIndex,
+      tabName: sheetTabs.name,
+      rowCount: sheetTabs.rowCount,
+      columnCount: sheetTabs.columnCount,
+      frozenRows: sheetTabs.frozenRows,
+      frozenColumns: sheetTabs.frozenColumns,
+      columnFormats: sheetTabs.columnFormats,
+      columnWidths: sheetTabs.columnWidths,
+      rowHeights: sheetTabs.rowHeights,
+      ranges: sheetTabs.ranges,
     })
-    .from(chatMessages)
-    .where(eq(chatMessages.userId, userId));
+    .from(sheetTabs)
+    .innerJoin(pages, eq(sheetTabs.pageId, pages.id))
+    .where(inArray(pages.driveId, driveIds));
 
-  for (const msg of aiChats) {
-    result.push({
-      id: msg.id,
-      source: 'ai_chat',
-      content: msg.content,
-      role: msg.role,
-      pageId: msg.pageId,
-      conversationId: msg.conversationId,
-      createdAt: msg.createdAt,
+  const PAGE_SIZE = 2000;
+  const out: UserSheetExport[] = [];
+
+  for (const tab of tabs) {
+    const rows: UserSheetExport['rows'] = [];
+    let cursor = 0;
+
+    for (;;) {
+      const batch = await database
+        .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+        .from(sheetRows)
+        .where(and(eq(sheetRows.tabId, tab.tabId), gte(sheetRows.rowIndex, cursor)))
+        .orderBy(asc(sheetRows.rowIndex))
+        .limit(PAGE_SIZE);
+
+      if (batch.length === 0) break;
+
+      for (const row of batch) {
+        const cells: UserSheetExport['rows'][number]['cells'] = {};
+        for (const [label, cell] of Object.entries(row.cells ?? {})) {
+          cells[label] = {
+            raw: cell.raw,
+            ...(cell.value !== undefined ? { value: cell.value } : {}),
+            ...(cell.error ? { error: cell.error.type } : {}),
+          };
+        }
+        rows.push({ rowIndex: row.rowIndex, cells });
+      }
+
+      cursor = batch[batch.length - 1].rowIndex + 1;
+      if (batch.length < PAGE_SIZE) break;
+    }
+
+    out.push({
+      pageId: tab.pageId,
+      pageTitle: tab.pageTitle,
+      driveId: tab.driveId,
+      tabIndex: tab.tabIndex,
+      tabName: tab.tabName,
+      rowCount: tab.rowCount,
+      columnCount: tab.columnCount,
+      frozenRows: tab.frozenRows,
+      frozenColumns: tab.frozenColumns,
+      columnFormats: tab.columnFormats,
+      columnWidths: tab.columnWidths,
+      rowHeights: tab.rowHeights,
+      ranges: tab.ranges,
+      rows,
     });
   }
+
+  return out;
+}
+
+/**
+ * How many message ids one attachment lookup may bind.
+ *
+ * Drizzle expands every `inArray` value into its own bind parameter, and
+ * Postgres caps a statement at 65535 of them — a subject with that many
+ * messages would otherwise fail the whole export with an opaque `08P01`
+ * protocol error instead of exercising their Art 15 right.
+ */
+const ATTACHMENT_LOOKUP_CHUNK = 500;
+
+/**
+ * Group a message table's attachment rows by messageId.
+ *
+ * Shared by the channel and DM branches because the two attachment tables are
+ * mirrors of each other; keeping one reader means an Art 15 gap cannot open on
+ * one surface while the other stays correct.
+ */
+async function collectAttachments(
+  database: DB,
+  table: typeof channelMessageAttachments | typeof directMessageAttachments,
+  messageIds: string[],
+): Promise<Map<string, NonNullable<UserMessageExport['attachments']>>> {
+  const byMessage = new Map<string, NonNullable<UserMessageExport['attachments']>>();
+  if (messageIds.length === 0) return byMessage;
+
+  const rows: Array<{
+    messageId: string;
+    fileId: string | null;
+    attachmentMeta: AttachmentMeta | null;
+    position: number;
+  }> = [];
+  for (let i = 0; i < messageIds.length; i += ATTACHMENT_LOOKUP_CHUNK) {
+    const chunk = messageIds.slice(i, i + ATTACHMENT_LOOKUP_CHUNK);
+    const chunkRows = await database
+      .select({
+        messageId: table.messageId,
+        fileId: table.fileId,
+        attachmentMeta: table.attachmentMeta,
+        position: table.position,
+      })
+      .from(table)
+      .where(inArray(table.messageId, chunk));
+    rows.push(...chunkRows);
+  }
+
+  // Sorted across the whole result, not per chunk: a message's rows all land in
+  // one chunk (chunking is by message id), so this restores display order.
+  for (const row of [...rows].sort((a, b) => a.position - b.position)) {
+    const list = byMessage.get(row.messageId) ?? [];
+    list.push({
+      fileId: row.fileId,
+      originalName: row.attachmentMeta?.originalName ?? null,
+      mimeType: row.attachmentMeta?.mimeType ?? null,
+      size: row.attachmentMeta?.size ?? null,
+    });
+    byMessage.set(row.messageId, list);
+  }
+
+  return byMessage;
+}
+
+export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
+  const result: UserMessageExport[] = [];
 
   // Channel messages
   const channelMsgs = await database
@@ -282,6 +905,15 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(channelMessages)
     .where(eq(channelMessages.userId, userId));
 
+  // Attachment rows carry the filename the subject chose, which is their data
+  // and lives in no other table. Fetched per batch rather than per message so
+  // a prolific subject does not turn the export into N+1 queries.
+  const channelAttachmentsByMessage = await collectAttachments(
+    database,
+    channelMessageAttachments,
+    channelMsgs.map((msg) => msg.id),
+  );
+
   for (const msg of channelMsgs) {
     result.push({
       id: msg.id,
@@ -289,10 +921,43 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       content: msg.content,
       pageId: msg.pageId,
       createdAt: msg.createdAt,
+      attachments: channelAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
-  // Conversation messages (unified conversations table)
+  /**
+   * Chat messages — one table, every kind of thread (epic "Agent-Session
+   * Single Source of Truth", Phase 4 / D6).
+   *
+   * ── Why the predicate is not just `messages.userId = :subject` ──────────
+   * `userId` is the HUMAN author and is NULL for every agent/system-authored
+   * row (page-chat assistant replies, `/help` answers, consult and worker
+   * dispatches; `sourceAgentId` names the agent when known). Filtering on
+   * `userId` alone exported the subject's questions and dropped every answer
+   * inside their own page chats — while the same answer in a GLOBAL
+   * conversation WAS exported, because the global writer stamps the owner's
+   * id on assistant rows. That asymmetry is an Art 15 completeness gap, and
+   * unification made it uniform rather than creating it.
+   *
+   * So the export is the union of:
+   *   1. rows the subject AUTHORED (`messages.userId = :subject`) — wherever
+   *      they live, including a conversation someone else owns (a shared
+   *      page conversation accepts messages from any member who can access
+   *      it), and
+   *   2. rows with NO human author that sit in a conversation the subject
+   *      OWNS — the agent/system side of the subject's own threads.
+   *
+   * It deliberately stops there. Rows authored by ANOTHER human inside the
+   * subject's shared conversation stay out: they are that person's data, and
+   * Art 15(4) says a subject's access right must not adversely affect the
+   * rights of others. `conversations.userId` alone would have swept them in
+   * (multi-author legacy conversations exist — 0249's orphan synthesis logs
+   * how many it found, "earliest human author wins").
+   *
+   * The join is INNER by design: `messages.conversationId` carries a real,
+   * VALIDATED FK to `conversations`, so a message with no conversation row
+   * cannot exist and the join cannot silently drop one.
+   */
   const convMsgs = await database
     .select({
       id: messages.id,
@@ -300,18 +965,45 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       role: messages.role,
       conversationId: messages.conversationId,
       createdAt: messages.createdAt,
+      status: messages.status,
+      conversationType: conversations.type,
+      conversationContextId: conversations.contextId,
+      conversationAgentPageId: conversations.agentPageId,
     })
     .from(messages)
-    .where(eq(messages.userId, userId));
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(
+      or(
+        eq(messages.userId, userId),
+        and(isNull(messages.userId), eq(conversations.userId, userId)),
+      )
+    );
 
   for (const msg of convMsgs) {
+    const isGlobal = msg.conversationType === 'global';
     result.push({
       id: msg.id,
-      source: 'conversation',
+      // The export vocabulary predates the merge and is kept: a page/client
+      // thread is still reported as 'ai_chat', a global thread as
+      // 'conversation'. One physical table, two documented sources.
+      source: isGlobal ? 'conversation' : 'ai_chat',
       content: msg.content,
       role: msg.role,
+      // The page comes from the CONVERSATION — there is no per-row page
+      // column. Each kind names it in its own place: `type='page'` in
+      // `contextId`, `type='client'` in `agentPageId` (its `contextId` is a
+      // DRIVE). Anything else — a global thread, or an API thread that never
+      // ran a completion — reports no pageId rather than a wrong one.
+      ...(() => {
+        const derived =
+          msg.conversationType === 'page' ? msg.conversationContextId
+          : msg.conversationType === 'client' ? msg.conversationAgentPageId
+          : null;
+        return derived ? { pageId: derived } : {};
+      })(),
       conversationId: msg.conversationId,
       createdAt: msg.createdAt,
+      status: msg.status,
     });
   }
 
@@ -328,6 +1020,16 @@ export async function collectUserMessages(database: DB, userId: string): Promise
     .from(directMessages)
     .where(eq(directMessages.senderId, userId));
 
+  // Only the SENT branch carries attachments: a received message's filename is
+  // the other participant's data, and Art 15(4) says the subject's access right
+  // must not adversely affect the rights of others — the same reasoning the
+  // conversation branch above applies to other authors' rows.
+  const dmAttachmentsByMessage = await collectAttachments(
+    database,
+    directMessageAttachments,
+    sentDms.map((msg) => msg.id),
+  );
+
   for (const msg of sentDms) {
     result.push({
       id: msg.id,
@@ -338,6 +1040,7 @@ export async function collectUserMessages(database: DB, userId: string): Promise
       isActive: msg.isActive,
       deletedAt: msg.deletedAt,
       createdAt: msg.createdAt,
+      attachments: dmAttachmentsByMessage.get(msg.id) ?? [],
     });
   }
 
@@ -404,7 +1107,10 @@ export async function collectUserFiles(database: DB, userId: string): Promise<Us
   return result;
 }
 
-export async function collectUserActivity(database: DB, userId: string): Promise<UserActivityExport[]> {
+/** An activity entry as collected, with the drive and page it happened in; the gate strips them. */
+export type CollectedActivity = UserActivityExport & { driveId: string | null; pageId: string | null };
+
+export async function collectUserActivity(database: DB, userId: string): Promise<CollectedActivity[]> {
   const result = await database
     .select({
       id: activityLogs.id,
@@ -413,11 +1119,91 @@ export async function collectUserActivity(database: DB, userId: string): Promise
       resourceId: activityLogs.resourceId,
       timestamp: activityLogs.timestamp,
       metadata: activityLogs.metadata,
+      driveId: activityLogs.driveId,
+      pageId: activityLogs.pageId,
     })
     .from(activityLogs)
     .where(eq(activityLogs.userId, userId));
 
   return result;
+}
+
+export async function collectUserSystemLogs(database: DB, userId: string): Promise<UserSystemLogExport[]> {
+  const result = await database
+    .select({
+      id: systemLogs.id,
+      timestamp: systemLogs.timestamp,
+      level: systemLogs.level,
+      message: systemLogs.message,
+      category: systemLogs.category,
+      endpoint: systemLogs.endpoint,
+      method: systemLogs.method,
+      duration: systemLogs.duration,
+    })
+    .from(systemLogs)
+    .where(eq(systemLogs.userId, userId));
+
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+  return [...result, ...(await collectChUserSystemLogs(client, userId))];
+}
+
+export async function collectUserApiMetrics(database: DB, userId: string): Promise<UserApiMetricExport[]> {
+  const result = await database
+    .select({
+      id: apiMetrics.id,
+      timestamp: apiMetrics.timestamp,
+      endpoint: apiMetrics.endpoint,
+      method: apiMetrics.method,
+      statusCode: apiMetrics.statusCode,
+      duration: apiMetrics.duration,
+      requestSize: apiMetrics.requestSize,
+      responseSize: apiMetrics.responseSize,
+    })
+    .from(apiMetrics)
+    .where(eq(apiMetrics.userId, userId));
+
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+  return [...result, ...(await collectChUserApiMetrics(client, userId))];
+}
+
+export async function collectUserErrorLogs(database: DB, userId: string): Promise<UserErrorLogExport[]> {
+  const result = await database
+    .select({
+      id: errorLogs.id,
+      timestamp: errorLogs.timestamp,
+      name: errorLogs.name,
+      message: errorLogs.message,
+      endpoint: errorLogs.endpoint,
+      method: errorLogs.method,
+      file: errorLogs.file,
+      line: errorLogs.line,
+      column: errorLogs.column,
+      resolved: errorLogs.resolved,
+    })
+    .from(errorLogs)
+    .where(eq(errorLogs.userId, userId));
+
+  const client = clickHouseClientOrNull();
+  if (!client) return result;
+
+  const chRows = await collectChUserErrorLogs(client, userId);
+  if (chRows.length === 0) return result;
+
+  // CH rows carry no resolution state — the resolved flag lives in the
+  // error_resolutions mini-table in main PG (cross-store two-step, leaf 3).
+  const resolutionRows = await database
+    .select({ errorId: errorResolutions.errorId, resolved: errorResolutions.resolved })
+    .from(errorResolutions)
+    .where(inArray(errorResolutions.errorId, chRows.map((r) => r.id)));
+  const resolvedById = new Map(resolutionRows.map((r) => [r.errorId, r.resolved]));
+
+  return [
+    ...result,
+    // No workflow row = never resolved (false, matching the PG column default).
+    ...chRows.map((r) => ({ ...r, resolved: resolvedById.get(r.id) ?? false })),
+  ];
 }
 
 export async function collectUserAiUsage(database: DB, userId: string): Promise<UserAiUsageExport[]> {
@@ -437,10 +1223,14 @@ export async function collectUserAiUsage(database: DB, userId: string): Promise<
   return result;
 }
 
-export async function collectUserTasks(database: DB, userId: string): Promise<UserTaskExport[]> {
+/** A task list as collected, with the page it lives on (null for a conversation's list); the gate strips it. */
+export type CollectedTaskList = UserTaskExport & { pageId: string | null };
+
+export async function collectUserTasks(database: DB, userId: string): Promise<CollectedTaskList[]> {
   const lists = await database
     .select({
       id: taskLists.id,
+      pageId: taskLists.pageId,
       title: taskLists.title,
     })
     .from(taskLists)
@@ -448,31 +1238,41 @@ export async function collectUserTasks(database: DB, userId: string): Promise<Us
 
   if (lists.length === 0) return [];
 
-  const listIds = lists.map(l => l.id);
+  const listPageIds = lists.map(l => l.pageId).filter((id): id is string => id != null);
+
+  if (listPageIds.length === 0) {
+    return lists.map(list => ({ listId: list.id, listTitle: list.title, pageId: list.pageId ?? null, items: [] }));
+  }
+
   const allItems = await database
     .select({
       id: taskItems.id,
       title: pages.title,
       status: taskItems.status,
       priority: taskItems.priority,
-      taskListId: taskItems.taskListId,
+      taskListPageId: pages.parentId,
       createdAt: taskItems.createdAt,
     })
     .from(taskItems)
     .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(inArray(taskItems.taskListId, listIds));
+    .where(and(
+      inArray(pages.parentId, listPageIds),
+      eq(pages.isTrashed, false),
+    ));
 
-  const itemsByList = new Map<string, typeof allItems>();
+  const itemsByListPageId = new Map<string, typeof allItems>();
   for (const item of allItems) {
-    const existing = itemsByList.get(item.taskListId) ?? [];
+    if (!item.taskListPageId) continue;
+    const existing = itemsByListPageId.get(item.taskListPageId) ?? [];
     existing.push(item);
-    itemsByList.set(item.taskListId, existing);
+    itemsByListPageId.set(item.taskListPageId, existing);
   }
 
   return lists.map(list => ({
     listId: list.id,
     listTitle: list.title,
-    items: (itemsByList.get(list.id) ?? []).map(item => ({
+    pageId: list.pageId ?? null,
+    items: (itemsByListPageId.get(list.pageId ?? '') ?? []).map(item => ({
       id: item.id,
       title: item.title,
       status: item.status,
@@ -533,7 +1333,58 @@ export async function collectUserDisplayPreferences(database: DB, userId: string
     .where(eq(displayPreferences.userId, userId));
 }
 
-export async function collectUserPersonalization(database: DB, userId: string): Promise<UserPersonalizationExport | null> {
+/** Every settings row the subject owns, in one Art 15 category. */
+export async function collectUserSettings(database: DB, userId: string): Promise<UserSettingsExport> {
+  const [hotkeys, automation, toast, email, imagoAccess] = await Promise.all([
+    database
+      .select({ hotkeyId: userHotkeyPreferences.hotkeyId, binding: userHotkeyPreferences.binding, updatedAt: userHotkeyPreferences.updatedAt })
+      .from(userHotkeyPreferences)
+      .where(eq(userHotkeyPreferences.userId, userId)),
+    database
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled, updatedAt: userAutomationPreferences.updatedAt })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId)),
+    database
+      .select({ level: userToastNotificationPreferences.level, updatedAt: userToastNotificationPreferences.updatedAt })
+      .from(userToastNotificationPreferences)
+      .where(eq(userToastNotificationPreferences.userId, userId)),
+    database
+      .select({ notificationType: emailNotificationPreferences.notificationType, emailEnabled: emailNotificationPreferences.emailEnabled, updatedAt: emailNotificationPreferences.updatedAt })
+      .from(emailNotificationPreferences)
+      .where(eq(emailNotificationPreferences.userId, userId)),
+    database
+      .select({ driveId: imagoDriveAccess.driveId, enabled: imagoDriveAccess.enabled, updatedAt: imagoDriveAccess.updatedAt })
+      .from(imagoDriveAccess)
+      .where(eq(imagoDriveAccess.userId, userId)),
+  ]);
+  return {
+    hotkeys,
+    // Both are unique-per-user, so at most one row each; null means "never set",
+    // which is a different fact from the default and worth preserving.
+    automation: automation[0] ?? null,
+    toastNotifications: toast[0] ?? null,
+    emailNotifications: email,
+    imagoDriveAccess: imagoAccess,
+  };
+}
+
+/**
+ * The subject's personalization profile.
+ *
+ * The content lives as pages in their Home drive; the bio/writingStyle/rules
+ * COLUMNS are only a fallback for users the backfill has not reached, and are
+ * cleared once a page holds the content. Reading the columns alone would
+ * therefore return three nulls for every migrated user and quietly understate
+ * the profile — so this resolves the page pointers and reads the pages, falling
+ * back to the column only where no pointer exists.
+ *
+ * The pages are ALSO carried in `pages.json` (they are ordinary pages in a
+ * drive the subject owns). That duplication is deliberate: this file is where a
+ * reader looks to answer "what does the AI know about me?", and a category that
+ * silently emptied itself after a migration is exactly the kind of omission the
+ * export coverage guard exists to prevent.
+ */
+export async function collectUserPersonalization(database: DB, userId: string): Promise<CollectedPersonalization | null> {
   const result = await database
     .select({
       bio: userPersonalization.bio,
@@ -542,46 +1393,1047 @@ export async function collectUserPersonalization(database: DB, userId: string): 
       enabled: userPersonalization.enabled,
       createdAt: userPersonalization.createdAt,
       updatedAt: userPersonalization.updatedAt,
+      bioPageId: userPersonalization.bioPageId,
+      writingStylePageId: userPersonalization.writingStylePageId,
+      rulesPageId: userPersonalization.rulesPageId,
+      memoryOrgIds: userPersonalization.memoryOrgIds,
     })
     .from(userPersonalization)
     .where(eq(userPersonalization.userId, userId))
     .limit(1);
 
-  return result[0] ?? null;
+  const row = result[0];
+  if (!row) return null;
+
+  const { bioPageId, writingStylePageId, rulesPageId, memoryOrgIds, ...profile } = row;
+  // Truthiness, not `!== null`: a pointer can arrive undefined as well as null
+  // (an older row, or a projection that omits the column), and an undefined id
+  // would otherwise reach `inArray` as a phantom lookup.
+  const pageIds = [bioPageId, writingStylePageId, rulesPageId].filter(
+    (id): id is string => Boolean(id),
+  );
+
+  const provenance = { memoryOrgIds: memoryOrgIds ?? [] };
+  if (pageIds.length === 0) return { ...profile, ...provenance };
+
+  const memoryPages = await database
+    .select({ id: pages.id, content: pages.content, isTrashed: pages.isTrashed })
+    .from(pages)
+    .where(inArray(pages.id, pageIds));
+
+  // A trashed page is content the subject deleted; report it as absent rather
+  // than disclosing what they removed.
+  const contentById = new Map(
+    memoryPages.filter((p) => !p.isTrashed).map((p) => [p.id, p.content ?? '']),
+  );
+
+  return {
+    ...profile,
+    bio: bioPageId ? (contentById.get(bioPageId) ?? null) : profile.bio,
+    writingStyle: writingStylePageId
+      ? (contentById.get(writingStylePageId) ?? null)
+      : profile.writingStyle,
+    rules: rulesPageId ? (contentById.get(rulesPageId) ?? null) : profile.rules,
+    ...provenance,
+  };
 }
 
-export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
+/** The profile as collected, with the orgs its distilled memory drew on (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalization = UserPersonalizationExport & { memoryOrgIds: string[] };
+
+/**
+ * Every inference the memory cron staged about the subject — promoted, declined
+ * and still-pending alike.
+ *
+ * Sorted oldest-first in memory rather than with `ORDER BY` so the query shape
+ * stays identical to every other collector here (select/from/where). The row
+ * count is bounded by what one user's discovery passes produce, so the sort is
+ * trivial, and matching the shared shape keeps this collector working with the
+ * same test harness as its neighbours.
+ */
+export async function collectUserPersonalizationCandidates(
+  database: DB,
+  userId: string,
+): Promise<CollectedPersonalizationCandidate[]> {
+  const rows = await database
+    .select({
+      field: personalizationCandidates.field,
+      claim: personalizationCandidates.claim,
+      evidence: personalizationCandidates.evidence,
+      occurrences: personalizationCandidates.occurrences,
+      firstSeenAt: personalizationCandidates.firstSeenAt,
+      lastSeenAt: personalizationCandidates.lastSeenAt,
+      promotedAt: personalizationCandidates.promotedAt,
+      rejectedAt: personalizationCandidates.rejectedAt,
+      orgIds: personalizationCandidates.orgIds,
+    })
+    .from(personalizationCandidates)
+    .where(eq(personalizationCandidates.userId, userId));
+
+  return [...rows].sort(
+    (a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime(),
+  );
+}
+
+/** A candidate as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPersonalizationCandidate = UserPersonalizationCandidateExport & { orgIds: string[] };
+
+/** A Pulse summary as collected, with the orgs whose drives fed it (D-OW-62); the gate strips the provenance. */
+export type CollectedPulseSummary = UserPulseSummaryExport & { orgIds: string[] };
+
+/** Every Pulse summary written for the subject, oldest first (in memory, as for candidates). */
+export async function collectUserPulseSummaries(database: DB, userId: string): Promise<CollectedPulseSummary[]> {
+  const rows = await database
+    .select({
+      summary: pulseSummaries.summary,
+      greeting: pulseSummaries.greeting,
+      type: pulseSummaries.type,
+      periodStart: pulseSummaries.periodStart,
+      periodEnd: pulseSummaries.periodEnd,
+      generatedAt: pulseSummaries.generatedAt,
+      orgIds: pulseSummaries.orgIds,
+    })
+    .from(pulseSummaries)
+    .where(eq(pulseSummaries.userId, userId));
+  return [...rows].sort((a, b) => new Date(a.generatedAt).getTime() - new Date(b.generatedAt).getTime());
+}
+
+/**
+ * The subject's WORKING CONTEXTS and the shells inside them.
+ *
+ * ── Why this collector exists ────────────────────────────────────────────────
+ * The epic "Agent-Session Single Source of Truth" moved a large amount of the
+ * subject's actual work into `agent_workspaces` / `agent_workspace_shells`.
+ * Nothing collected either one, so a subject access request answered LESS after
+ * the epic than before it, in a product where the workspace and its shells ARE
+ * the work. The asymmetry was sharpest against erasure: `purge-stream-state`
+ * and the `users` cascade already REACH this content on an Art 17 request. We
+ * were deleting on demand what we would not disclose on demand.
+ *
+ * ── The Art 15(4) boundary ──────────────────────────────────────────────────
+ * Exactly the rule `collectUserMessages` settled on: rows the subject
+ * AUTHORED, wherever they live — never another person's rows just because they
+ * sit in a container the subject owns.
+ *
+ *   - Workspaces: `ownerId = :subject`.
+ *   - Shells: `ownerId = :subject`. A shell's `ownerId` is the ACTING user
+ *     (`spawnSessionShell` takes it from the caller), which in a SHARED
+ *     workspace is not necessarily the workspace's owner. So the subject's own
+ *     shell inside someone else's workspace travels — as a `participant` entry
+ *     carrying the shells and nothing descriptive about the other person's
+ *     workspace — and another member's shell inside the SUBJECT's workspace
+ *     does NOT. The threads themselves are bound by `agent_workspace_nodes`,
+ *     and `collectUserMessages` already exports them under its own boundary.
+ */
+export async function collectUserAgentWorkspaces(
+  database: DB,
+  userId: string,
+): Promise<UserAgentWorkspaceExport[]> {
+  const ownedWorkspaces = await database
+    .select({
+      id: agentWorkspaces.id,
+      driveId: agentWorkspaces.driveId,
+      name: agentWorkspaces.name,
+      lastActiveAt: agentWorkspaces.lastActiveAt,
+      endedAt: agentWorkspaces.endedAt,
+      createdAt: agentWorkspaces.createdAt,
+      updatedAt: agentWorkspaces.updatedAt,
+    })
+    .from(agentWorkspaces)
+    .where(eq(agentWorkspaces.ownerId, userId));
+
+  const ownedShells = await database
+    .select({
+      id: agentWorkspaceShells.id,
+      workspaceId: agentWorkspaceShells.workspaceId,
+      name: agentWorkspaceShells.name,
+      agentType: agentWorkspaceShells.agentType,
+      command: agentWorkspaceShells.command,
+      coldTail: agentWorkspaceShells.coldTail,
+      coldTailAt: agentWorkspaceShells.coldTailAt,
+      coldTailHasOutput: agentWorkspaceShells.coldTailHasOutput,
+      createdAt: agentWorkspaceShells.createdAt,
+      updatedAt: agentWorkspaceShells.updatedAt,
+    })
+    .from(agentWorkspaceShells)
+    .where(eq(agentWorkspaceShells.ownerId, userId));
+
+  const shellsByWorkspace = new Map<string, UserAgentWorkspaceShellExport[]>();
+  for (const shell of ownedShells) {
+    const { workspaceId, ...rest } = shell;
+    const bucket = shellsByWorkspace.get(workspaceId) ?? [];
+    bucket.push(rest);
+    shellsByWorkspace.set(workspaceId, bucket);
+  }
+
+  // The owned workspaces' trees — membership AND layout, which stopped being
+  // two things. One query for all of them; a workspace with no tree yet simply
+  // has no rows.
+  const ownedIdList = ownedWorkspaces.map((workspace) => workspace.id);
+  const ownedNodes =
+    ownedIdList.length === 0
+      ? []
+      : await database
+          .select({
+            rootId: agentWorkspaceNodes.rootId,
+            id: agentWorkspaceNodes.id,
+            parentId: agentWorkspaceNodes.parentId,
+            position: agentWorkspaceNodes.position,
+            nodeType: agentWorkspaceNodes.nodeType,
+            axis: agentWorkspaceNodes.axis,
+            fraction: agentWorkspaceNodes.fraction,
+            targetKind: agentWorkspaceNodes.targetKind,
+            targetId: agentWorkspaceNodes.targetId,
+            createdAt: agentWorkspaceNodes.createdAt,
+            updatedAt: agentWorkspaceNodes.updatedAt,
+          })
+          .from(agentWorkspaceNodes)
+          .where(inArray(agentWorkspaceNodes.rootId, ownedIdList));
+
+  const nodesByWorkspace = new Map<string, UserAgentWorkspaceNodeExport[]>();
+  for (const node of ownedNodes) {
+    const { rootId, ...rest } = node;
+    const bucket = nodesByWorkspace.get(rootId) ?? [];
+    bucket.push(rest);
+    nodesByWorkspace.set(rootId, bucket);
+  }
+
+  const result: UserAgentWorkspaceExport[] = ownedWorkspaces.map((workspace) => ({
+    ...workspace,
+    role: 'owner' as const,
+    shells: shellsByWorkspace.get(workspace.id) ?? [],
+    nodes: nodesByWorkspace.get(workspace.id) ?? [],
+  }));
+
+  // Subject-owned shells that live in somebody else's workspace. The shells are
+  // the subject's data and must not be dropped; the host workspace's own
+  // fields are the OWNER's and are withheld (Art 15(4)).
+  const ownedIds = new Set(ownedWorkspaces.map((w) => w.id));
+  for (const [workspaceId, shells] of shellsByWorkspace) {
+    if (ownedIds.has(workspaceId)) continue;
+    result.push({
+      id: workspaceId,
+      role: 'participant',
+      driveId: null,
+      name: null,
+      lastActiveAt: null,
+      endedAt: null,
+      createdAt: null,
+      updatedAt: null,
+      shells,
+      // Withheld with the rest of the host workspace's description — the tree
+      // is the OWNER's arrangement of their own working context, and the
+      // subject's presence in it as a shell operator does not make it theirs.
+      nodes: [],
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Checkpointed generation state (`ai_stream_sessions`).
+ *
+ * ── Why the predicate is not just `ai_stream_sessions.user_id = :subject` ────
+ * Same shape as `collectUserMessages`, for the same reason. `user_id` is the
+ * human who triggered the generation, and the union is:
+ *
+ *   1. rows the subject TRIGGERED (`user_id = :subject`) — wherever they live,
+ *      including a shared conversation someone else owns; and
+ *   2. rows with NO human trigger — a `user_id` that matches no `users` row,
+ *      i.e. a service/agent actor such as a dispatched worker — that sit in a
+ *      conversation the subject OWNS.
+ *
+ * Leg 2 is the same Art 15 hole the epic already closed for `messages`: the
+ * agent side of the subject's own thread must not vanish from their export
+ * merely because no person authored it. It is expressed as "no matching `users`
+ * row" rather than "NULL" because this column is NOT NULL — an agent actor
+ * carries an id that simply is not a person's.
+ *
+ * It stops there. A row triggered by ANOTHER HUMAN inside the subject's shared
+ * conversation stays out: `parts` is that person's generated content, and
+ * Art 15(4) forbids letting one subject's access right override another's.
+ *
+ * ── Why `ai_stream_frames` rides this collector rather than its own ──────────
+ * The frame log has no `user_id` of its own; it is keyed by `message_id` and
+ * carries `conversation_id` solely to inherit the cascade. So the only thing
+ * that can say whose content a frame is, is the session row for its
+ * `message_id` — which means the disclosure boundary above is already the
+ * correct one, and a separate collector would have to re-derive it. Fetching
+ * frames for exactly the sessions this collector returns keeps the Art 15(4)
+ * line in ONE place: a generation withheld above cannot leak through its
+ * frames, because its messageId never reaches the second query.
+ */
+export async function collectUserStreamState(
+  database: DB,
+  userId: string,
+): Promise<UserStreamStateExport[]> {
+  const rows = await database
+    .select({
+      messageId: aiStreamSessions.messageId,
+      conversationId: aiStreamSessions.conversationId,
+      status: aiStreamSessions.status,
+      parts: aiStreamSessions.parts,
+      startedAt: aiStreamSessions.startedAt,
+      completedAt: aiStreamSessions.completedAt,
+    })
+    .from(aiStreamSessions)
+    .innerJoin(conversations, eq(aiStreamSessions.conversationId, conversations.id))
+    .leftJoin(users, eq(users.id, aiStreamSessions.userId))
+    .where(
+      or(
+        eq(aiStreamSessions.userId, userId),
+        and(isNull(users.id), eq(conversations.userId, userId)),
+      ),
+    );
+
+  const framesByMessage = await collectStreamFrames(database, rows.map((row) => row.messageId));
+
+  return rows.map((row) => ({
+    ...row,
+    parts: row.parts ?? [],
+    frames: framesByMessage.get(row.messageId) ?? [],
+  }));
+}
+
+/**
+ * Flatten `ai_stream_frames` into one frame array per messageId.
+ *
+ * A row covers `[from_seq, from_seq + frame_count)`, so ordering by `from_seq`
+ * and concatenating reproduces the emitted sequence exactly — the same read the
+ * runtime's own cursor join performs, minus the slicing, because an export
+ * wants the whole stream rather than a suffix.
+ */
+async function collectStreamFrames(
+  database: DB,
+  messageIds: string[],
+): Promise<Map<string, unknown[]>> {
+  const byMessage = new Map<string, unknown[]>();
+  if (messageIds.length === 0) return byMessage;
+
+  const batches = await database
+    .select({
+      messageId: aiStreamFrames.messageId,
+      frames: aiStreamFrames.frames,
+    })
+    .from(aiStreamFrames)
+    .where(inArray(aiStreamFrames.messageId, messageIds))
+    .orderBy(aiStreamFrames.messageId, aiStreamFrames.fromSeq);
+
+  for (const batch of batches) {
+    const existing = byMessage.get(batch.messageId);
+    if (existing) existing.push(...(batch.frames ?? []));
+    else byMessage.set(batch.messageId, [...(batch.frames ?? [])]);
+  }
+
+  return byMessage;
+}
+
+/**
+ * Every tag the subject applied, across every target kind.
+ *
+ * Registered WITH its collector at the moment the table was added rather than
+ * when its writer arrives — the same call `ai_stream_frames` above records, and
+ * for the same reason: a table that reaches `master` unexported is exactly the
+ * failure `gdpr-export-coverage.ts` exists to catch, and "nothing writes it
+ * yet" is a state that expires quietly.
+ *
+ * SCOPED TO THE SUBJECT'S CURRENT DRIVES, not to `createdBy` alone — the same
+ * boundary `collectUserPages` draws, and it has to be drawn here for the same
+ * reason. Removing someone from a drive deletes their `drive_members` row and
+ * nothing else, so their `content_tags.createdBy` values survive the removal.
+ * Filtering on `createdBy` by itself would therefore let a FORMER member pull
+ * live page titles, the drive's shared tag names, and the verbatim text an
+ * anchor quotes out of a drive they can no longer read, through their own
+ * account export. Art 15 is a right to one's own data, not a channel back into
+ * a workspace one has left.
+ *
+ * The consequence is deliberate and worth stating: a tag the subject applied in
+ * a drive they have since left is NOT in their export. That is the boundary
+ * `pages`, `drives` and the rest of this file already draw, and a category that
+ * drew a wider one would be the leak, not a courtesy.
+ *
+ * `leftJoin` on both sides deliberately. `tags.id` is a cascade FK so a row
+ * cannot outlive its vocabulary entry, and `pageId` is notNull for the same
+ * reason — but an inner join would silently DROP a row if either ever became
+ * nullable, and silently dropping rows is the failure mode this whole file is
+ * built against. A null `tagName` in the bundle is visible; a missing line is
+ * not.
+ */
+export async function collectUserContentTags(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserContentTagExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+
+  if (driveIds.length === 0) return [];
+
+  return database
+    .select({
+      tagName: tags.name,
+      pageId: contentTags.pageId,
+      pageTitle: pages.title,
+      targetKind: contentTags.targetKind,
+      anchor: contentTags.anchor,
+      anchorStatus: contentTags.anchorStatus,
+      channelMessageId: contentTags.channelMessageId,
+      aiMessageId: contentTags.aiMessageId,
+      source: contentTags.source,
+      confidence: contentTags.confidence,
+      createdAt: contentTags.createdAt,
+    })
+    .from(contentTags)
+    .leftJoin(tags, eq(tags.id, contentTags.tagId))
+    // innerJoin on `pages` here, unlike the `tags` join above: the drive filter
+    // is only enforceable through the page row, so a tag whose page is missing
+    // must not slip past the scope check on a NULL `driveId`.
+    .innerJoin(pages, eq(pages.id, contentTags.pageId))
+    .where(and(eq(contentTags.createdBy, userId), inArray(pages.driveId, driveIds)));
+}
+
+/**
+ * A machine the subject enrolled as a local environment (`drive_env_local`,
+ * selected by `ownerId`). This is the subject's OWN device — a label they
+ * chose, their machine's public key and fingerprint, when it enrolled and was
+ * last seen — so it is carried whole, including revoked enrollments (a
+ * revocation is a fact about their machine, not a reason to hide it). The env
+ * it backs is drive-owned and excluded (`drive_envs`); only its name and drive
+ * ride along as the address the subject would recognise. No private material
+ * exists to export: the row never held any (epic invariant 2).
+ */
+export interface UserLocalEnvironmentExport {
+  envId: string;
+  driveId: string;
+  envName: string;
+  label: string;
+  /** NULL until the machine enrolled (the row exists from creation, with only the label and owner). */
+  machinePublicKey: string | null;
+  machineKeyFingerprint: string | null;
+  serverKeyId: string | null;
+  bindPolicy: string;
+  capabilities: DriveEnvLocalCapabilities | null;
+  enrolledAt: Date | null;
+  lastSeenAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function collectUserLocalEnvironments(database: DB, userId: string): Promise<UserLocalEnvironmentExport[]> {
+  const rows = await database
+    .select({
+      envId: driveEnvLocal.envId,
+      driveId: driveEnvs.driveId,
+      envName: driveEnvs.name,
+      label: driveEnvLocal.label,
+      machinePublicKey: driveEnvLocal.machinePublicKey,
+      machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
+      serverKeyId: driveEnvLocal.serverKeyId,
+      bindPolicy: driveEnvLocal.bindPolicy,
+      capabilities: driveEnvLocal.capabilities,
+      enrolledAt: driveEnvLocal.enrolledAt,
+      lastSeenAt: driveEnvLocal.lastSeenAt,
+      revokedAt: driveEnvLocal.revokedAt,
+      createdAt: driveEnvLocal.createdAt,
+      updatedAt: driveEnvLocal.updatedAt,
+    })
+    .from(driveEnvLocal)
+    .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+    .where(eq(driveEnvLocal.ownerId, userId));
+  // Ordered in JS rather than by `orderBy`: the unit suite's query-chain mock
+  // does not model `orderBy`, and this collector's rows are few (one per
+  // enrolled machine), so sorting after the fetch costs nothing.
+  return rows
+    .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+/**
+ * An ORG the subject OWNS (Spec X-2). The org row is the founder's record —
+ * they named it, they own it — so its identity travels. Everything else about
+ * it (policies, subscription, domains) is the organisation's own record and
+ * stays excluded in the coverage registry: the other members' relationship to
+ * this org is THEIR data, disclosed to them in their own exports, not to its
+ * owner.
+ */
+export interface UserOrganizationExport {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: Date;
+}
+
+/**
+ * The subject's own seat in an org, with the seat allowance they hold on the
+ * org pool (WAL-7/POL-7: a `wallet_consumer_caps` row keyed `user:<id>` on the
+ * pool). `invitedBy` is deliberately absent: it names another person, the same
+ * Art 15(4) line that excludes `org_invitations` and `pending_invites` — a
+ * membership tells the subject where they stand, not who put them there.
+ *
+ * The POOL's balance is not here. The pool is the org's money (SPEND-9, D18):
+ * its ledger and balance belong to the org, and a member's export carries
+ * their seat, never the pool's full ledger.
+ */
+export interface UserOrgMembershipExport {
+  orgId: string;
+  orgName: string;
+  role: 'OWNER' | 'ADMIN' | 'MEMBER';
+  joinedAt: Date;
+  /** The subject's monthly seat allowance on the org pool, or null when none is set. */
+  seatAllowanceCents: number | null;
+}
+
+/**
+ * The record that the subject once belonged to an org and went (SEC-1: kept so
+ * a verified email domain never auto-joins them back). Their own departure,
+ * not the org's roster.
+ */
+export interface UserOrgDepartureExport {
+  orgId: string;
+  orgName: string;
+  reason: 'left' | 'removed' | 'account_deleted';
+  departedAt: Date;
+}
+
+/**
+ * The subject's own request to join a Restricted org drive (DRV-6), including
+ * the note they wrote — their words, which no other category carries.
+ * `decidedBy` is omitted: who decided is the approver's act, and the decision
+ * itself is carried by `status` + `decidedAt`.
+ */
+export interface UserOrgDriveJoinRequestExport {
+  id: string;
+  driveId: string;
+  driveName: string | null;
+  status: 'pending' | 'approved' | 'denied' | 'withdrawn';
+  message: string | null;
+  requestedAt: Date;
+  decidedAt: Date | null;
+}
+
+/**
+ * A guest hold that names the subject (POL-2): either their queued request to
+ * join an org drive as a guest (`request` — what was asked for them), or the
+ * snapshot of the access an org policy parked (`parked` — their own member row
+ * and page grants). The `request.invitedBy`/`request.linkId` fields inside the
+ * JSON blobs can name the inviter; the blobs are carried verbatim because they
+ * are the record of the subject's own queued/parked access, and the inviter of
+ * an invitation the subject received is already known to them.
+ */
+export interface UserOrgGuestHoldExport {
+  id: string;
+  orgId: string;
+  driveId: string;
+  state: 'pending_approval' | 'suspended' | 'approved';
+  origin: string;
+  request: unknown;
+  parked: unknown;
+  createdAt: Date;
+}
+
+/** Everything the export carries about the subject's org life, in one file. */
+export interface UserOrgMembershipExportFile {
+  memberships: UserOrgMembershipExport[];
+  departures: UserOrgDepartureExport[];
+  joinRequests: UserOrgDriveJoinRequestExport[];
+  guestHolds: UserOrgGuestHoldExport[];
+}
+
+/**
+ * The subject's PERSONAL ROOT WALLET (X-5: the row their `credit_balances` row
+ * became) — their balance, carried whole. Their money, their numbers.
+ *
+ * Org pools and drive wallets are NOT here: a pool is the org's money (its
+ * balance and ledger stay the org's), and a drive wallet's remaining amount is
+ * disclosed to a consumer only as "can I spend" at call time (D18, O-5) — not
+ * as a copy in their export. What IS here from those wallets are the legs the
+ * SUBJECT funded (donations, their own top-ups): money they gave away is their
+ * financial record.
+ */
+export interface UserWalletExport {
+  wallet: {
+    id: string;
+    monthlyRemainingCents: number;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    topupRemainingCents: number;
+    debtCents: number;
+    status: string;
+    fallbackRule: string | null;
+    defaultSpendSource: string | null;
+    alwaysOwnCredits: boolean;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+    createdAt: Date;
+  } | null;
+  /**
+   * Every funding leg the subject funded, anywhere (WAL-3): owner top-ups of
+   * wallets they fund and donations (WAL-4) they made into drive/agent
+   * wallets. Keyed on `funderUserId = :subject` — never another person's legs,
+   * and never the org pool's refill legs, which are the org's record.
+   */
+  fundingLegs: UserFundingLegExport[];
+  /** The subject's SPEND-5 "always my own credits" switch, per drive. */
+  spendOverrides: { driveId: string; createdAt: Date }[];
+}
+
+/**
+ * One leg the subject funded. The destination is named readably: the wallet's
+ * owner/subject shape plus the drive's NAME for a drive wallet (the subject
+ * donated to that drive by name; an opaque id alone would not tell them where
+ * their money went — the same join-in-the-name move `contentTags` makes for
+ * the drive's vocabulary). `remainingCents` is how much of their leg is left.
+ */
+export interface UserFundingLegExport {
+  id: string;
+  walletId: string;
+  walletOwnerType: 'user' | 'org';
+  walletSubjectType: 'drive' | null;
+  walletSubjectDriveName: string | null;
+  funderKind: 'owner' | 'donation';
+  originalCents: number;
+  remainingCents: number;
+  nonRefundable: boolean;
+  createdAt: Date;
+}
+
+/**
+ * The ORGS the subject OWNS (X-2). Membership in orgs owned by OTHERS is
+ * carried by the orgMembership category; owning one is a different
+ * relationship and a different row (`organizations.ownerId`).
+ */
+export async function collectUserOrganizations(database: DB, userId: string): Promise<UserOrganizationExport[]> {
+  return database
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      slug: organizations.slug,
+      createdAt: organizations.createdAt,
+    })
+    .from(organizations)
+    .where(eq(organizations.ownerId, userId));
+}
+
+/**
+ * The subject's org life (X-2): their memberships with their seat allowances,
+ * their departures, their join requests, their guest holds.
+ *
+ * Every table here is read through the subject's OWN row — `org_members.userId`,
+ * `org_member_departures.userId`, `drive_join_requests.userId`,
+ * `org_guest_holds.userId` (or a hold keyed on their email for an invitation
+ * sent before they had linked the account). Another member's rows never enter:
+ * the org's roster is the org's data, disclosed to each member in their own
+ * export.
+ */
+export async function collectUserOrgMembership(database: DB, userId: string): Promise<UserOrgMembershipExportFile> {
+  const membershipRows = await database
+    .select({
+      orgId: orgMembers.orgId,
+      orgName: organizations.name,
+      role: orgMembers.role,
+      joinedAt: orgMembers.joinedAt,
+    })
+    .from(orgMembers)
+    .innerJoin(organizations, eq(orgMembers.orgId, organizations.id))
+    .where(eq(orgMembers.userId, userId));
+
+  // The seat allowance is the consumer cap the org pool holds for this person
+  // (WAL-7): one row per (pool, consumer), read off the pools of the orgs the
+  // subject belongs to. This is the ONLY piece of wallet state exported from
+  // an org wallet: the pool's balance and ledger are the org's (SPEND-9/D18).
+  const orgIds = membershipRows.map((row) => row.orgId);
+  const allowances = orgIds.length === 0
+    ? new Map<string, number>()
+    : new Map(
+        (
+          await database
+            .select({ orgId: wallets.orgId, monthlyCapCents: walletConsumerCaps.monthlyCapCents })
+            .from(walletConsumerCaps)
+            .innerJoin(wallets, eq(walletConsumerCaps.walletId, wallets.id))
+            .where(and(
+              eq(walletConsumerCaps.consumerKey, `user:${userId}`),
+              inArray(wallets.orgId, orgIds),
+            ))
+        ).filter((row): row is { orgId: string; monthlyCapCents: number } => row.monthlyCapCents !== null)
+          .map((row) => [row.orgId as string, row.monthlyCapCents]),
+      );
+
+  const memberships: UserOrgMembershipExport[] = membershipRows.map((row) => ({
+    ...row,
+    seatAllowanceCents: allowances.get(row.orgId) ?? null,
+  }));
+
+  const departures: UserOrgDepartureExport[] = await database
+    .select({
+      orgId: orgMemberDepartures.orgId,
+      orgName: organizations.name,
+      reason: orgMemberDepartures.reason,
+      departedAt: orgMemberDepartures.departedAt,
+    })
+    .from(orgMemberDepartures)
+    .innerJoin(organizations, eq(orgMemberDepartures.orgId, organizations.id))
+    .where(eq(orgMemberDepartures.userId, userId));
+
+  // The request's drive name is joined in (left, so a deleted drive cannot
+  // drop the row): the subject asked to join that drive BY NAME.
+  const joinRequests: UserOrgDriveJoinRequestExport[] = await database
+    .select({
+      id: driveJoinRequests.id,
+      driveId: driveJoinRequests.driveId,
+      driveName: drives.name,
+      status: driveJoinRequests.status,
+      message: driveJoinRequests.message,
+      requestedAt: driveJoinRequests.requestedAt,
+      decidedAt: driveJoinRequests.decidedAt,
+    })
+    .from(driveJoinRequests)
+    .leftJoin(drives, eq(driveJoinRequests.driveId, drives.id))
+    .where(eq(driveJoinRequests.userId, userId));
+
+  // A hold names the subject either by id or — for an emailed invitation that
+  // predates their account — by address. The email comes off the subject's own
+  // row, never from the hold.
+  const [subject] = await database
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const holds: UserOrgGuestHoldExport[] = await database
+    .select({
+      id: orgGuestHolds.id,
+      orgId: orgGuestHolds.orgId,
+      driveId: orgGuestHolds.driveId,
+      state: orgGuestHolds.state,
+      origin: orgGuestHolds.origin,
+      request: orgGuestHolds.request,
+      parked: orgGuestHolds.parked,
+      createdAt: orgGuestHolds.createdAt,
+    })
+    .from(orgGuestHolds)
+    .where(subject
+      ? or(eq(orgGuestHolds.userId, userId), sql`lower(${orgGuestHolds.email}) = lower(${subject.email})`)
+      : eq(orgGuestHolds.userId, userId));
+
+  return { memberships, departures, joinRequests, guestHolds: holds };
+}
+
+/**
+ * The subject's WALLET (X-2): their personal root wallet, every funding leg
+ * THEY funded, and their per-drive spend switches.
+ *
+ * The SPEND-9/D18 boundary, stated once: this collector answers "what is
+ * mine and what did I give", never "what does everyone else have". Legs are
+ * read on `funderUserId`, so another member's donation to the same drive is
+ * as invisible here as their balance; an org pool contributes only the seat
+ * allowance carried beside the membership in `orgMembership`, never its row.
+ * A deleted drive's name reads as null rather than dropping the leg — money
+ * movement outlives the container it moved into.
+ */
+export async function collectUserWallet(database: DB, userId: string, options?: { fundingLegBatchSize?: number }): Promise<UserWalletExport> {
+  const walletRows = await database
+    .select({
+      id: wallets.id,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      spentCents: wallets.spentCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      status: wallets.status,
+      fallbackRule: wallets.fallbackRule,
+      defaultSpendSource: wallets.defaultSpendSource,
+      alwaysOwnCredits: wallets.alwaysOwnCredits,
+      monthlyPeriodStart: wallets.monthlyPeriodStart,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
+      createdAt: wallets.createdAt,
+    })
+    .from(wallets)
+    // The personal root wallet predicate, not a bare userId match: a drive
+    // wallet the subject owns is that drive's budget, not their balance.
+    .where(and(
+      eq(wallets.userId, userId),
+      isNull(wallets.subjectType),
+      isNull(wallets.parentWalletId),
+    ));
+
+  // HIST-02 (#2859): EVERY funding leg the subject funded is emitted, through bounded
+  // deterministic keyset batches. One capped query silently dropped legs past its limit —
+  // an incomplete export with no truncation signal — and without an ordering, which legs
+  // survived was not even deterministic. Batches walk (createdAt, id) in a stable order.
+  type FundingLegRow = {
+    id: string;
+    walletId: string;
+    walletOwnerType: 'user' | 'org';
+    walletSubjectType: 'drive' | null;
+    walletSubjectDriveName: string | null;
+    funderKind: 'owner' | 'donation';
+    originalCents: number;
+    remainingCents: number;
+    nonRefundable: boolean;
+    createdAt: Date;
+  };
+  const legRows: FundingLegRow[] = [];
+  let cursor: { createdAt: Date; id: string } | null = null;
+  const FUNDING_LEG_BATCH = options?.fundingLegBatchSize ?? 1_000;
+  for (;;) {
+    const batch: FundingLegRow[] = await database
+      .select({
+        id: walletFundingLegs.id,
+        walletId: walletFundingLegs.walletId,
+        walletOwnerType: wallets.ownerType,
+        walletSubjectType: wallets.subjectType,
+        walletSubjectDriveName: drives.name,
+        funderKind: walletFundingLegs.funderKind,
+        originalCents: walletFundingLegs.originalCents,
+        remainingCents: walletFundingLegs.remainingCents,
+        nonRefundable: walletFundingLegs.nonRefundable,
+        createdAt: walletFundingLegs.createdAt,
+      })
+      .from(walletFundingLegs)
+      .innerJoin(wallets, eq(walletFundingLegs.walletId, wallets.id))
+      // `wallets.subjectId` is a soft link with no FK; the name join is a
+      // convenience left join and a missing drive row reads as null.
+      .leftJoin(drives, eq(drives.id, wallets.subjectId))
+      .where(cursor
+        ? and(
+            eq(walletFundingLegs.funderUserId, userId),
+            or(
+              gt(walletFundingLegs.createdAt, cursor.createdAt),
+              and(
+                eq(walletFundingLegs.createdAt, cursor.createdAt),
+                gt(walletFundingLegs.id, cursor.id),
+              ),
+            ),
+          )
+        : eq(walletFundingLegs.funderUserId, userId))
+      .orderBy(asc(walletFundingLegs.createdAt), asc(walletFundingLegs.id))
+      .limit(FUNDING_LEG_BATCH);
+    legRows.push(...batch);
+    if (batch.length < FUNDING_LEG_BATCH) break;
+    const last = batch[batch.length - 1];
+    cursor = { createdAt: last.createdAt, id: last.id };
+  }
+
+  const fundingLegs: UserFundingLegExport[] = legRows.map((row) => ({
+    id: row.id,
+    walletId: row.walletId,
+    walletOwnerType: row.walletOwnerType,
+    walletSubjectType: row.walletSubjectType,
+    walletSubjectDriveName: row.walletSubjectDriveName,
+    funderKind: row.funderKind,
+    originalCents: row.originalCents,
+    remainingCents: row.remainingCents,
+    nonRefundable: row.nonRefundable,
+    createdAt: row.createdAt,
+  }));
+
+  const spendOverrides: { driveId: string; createdAt: Date }[] = await database
+    .select({ driveId: driveSpendOverrides.driveId, createdAt: driveSpendOverrides.createdAt })
+    .from(driveSpendOverrides)
+    .where(eq(driveSpendOverrides.userId, userId));
+
+  return { wallet: walletRows[0] ?? null, fundingLegs, spendOverrides };
+}
+
+export async function collectAllUserData(database: DB, userId: string, gate: ExportSignInGate): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
 
   const userDrives = await collectUserDrives(database, userId);
-  const driveIds = userDrives.map(d => d.id);
+  // SEC-2/3: the content of an org drive whose sign-in policy refuses the requesting credential is left out (the drive
+  // itself stays listed in drives.json); the manifest says so.
+  const refusedDrives = await gate.refusedDrives(userDrives.map(d => d.id));
+  const driveIds = userDrives.map(d => d.id).filter(id => !refusedDrives.has(id));
 
-  const [userPages, userMessages, userFiles, activity, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userPersonalizationData] = await Promise.all([
+  // Positional: this destructuring order must exactly match the Promise.all array
+  // order below (each collector returns a differently-shaped array, so TypeScript
+  // cannot catch a reorder/insert mismatch here).
+  const [collectedPages, userSheets, collectedMessages, collectedFiles, collectedActivity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, collectedTasks, userSessions, userNotifications, userDisplayPreferences, userSettings, collectedPersonalization, collectedCandidates, collectedPulse, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
     collectUserPages(database, userId, driveIds),
+    collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),
+    collectUserSystemLogs(database, userId),
+    collectUserApiMetrics(database, userId),
+    collectUserErrorLogs(database, userId),
     collectUserAiUsage(database, userId),
     collectUserTasks(database, userId),
     collectUserSessions(database, userId),
     collectUserNotifications(database, userId),
     collectUserDisplayPreferences(database, userId),
+    collectUserSettings(database, userId),
     collectUserPersonalization(database, userId),
+    collectUserPersonalizationCandidates(database, userId),
+    collectUserPulseSummaries(database, userId),
+    collectUserAgentWorkspaces(database, userId),
+    collectUserAgentAccounts(database, userId),
+    collectUserStreamState(database, userId),
+    collectUserContentTags(database, userId, driveIds),
+    collectUserLocalEnvironments(database, userId),
+    collectUserOrganizations(database, userId),
+    collectUserOrgMembership(database, userId),
+    collectUserWallet(database, userId),
   ]);
+
+  const withheld = new WithheldLedger();
+  for (const [driveId, code] of refusedDrives) {
+    const orgId = userDrives.find(d => d.id === driveId)?.orgId;
+    withheld.add('orgDriveContent', 1, code, orgId ? [orgId] : []);
+  }
+
+  // What the subject wrote, uploaded, listed or did inside an org drive the credential is refused is that drive's
+  // content too (SEC-2/3). Pages resolve to their drive in one batched read; drives the subject no longer belongs to
+  // are decided as well.
+  const pageDrive = await driveOfPages(database, [
+    ...collectedMessages.flatMap(m => (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? [m.pageId] : []),
+    ...collectedTasks.flatMap(t => t.pageId ? [t.pageId] : []),
+    ...collectedActivity.flatMap(a => !a.driveId && a.pageId ? [a.pageId] : []),
+  ]);
+  const messageDrive = (m: UserMessageExport) =>
+    (m.source === 'ai_chat' || m.source === 'channel') && m.pageId ? pageDrive.get(m.pageId) ?? null : null;
+  const taskDrive = (t: CollectedTaskList) => (t.pageId ? pageDrive.get(t.pageId) ?? null : null);
+  const activityDrive = (a: CollectedActivity) => a.driveId ?? (a.pageId ? pageDrive.get(a.pageId) ?? null : null);
+  const decided = new Set(userDrives.map(d => d.id));
+  const undecided = [...new Set([
+    ...collectedMessages.map(messageDrive),
+    ...collectedFiles.map(f => f.driveId),
+    ...collectedTasks.map(taskDrive),
+    ...collectedActivity.map(activityDrive),
+  ].filter((id): id is string => id !== null && !decided.has(id)))];
+  const authoredRefused = new Map([...refusedDrives, ...(await gate.refusedDrives(undecided))]);
+  const orgOfDrive = new Map(userDrives.map(d => [d.id, d.orgId ?? null]));
+  for (const [id, orgId] of await orgOfDrives(database, [...authoredRefused.keys()].filter(id => !orgOfDrive.has(id)))) {
+    orgOfDrive.set(id, orgId);
+  }
+  const keepOutsideRefused = <Row>(rows: readonly Row[], driveOf: (row: Row) => string | null, category: ExportWithheldCategory): Row[] =>
+    rows.filter((row) => {
+      const driveId = driveOf(row);
+      const code = driveId ? authoredRefused.get(driveId) : undefined;
+      if (!code || !driveId) return true;
+      const orgId = orgOfDrive.get(driveId);
+      withheld.add(category, 1, code, orgId ? [orgId] : []);
+      return false;
+    });
+  const userMessages = keepOutsideRefused(collectedMessages, messageDrive, 'orgDriveMessages');
+  const userFiles = keepOutsideRefused(collectedFiles, f => f.driveId, 'orgDriveFiles');
+  const tasks: UserTaskExport[] = keepOutsideRefused(collectedTasks, taskDrive, 'orgDriveTasks')
+    .map(({ pageId: _pageId, ...list }) => list);
+  const activity: UserActivityExport[] = keepOutsideRefused(collectedActivity, activityDrive, 'orgDriveActivity')
+    .map(({ driveId: _driveId, pageId: _pageId, ...entry }) => entry);
+
+  const refusedMemoryPages = await gate.refusedDerivedPages(collectedPages.map(p => p.id));
+  for (const refusal of refusedMemoryPages.values()) withheld.add('memoryPages', 1, refusal.code, refusal.orgIds);
+  const userPages = collectedPages.filter(p => !refusedMemoryPages.has(p.id));
+
+  let userPersonalizationData: UserPersonalizationExport | null = null;
+  if (collectedPersonalization) {
+    const { memoryOrgIds, ...personalization } = collectedPersonalization;
+    const access = await gate.derivedContent(memoryOrgIds);
+    if (access.allowed) {
+      userPersonalizationData = personalization;
+    } else {
+      // The memory text (pages, or the legacy columns before backfill) is withheld; the settings around it are not.
+      userPersonalizationData = { ...personalization, bio: null, writingStyle: null, rules: null };
+      withheld.add('personalization', 1, access.code, access.orgIds);
+    }
+  }
+
+  const userPersonalizationCandidates = await keepAdmitted(collectedCandidates, gate, 'personalizationCandidates', withheld);
+  const userPulseSummaries = await keepAdmitted(collectedPulse, gate, 'pulseSummaries', withheld);
 
   return {
     profile,
     drives: userDrives,
     pages: userPages,
+    sheets: userSheets,
     messages: userMessages,
     files: userFiles,
     activity,
+    systemLogs: userSystemLogs,
+    apiMetrics: userApiMetrics,
+    errorLogs: userErrorLogs,
     aiUsage,
     tasks,
     sessions: userSessions,
     notifications: userNotifications,
     displayPreferences: userDisplayPreferences,
+    settings: userSettings,
     personalization: userPersonalizationData,
+    personalizationCandidates: userPersonalizationCandidates,
+    pulseSummaries: userPulseSummaries,
+    withheld: withheld.entries(),
+    agentWorkspaces: userAgentWorkspaces,
+    agentAccounts: userAgentAccounts,
+    streamState: userStreamState,
+    contentTags: userContentTags,
+    localEnvironments: userLocalEnvironments,
+    organizations: userOrganizations,
+    orgMembership: userOrgMembership,
+    wallet: userWallet,
   };
+}
+
+/** Groups what the export left out by category and code, summing counts and uniting the refusing orgs. */
+class WithheldLedger {
+  private readonly byKey = new Map<string, ExportWithheld>();
+
+  add(category: ExportWithheldCategory, count: number, code: OrgAuthenticationDenialCode, orgIds: readonly string[]): void {
+    const key = `${category}:${code}`;
+    const entry = this.byKey.get(key) ?? { category, count: 0, code, orgIds: [] };
+    this.byKey.set(key, { ...entry, count: entry.count + count, orgIds: [...new Set([...entry.orgIds, ...orgIds])].sort() });
+  }
+
+  entries(): ExportWithheld[] {
+    return [...this.byKey.values()];
+  }
+}
+
+/** The rows the gate admits (by each row's contributing orgs), provenance stripped; the rest are recorded as withheld. */
+async function keepAdmitted<Row extends { orgIds: string[] }>(
+  rows: readonly Row[],
+  gate: ExportSignInGate,
+  category: ExportWithheldCategory,
+  withheld: WithheldLedger,
+): Promise<Omit<Row, 'orgIds'>[]> {
+  const kept: Omit<Row, 'orgIds'>[] = [];
+  const decided = new Map<string, Awaited<ReturnType<ExportSignInGate['derivedContent']>>>();
+  for (const { orgIds, ...row } of rows) {
+    const key = [...(orgIds ?? [])].sort().join(',');
+    const access = decided.get(key) ?? (await gate.derivedContent(orgIds ?? []));
+    decided.set(key, access);
+    if (access.allowed) kept.push(row);
+    else withheld.add(category, 1, access.code, access.orgIds);
+  }
+  return kept;
+}
+
+const EXPORT_ID_CHUNK = 500;
+
+/** The drive of each of `pageIds` (absent: no such page), one read per chunk. */
+async function driveOfPages(database: DB, pageIds: readonly string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(pageIds)];
+  const out = new Map<string, string>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: pages.id, driveId: pages.driveId })
+      .from(pages)
+      .where(inArray(pages.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.driveId);
+  }
+  return out;
+}
+
+/** The org governing each of `driveIds` (null: a personal drive), one read per chunk. */
+async function orgOfDrives(database: DB, driveIds: readonly string[]): Promise<Map<string, string | null>> {
+  const unique = [...new Set(driveIds)];
+  const out = new Map<string, string | null>();
+  for (let i = 0; i < unique.length; i += EXPORT_ID_CHUNK) {
+    const rows = await database
+      .select({ id: drives.id, orgId: drives.orgId })
+      .from(drives)
+      .where(inArray(drives.id, unique.slice(i, i + EXPORT_ID_CHUNK)));
+    for (const row of rows) out.set(row.id, row.orgId);
+  }
+  return out;
 }

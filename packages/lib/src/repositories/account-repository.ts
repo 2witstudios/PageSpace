@@ -6,16 +6,27 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql } from '@pagespace/db/operators';
+import { and, eq, isNull, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveMembers } from '@pagespace/db/schema/members';
+import { organizations } from '@pagespace/db/schema/organizations';
+import { deleteConversationsForDrive } from './conversation-cleanup';
+import { decryptUserRow } from '../auth/user-repository';
+import { LeaveOrganizationRefusedError, computeReattributionAuditEvents, leaveAllOrganizations, reassignLedOrgDrives, type ComputeReattribution } from '../organizations/leave';
+import { leaveAuditEvents } from '../organizations/org-events';
+import { ownerLeftAutomationAuditEvents, prepareAutomationsForAccountDeletion, type OwnerLeftAutomation } from '../organizations/automation-ownership';
+import { transactionWithOrgAudit } from '../audit/org-audit';
+import { recordDepartureSuppressions } from '../organizations/departure-suppression';
+import { createAnonymizedActorEmail } from '../compliance/anonymize';
 
 export interface UserAccount {
   id: string;
   email: string;
   image: string | null;
   stripeCustomerId: string | null;
+  /** Set when the account has ever signed in with Apple. */
+  appleId: string | null;
 }
 
 export interface OwnedDrive {
@@ -40,18 +51,21 @@ export const accountRepository = {
         email: true,
         image: true,
         stripeCustomerId: true,
+        appleId: true,
       },
     });
 
-    return user ?? null;
+    // Decrypt PII at the edge so the email confirmation + erasure payload use plaintext.
+    return user ? decryptUserRow(user) : null;
   },
 
   /**
-   * Get all drives owned by a user
+   * Get the personal drives owned by a user. Org drives the user leads are not theirs to
+   * dispose of: deleteUser reassigns them to the org Owner (Spec O-7).
    */
   getOwnedDrives: async (userId: string): Promise<OwnedDrive[]> => {
     return db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
+      where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
       columns: {
         id: true,
         name: true,
@@ -59,12 +73,32 @@ export const accountRepository = {
     });
   },
 
+  /** Refuse erasure while the subject owns an organization; caller holds the subject's user-row lock. */
+  assertMayLodgeErasure: async (userId: string, executor: Pick<typeof db, 'select'>): Promise<void> => {
+    const [owned] = await executor.select({ id: organizations.id }).from(organizations).where(eq(organizations.ownerId, userId)).limit(1);
+    if (owned) throw new LeaveOrganizationRefusedError(owned.id, 'OWNER_MUST_TRANSFER');
+  },
+
   /**
-   * Get member count for a drive
+   * Names of the organizations the user owns. An org Owner cannot delete their account (ORG-6):
+   * every erasure entry point refuses on a non-empty list BEFORE destroying anything, since
+   * deleteUser would otherwise refuse only at the very end, after the rest was erased.
+   */
+  getOwnedOrganizationNames: async (userId: string): Promise<string[]> => {
+    const rows = await db
+      .select({ name: organizations.name })
+      .from(organizations)
+      .where(eq(organizations.ownerId, userId));
+    return rows.map((r) => r.name);
+  },
+
+  /**
+   * Get member count for a drive. GUEST rows (redeemed page share links) are
+   * not members, so a drive shared only with guests counts as solo.
    */
   getDriveMemberCount: async (driveId: string): Promise<number> => {
     const result = await db
-      .select({ count: sql<number>`count(*)` })
+      .select({ count: sql<number>`count(*) filter (where ${driveMembers.role} <> 'GUEST')` })
       .from(driveMembers)
       .where(eq(driveMembers.driveId, driveId));
 
@@ -72,17 +106,61 @@ export const accountRepository = {
   },
 
   /**
-   * Delete a drive by ID
+   * Delete a drive by ID.
+   *
+   * Takes the drive's chat history with it, explicitly and first: the drive
+   * cascade reaches `pages` and `drive_members` but NOT `conversations`, whose
+   * `contextId` has never been a foreign key. The `chat_messages.pageId`
+   * cascade that used to make this automatic went with the table in 0253.
    */
   deleteDrive: async (driveId: string): Promise<void> => {
-    await db.delete(drives).where(eq(drives.id, driveId));
+    await db.transaction(async (tx) => {
+      await deleteConversationsForDrive(tx, driveId);
+      await tx.delete(drives).where(eq(drives.id, driveId));
+    });
   },
 
   /**
-   * Delete a user by ID
+   * Delete a user by ID.
+   *
+   * drives.ownerId cascades, so the user first leaves every org and any org drive they still
+   * lead is reassigned to its org Owner, in the same transaction as the delete (Spec O-7, O-8).
+   * An org Owner is refused (LeaveOrganizationRefusedError) and nothing changes: ownership
+   * transfers first (ORG-6). The audit actor is the anonymized address, since this runs after
+   * the erasure has anonymized the user's activity.
    */
   deleteUser: async (userId: string): Promise<void> => {
-    await db.delete(users).where(eq(users.id, userId));
+    await transactionWithOrgAudit(async (tx, audit) => {
+      // [D-OW-28] The departing member's environments and apps go to each drive's lead, and [D-OW-36] their
+      // org-drive automations are disabled and flagged, never deleted: all audited with the deletion.
+      const reattributed: ComputeReattribution[] = [];
+      const ownerLeft: OwnerLeftAutomation[] = [];
+      const options = {
+        reason: 'account_deleted' as const,
+        actor: { actorEmail: createAnonymizedActorEmail(userId), actorDisplayName: 'Deleted User' },
+        collectReattributed: reattributed,
+        collectOwnerLeft: ownerLeft,
+      };
+      const orgsLeft = await leaveAllOrganizations(userId, tx, options);
+      // A lead who is somehow no longer a member of the drive's org still must not take it.
+      await reassignLedOrgDrives(userId, tx, options);
+      // [D-OW-36] Every org drive's automation they made (in orgs they had already left, or as a guest
+      // creator, too) is flagged, the trigger anchors they created are handed to the drive's lead, and a
+      // personal drive's automations go with the account as before. The users delete then clears the
+      // creator columns (SET NULL): an owner-left automation keeps nothing of theirs.
+      ownerLeft.push(...await prepareAutomationsForAccountDeletion(tx, userId));
+      // [D-OW-27] Their departure records go with the user row; each org they left keeps only a keyed
+      // hash of the address, so a new account with it is not auto-joined back (SEC-1).
+      await recordDepartureSuppressions(tx, userId);
+      await tx.delete(users).where(eq(users.id, userId));
+      // AUD-1, committed with the deletion. No actor: the account no longer exists to be named (the audit row's user
+      // reference would point at a deleted user); the person is the event's resource.
+      await audit(
+        ...orgsLeft.flatMap(({ orgId, reassigned }) => leaveAuditEvents({ orgId, userId, eventType: 'org.member.left', reason: 'account_deleted', reassigned })),
+        ...computeReattributionAuditEvents(reattributed),
+        ...ownerLeftAutomationAuditEvents(ownerLeft),
+      );
+    });
   },
 
   /**
@@ -92,7 +170,7 @@ export const accountRepository = {
   checkAndDeleteSoloDrives: async (userId: string): Promise<{ multiMemberDriveNames: string[] }> => {
     return db.transaction(async (tx) => {
       const ownedDrives = await tx.query.drives.findMany({
-        where: eq(drives.ownerId, userId),
+        where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
         columns: { id: true, name: true },
       });
 
@@ -102,8 +180,9 @@ export const accountRepository = {
       const soloDriveIds: string[] = [];
 
       for (const drive of ownedDrives) {
+        // GUEST rows are not members (see getDriveMemberCount).
         const [{ count }] = await tx
-          .select({ count: sql<number>`count(*)` })
+          .select({ count: sql<number>`count(*) filter (where ${driveMembers.role} <> 'GUEST')` })
           .from(driveMembers)
           .where(eq(driveMembers.driveId, drive.id));
 
@@ -118,8 +197,11 @@ export const accountRepository = {
         return { multiMemberDriveNames: multiMemberNames };
       }
 
-      // Safe to delete — no multi-member drives
+      // Safe to delete — no multi-member drives. Chat history first, while the
+      // drive's pages still exist to trace the page-scoped threads through
+      // (the drive cascade does not reach `conversations`).
       for (const driveId of soloDriveIds) {
+        await deleteConversationsForDrive(tx, driveId);
         await tx.delete(drives).where(eq(drives.id, driveId));
       }
 

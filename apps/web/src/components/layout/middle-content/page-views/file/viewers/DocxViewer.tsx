@@ -41,12 +41,19 @@ export default function DocxViewer({ page }: DocxViewerProps) {
     setIsLoading(true);
     setError(null);
     
-    fetchWithAuth(`/api/files/${page.id}/view`)
+    fetchWithAuth(`/api/files/${page.id}/view`, {
+      headers: { Accept: 'application/json' },
+    })
       .then(response => {
         if (!response.ok) {
           throw new Error(`Failed to load document: ${response.status}`);
         }
-        return response.arrayBuffer();
+        return response.json() as Promise<{ url: string }>;
+      })
+      .then(async ({ url }) => {
+        const fileRes = await fetch(url);
+        if (!fileRes.ok) throw new Error(`Failed to load document content: ${fileRes.status}`);
+        return fileRes.arrayBuffer();
       })
       .then(data => {
         console.log('DOCX data loaded:', data.byteLength, 'bytes');

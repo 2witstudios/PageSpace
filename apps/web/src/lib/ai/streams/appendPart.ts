@@ -14,7 +14,7 @@ type AnyPart = UIMessage['parts'][number];
 // the `tool-` prefix): we additionally require a string `toolCallId` because
 // it is the merge key for the replace-by-toolCallId branch below — a tool
 // part missing the id can't converge state transitions.
-const isToolPart = (
+export const isToolPart = (
   part: AnyPart,
 ): part is AnyPart & { type: `tool-${string}`; toolCallId: string } =>
   typeof part.type === 'string' &&

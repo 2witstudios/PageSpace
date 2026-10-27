@@ -6,26 +6,26 @@ import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { calendarTriggers } from '@pagespace/db/schema/calendar-triggers';
 import { workflows } from '@pagespace/db/schema/workflows';
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveOwnerOrAdmin, type AuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import {
   removeCalendarTrigger,
   upsertCalendarTriggerWorkflow,
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
-const SESSION_READ = { allow: ['session'] as const, requireCSRF: false };
-const SESSION_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // Same auth shape as PATCH /api/calendar/events/[eventId]: creator OR drive
 // owner/admin. Personal events (no driveId) are creator-only by construction.
 async function canManageEventTrigger(
-  userId: string,
+  auth: AuthResult,
   event: typeof calendarEvents.$inferSelect,
 ): Promise<boolean> {
-  if (event.createdById === userId) return true;
-  if (event.driveId) return isDriveOwnerOrAdmin(userId, event.driveId);
+  if (event.createdById === auth.userId) return true;
+  if (event.driveId) return isPrincipalDriveOwnerOrAdmin(auth, event.driveId);
   return false;
 }
 
@@ -64,7 +64,6 @@ async function loadAttendeeIds(eventId: string): Promise<string[]> {
 export async function GET(request: Request, context: { params: Promise<{ eventId: string }> }) {
   const auth = await authenticateRequestWithOptions(request, SESSION_READ);
   if (isAuthError(auth)) return auth.error;
-  const userId = auth.userId;
 
   const { eventId } = await context.params;
 
@@ -78,9 +77,9 @@ export async function GET(request: Request, context: { params: Promise<{ eventId
     if (scopeError) return scopeError;
   }
 
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   const [row] = await db
@@ -172,21 +171,14 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
     );
   }
 
-  // Reject recurring events. The cron poller fires one-shot occurrences, so
-  // attaching one trigger to a recurring event would silently misfire on
-  // every occurrence past the first. Mirrors the POST /events guard.
-  if (event.recurrenceRule) {
-    return NextResponse.json(
-      { error: 'Agent triggers are not supported for recurring events' },
-      { status: 400 }
-    );
-  }
-
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
+  // TRIGGER SAFETY: execution context is always the home drive (event.driveId).
+  // Drives shared via calendar_event_drives have read visibility only — they cannot
+  // manage or receive triggers. canManageEventTrigger above enforces this.
   try {
     await upsertCalendarTriggerWorkflow(db, {
       driveId: event.driveId,
@@ -195,6 +187,8 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
       triggerAt: event.startAt,
       timezone: event.timezone ?? 'UTC',
       agentTrigger: parsed.data,
+      recurrenceRule: event.recurrenceRule,
+      recurrenceExceptions: event.recurrenceExceptions ?? [],
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to save trigger';
@@ -242,9 +236,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ even
     if (scopeError) return scopeError;
   }
 
-  const canManage = await canManageEventTrigger(userId, event);
+  const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   await removeCalendarTrigger(db, eventId);

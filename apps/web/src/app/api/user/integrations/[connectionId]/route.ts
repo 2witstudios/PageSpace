@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { integrationConnections } from '@pagespace/db/schema/integrations';
@@ -25,6 +26,7 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
   if (isAuthError(auth)) return auth.error;
@@ -64,6 +66,7 @@ export async function PATCH(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
@@ -125,6 +128,7 @@ export async function DELETE(
   request: Request,
   context: { params: Promise<{ connectionId: string }> }
 ) {
+  if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const { connectionId } = await context.params;
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;

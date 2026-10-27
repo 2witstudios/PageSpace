@@ -1,0 +1,103 @@
+import { NextResponse } from 'next/server';
+import {
+  authenticateRequestWithOptions,
+  isAuthError,
+  getAllowedDriveIds,
+} from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { messageRepository } from '@/lib/repositories/message-repository';
+import {
+  validateConversationAccess,
+  serializeMessageRowToMessages,
+} from '@/lib/ai/openai-api/v1-conversations';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+
+const AUTH_OPTIONS = { allow: ['mcp'] as const, requireCSRF: false };
+
+type RouteContext = { params: Promise<{ id: string }> };
+
+export async function GET(request: Request, context: RouteContext): Promise<Response> {
+  const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(authResult)) return authResult.error;
+
+  const { id } = await context.params;
+
+  const conversation = await conversationRepository.getConversation(id);
+  const access = validateConversationAccess(conversation, authResult.userId);
+  if (!access.ok) {
+    return NextResponse.json({ error: access.message }, { status: access.status });
+  }
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+  if (allowedDriveIds.length > 0) {
+    const contextId = conversation!.contextId;
+    if (contextId === null || !allowedDriveIds.includes(contextId)) {
+      return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
+    }
+  }
+  // SEC-2/3 (D-OW-45): a page or drive conversation carries that org's content; its owner reaches it only through a
+  // credential the org admits, refused with the sign-in code.
+  const actor = actorFromAuth(authResult);
+  if (!(await canAccessConversation(actor, conversation!))) {
+    return deniedResponse(actor, conversation!.contextId, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
+  }
+
+  // Stale-tab rollout protection: SDK consumers deployed before this PR never send this
+  // param, so they never see 'streaming' placeholder rows. See Server Stream Durability
+  // epic PR 2.
+  const { searchParams } = new URL(request.url);
+  const includeStreaming = searchParams.get('includeStreaming') === '1';
+  // Unified `messages` table since the message-table merge (epic
+  // "Agent-Session Single Source of Truth", Phase 4 / D6). Same
+  // conversationId-scoped, streaming-aware query the legacy repository ran —
+  // one table instead of two.
+  const messages = await messageRepository.getMessagesByConversationId(id, includeStreaming);
+
+  auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
+
+  return NextResponse.json({
+    id,
+    object: 'conversation',
+    created_at: Math.floor(conversation!.createdAt.getTime() / 1000),
+    user_id: conversation!.userId,
+    title: conversation!.title,
+    drive_id: conversation!.contextId,
+    messages: messages.filter((m) => m.isActive).flatMap(serializeMessageRowToMessages),
+  });
+}
+
+export async function DELETE(request: Request, context: RouteContext): Promise<Response> {
+  const authResult = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
+  if (isAuthError(authResult)) return authResult.error;
+
+  const { id } = await context.params;
+
+  const conversation = await conversationRepository.getConversation(id);
+  const access = validateConversationAccess(conversation, authResult.userId);
+  if (!access.ok) {
+    return NextResponse.json({ error: access.message }, { status: access.status });
+  }
+  const allowedDriveIds = getAllowedDriveIds(authResult);
+  if (allowedDriveIds.length > 0) {
+    const contextId = conversation!.contextId;
+    if (contextId === null || !allowedDriveIds.includes(contextId)) {
+      return NextResponse.json({ error: 'Conversation not accessible with this token' }, { status: 403 });
+    }
+  }
+  // SEC-2/3 (D-OW-45): a page or drive conversation carries that org's content; its owner reaches it only through a
+  // credential the org admits, refused with the sign-in code.
+  const actor = actorFromAuth(authResult);
+  if (!(await canAccessConversation(actor, conversation!))) {
+    return deniedResponse(actor, conversation!.contextId, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
+  }
+
+  // Repository-owned conversation soft-delete (same conversationId-scoped
+  // message sweep this route always did): bumps rev and emits
+  // `conversation:deleted` (Agent-Session SSoT epic, Phase 2).
+  await conversationRepository.softDeleteConversationById(id);
+
+  auditRequest(request, { eventType: 'data.delete', userId: authResult.userId, resourceType: 'conversation', resourceId: id, details: {}, riskScore: 0 });
+
+  return NextResponse.json({ id, deleted: true });
+}

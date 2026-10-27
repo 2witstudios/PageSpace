@@ -3,8 +3,22 @@
  * extraction to replace select().from().where() and update/insert chains
  * with a mockable repository interface.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
+// [D-OW-33] guardDriveAccess opens the role write's transaction (tested against real Postgres in
+// org-lapse-loosening.integration.test.ts); here it is the transaction mock each test sets up.
+vi.mock('../../permissions/org-lapse-guard', () => ({
+  guardDriveAccess: vi.fn((executor: { transaction: (fn: unknown) => unknown }, _driveId: string, _scope: unknown, write: unknown) => executor.transaction(write)),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -34,20 +48,40 @@ vi.mock('@pagespace/db/db', () => ({
     transaction: vi.fn(),
   },
 }));
+const mockLoadMembership = vi.hoisted(() => vi.fn());
+// POL-6: the org floor guard reads the drive's state around each role write; it is proven against real Postgres in
+// open-role-floor.integration.test.ts, so here it only runs the write.
+vi.mock('../../organizations/open-role-floor', () => ({
+  guardOpenRoleFloor: vi.fn((_tx: unknown, _driveId: string, write: () => Promise<unknown>) => write()),
+  OpenRoleFloorError: class extends Error {},
+}));
+vi.mock('../../permissions/org-drive-membership', () => ({
+  loadEffectiveDriveMembership: mockLoadMembership,
+}));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'drives.id', name: 'drives.name', slug: 'drives.slug', ownerId: 'drives.ownerId' },
 }));
 vi.mock('@pagespace/db/schema/members', () => ({
   driveRoles: { id: 'dr.id', driveId: 'dr.driveId', name: 'dr.name', description: 'dr.description', color: 'dr.color', isDefault: 'dr.isDefault', permissions: 'dr.permissions', position: 'dr.position', updatedAt: 'dr.updatedAt' },
-  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role' },
+  driveMembers: { driveId: 'dm.driveId', userId: 'dm.userId', role: 'dm.role', acceptedAt: 'dm.acceptedAt' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a, b) => ({ op: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ op: 'and', args })),
   asc: vi.fn((a) => ({ op: 'asc', a })),
+  inArray: vi.fn((a, b) => ({ op: 'inArray', a, b })),
+  isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+  sql: Object.assign(
+    vi.fn((strings: unknown, ...values: unknown[]) => ({ strings, values })),
+    {
+      join: vi.fn((parts: unknown[], sep: unknown) => ({ parts, sep })),
+      identifier: vi.fn((name: string) => ({ identifier: name })),
+    }
+  ),
 }));
 
 import { db } from '@pagespace/db/db';
+import { driveMembers } from '@pagespace/db/schema/members';
 import {
   checkDriveAccessForRoles,
   listDriveRoles,
@@ -57,7 +91,12 @@ import {
   deleteDriveRole,
   reorderDriveRoles,
   validateRolePermissions,
+  validateDriveWidePermissions,
+  mergeRolePermissionsPatch,
+  isSystemRoleName,
+  roleNotFoundMessage,
 } from '../drive-role-service';
+import { credentialActor } from '../../permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MockDb = {
@@ -72,6 +111,61 @@ type MockDb = {
   transaction: MockFn;
 };
 const mockDb = db as unknown as MockDb;
+
+// Builds a mock transaction client (`tx`) shared by createDriveRole,
+// updateDriveRole, and reorderDriveRoles tests. `tx.select().from().where()`
+// resolves directly to `selectRows` (the plain, unordered read used by
+// createDriveRole's non-default path) and also chains `.for('update')`
+// (single-row lock) or `.orderBy(asc(id)).for('update')` (ordered drive-wide
+// lock, taken whenever isDefault is involved) — both resolving to the same
+// `selectRows`. `tx.update().set().where()` resolves each successive call to
+// the next entry in `updateResults` (`returning()` resolves; a plain
+// no-`returning()` update — e.g. unsetting other defaults — resolves
+// `where()` itself to `undefined`). `tx.insert().values().returning()`
+// resolves to `insertResult`.
+function makeTx(
+  selectRows: unknown[],
+  updateResults: Array<unknown[] | undefined> = [],
+  insertResult?: unknown[]
+) {
+  const forMock = vi.fn().mockResolvedValue(selectRows);
+  const orderByMock = vi.fn(() => ({ for: forMock }));
+  const selectWhereChain = {
+    then: (resolve: (v: unknown) => void, reject?: (e: unknown) => void) =>
+      Promise.resolve(selectRows).then(resolve, reject),
+    for: forMock,
+    orderBy: orderByMock,
+  };
+  let updateCall = 0;
+  const updateMock = vi.fn(() => ({
+    set: vi.fn().mockReturnValue({
+      where: vi.fn().mockImplementation(() => {
+        const result = updateResults[updateCall++];
+        if (result === undefined) return Promise.resolve(undefined);
+        return { returning: vi.fn().mockResolvedValue(result) };
+      }),
+    }),
+  }));
+  const insertMock = vi.fn(() => ({
+    values: vi.fn().mockReturnValue({
+      returning: vi.fn().mockResolvedValue(insertResult ?? []),
+    }),
+  }));
+  const selectMock = vi.fn(() => ({
+    from: vi.fn(() => ({
+      where: vi.fn(() => selectWhereChain),
+    })),
+  }));
+  const executeMock = vi.fn().mockResolvedValue(undefined);
+  return {
+    select: selectMock,
+    update: updateMock,
+    insert: insertMock,
+    execute: executeMock,
+    forMock,
+    orderByMock,
+  };
+}
 
 describe('drive-role-service', () => {
   beforeEach(() => {
@@ -88,7 +182,7 @@ describe('drive-role-service', () => {
         }),
       });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.drive).toBeNull();
       expect(result.isOwner).toBe(false);
     });
@@ -103,7 +197,7 @@ describe('drive-role-service', () => {
         }),
       });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isOwner).toBe(true);
       expect(result.isAdmin).toBe(true);
       expect(result.drive!.name).toBe('My Drive');
@@ -118,9 +212,9 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'ADMIN' });
+      mockLoadMembership.mockResolvedValueOnce({ role: 'ADMIN', customRoleId: null, source: 'invite' });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(true);
       expect(result.isMember).toBe(true);
     });
@@ -134,11 +228,89 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce({ role: 'MEMBER' });
+      mockLoadMembership.mockResolvedValueOnce({ role: 'MEMBER', customRoleId: null, source: 'invite' });
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
       expect(result.isAdmin).toBe(false);
       expect(result.isMember).toBe(true);
+    });
+
+    // A drive_members row grants nothing until it is accepted — every canonical
+    // resolver in permissions.ts gates on acceptedAt IS NOT NULL. The fake table
+    // below evaluates the WHERE clause the service actually builds, so a pending
+    // row reaches the result only if the service forgets the gate.
+    describe('pending invites (acceptedAt IS NULL)', () => {
+      type Predicate =
+        | { op: 'eq'; a: string; b: unknown }
+        | { op: 'isNotNull'; a: string }
+        | { op: 'and'; args: Predicate[] };
+      type MemberRow = { driveId: string; userId: string; role: string; acceptedAt: Date | null };
+
+      const column = (ref: string) => ref.replace(/^dm\./, '') as keyof MemberRow;
+      const matches = (row: MemberRow, p: Predicate): boolean => {
+        switch (p.op) {
+          case 'and': return p.args.every((arg) => matches(row, arg));
+          case 'eq': return row[column(p.a)] === p.b;
+          case 'isNotNull': return row[column(p.a)] !== null;
+          default: throw new Error(`fake table cannot evaluate ${JSON.stringify(p)}`);
+        }
+      };
+      // The service reads membership through the shared org-aware loader, so the REAL
+      // loadEffectiveDriveMembership runs here, and its drive_members select is answered by
+      // the fake table evaluating the WHERE the loader builds.
+      const seedMembers = (rows: MemberRow[]) => {
+        mockDb.select.mockImplementation(() => ({
+          from: vi.fn((table: unknown) => ({
+            where: vi.fn((where: Predicate) => ({
+              limit: vi.fn(async () => table === driveMembers
+                ? rows.filter((row) => matches(row, where)).slice(0, 1)
+                : [{ id: 'drive-1', name: 'My Drive', slug: 'my-drive', ownerId: 'owner-1' }]),
+            })),
+          })),
+        }));
+        mockLoadMembership.mockImplementation(async (userId: string, drive: { id: string }) => {
+          const actual = await vi.importActual<typeof import('../../permissions/org-drive-membership')>(
+            '../../permissions/org-drive-membership',
+          );
+          return actual.loadEffectiveDriveMembership(userId, drive);
+        });
+      };
+      afterEach(() => mockLoadMembership.mockReset());
+
+      it.each(['ADMIN', 'MEMBER'])('refuses a user whose %s invite is still pending', async (role) => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role, acceptedAt: null }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: false });
+      });
+
+      it('grants ADMIN once the same invite is accepted', async () => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: true, isMember: true });
+      });
+
+      it('grants MEMBER (not admin) once the same invite is accepted', async () => {
+        seedMembers([{ driveId: 'drive-1', userId: 'user-1', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }]);
+
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
+
+        expect(result).toMatchObject({ isOwner: false, isAdmin: false, isMember: true });
+      });
+
+      it('does not let another user\'s accepted row stand in for a pending one', async () => {
+        seedMembers([
+          { driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: null },
+          { driveId: 'drive-1', userId: 'user-2', role: 'ADMIN', acceptedAt: new Date('2026-09-01') },
+        ]);
+
+        const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
+
+        expect(result.isMember).toBe(false);
+      });
     });
 
     it('should return non-member when no membership', async () => {
@@ -150,9 +322,11 @@ describe('drive-role-service', () => {
           }),
         }),
       });
-      mockDb.query.driveMembers.findFirst.mockResolvedValueOnce(null);
+      // The shared loader reads accepted rows only, so a pending ADMIN invitation lands here too.
+      mockLoadMembership.mockResolvedValueOnce(null);
 
-      const result = await checkDriveAccessForRoles('drive-1', 'user-1');
+      const result = await checkDriveAccessForRoles('drive-1', credentialActor('user-1', null));
+      expect(mockLoadMembership).toHaveBeenCalledWith('user-1', drive);
       expect(result.isMember).toBe(false);
       expect(result.drive).not.toBeNull();
     });
@@ -182,68 +356,78 @@ describe('drive-role-service', () => {
 
   describe('createDriveRole', () => {
     it('should create role at next position', async () => {
-      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([
-        { id: 'r1', position: 0 }, { id: 'r2', position: 1 },
-      ]);
-
       const newRole = { id: 'r3', name: 'New Role', position: 2 };
-      mockDb.insert.mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([newRole]),
-        }),
-      });
+      const tx = makeTx([{ id: 'r1', position: 0 }, { id: 'r2', position: 1 }], [], [newRole]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       const result = await createDriveRole('drive-1', { name: 'New Role', permissions: {} });
       expect(result).toEqual(newRole);
     });
 
     it('should start at 0 when no existing roles', async () => {
-      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([]);
-
-      mockDb.insert.mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'r1', position: 0 }]),
-        }),
-      });
+      const tx = makeTx([], [], [{ id: 'r1', position: 0 }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       const result = await createDriveRole('drive-1', { name: 'First', permissions: {} });
       expect(result.position).toBe(0);
     });
 
     it('should unset other defaults when isDefault', async () => {
-      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([]);
-      mockDb.update.mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockResolvedValue(undefined),
-        }),
-      });
-      mockDb.insert.mockReturnValue({
-        values: vi.fn().mockReturnValue({
-          returning: vi.fn().mockResolvedValue([{ id: 'r1', isDefault: true }]),
-        }),
-      });
+      // isDefault takes the ordered drive-wide lock (see makeTx / updateDriveRole
+      // tests below) before the unset-defaults write and the insert.
+      const tx = makeTx([], [undefined], [{ id: 'r1', isDefault: true }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       const result = await createDriveRole('drive-1', { name: 'Default', isDefault: true, permissions: {} });
       expect(result.isDefault).toBe(true);
+      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not take the drive-wide ordered lock when isDefault is not set', async () => {
+      const tx = makeTx([{ id: 'r1', position: 0 }], [], [{ id: 'r2', position: 1 }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await createDriveRole('drive-1', { name: 'Non-default', permissions: {} });
+      expect(tx.orderByMock).not.toHaveBeenCalled();
+    });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: { invalid: true } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
+      // Validation short-circuits before any transaction is opened.
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+
+    it('should accept null driveWidePermissions', async () => {
+      const tx = makeTx([], [], [{ id: 'r1', driveWidePermissions: null }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      const result = await createDriveRole('drive-1', { name: 'X', permissions: {}, driveWidePermissions: null });
+      expect(result.driveWidePermissions).toBeNull();
     });
   });
 
   describe('updateDriveRole', () => {
     it('should throw when role not found', async () => {
-      mockDb.query.driveRoles.findFirst.mockResolvedValueOnce(null);
+      const tx = makeTx([], []);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
       await expect(updateDriveRole('drive-1', 'r-x', { name: 'X' }))
         .rejects.toThrow('Role not found');
     });
 
+    it('should lock the role row with FOR UPDATE', async () => {
+      const tx = makeTx([{ id: 'r1', isDefault: false, permissions: {} }], [[{ id: 'r1', name: 'Updated' }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await updateDriveRole('drive-1', 'r1', { name: 'Updated' });
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+    });
+
     it('should update and return result', async () => {
-      mockDb.query.driveRoles.findFirst.mockResolvedValueOnce({ id: 'r1', isDefault: false });
-      mockDb.update.mockReturnValue({
-        set: vi.fn().mockReturnValue({
-          where: vi.fn().mockReturnValue({
-            returning: vi.fn().mockResolvedValue([{ id: 'r1', name: 'Updated' }]),
-          }),
-        }),
-      });
+      const tx = makeTx([{ id: 'r1', isDefault: false, permissions: {} }], [[{ id: 'r1', name: 'Updated' }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       const result = await updateDriveRole('drive-1', 'r1', { name: 'Updated' });
       expect(result.role.name).toBe('Updated');
@@ -251,23 +435,113 @@ describe('drive-role-service', () => {
     });
 
     it('should unset other defaults when setting isDefault', async () => {
-      mockDb.query.driveRoles.findFirst.mockResolvedValueOnce({ id: 'r1', isDefault: false });
-      mockDb.update
-        .mockReturnValueOnce({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockResolvedValue(undefined),
-          }),
-        })
-        .mockReturnValueOnce({
-          set: vi.fn().mockReturnValue({
-            where: vi.fn().mockReturnValue({
-              returning: vi.fn().mockResolvedValue([{ id: 'r1', isDefault: true }]),
-            }),
-          }),
-        });
+      const tx = makeTx(
+        [{ id: 'r1', isDefault: false, permissions: {} }],
+        [undefined, [{ id: 'r1', isDefault: true }]]
+      );
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
       const result = await updateDriveRole('drive-1', 'r1', { isDefault: true });
       expect(result.role.isDefault).toBe(true);
+    });
+
+    it('should lock all drive role rows in a consistent order when setting isDefault', async () => {
+      // The drive-wide "unset other defaults" write touches every role row in
+      // the drive; locking only the target row first would let two concurrent
+      // default-switches deadlock on each other's targets. The isDefault path
+      // must take an ordered drive-wide lock instead of a single-row lock.
+      const tx = makeTx(
+        [
+          { id: 'r1', isDefault: true, permissions: {} },
+          { id: 'r2', isDefault: false, permissions: {} },
+        ],
+        [undefined, [{ id: 'r2', isDefault: true }]]
+      );
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      const result = await updateDriveRole('drive-1', 'r2', { isDefault: true });
+      expect(result.role.isDefault).toBe(true);
+      expect(result.wasDefault).toBe(false);
+      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+    });
+
+    it('should not take the drive-wide ordered lock when isDefault is not being set', async () => {
+      const tx = makeTx([{ id: 'r1', isDefault: false, permissions: {} }], [[{ id: 'r1', name: 'Updated' }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await updateDriveRole('drive-1', 'r1', { name: 'Updated' });
+      expect(tx.orderByMock).not.toHaveBeenCalled();
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+    });
+
+    it('should throw when target role is missing from the drive-wide locked set on the isDefault path', async () => {
+      const tx = makeTx([{ id: 'r-other', isDefault: true, permissions: {} }], []);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await expect(updateDriveRole('drive-1', 'r-x', { isDefault: true }))
+        .rejects.toThrow('Role not found');
+    });
+
+    it('should throw when driveWidePermissions is malformed', async () => {
+      await expect(
+        updateDriveRole('drive-1', 'r1', { driveWidePermissions: { bad: 'field' } as never })
+      ).rejects.toThrow('Invalid driveWidePermissions structure');
+      // Validation short-circuits before any transaction is opened.
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+
+    it('should throw when both permissions and permissionsPatch are given', async () => {
+      await expect(
+        updateDriveRole('drive-1', 'r1', { permissions: {}, permissionsPatch: {} })
+      ).rejects.toThrow('Cannot specify both permissions and permissionsPatch');
+      expect(mockDb.transaction).not.toHaveBeenCalled();
+    });
+
+    it('should merge permissionsPatch against the row read inside the transaction, not a stale pre-transaction read', async () => {
+      // Regression test for the read-modify-write race (#1425): the existing
+      // permissions used for the merge must come from the locked, in-transaction
+      // read, so a concurrent writer that changed the row between an earlier
+      // unlocked read and this call is still reflected.
+      const lockedRow = {
+        id: 'r1',
+        isDefault: false,
+        permissions: { 'page-a': { canView: true, canEdit: false, canShare: false } },
+      };
+      const tx = makeTx([lockedRow], [[{ id: 'r1', permissions: {
+        'page-a': { canView: true, canEdit: false, canShare: false },
+        'page-b': { canView: true, canEdit: true, canShare: false },
+      } }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await updateDriveRole('drive-1', 'r1', {
+        permissionsPatch: { 'page-b': { canView: true, canEdit: true, canShare: false } },
+      });
+
+      const setCall = (tx.update.mock.results[0]?.value as { set: MockFn }).set;
+      expect(setCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          permissions: {
+            'page-a': { canView: true, canEdit: false, canShare: false },
+            'page-b': { canView: true, canEdit: true, canShare: false },
+          },
+        })
+      );
+    });
+
+    it('should prune a page via a null permissionsPatch entry', async () => {
+      const lockedRow = {
+        id: 'r1',
+        isDefault: false,
+        permissions: { 'page-a': { canView: true, canEdit: false, canShare: false } },
+      };
+      const tx = makeTx([lockedRow], [[{ id: 'r1', permissions: {} }]]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await updateDriveRole('drive-1', 'r1', { permissionsPatch: { 'page-a': null } });
+
+      const setCall = (tx.update.mock.results[0]?.value as { set: MockFn }).set;
+      expect(setCall).toHaveBeenCalledWith(expect.objectContaining({ permissions: {} }));
     });
   });
 
@@ -280,6 +554,8 @@ describe('drive-role-service', () => {
     it('should delete existing role without throwing', async () => {
       mockDb.query.driveRoles.findFirst.mockResolvedValueOnce({ id: 'r1' });
       mockDb.delete.mockReturnValue({ where: vi.fn().mockResolvedValue(undefined) });
+      // The delete runs in a transaction (the POL-6 floor guard judges the drive after it).
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(mockDb));
 
       // void function — verifying it resolves without error is the contract
       await expect(deleteDriveRole('drive-1', 'r1')).resolves.toBeUndefined();
@@ -288,25 +564,51 @@ describe('drive-role-service', () => {
 
   describe('reorderDriveRoles', () => {
     it('should throw for invalid role IDs', async () => {
-      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([{ id: 'r1' }, { id: 'r2' }]);
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
       await expect(reorderDriveRoles('drive-1', ['r1', 'r3'])).rejects.toThrow('Invalid role IDs');
+      // Invalid-id rejection short-circuits before the batched write is ever attempted.
+      expect(tx.execute).not.toHaveBeenCalled();
     });
 
-    it('should update positions in transaction', async () => {
-      mockDb.query.driveRoles.findMany.mockResolvedValueOnce([{ id: 'r1' }, { id: 'r2' }]);
-      mockDb.transaction.mockImplementation(async (fn: Function) => {
-        const tx = {
-          update: vi.fn().mockReturnValue({
-            set: vi.fn().mockReturnValue({
-              where: vi.fn().mockResolvedValue(undefined),
-            }),
-          }),
-        };
-        await fn(tx);
-      });
+    it('should write positions as a single batched statement instead of N sequential updates', async () => {
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
 
-      // void function — verifying it resolves without error is the contract
       await expect(reorderDriveRoles('drive-1', ['r2', 'r1'])).resolves.toBeUndefined();
+      expect(tx.execute).toHaveBeenCalledTimes(1);
+      // No more per-row tx.update(...).set(...).where(...) calls for the write.
+      expect(tx.update).not.toHaveBeenCalled();
+    });
+
+    it('should take the ordered drive-wide lock (lockDriveRolesInOrder) before lockedBatchReorder batches the write', async () => {
+      // Locking the drive's role rows in id order before writing positions
+      // avoids a deadlock against a concurrent updateDriveRole isDefault
+      // switch, which locks in the same order (see lockDriveRolesInOrder).
+      // lockedBatchReorder then re-locks (harmlessly, same tx) only the
+      // targeted rows before its own batched write — hence two orderBy/for
+      // ('update') pairs instead of one.
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await reorderDriveRoles('drive-1', ['r2', 'r1']);
+
+      expect(tx.orderByMock).toHaveBeenCalledTimes(2);
+      expect(tx.forMock).toHaveBeenCalledWith('update');
+      const firstSelectOrder = tx.select.mock.invocationCallOrder[0];
+      const executeOrder = tx.execute.mock.invocationCallOrder[0];
+      expect(firstSelectOrder).toBeLessThan(executeOrder);
+    });
+
+    it('should no-op on an empty roleIds array without touching the batched write', async () => {
+      const tx = makeTx([{ id: 'r1' }, { id: 'r2' }]);
+      mockDb.transaction.mockImplementation(async (fn: Function) => fn(tx));
+
+      await expect(reorderDriveRoles('drive-1', [])).resolves.toBeUndefined();
+      // Still takes the drive-wide lock (validation), but skips the batched write entirely.
+      expect(tx.orderByMock).toHaveBeenCalledTimes(1);
+      expect(tx.execute).not.toHaveBeenCalled();
     });
   });
 
@@ -322,5 +624,105 @@ describe('drive-role-service', () => {
     it('should return true for valid permissions', () =>
       expect(validateRolePermissions({ p: { canView: true, canEdit: false, canShare: false } })).toBe(true));
     it('should return true for empty object', () => expect(validateRolePermissions({})).toBe(true));
+  });
+
+  describe('validateDriveWidePermissions', () => {
+    it('should return true for null', () => expect(validateDriveWidePermissions(null)).toBe(true));
+    it('should return true for undefined', () => expect(validateDriveWidePermissions(undefined)).toBe(true));
+    it('should return true for valid object', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false })).toBe(true));
+    it('should return false for array', () => expect(validateDriveWidePermissions([])).toBe(false));
+    it('should return false for string', () => expect(validateDriveWidePermissions('yes')).toBe(false));
+    it('should return false for missing key', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false })).toBe(false));
+    it('should return false for non-boolean value', () =>
+      expect(validateDriveWidePermissions({ canView: 1, canEdit: false, canShare: false })).toBe(false));
+    it('should return false for object with extra keys', () =>
+      expect(validateDriveWidePermissions({ canView: true, canEdit: false, canShare: false, canDelete: true })).toBe(false));
+  });
+
+  describe('mergeRolePermissionsPatch', () => {
+    it('should add a new page entry', () => {
+      const existing = { 'page-a': { canView: true, canEdit: false, canShare: false } };
+      const merged = mergeRolePermissionsPatch(existing, {
+        'page-b': { canView: true, canEdit: true, canShare: false },
+      });
+      expect(merged).toEqual({
+        'page-a': { canView: true, canEdit: false, canShare: false },
+        'page-b': { canView: true, canEdit: true, canShare: false },
+      });
+    });
+
+    it('should overwrite an existing page entry', () => {
+      const existing = { 'page-a': { canView: true, canEdit: false, canShare: false } };
+      const merged = mergeRolePermissionsPatch(existing, {
+        'page-a': { canView: true, canEdit: true, canShare: true },
+      });
+      expect(merged['page-a']).toEqual({ canView: true, canEdit: true, canShare: true });
+    });
+
+    it('should prune a page entry when patched with null', () => {
+      const existing = {
+        'page-a': { canView: true, canEdit: false, canShare: false },
+        'page-b': { canView: true, canEdit: true, canShare: false },
+      };
+      const merged = mergeRolePermissionsPatch(existing, { 'page-a': null });
+      expect(merged).toEqual({ 'page-b': { canView: true, canEdit: true, canShare: false } });
+    });
+
+    it('should leave pages not named in the patch untouched', () => {
+      const existing = {
+        'page-a': { canView: true, canEdit: false, canShare: false },
+        'page-b': { canView: true, canEdit: true, canShare: false },
+      };
+      const merged = mergeRolePermissionsPatch(existing, {
+        'page-c': { canView: true, canEdit: false, canShare: false },
+      });
+      expect(merged['page-a']).toEqual(existing['page-a']);
+      expect(merged['page-b']).toEqual(existing['page-b']);
+    });
+
+    it('should not mutate the existing map', () => {
+      const existing = { 'page-a': { canView: true, canEdit: false, canShare: false } };
+      mergeRolePermissionsPatch(existing, { 'page-b': { canView: true, canEdit: true, canShare: false } });
+      expect(existing).toEqual({ 'page-a': { canView: true, canEdit: false, canShare: false } });
+    });
+  });
+});
+
+/**
+ * Issue #2470. `get_drive_role "member"` answered "not found in this drive",
+ * which reads as "that role does not exist" when the truth is that system roles
+ * are not rows here at all and never will be. A caller has no way to act on the
+ * old wording; these lock in that the new one names where they live.
+ */
+describe('roleNotFoundMessage', () => {
+  it('leaves an ordinary missing role id as a plain not-found', () => {
+    expect(roleNotFoundMessage('role_abc')).toBe('Role "role_abc" not found in this drive');
+  });
+
+  it.each(['member', 'admin', 'owner', 'MEMBER', ' Member '])('explains where the system role %j actually lives', (name) => {
+    const message = roleNotFoundMessage(name);
+    expect(message).toMatch(/system role/i);
+    expect(message).toMatch(/drive membership/i);
+    expect(message).toContain('pagespace keys describe');
+    // Same reason as the MCP write refusal: `keys describe` needs a content
+    // credential named, so pointing at a bare invocation would send the reader
+    // into a second refusal.
+    expect(message).toMatch(/with that credential in hand/i);
+    expect(message).not.toBe(`Role "${name}" not found in this drive`);
+  });
+});
+
+describe('isSystemRoleName', () => {
+  it('matches the MemberRole enum values case- and whitespace-insensitively', () => {
+    for (const name of ['owner', 'ADMIN', ' Member ']) {
+      expect(isSystemRoleName(name)).toBe(true);
+    }
+  });
+
+  it('does not match a custom role name that merely contains one', () => {
+    expect(isSystemRoleName('members')).toBe(false);
+    expect(isSystemRoleName('role_admin')).toBe(false);
   });
 });

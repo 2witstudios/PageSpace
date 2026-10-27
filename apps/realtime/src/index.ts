@@ -1,284 +1,617 @@
+import './instrument';
+import { getDrivePolicies, getResourceAuthenticationPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { createOrgRoomWatch, createPolicyChangeFanout, ORG_REAUTHENTICATION_REQUIRED_EVENT, type OrgRoomWatch } from './org-room-watch';
+import { ORG_CHANGED_EVENT } from '@pagespace/lib/realtime/org-wallet-events';
+import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import type { Duplex } from 'stream';
 import { Server, Socket } from 'socket.io';
-import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { explainSignInRefusal, getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
+import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { sessionService } from '@pagespace/lib/auth/session-service';
-import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { verifyBroadcastSignature } from '@pagespace/lib/auth/broadcast-auth';
 import * as dotenv from 'dotenv';
 import { db } from '@pagespace/db/db';
-import { eq, gt, and, or } from '@pagespace/db/operators';
+import { and, eq, or } from '@pagespace/db/operators';
 import { dmConversations } from '@pagespace/db/schema/social';
-import { socketTokens, users } from '@pagespace/db/schema/auth';
+import { users } from '@pagespace/db/schema/auth';
 import { userProfiles } from '@pagespace/db/schema/members';
-import { pages } from '@pagespace/db/schema/core';
+import { pages, drives } from '@pagespace/db/schema/core';
+import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
+import { checkAgentSessionConcurrency } from '@pagespace/lib/services/sandbox/quota';
+import {
+  refreshSessionStorageMeasurement,
+  shouldRefreshMeasurement,
+  SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+} from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
+import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import {
+  decideFullEgressEnablement,
+  isContainmentVerified,
+} from '@pagespace/lib/services/sandbox/containment';
+import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { defaultSandboxBillingDeps } from '@pagespace/lib/services/sandbox/sandbox-billing';
+import { makeResolveShellPayer } from './terminal/shell-payer';
+import { pgWindowClaimLock } from './terminal/window-claim-lock';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
+import { acquireCodeExecutionSlot, releaseCodeExecutionSlot } from '@pagespace/lib/services/sandbox/quota';
+import { createSpritesSandboxClient, createSpriteHandleCache, type SpritesSdk } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { createSpriteSandboxHost } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host';
+import {
+  createSpriteTasksClient,
+  createTaskHoldController,
+  taskHoldName,
+  resolveTaskHoldConfig,
+} from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
+import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
+import { createTerminalSessionMap, type TerminalSession } from './terminal/terminal-session-map';
+import { openPtyShell } from './terminal/sprites-shell';
+import { getRealtimeSpritesSdk } from './terminal/realtime-sprites-client';
+import {
+  buildShellHandlers,
+  claimBillingWindow,
+  regateResumedWindow,
+  composeSocketKey,
+  connectFailureMessage,
+  ensureShellSession,
+  armIdleReap as armShellIdleReap,
+  type ShellSessionDeps,
+  type SocketLike as ShellSocketLike,
+} from './terminal/shell-handler';
+import { buildShellCheckAuth } from './terminal/shell-access';
+import { deriveShellSessionKey } from './terminal/shell-session-key';
+import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
+import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-handler';
+import { handleShellActivityRequest } from './terminal/shell-activity';
+import { buildPreviewUpgradeHandler, previewHolderForUpgrade } from './dev-preview/preview-upgrade';
+import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
+import { createDevPreviewLock, DEV_PREVIEW_DETECTOR_RETRIES } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
+import { readDevPreviewHolderBody } from './dev-preview/holder-body';
+import {
+  buildRealtimePreviewAccessDeps,
+  createConnectScopedSandboxHost,
+  getRealtimePreviewCookieKey,
+  getRealtimePreviewStore,
+  resolveHolderSandboxId,
+} from './dev-preview/preview-runtime';
+import { resolvePreviewTarget } from '@pagespace/lib/services/sandbox/preview/preview-access';
+import { tunnelWebSocketUpgrade } from '@pagespace/lib/services/sandbox/preview/preview-ws-tunnel';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { resolveSpritesApiBaseUrl } from '@pagespace/lib/services/sandbox/preview/ports-watch';
+import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { resolveSpritesToken } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { handleRealtimeAttachRequest, defaultAttachHandlerDeps } from './voice/attach-handler';
+import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
+import {
+  resolveSessionTenantId,
+  resolveDriveMembership,
+  canRunCodeForSession,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/workspace-shells';
+import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/workspace-shells-store';
+import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import { createDbDriveEnvStore } from '@pagespace/lib/services/drive-envs/drive-envs-store';
+import { ensureDriveEnvSandbox } from '@pagespace/lib/services/drive-envs/env-provision-deps';
+import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
+import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
+import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import {
   validatePageId,
   validateDriveId,
   validateConversationId,
+  validateSessionId,
   validatePresencePagePayload,
   emitValidationError,
 } from './validation';
-import { loggers } from '@pagespace/lib/logging/logger-config';
-import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
+import { loggers, initializeLogging } from '@pagespace/lib/logging/logger-config';
+import { corsOrigin, validateAndLogWebSocketOrigin } from './origin-allowlist';
+import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+// Room names come EXCLUSIVELY from the shared grammar (#2158) — the same
+// module the broadcast-audience validator checks against, so a join shape
+// added here is automatically broadcastable (and vice versa). The drift guard
+// (__tests__/room-grammar-drift-guard.test.ts) rejects hand-rolled room names.
+import {
+  notificationsRoom,
+  userTasksRoom,
+  userCalendarRoom,
+  userDrivesRoom,
+  userGlobalRoom,
+  userSessionsRoom,
+  driveRoom,
+  driveCalendarRoom,
+  driveWalletRoom,
+  dmRoom,
+  conversationRoom,
+  sessionRoom,
+  driveActivityRoom,
+  pageActivityRoom,
+} from '@pagespace/lib/realtime/rooms';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { canViewDriveWallet } from '@pagespace/lib/permissions/spend-standing';
+import { conversations } from '@pagespace/db/schema/conversations';
 import { socketRegistry } from './socket-registry';
 import { handleKickRequest } from './kick-handler';
+import { authorizeBroadcastAudience } from './broadcast-audience';
 import { presenceTracker, type PresenceViewer } from './presence-tracker';
 import { withPerEventAuth, type AuthSocket } from './per-event-auth';
+import { isOrgActive, isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
 
 dotenv.config({ path: '../../.env' });
 
+// realtime's first-ever global crash visibility: an uncaught exception or
+// unhandled rejection used to just kill the process with no record anywhere.
+initializeLogging(async (error) => {
+  Sentry.captureException(error);
+  await Sentry.flush(2000);
+});
+
+// One map for every live shell PTY, keyed by its own sessionKey — a session's
+// shared Sprite can host several of these concurrently.
+const agentTerminalSessionMap = createTerminalSessionMap();
+
+// The shell:* family's stores (agent sessions + their shells) — created once
+// at module level, not per-connection.
+const dbAgentSessionStorePromise = createDbAgentSessionStore();
+// The drive-environment store, for sessions that run INSIDE an environment: a
+// shell opened over the socket provisions the env's Sprite exactly as a web
+// tool call does, through the same shared core.
+const dbDriveEnvStorePromise = createDbDriveEnvStore();
+const dbSessionShellStorePromise = createDbSessionShellStore();
+
+// Dev-server detection: one `ports/watch` watcher per live sprite (dark unless
+// DEV_PREVIEW_ENABLED). Asserted from two places — the web tier's signed
+// trigger (`/api/dev-preview/watch`, after a session ensure) and this
+// process's own shell open below — because the exec-WS port channel is
+// TTY-only and a watcher must exist for AGENT-launched servers too.
+const devPreviewRegistry = createDetectionRegistry({
+  featureEnabled: isDevPreviewEnabled,
+  resolveHolderSandboxId,
+  attach: async (sandboxId) => (await createConnectScopedSandboxHost()).attach({ sandboxId }).catch(() => null),
+  store: getRealtimePreviewStore(),
+  createSocket: nodeWebSocketFactory,
+  spritesToken: resolveSpritesToken,
+  spritesApiBaseUrl: resolveSpritesApiBaseUrl,
+  log: loggers.realtime,
+  // Serialized against the web tier's stop/resume on the same holder. A short
+  // budget: frames arrive seconds apart, so waiting a few hundred ms costs the
+  // chain nothing, and past it the frame defers rather than fighting.
+  lock: createDevPreviewLock({ retries: DEV_PREVIEW_DETECTOR_RETRIES, log: loggers.realtime }),
+  now: () => new Date(),
+});
+
 /**
- * Validate a short-lived socket token (ps_sock_* format).
- * These tokens are created by /api/auth/socket-token to bypass sameSite: 'strict' cookies.
- *
- * @param token - The socket token to validate
- * @returns Object with userId if valid, null if invalid or expired
+ * Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
+ * plaintext activity-log/audit snapshot downstream (writeCodeExecutionAudit),
+ * not an encrypted column, so a ciphertext users.email must never reach it.
+ * Extracted as a pure helper (rather than inlined in `buildShellCheckAuth`)
+ * so it's directly unit-testable without mocking the rest of the shell-auth
+ * pipeline (sandbox provisioning, sprites SDK, audit sink).
  */
-async function validateSocketToken(token: string): Promise<{ userId: string } | null> {
-  /* c8 ignore next 3 */
-  if (!token.startsWith('ps_sock_')) {
-    return null;
-  }
+export async function resolveActorEmail(rawEmail: string | null | undefined): Promise<string> {
+  return rawEmail ? await decryptField(rawEmail) : '';
+}
 
-  const tokenHash = hashToken(token);
+// ---------------------------------------------------------------------------
+// shell:* family — the PTY bridge re-keyed onto agent sessions (Phase 3).
+//
+// A shell's whole wire address is `{shellId}`: the bridge resolves shell row →
+// session → sandbox. Authorization is the SAME pure `decideAgentSessionAccess`
+// verdict the web API routes enforce (via `checkAgentSessionAccess`), and
+// provisioning is the SAME `ensureAgentSessionSandbox` path the web tier uses —
+// one code path, so concurrent provisioners CAS against one store instead of
+// fighting. The legacy `agent-terminal:*` family (machine/project/branch-scope
+// PTYs) was deleted in the Phase 8 teardown.
+// ---------------------------------------------------------------------------
 
-  try {
-    const record = await db.query.socketTokens.findFirst({
-      where: and(
-        eq(socketTokens.tokenHash, tokenHash),
-        gt(socketTokens.expiresAt, new Date())
-      ),
-    });
-
-    if (!record) {
-      loggers.realtime.debug('Socket token not found or expired', { tokenHashPrefix: tokenHash.substring(0, 8) });
-      return null;
-    }
-
-    loggers.realtime.debug('Socket token validated successfully', { userId: record.userId });
-    return { userId: record.userId };
-  } catch (error) {
-    loggers.realtime.error('Error validating socket token', error as Error);
-    return null;
-  }
+/** A user's plan tier (the payer's, for ceiling/eligibility checks). Unknown/missing rows fall to the free-tier limit. */
+async function resolveOwnerTier(ownerId: string) {
+  const [row] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, ownerId))
+    .limit(1);
+  return toSubscriptionTier(row?.subscriptionTier);
 }
 
 /**
- * Origin Validation for WebSocket Connections (Defense-in-Depth with Blocking)
+ * An ENVIRONMENT's payer — the drive's OWNER — and their tier, with NO fallback.
  *
- * This module provides explicit origin validation that BLOCKS invalid origins.
- * Socket.IO CORS is a first line of defense, but this provides defense-in-depth
- * by rejecting connections from unexpected origins at the middleware level.
+ * The web tier's `resolveDriveEnvPayer` says the same thing; both fail closed on
+ * a vanished drive for the same reason `resolveSessionTenantId` does. The payer
+ * id is the TENANT an env's Sprite key folds under, so substituting the acting
+ * user would derive a different Sprite NAME for the same environment and hand
+ * back a different machine — splitting one env across two identities, one per
+ * tier of the system.
  */
-
-/**
- * Normalizes an origin URL by extracting protocol, host, and port
- * This ensures consistent comparison between origins
- *
- * @param origin - The origin URL to normalize
- * @returns Normalized origin (protocol://host:port) or empty string if invalid
- */
-function normalizeOrigin(origin: string): string {
-  try {
-    const url = new URL(origin);
-    return url.origin;
-  } catch {
-    return '';
-  }
+async function resolveDriveEnvPayer(driveId: string) {
+  const [drive] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  if (!drive) return null;
+  // The tenant stays the lead (key folding); the tier is the org's for an org drive (WAL-9).
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, await resolveOwnerTier(drive.ownerId), await isOrgLapsedForDrive(drive)) };
 }
 
 /**
- * Gets the list of allowed origins from environment configuration
- *
- * @returns Array of allowed origin URLs
+ * Ensure (create/resume/adopt) the session's ONE shared sandbox — the
+ * `ensureSessionSandbox` seam of `buildShellCheckAuth`, backed by the shared
+ * packages/lib provisioner and NEVER a realtime-local one. `tenantId` (the
+ * Sprite-key fold's tenant and the billing account) is the session's own
+ * DRIVE owner, falling back to the session's own owner for a global-assistant
+ * session — resolved through `resolveSessionTenantId`, the SAME shared lib
+ * function the web tier's `provisionSessionSandbox` calls, so a vanished
+ * drive fails closed identically on both tiers.
  */
-function getAllowedOrigins(): string[] {
-  const origins: string[] = [];
+async function ensureShellSessionSandbox({ workspaceId, actor }: { workspaceId: string; actor: AccessActor }): Promise<
+  { ok: true; sandboxId: string } | { ok: false; reason: string }
+> {
+  const store = await dbAgentSessionStorePromise;
+  const row = await store.findById(workspaceId);
+  if (!row) return { ok: false, reason: 'session_not_found' };
 
-  // Primary origins from CORS_ORIGIN or WEB_APP_URL (matches Socket.IO CORS config)
-  const corsOrigin = process.env.CORS_ORIGIN;
-  const webAppUrl = process.env.WEB_APP_URL;
+  const tenant = await resolveSessionTenantId(row);
+  if (!tenant.ok) return { ok: false, reason: tenant.reason };
+  const tenantId = tenant.tenantId;
 
-  if (corsOrigin) {
-    const normalized = normalizeOrigin(corsOrigin);
-    if (normalized) origins.push(normalized);
-  } else if (webAppUrl) {
-    const normalized = normalizeOrigin(webAppUrl);
-    if (normalized) origins.push(normalized);
-  }
+  const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+  const host = createSpriteSandboxHost({ sdk, client: createSpritesSandboxClient({ sdk }) });
 
-  // Additional origins from ADDITIONAL_ALLOWED_ORIGINS (comma-separated)
-  const additionalOrigins = process.env.ADDITIONAL_ALLOWED_ORIGINS;
-  if (additionalOrigins) {
-    const parsed = additionalOrigins
-      .split(',')
-      .map((o) => normalizeOrigin(o.trim()))
-      .filter((o) => o.length > 0);
-    origins.push(...parsed);
-  }
-
-  return origins;
-}
-
-/**
- * Checks if the given origin is in the allowed list
- *
- * @param origin - The origin to validate
- * @param allowedOrigins - List of allowed origins
- * @returns true if origin is allowed, false otherwise
- */
-function isOriginAllowed(origin: string, allowedOrigins: string[]): boolean {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) {
-    return false;
-  }
-
-  return allowedOrigins.some((allowed) => allowed === normalizedOrigin);
-}
-
-/**
- * Result of WebSocket origin validation
- */
-interface WebSocketOriginValidationResult {
-  /** Whether the origin is valid (allowed or not required) */
-  isValid: boolean;
-  /** The origin that was validated (normalized), or undefined if not provided */
-  origin: string | undefined;
-  /** Reason for the validation result */
-  reason: 'valid' | 'no_origin' | 'invalid' | 'no_config';
-}
-
-/**
- * Validates a WebSocket connection origin against allowed origins
- *
- * This helper function provides a simple boolean check for origin validation.
- * It can be used for additional security monitoring or optional blocking decisions.
- *
- * Validation rules:
- * - Missing origin: Returns valid (non-browser clients like curl, mobile apps)
- * - No config: Returns valid with warning (CORS_ORIGIN/WEB_APP_URL not set)
- * - Origin matches allowed list: Returns valid
- * - Origin doesn't match: Returns invalid
- *
- * @param origin - The Origin header value from the connection request
- * @returns Validation result with isValid boolean and reason
- *
- * @example
- * ```typescript
- * const result = validateWebSocketOrigin(socket.handshake.headers.origin);
- * if (!result.isValid) {
- *   // Optionally reject the connection or log a warning
- *   socket.disconnect();
- * }
- * ```
- */
-/* c8 ignore start */
-function validateWebSocketOrigin(origin: string | undefined): WebSocketOriginValidationResult {
-  // No origin header - non-browser client, allow by default
-  if (!origin) {
-    return {
-      isValid: true,
-      origin: undefined,
-      reason: 'no_origin',
-    };
-  }
-
-  const normalizedOrigin = normalizeOrigin(origin);
-  const allowedOrigins = getAllowedOrigins();
-
-  // No allowed origins configured - allow but this is a misconfiguration
-  if (allowedOrigins.length === 0) {
-    return {
-      isValid: true,
-      origin: normalizedOrigin || origin,
-      reason: 'no_config',
-    };
-  }
-
-  // Check if origin is in allowed list
-  if (isOriginAllowed(origin, allowedOrigins)) {
-    return {
-      isValid: true,
-      origin: normalizedOrigin,
-      reason: 'valid',
-    };
-  }
-
-  // Origin not in allowed list
-  return {
-    isValid: false,
-    origin: normalizedOrigin || origin,
-    reason: 'invalid',
-  };
-}
-/* c8 ignore stop */
-
-/**
- * Validates WebSocket connection origin and returns whether to allow the connection
- *
- * This function BLOCKS connections from invalid origins (defense-in-depth).
- * Socket.IO CORS is a first line of defense, but this provides additional protection.
- *
- * @param origin - The Origin header value from the connection request
- * @param metadata - Additional metadata for logging (socketId, IP, etc.)
- * @returns true if connection should be allowed, false if it should be rejected
- */
-function validateAndLogWebSocketOrigin(
-  origin: string | undefined,
-  metadata: { socketId: string; ip: string | undefined; userAgent: string | undefined }
-): boolean {
-  const allowedOrigins = getAllowedOrigins();
-
-  // No origin header - non-browser client (curl, mobile apps, etc.)
-  // Allow these as they authenticate via tokens, not cookies
-  if (!origin) {
-    loggers.realtime.debug('WebSocket origin validation: no Origin header', {
-      ...metadata,
-      reason: 'Non-browser client or same-origin request',
-    });
-    return true;
-  }
-
-  // No allowed origins configured in production is a misconfiguration
-  // In development, allow but warn. In production, this should fail closed.
-  if (allowedOrigins.length === 0) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    if (isProduction) {
-      loggers.realtime.error('WebSocket origin validation: REJECTED - no allowed origins configured in production', {
-        ...metadata,
-        origin,
-        severity: 'security',
-        reason: 'CORS_ORIGIN and WEB_APP_URL not set in production',
-      });
-      return false;
-    }
-    loggers.realtime.warn('WebSocket origin validation: no allowed origins configured (allowing in development)', {
-      ...metadata,
-      origin,
-      reason: 'CORS_ORIGIN and WEB_APP_URL not set',
-    });
-    return true;
-  }
-
-  // Check if origin is allowed
-  if (isOriginAllowed(origin, allowedOrigins)) {
-    loggers.realtime.debug('WebSocket origin validation: valid origin', {
-      ...metadata,
-      origin,
-    });
-    return true;
-  }
-
-  // Origin not in allowed list - REJECT the connection
-  loggers.realtime.warn('WebSocket origin validation: REJECTED - unexpected origin', {
-    ...metadata,
-    origin,
-    allowedOrigins,
-    severity: 'security',
-    reason: 'Origin not in allowed list - connection rejected',
+  const result = await ensureAgentSessionSandbox({
+    row: { ...row, workspaceId: row.id },
+    intent: 'ensure',
+    actor: { access: actor, tenantId },
+    deps: {
+      store,
+      host,
+      substrate: { kind: 'sprite' },
+      options: resolveSandboxNetworkOptions({ surface: 'session', egressIpTag: getConfiguredEgressIpTag() }),
+      secret: getSandboxSessionSecret(),
+      // SECURITY: the centralized code-execution gate, applied inside the
+      // shared provisioner before any Sprite is provisioned OR handed back —
+      // the same fail-closed checker the access half already consulted.
+      authorize: canRunCode,
+      checkFullEgressEnablement: async () =>
+        decideFullEgressEnablement({
+          adminGateEnabled: isCodeExecutionEnabled(),
+          containment: isContainmentVerified() ? { contained: true } : null,
+        }),
+      // The per-owner live-session ceiling. Enforced on THIS path too, not just
+      // the web tier's: a shell opened over the socket mints a Sprite exactly
+      // like a chat tool call does, so gating only the HTTP routes would leave
+      // the socket as a way around the tier limit.
+      // Storage measurement on THIS path too. A session whose only work is PTY
+      // shells over the socket — the primary workload — otherwise never gets
+      // measured at all: the web tool path is the only other trigger, and a
+      // shell-only session never touches it. The reconcile maps a null
+      // measurement to 0 GB and advances the watermark regardless, so those
+      // sessions would bill $0 for storage permanently.
+      measureSessionStorage: async ({ workspaceId, handle }) => {
+        await refreshSessionStorageMeasurement({
+          handle,
+          workspaceId,
+          // The generation just minted, for the writer's CAS (see the web tier).
+          spriteInstanceId: handle.spriteInstanceId ?? null,
+          // Null for the same reason as the web tier: this fires on the create
+          // arm, whose own stamps reset the measurement columns.
+          lastMeasuredAt: null,
+          now: new Date(),
+          persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+            await store.recordStorageMeasurement({ workspaceId, spriteInstanceId, measuredBytes, measuredAt });
+          },
+        });
+      },
+      // An env-bound session provisions its ENVIRONMENT, not itself — the same
+      // `ensureDriveEnvSandbox` the web tier binds, so both processes fold one
+      // keyspace under one tenant. Routing lives inside
+      // `ensureAgentSessionSandbox`; this is only the binding it calls.
+      ensureEnvSandbox: async ({ envId, intent }) =>
+        ensureDriveEnvSandbox({
+          envId,
+          intent,
+          requester: actor,
+          deps: {
+            store: await dbDriveEnvStorePromise,
+            host,
+            resolvePayer: resolveDriveEnvPayer,
+            // POL-10: the org's persistent-environments switch, read live at every start (same reader the web tier binds).
+            getDriveOrgPolicies: async (id) => (await getDrivePolicies(id))?.policies ?? null,
+          },
+        }),
+      checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
+        // Tier of the PAYER — the session's tenant (drive owner, else session
+        // owner), resolved above — not the session creator's own tier (review
+        // #2326); mirrors the web tier's `provisionSessionSandbox`. The count
+        // stays per session owner (`ownerId`).
+        const tier = await resolveOwnerTier(tenantId);
+        return checkAgentSessionConcurrency({
+          ownerId,
+          tier,
+          countLiveAgentSessions: (id) => store.countLive(id),
+          alreadyProvisioned,
+        });
+      },
+      now: () => new Date(),
+    },
   });
-  return false;
+  if (!result.ok) return { ok: false, reason: result.denial ?? result.reason };
+
+  // Opportunistic measurement for a RESUMED session. The create-arm hook above
+  // only ever sees an empty disk; this is the moment a shell-only session — one
+  // that never makes a chat tool call, and so never reaches the web tier's
+  // measurement path — is both awake and worth measuring. Throttled per session,
+  // and deliberately not awaited: a billing observation must never delay opening
+  // a shell.
+  //
+  // On the CREATE arm this doubles up with the provisioning hook: that arm nulls
+  // `storageMeasuredAt` in the same write, so the throttle below reads null and
+  // always fires, and two `du` walks run concurrently on the same fresh sandbox.
+  // Pre-existing and harmless in value — both read the same empty disk, each is
+  // capped at 20s, and neither is awaited — but it is two execs where one would
+  // do. Suppressing it needs the provisioner to report whether it measured,
+  // which is a change to the shared holder core.
+  void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
+
+  // The sprite is awake (it was just ensured for a shell): attach the
+  // dev-server watcher for its HOLDER — the env for an env-bound session.
+  void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row) });
+
+  return { ok: true, sandboxId: result.sandboxId };
 }
+
+/**
+ * Measure a warm session's storage if the throttle has elapsed. Mirrors the web
+ * tier's `measureWarmSessionStorage`; kept here rather than imported because the
+ * two tiers construct their sandbox clients differently.
+ */
+async function measureWarmSessionStorageOnResume(workspaceId: string, sandboxId: string): Promise<void> {
+  try {
+    const store = await dbAgentSessionStorePromise;
+    const row = await store.findById(workspaceId);
+    if (!row || row.sandboxId === null || row.spriteTornDownAt !== null) return;
+    if (!shouldRefreshMeasurement({
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      throttleMs: SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
+    })) return;
+
+    const sdk = createSpriteHandleCache(await getRealtimeSpritesSdk());
+    const client = createSpritesSandboxClient({ sdk });
+    const sandbox = await client.get({ sandboxId });
+    if (!sandbox) return;
+
+    await refreshSessionStorageMeasurement({
+      handle: { exec: (args) => sandbox.runCommand(args) },
+      workspaceId,
+      // The FETCHED sandbox's own generation, not the row's: the CAS has to
+      // describe the disk that was walked (see the web tier). Here the two
+      // usually agree — the sandbox is fetched right after the row — but
+      // "usually" is exactly what a CAS is for.
+      spriteInstanceId: sandbox.spriteInstanceId ?? null,
+      lastMeasuredAt: row.storageMeasuredAt ?? null,
+      now: new Date(),
+      persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
+        await store.recordStorageMeasurement({ workspaceId, spriteInstanceId, measuredBytes, measuredAt });
+      },
+    });
+  } catch {
+    // Best-effort: a billing observation must never break opening a shell.
+  }
+}
+
+/**
+ * Auth for a shell connect: shell row → owning session → the ONE session access
+ * decision, with the Sprite half handed back as an uncalled thunk (see
+ * `shell-access.ts`). Every dep here is DB-only except the thunk's own
+ * provisioning pair.
+ */
+const shellCheckAuth = buildShellCheckAuth({
+  resolveShell: async (shellId) => {
+    const store = await dbSessionShellStorePromise;
+    return resolveSessionShellById({ shellId, deps: { store } });
+  },
+  checkSessionAccess: async ({ requester, workspaceId }) => {
+    const store = await dbAgentSessionStorePromise;
+    const row = await store.findById(workspaceId);
+    if (!row) return { allowed: false, reason: 'session_not_found' };
+    const subject = { ownerId: row.ownerId, driveId: row.driveId };
+    const decision = await checkAgentSessionAccess({
+      requester,
+      workspaceId,
+      deps: {
+        // The row was just read; hand the wrapper the same subject rather than
+        // paying a second lookup for the identical answer.
+        findSession: async () => subject,
+        resolveDriveMembership,
+        canRunCode: canRunCodeForSession,
+      },
+    });
+    if (!decision.allowed) return decision;
+    // A PTY is COMPUTE, not session surface: the shared access decision above
+    // is deliberately capability-free (chat/panes are open to every drive
+    // member), so the shell bridge re-adds the `canRunCode` gate itself —
+    // payer-tier, drive-role and kill-switch all resolved by the centralized
+    // checker. This runs on the warm-reattach path and the 60s re-auth tick
+    // too, where the provisioner's own authorize seam (cold path only) never
+    // fires — without it, a member who lost the capability could keep typing
+    // into a live PTY.
+    const allowedToRunCode = await canRunCodeForSession({
+      actor: requester,
+      driveId: subject.driveId,
+      ownerId: subject.ownerId,
+    });
+    if (!allowedToRunCode) return { allowed: false, reason: 'code_execution_denied' };
+    return { allowed: true, session: subject };
+  },
+  // WAL-2: the session's drive's payer, recorded under and capped against the ACTOR connecting.
+  resolvePayer: makeResolveShellPayer(),
+  isOrgLapsed: async (orgId) => !(await isOrgActive(orgId)),
+  getUser: async (userId) => {
+    const [userRow] = await db
+      .select({ subscriptionTier: users.subscriptionTier, email: users.email })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return userRow;
+  },
+  resolveActorEmail,
+  acquireSlot: ({ userId, tier }) => acquireCodeExecutionSlot({ userId, tier }),
+  releaseSlot: (userId) => releaseCodeExecutionSlot({ userId }),
+  ensureSessionSandbox: ensureShellSessionSandbox,
+  getSprite: async (sandboxId) => (await getRealtimeSpritesSdk()).getSprite(sandboxId),
+  // Write code execution audit record (shell PTY session open) — this launches
+  // an arbitrary program (the resolved command, or a per-shell override)
+  // inside the session's Sprite. `driveId` is null for a global-assistant
+  // session, which the audit record type carries as-is.
+  writeAudit: ({ userId, actorEmail, driveId, command }) => {
+    writeCodeExecutionAudit({
+      input: {
+        userId,
+        actorEmail,
+        driveId,
+        requestOrigin: 'user',
+        profile: 'pty',
+        code: `[Shell session opened: ${command}]`,
+        exitCode: null,
+        durationMs: 0,
+        timestamp: new Date(),
+      },
+    }).catch(() => {});
+  },
+  buildSessionKey: ({ shellId }) => deriveShellSessionKey({ shellId }),
+  logDenied: (reason, context) => loggers.realtime.warn('Shell auth denied', { reason, ...context }),
+  logSandboxLookupFailed: (context) => loggers.realtime.warn('Shell sandbox lookup failed', { reason: 'provision_failed', ...context }),
+});
+
+/**
+ * Everything it takes to START a shell PTY, wired once for BOTH callers: a
+ * viewer's `shell:connect` and a headless start driven by agent IO over signed
+ * HTTP (`startHeadlessShell`). Shares the ONE process-wide session map with the
+ * legacy family — the two key namespaces cannot collide (see
+ * `deriveShellSessionKey`) — and the same billing + task-hold seams.
+ */
+const shellSessionDeps: ShellSessionDeps = {
+  sessionMap: agentTerminalSessionMap,
+  openShell: openPtyShell,
+  checkAuth: shellCheckAuth,
+  persistSpriteExecId: async ({ shellId, spriteExecId }) => {
+    const store = await dbSessionShellStorePromise;
+    await store.updateSpriteExecId({ id: shellId, spriteExecId: spriteExecId, now: new Date() });
+  },
+  persistColdTail: async ({ shellId, tail, hasOutput, endedAt }) => {
+    const store = await dbSessionShellStorePromise;
+    await store.recordColdTail({ id: shellId, tail, hasOutput, endedAt });
+  },
+  billing: defaultSandboxBillingDeps,
+  // re-review P2-1: billing-window claims serialize per session ACROSS realtime instances.
+  windowClaimLock: pgWindowClaimLock,
+  // Sprites Tasks API hold (leaf 5-1): while an agent is running or a
+  // viewer attached, a short-expiry platform task (refreshed on a
+  // heartbeat, deleted on exit) keeps the sprite from cold-pausing mid-run;
+  // released when idle so the sprite CAN pause. 5m expiry / 60s refresh
+  // defaults, overridable via SPRITE_TASK_HOLD_EXPIRE_SECONDS /
+  // SPRITE_TASK_HOLD_REFRESH_MS.
+  createTaskHold: ({ sprite, sessionKey }) =>
+    createTaskHoldController({
+      client: createSpriteTasksClient({ sprite }),
+      // Per-INCARNATION name (session key + creation time), not per key: a
+      // torn-down session's queued final DELETE runs on its own serialized
+      // queue, so under a shared name it could land AFTER a quickly
+      // reopened session's CREATE and destroy the live hold. Distinct names
+      // make that race unrepresentable; an orphaned old task self-expires.
+      taskName: taskHoldName(`${sessionKey}:${Date.now()}`),
+      ...resolveTaskHoldConfig(process.env),
+      onError: (stage, result) => {
+        // Degrade gracefully: a lost hold means a possible pause, which the
+        // checkpoint work (5-2) already survives — log and carry on.
+        // exitCode 127 = curl missing from the sprite image (feature inert
+        // for this sprite); an HTTP status = the tasks API answered.
+        loggers.realtime.warn(`Sprite task hold ${stage} failed`, {
+          sessionKey,
+          status: result.status,
+          exitCode: result.exitCode,
+        });
+      },
+    }),
+};
+
+/**
+ * The geometry a shell nobody is looking at is born with.
+ *
+ * A PTY must have one — programs read `$COLUMNS`/`$LINES` and wrap their output
+ * to it — and 80x24 is the conventional default a terminal with no window to
+ * measure gets. The first human to open the pane resizes it to their real
+ * window (`shell:resize`), so this only ever governs the wrapping of output
+ * produced before anyone looked.
+ */
+const HEADLESS_COLS = 80;
+const HEADLESS_ROWS = 24;
+
+/**
+ * Start a PTY for an agent reading or typing into a shell whose session has
+ * never run (issue #2206) — the `startSession` seam of `shell-io.ts`.
+ * Authorization is decided HERE, against the userId the (signed) request
+ * names: starting a sandbox process reserves that user's concurrency slot,
+ * bills the session's payer, and writes a code-execution audit row.
+ */
+const startHeadlessShell = async (
+  { shellId, actor }: { shellId: string; actor: AccessActor },
+  abandoned: () => boolean,
+) => {
+  const access = await shellCheckAuth({ actor, shellId });
+  if (!access.ok) return undefined;
+
+  const outcome = await ensureShellSession(shellSessionDeps, {
+    access,
+    target: { shellId },
+    actor,
+    cols: HEADLESS_COLS,
+    rows: HEADLESS_ROWS,
+    abandoned,
+  });
+  // A refusal with something to say comes back as a reason rather than a bare
+  // `undefined`, so an agent at its plan ceiling is told that instead of
+  // receiving a silent `{live: false, delivered: false}` it would retry forever.
+  if (outcome.kind === 'failed') {
+    const reason = connectFailureMessage(outcome);
+    return reason ? { reason } : undefined;
+  }
+  loggers.realtime.info('Shell session started headlessly', {
+    sessionKey: access.sessionKey,
+    sandboxId: outcome.session.sandboxId,
+    reused: outcome.kind === 'existing',
+  });
+  return outcome.session;
+};
+
+/** The shell-IO deps both HTTP verbs share — the map, the key derivation, and the two effects. */
+const shellIoDeps = {
+  sessionMap: agentTerminalSessionMap,
+  sessionKeyFor: (shellId: string) => deriveShellSessionKey({ shellId }),
+  startSession: startHeadlessShell,
+  rearmIdleReap: (session: TerminalSession) =>
+    armShellIdleReap(shellSessionDeps, agentTerminalSessionMap, session),
+  // Whether a caller-supplied userId may become the identity the detached
+  // re-auth tick evicts on. The SAME decision the socket connect makes, so a
+  // user who could not open this shell cannot become its tracked owner through
+  // the IO endpoints either. Without this wired the seam fails closed and the
+  // identity is never refreshed — correct but useless, since revocation would
+  // then evict whoever happened to create the session rather than whoever is
+  // driving it.
+  reauthorizeViewer: async ({ shellId, actor }: { shellId: string; actor: AccessActor }) => {
+    const decision = await shellCheckAuth({ actor, shellId });
+    return decision.ok;
+  },
+  // WAL-2: typing on someone's behalf runs compute as them — their cap, their window.
+  claimBillingWindow: async (session: TerminalSession, userId: string) => {
+    const billing = shellSessionDeps.billing;
+    if (!billing) return true;
+    return (await claimBillingWindow(billing, agentTerminalSessionMap, session, userId, pgWindowClaimLock)).ok;
+  },
+  // Review #2761: a window this send restarted is re-gated at once, never left unheld.
+  regateResumedWindow: (session: TerminalSession) => {
+    void regateResumedWindow(shellSessionDeps, agentTerminalSessionMap, session, session.sessionKey);
+  },
+};
 
 const requestListener = (req: IncomingMessage, res: ServerResponse) => {
     // Helper to verify signature (shared by broadcast and kick)
@@ -306,12 +639,68 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         return true;
     };
 
-    if (req.method === 'POST' && req.url === '/api/broadcast') {
+    /**
+     * Accumulate an internal-endpoint body with a hard byte cap. All five
+     * signed endpoints share it: the HMAC check can only run once the body has
+     * been read in full, so without a cap an UNAUTHENTICATED caller could
+     * stream an arbitrarily large body and hold memory until the signature is
+     * finally rejected. Past the cap the connection is destroyed outright —
+     * there is no legitimate over-cap caller (the largest real payload is a
+     * broadcast message envelope, far under the limit).
+     */
+    const MAX_INTERNAL_BODY_BYTES = 1024 * 1024;
+    const readCappedBody = (onBody: (body: string) => void): void => {
         let body = '';
+        let bytes = 0;
+        let over = false;
         req.on('data', chunk => {
+            if (over) return;
+            bytes += chunk.length;
+            if (bytes > MAX_INTERNAL_BODY_BYTES) {
+                over = true;
+                req.destroy();
+                return;
+            }
             body += chunk.toString();
         });
         req.on('end', () => {
+            if (!over) onBody(body);
+        });
+    };
+
+    /**
+     * Has the CLIENT gone away before this request got an answer?
+     *
+     * Only meaningful for the two headless session-IO endpoints: their
+     * `start: true` path can run a cold Sprite wake past even the web tier's
+     * own generous `fetch` timeout for that shape (`COLD_START_TIMEOUT_MS`,
+     * `session-io-pty.ts`), and this is how `ensureAgentTerminalSession`'s
+     * `abandoned()` check — the same one a viewer's socket connect uses —
+     * learns to bail rather than start a PTY (and write input into it) for a
+     * caller who already gave up and may retry.
+     *
+     * Listens on `res`, NOT `req`. `req` (`IncomingMessage`) fires `'close'`
+     * once its own body finishes being READ — for an ordinary POST that is
+     * moments after `readCappedBody`'s `'end'`, while the async handler is
+     * still doing real work (`resolveSandbox`, a liveness check) and the
+     * RESPONSE hasn't been written yet. Wiring this to `req` would flag every
+     * normal request as abandoned and silently break headless start outright.
+     * `res` (`ServerResponse`) `'close'` fires when the underlying CONNECTION
+     * tears down — which happens on an ordinary request too, but only once
+     * the response has actually been sent, which is exactly what
+     * `!res.writableEnded` distinguishes: a request that finished cleanly
+     * must not be mistaken for one the caller walked away from.
+     */
+    const trackRequestAbandonment = (): (() => boolean) => {
+        let requestAbandoned = false;
+        res.on('close', () => {
+            if (!res.writableEnded) requestAbandoned = true;
+        });
+        return () => requestAbandoned;
+    };
+
+    if (req.method === 'POST' && req.url === '/api/broadcast') {
+        readCappedBody(body => {
             try {
                 const signatureHeader = req.headers['x-broadcast-signature'] as string;
                 if (!verifySignature(signatureHeader, body)) {
@@ -320,38 +709,188 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                     return;
                 }
 
-                const { channelId, event, payload } = JSON.parse(body);
-                if (channelId && event && payload) {
-                    io.to(channelId).emit(event, payload);
-                    loggers.realtime.debug('Broadcast event sent successfully', {
-                        channelId,
-                        event,
-                        payloadKeys: Object.keys(payload)
-                    });
-                    res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ success: true }));
-                } else {
-                    loggers.realtime.warn('Invalid broadcast payload structure', {
-                        hasChannelId: !!channelId,
-                        hasEvent: !!event,
-                        hasPayload: !!payload
-                    });
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Invalid broadcast payload' }));
+                const parsed = JSON.parse(body);
+
+                // #972 + CodeQL js/user-controlled-bypass: the emit is NOT gated on a
+                // raw user-controlled truthiness check (`if (channelId && event &&
+                // payload)`). The SOLE guard is the trusted, pure validator
+                // authorizeBroadcastAudience, which enforces field presence/type AND
+                // that channelId names a real room shape. A valid HMAC signature
+                // proves the SENDER (web backend); this proves the AUDIENCE target is
+                // legitimate, so a signed-but-malformed/forged request cannot fan a
+                // payload out to an arbitrary or wildcard room (GDPR Art 5(1)(c) + 32).
+                const audience = authorizeBroadcastAudience(parsed ?? {});
+                if (!audience.allowed) {
+                    // A disallowed room shape is an authorization failure (403); a
+                    // missing/mistyped field is a malformed payload (400).
+                    const isAudienceRejection =
+                        audience.reason === 'channelId does not match an allowed room shape';
+                    if (isAudienceRejection) {
+                        loggers.realtime.warn('Broadcast audience not authorized', {
+                            channelId: parsed?.channelId,
+                            event: parsed?.event,
+                            reason: audience.reason,
+                            ip: req.socket.remoteAddress,
+                        });
+                        res.writeHead(403, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Broadcast audience not authorized' }));
+                    } else {
+                        loggers.realtime.warn('Invalid broadcast payload structure', {
+                            reason: audience.reason,
+                        });
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Invalid broadcast payload' }));
+                    }
+                    return;
                 }
+
+                const { channelId, event, payload } = parsed;
+                io.to(channelId).emit(event, payload);
+                // SEC-2/3: an org's policy changed — EVERY socket here re-decides its org rooms now, not at the next
+                // timer (a tightened sign-in rule evicts at once), guests and non-members included.
+                const orgChange = payload as { orgId?: unknown; change?: unknown };
+                if (event === ORG_CHANGED_EVENT && orgChange.change === 'policy' && typeof orgChange.orgId === 'string') {
+                    fanOutOrgPolicyChange(orgChange.orgId);
+                }
+                loggers.realtime.debug('Broadcast event sent successfully', {
+                    channelId,
+                    event,
+                    payloadKeys: Object.keys(payload)
+                });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true }));
             } catch (error) {
                 loggers.realtime.error('Broadcast request processing error', error as Error);
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Invalid JSON' }));
             }
         });
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.read) {
+        // read_shell (shell:* family) + the liveness sweep, re-keyed to
+        // {shellId}. The bytes live in THIS process's session map, so the web
+        // tier — which has already authorized the shell against the shared
+        // session access decision — asks for them over a signed POST.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellReadRequest(shellIoDeps, body, trackRequestAbandonment()).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell read request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.input) {
+        // send_shell (shell:* family): types stdin into a live shell PTY
+        // through the same `session.command.write` a human viewer's keystroke
+        // takes, so anyone watching sees it echoed exactly as they would see a
+        // teammate type.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellSendRequest(shellIoDeps, body, undefined, trackRequestAbandonment()).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell input request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && req.url === SHELL_BRIDGE_ROUTES.activity) {
+        // Streams an agent's bash run into the live shell feeds of its SESSION
+        // (the shell:* successor to /api/terminal-activity, addressed by
+        // workspaceId). Best-effort: no live shell (nobody watching) is not an
+        // error.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleShellActivityRequest(
+                {
+                    sessionMap: agentTerminalSessionMap,
+                    // A DB-only listing of the session's shells composed with the
+                    // pure key derivation — no Sprite is resolved or woken to
+                    // answer "is anyone watching".
+                    resolveShellKeys: async (workspaceId) => {
+                        const store = await dbSessionShellStorePromise;
+                        const rows = await store.list(workspaceId);
+                        return rows.map((row) => deriveShellSessionKey({ shellId: row.id }));
+                    },
+                },
+                body,
+            ).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Shell activity request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
+    } else if (req.method === 'POST' && (req.url === '/api/dev-preview/watch' || req.url === '/api/dev-preview/listeners')) {
+        // The two dev-preview calls from the web tier share ONE prologue:
+        // signed like every other web→realtime call, and the body names only
+        // a HOLDER — which sprite that holder is on is re-derived from the
+        // holder's own row inside the registry, so a signed-but-wrong sprite
+        // name can never be watched or read (`readDevPreviewHolderBody`).
+        //   watch     — a session ensure just happened: start a dev-server
+        //               watcher on the holder's live sprite (202, idempotent).
+        //   listeners — a status render asks for the snapshot this process's
+        //               watcher already holds; `null` is the honest "no
+        //               snapshot in hand" (never-probe-to-render: the sprite
+        //               is not touched to answer). It ALSO re-arms a missing
+        //               watcher, throttled — this is what makes detection
+        //               survive a restart or an exhausted reconnect budget,
+        //               since nothing else would ever start one again.
+        const isWatch = req.url === '/api/dev-preview/watch';
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+            const holder = readDevPreviewHolderBody(body);
+            if (holder === null) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Malformed body' }));
+                return;
+            }
+            if (isWatch) {
+                void devPreviewRegistry.ensure({ holder });
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ accepted: true }));
+                return;
+            }
+            devPreviewRegistry.read({ holder }).then((read) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(read));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('dev-preview: listeners read failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal error' }));
+            });
+        });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation
-        let body = '';
-        req.on('data', chunk => {
-            body += chunk.toString();
-        });
-        req.on('end', () => {
+        readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
                 res.writeHead(401, { 'Content-Type': 'application/json' });
@@ -363,6 +902,30 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
             res.writeHead(result.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result.body));
         });
+    } else if (req.method === 'POST' && req.url === VOICE_BRIDGE_ROUTES.attach) {
+        // Voice attach: the web tier hands over a live OpenAI realtime call so
+        // THIS process — which can hold a socket for the whole call, unlike a
+        // Next route handler — owns its tools, transcripts and metering.
+        //
+        // The body carries a live ephemeral OpenAI credential, so the signature
+        // check is not optional and runs before anything is parsed.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+
+            handleRealtimeAttachRequest(defaultAttachHandlerDeps, body).then((result) => {
+                res.writeHead(result.status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result.body));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('Realtime attach request failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Internal error' }));
+            });
+        });
     } else {
         res.writeHead(404);
         res.end();
@@ -370,11 +933,56 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 };
 
 const httpServer = createServer(requestListener);
+
+// The WebSocket half of the dev-preview proxy (HMR sockets) — see
+// `preview-ws-tunnel.ts` for why it lives here and not in the web tier. A
+// preview-host upgrade is tunnelled; a socket.io upgrade is left to engine.io
+// (whose own listener follows); anything else is closed here, because
+// `destroyUpgrade` is turned off below and this listener owns that hygiene.
+const previewUpgrade = buildPreviewUpgradeHandler({
+  resolveApex: () => (isDevPreviewEnabled() ? resolveDevPreviewApex() : null),
+  cookieKey: getRealtimePreviewCookieKey,
+  resolveTarget: (holder, userId, sessionId) => resolvePreviewTarget({ holder, userId, sessionId, deps: buildRealtimePreviewAccessDeps() }),
+  tunnel: tunnelWebSocketUpgrade,
+  spritesToken: resolveSpritesToken,
+  log: loggers.realtime,
+  now: () => new Date(),
+});
 const io = new Server(httpServer, {
+  // engine.io would otherwise destroy any upgrade socket that has not been
+  // written to within 1s of arriving — a preview tunnel writes its 101 only
+  // once the sprite answers, which after a hibernation wake takes longer.
+  // The single upgrade dispatcher below closes stray sockets itself.
+  destroyUpgrade: false,
   cors: {
-    origin: process.env.CORS_ORIGIN || process.env.WEB_APP_URL,
+    origin: corsOrigin,
     credentials: true,
   },
+});
+
+// ONE owner per upgrade socket. Node invokes every 'upgrade' listener, so
+// engine.io's own listener (registered by `new Server(httpServer)` above) and
+// the preview tunnel would both receive a preview-host `/socket.io/` upgrade
+// — a previewed app using Socket.IO's default path — and engine.io would
+// write to or destroy the socket while the tunnel was still authorizing.
+// So engine.io's listeners are taken off the server and re-dispatched from
+// here: a preview HOST goes to the tunnel exclusively, PageSpace's own
+// `/socket.io/` goes to engine.io, and anything else is closed.
+const engineUpgradeListeners = httpServer.listeners('upgrade') as Array<(req: IncomingMessage, socket: Duplex, head: Buffer) => void>;
+httpServer.removeAllListeners('upgrade');
+httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  if (previewHolderForUpgrade(req, isDevPreviewEnabled() ? resolveDevPreviewApex() : null) !== null) {
+    previewUpgrade(req, socket, head).catch((error: unknown) => {
+      loggers.realtime.error('dev-preview: upgrade failed', error instanceof Error ? error : new Error(String(error)));
+      socket.destroy();
+    });
+    return;
+  }
+  if ((req.url ?? '').startsWith('/socket.io/')) {
+    for (const listener of engineUpgradeListeners) listener(req, socket, head);
+    return;
+  }
+  socket.destroy();
 });
 
 // AuthSocket is imported from per-event-auth.ts
@@ -393,7 +1001,14 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
       db.select({ displayName: userProfiles.displayName, avatarUrl: userProfiles.avatarUrl }).from(userProfiles).where(eq(userProfiles.userId, userId)).limit(1),
     ]);
 
-    const name = profileResult[0]?.displayName || userResult[0]?.name || 'Unknown';
+    // Decrypt PII at the edge (GDPR #965): users.name may be ciphertext;
+    // userProfiles.displayName is never encrypted and takes precedence anyway,
+    // so only decrypt when it's actually needed — a decrypt failure on a
+    // stale/corrupt users.name must not discard an otherwise-valid displayName.
+    const rawName = userResult[0]?.name;
+    const displayName = profileResult[0]?.displayName;
+    const decryptedName = !displayName && rawName ? await decryptField(rawName) : undefined;
+    const name = displayName || decryptedName || 'Unknown';
     const avatarUrl = profileResult[0]?.avatarUrl || userResult[0]?.image || null;
 
     socket.data.user = { id: userId, name, avatarUrl };
@@ -402,6 +1017,24 @@ async function populateUserMetadata(socket: AuthSocket): Promise<void> {
     // Keep the basic user data (just id) - presence will work with fallback name
     socket.data.user = { id: userId, name: 'Unknown', avatarUrl: null };
   }
+}
+
+/** One org-room watch per connected socket (SEC-3 eviction), so an org policy change can nudge them. */
+const orgRoomWatches = new Map<string, OrgRoomWatch>();
+const fanOutOrgPolicyChange = createPolicyChangeFanout({
+  watches: () => orgRoomWatches.values(),
+  now: () => Date.now(),
+  windowMs: 1_000,
+});
+
+/**
+ * After a join was refused: when the org's sign-in policy is why (SEC-2/3), tell the socket so the client can ask the
+ * person to sign in again, and answer true so the caller does not treat it as a protocol violation.
+ */
+async function emitSignInDenial(socket: AuthSocket, actor: AccessActor, resourceId: string): Promise<boolean> {
+  const code = await explainSignInRefusal(actor, resourceId);
+  if (code) socket.emit(ORG_REAUTHENTICATION_REQUIRED_EVENT, { code, resourceId });
+  return code !== null;
 }
 
 io.use(async (socket: AuthSocket, next) => {
@@ -439,29 +1072,40 @@ io.use(async (socket: AuthSocket, next) => {
     return next(new Error('Authentication error: No token provided.'));
   }
 
-  // Check for socket token (ps_sock_*) first - these bypass sameSite: 'strict' cookies
+  // Check for socket token (ps_sock_*) first - these bypass sameSite: 'strict' cookies.
+  // Socket tokens are unified opaque sessions (type: 'socket', #1054) validated the
+  // same way as the ps_sess_* branch below.
   if (token.startsWith('ps_sock_')) {
-    const socketAuth = await validateSocketToken(token);
-    if (socketAuth) {
-      socket.data.user = { id: socketAuth.userId, name: 'Unknown', avatarUrl: null };
+    try {
+      const sessionClaims = await sessionService.validateSession(token, { expectedType: 'socket' });
+      if (!sessionClaims) {
+        loggers.realtime.warn('Socket.IO: Socket token validation failed', { tokenPrefix: token.substring(0, 12) });
+        return next(new Error('Authentication error: Invalid or expired socket token.'));
+      }
+
+      socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      // SEC-2/3: the credential's ceremony evidence rides with the socket for every access check it makes.
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
-      loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: socketAuth.userId });
+      loggers.realtime.info('Socket.IO: User authenticated via socket token', { userId: sessionClaims.userId });
       return next();
+    } catch (error) {
+      loggers.realtime.error('Error validating socket token', error as Error);
+      return next(new Error('Authentication error: Server failed.'));
     }
-    loggers.realtime.warn('Socket.IO: Socket token validation failed');
-    return next(new Error('Authentication error: Invalid or expired socket token.'));
   }
 
   // Check for session token (ps_sess_*) - used by mobile/desktop clients
   if (token.startsWith('ps_sess_')) {
     try {
-      const sessionClaims = await sessionService.validateSession(token);
+      const sessionClaims = await sessionService.validateSession(token, { expectedType: 'user' });
       if (!sessionClaims) {
         loggers.realtime.warn('Socket.IO: Session token validation failed');
         return next(new Error('Authentication error: Invalid or expired session.'));
       }
 
       socket.data.user = { id: sessionClaims.userId, name: 'Unknown', avatarUrl: null };
+      socket.data.actor = credentialActor(sessionClaims.userId, sessionClaims.authentication);
       await populateUserMetadata(socket);
       loggers.realtime.info('Socket.IO: User authenticated via session token', { userId: sessionClaims.userId });
       return next();
@@ -479,6 +1123,24 @@ io.use(async (socket: AuthSocket, next) => {
 io.on('connection', (socket: AuthSocket) => {
   loggers.realtime.info('User connected', { socketId: socket.id });
   const user = socket.data.user;
+  // The socket's credential (D-OW-45). Every join below asks the org sign-in policy of it, and the watch evicts the
+  // socket from an org's rooms when that org's maximum session age elapses or its policy tightens.
+  const actor = socket.data.actor;
+  // App-log streams are tracked by the same watch (SEC-2/3); an eviction tears the stream down too.
+  let onOrgRoomEvicted: (room: string) => void = () => {};
+  const orgRoomWatch = createOrgRoomWatch(socket, {
+    // A page's own org and, for a memory page, every org its content was derived from (D-OW-62).
+    readPolicies: (resourceIds) => getResourceAuthenticationPolicies(resourceIds),
+    onLeft: (room) => {
+      socketRegistry.trackRoomLeave(socket.id, room);
+      onOrgRoomEvicted(room);
+    },
+    now: () => Date.now(),
+    setTimer: (run, delayMs) => setTimeout(run, delayMs),
+    clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    onError: (error) => loggers.realtime.error('Org room re-check failed', error instanceof Error ? error : new Error(String(error)), { socketId: socket.id }),
+  });
+  orgRoomWatches.set(socket.id, orgRoomWatch);
 
   // Register socket in the registry for permission revocation tracking
   if (user?.id) {
@@ -487,30 +1149,30 @@ io.on('connection', (socket: AuthSocket) => {
 
   // Auto-join user's personal rooms on connection
   if (user?.id) {
-    const notificationRoom = `notifications:${user.id}`;
-    const taskRoom = `user:${user.id}:tasks`;
-    const calendarRoom = `user:${user.id}:calendar`;
-    const userDrivesRoom = `user:${user.id}:drives`;
-    const globalRoom = globalChannelId(user.id);
-    socket.join(notificationRoom);
-    socket.join(taskRoom);
-    socket.join(calendarRoom);
-    socket.join(userDrivesRoom);
-    socket.join(globalRoom);
-    // Track in registry (these are always-on rooms, not permission-gated)
-    socketRegistry.trackRoomJoin(socket.id, notificationRoom);
-    socketRegistry.trackRoomJoin(socket.id, taskRoom);
-    socketRegistry.trackRoomJoin(socket.id, calendarRoom);
-    socketRegistry.trackRoomJoin(socket.id, userDrivesRoom);
-    socketRegistry.trackRoomJoin(socket.id, globalRoom);
+    const personalRooms = [
+      notificationsRoom(user.id),
+      userTasksRoom(user.id),
+      userCalendarRoom(user.id),
+      userDrivesRoom(user.id),
+      userGlobalRoom(user.id),
+      // Directory plane (Agent-Session SSoT epic, Phase 2): id-level
+      // conversation:created/updated/closed/reopened/deleted events for the
+      // user's own conversations and sessions.
+      userSessionsRoom(user.id),
+    ];
+    for (const room of personalRooms) {
+      socket.join(room);
+      // Track in registry (these are always-on rooms, not permission-gated)
+      socketRegistry.trackRoomJoin(socket.id, room);
+    }
     loggers.realtime.debug('User joined notification, task, calendar, drives, and global rooms', {
       userId: user.id,
-      rooms: [notificationRoom, taskRoom, calendarRoom, userDrivesRoom, globalRoom]
+      rooms: personalRooms
     });
   }
 
   socket.on('join_channel', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -522,13 +1184,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
         socket.join(pageId);
         socketRegistry.trackRoomJoin(socket.id, pageId);
+        void orgRoomWatch.track(pageId, pageId);
         loggers.realtime.debug('User joined channel', { userId: user.id, channelId: pageId });
       } else {
         loggers.realtime.warn('User denied access to channel', { userId: user.id, channelId: pageId });
+        // A sign-in policy refusal is an expected state (sign in again), not a protocol violation.
+        if (await emitSignInDenial(socket, actor, pageId)) return;
         socket.disconnect();
       }
     } catch (error) {
@@ -548,11 +1213,12 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
     socket.leave(pageId);
     socketRegistry.trackRoomLeave(socket.id, pageId);
+    orgRoomWatch.untrack(pageId);
     loggers.realtime.debug('User left channel', { userId: user.id, channelId: pageId });
   });
 
   socket.on('join_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -564,24 +1230,167 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
-        const driveRoom = `drive:${driveId}`;
-        const driveCalendarRoom = `drive:${driveId}:calendar`;
-        socket.join(driveRoom);
-        socket.join(driveCalendarRoom);
-        socketRegistry.trackRoomJoin(socket.id, driveRoom);
-        socketRegistry.trackRoomJoin(socket.id, driveCalendarRoom);
+        const rooms = [driveRoom(driveId), driveCalendarRoom(driveId)];
+        // X-4: wallet:changed reaches only people with a wallet view of the drive, never a
+        // page-share collaborator whose drive-room access comes from a page grant alone.
+        if (await canViewDriveWallet(actor, driveId)) rooms.push(driveWalletRoom(driveId));
+        for (const room of rooms) {
+          socket.join(room);
+          socketRegistry.trackRoomJoin(socket.id, room);
+          void orgRoomWatch.track(room, driveId);
+        }
         loggers.realtime.debug('User joined drive and drive calendar rooms', {
           userId: user.id,
-          rooms: [driveRoom, driveCalendarRoom],
+          rooms,
         });
       } else {
         loggers.realtime.warn('User denied access to drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining drive', error as Error, { driveId });
     }
+  });
+
+  // Join an AI conversation's content room (`conv:<id>`) — the content plane
+  // of the Agent-Session SSoT epic (Phase 2). Authorization is the shared
+  // `canAccessConversation` predicate: owner OR (isShared AND page access) —
+  // the SAME implementation web's /stream-join and /active-streams enforce,
+  // so the three cannot drift. Fails closed: no row, private, or a shared
+  // GLOBAL conversation (no page to share through) all deny for non-owners.
+  socket.on('join_conversation', async (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId || !actor) return;
+
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_conversation', validation.error);
+      return;
+    }
+    const conversationId = validation.value;
+
+    try {
+      const [conversation] = await db
+        .select({
+          userId: conversations.userId,
+          isShared: conversations.isShared,
+          type: conversations.type,
+          contextId: conversations.contextId,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+
+      const allowed =
+        conversation !== undefined && (await canAccessConversation(actor, conversation));
+      if (!allowed) {
+        // Deny quietly (no disconnect): unlike join_channel, a stale join
+        // attempt after an un-share is an expected client state, not a
+        // protocol violation.
+        loggers.realtime.warn('Conversation join denied', { userId, conversationId });
+        return;
+      }
+
+      const room = conversationRoom(conversationId);
+      socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
+      // A page or drive conversation carries that org's content: watched like the page itself.
+      if (conversation.type !== 'global' && conversation.contextId) void orgRoomWatch.track(room, conversation.contextId);
+      loggers.realtime.debug('User joined conversation room', { userId, room });
+    } catch (error) {
+      loggers.realtime.error('Error joining conversation', error as Error, { conversationId });
+    }
+  });
+
+  // Join an agent workspace's LAYOUT room (`session:<id>`) — where
+  // rev-carrying `workspace:nodes-updated` tree events fan out.
+  // Authorization is the SAME one session-access decision the web routes run
+  // (`checkAgentSessionAccess` → `decideAgentSessionAccess`): a session is a
+  // drive-level workspace, so access is drive access. Deliberately NOT
+  // `canRunCode`-gated — a pane grid is session surface, not compute (the
+  // shell bridge below re-adds that gate for itself).
+  socket.on('join_session', async (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId || !actor) return;
+
+    const validation = validateSessionId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid join_session payload', { userId, error: validation.error });
+      emitValidationError(socket, 'join_session', validation.error);
+      return;
+    }
+    const workspaceId = validation.value;
+
+    try {
+      const store = await dbAgentSessionStorePromise;
+      const row = await store.findById(workspaceId);
+      const decision = row
+        ? await checkAgentSessionAccess({
+            requester: actor,
+            workspaceId,
+            deps: {
+              // The row was just read; hand the wrapper the same subject
+              // rather than paying a second lookup for the same answer.
+              findSession: async () => ({ ownerId: row.ownerId, driveId: row.driveId }),
+              resolveDriveMembership,
+              canRunCode: canRunCodeForSession,
+            },
+          })
+        : { allowed: false as const, reason: 'session_not_found' as const };
+
+      if (!decision.allowed) {
+        // Deny quietly (no disconnect), same as `join_conversation`: a stale
+        // join after a session end or a drive removal is an expected client
+        // state, not a protocol violation.
+        loggers.realtime.warn('Session layout join denied', { userId, workspaceId, reason: decision.reason });
+        return;
+      }
+
+      const room = sessionRoom(workspaceId);
+      socket.join(room);
+      socketRegistry.trackRoomJoin(socket.id, room);
+      if (row?.driveId) void orgRoomWatch.track(room, row.driveId);
+      loggers.realtime.debug('User joined session layout room', { userId, room });
+    } catch (error) {
+      loggers.realtime.error('Error joining session layout room', error as Error, { workspaceId });
+    }
+  });
+
+  socket.on('leave_session', (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateSessionId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_session payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_session', validation.error);
+      return;
+    }
+    const room = sessionRoom(validation.value);
+    socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
+    loggers.realtime.debug('User left session layout room', { userId, room });
+  });
+
+  socket.on('leave_conversation', (payload: unknown) => {
+    const userId = user?.id;
+    if (!userId) return;
+
+    const validation = validateConversationId(payload);
+    if (!validation.ok) {
+      loggers.realtime.warn('Invalid leave_conversation payload', { userId, error: validation.error });
+      emitValidationError(socket, 'leave_conversation', validation.error);
+      return;
+    }
+    const room = conversationRoom(validation.value);
+    socket.leave(room);
+    socketRegistry.trackRoomLeave(socket.id, room);
+    orgRoomWatch.untrack(room);
+    loggers.realtime.debug('User left conversation room', { userId, room });
   });
 
   // Join a direct message conversation room after membership verification
@@ -621,7 +1430,7 @@ io.on('connection', (socket: AuthSocket) => {
         return;
       }
 
-      const room = `dm:${conversationId}`;
+      const room = dmRoom(conversationId);
       socket.join(room);
       socketRegistry.trackRoomJoin(socket.id, room);
       loggers.realtime.debug('User joined DM room', { userId, room });
@@ -643,7 +1452,7 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const conversationId = validation.value;
 
-    const room = `dm:${conversationId}`;
+    const room = dmRoom(conversationId);
     socket.leave(room);
     socketRegistry.trackRoomLeave(socket.id, room);
     loggers.realtime.debug('User left DM room', { userId, room });
@@ -661,21 +1470,21 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const driveRoom = `drive:${driveId}`;
-    const driveCalendarRoom = `drive:${driveId}:calendar`;
-    socket.leave(driveRoom);
-    socket.leave(driveCalendarRoom);
-    socketRegistry.trackRoomLeave(socket.id, driveRoom);
-    socketRegistry.trackRoomLeave(socket.id, driveCalendarRoom);
+    const rooms = [driveRoom(driveId), driveCalendarRoom(driveId), driveWalletRoom(driveId)];
+    for (const room of rooms) {
+      socket.leave(room);
+      socketRegistry.trackRoomLeave(socket.id, room);
+      orgRoomWatch.untrack(room);
+    }
     loggers.realtime.debug('User left drive and drive calendar rooms', {
       userId: user.id,
-      rooms: [driveRoom, driveCalendarRoom],
+      rooms,
     });
   });
 
   // Activity channel handlers - for real-time activity feed updates
   socket.on('join_activity_drive', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validateDriveId(payload);
@@ -687,14 +1496,16 @@ io.on('connection', (socket: AuthSocket) => {
     const driveId = validation.value;
 
     try {
-      const hasAccess = await getUserDriveAccess(user.id, driveId);
+      const hasAccess = await getUserDriveAccess(actor, driveId);
       if (hasAccess) {
-        const activityRoom = `activity:drive:${driveId}`;
+        const activityRoom = driveActivityRoom(driveId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, driveId);
         loggers.realtime.debug('User joined activity drive room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity drive', { userId: user.id, driveId });
+        await emitSignInDenial(socket, actor, driveId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity drive', error as Error, { driveId });
@@ -702,7 +1513,7 @@ io.on('connection', (socket: AuthSocket) => {
   });
 
   socket.on('join_activity_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     // Validate payload before any DB query
     const validation = validatePageId(payload);
@@ -714,14 +1525,16 @@ io.on('connection', (socket: AuthSocket) => {
     const pageId = validation.value;
 
     try {
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (accessLevel) {
-        const activityRoom = `activity:page:${pageId}`;
+        const activityRoom = pageActivityRoom(pageId);
         socket.join(activityRoom);
         socketRegistry.trackRoomJoin(socket.id, activityRoom);
+        void orgRoomWatch.track(activityRoom, pageId);
         loggers.realtime.debug('User joined activity page room', { userId: user.id, room: activityRoom });
       } else {
         loggers.realtime.warn('User denied access to activity page', { userId: user.id, pageId });
+        await emitSignInDenial(socket, actor, pageId);
       }
     } catch (error) {
       loggers.realtime.error('Error joining activity page', error as Error, { pageId });
@@ -740,9 +1553,10 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const driveId = validation.value;
 
-    const activityRoom = `activity:drive:${driveId}`;
+    const activityRoom = driveActivityRoom(driveId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity drive room', { userId: user.id, room: activityRoom });
   });
 
@@ -758,15 +1572,16 @@ io.on('connection', (socket: AuthSocket) => {
     }
     const pageId = validation.value;
 
-    const activityRoom = `activity:page:${pageId}`;
+    const activityRoom = pageActivityRoom(pageId);
     socket.leave(activityRoom);
     socketRegistry.trackRoomLeave(socket.id, activityRoom);
+    orgRoomWatch.untrack(activityRoom);
     loggers.realtime.debug('User left activity page room', { userId: user.id, room: activityRoom });
   });
 
   // Presence tracking: join a page as a viewer
   socket.on('presence:join_page', async (payload: unknown) => {
-    if (!user?.id) return;
+    if (!user?.id || !actor) return;
 
     const pageValidation = validatePresencePagePayload(payload);
     if (!pageValidation.ok) {
@@ -777,7 +1592,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     try {
       // Verify the user has access to this page
-      const accessLevel = await getUserAccessLevel(user.id, pageId);
+      const accessLevel = await getUserAccessLevel(actor, pageId);
       if (!accessLevel) {
         loggers.realtime.warn('Presence denied: no page access', { userId: user.id, pageId });
         return;
@@ -814,7 +1629,7 @@ io.on('connection', (socket: AuthSocket) => {
       });
 
       // Broadcast to the drive room (for the sidebar page tree)
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+      io.to(driveRoom(driveId)).emit('presence:page_viewers', {
         pageId,
         viewers: uniqueViewers,
       });
@@ -852,7 +1667,7 @@ io.on('connection', (socket: AuthSocket) => {
 
     // Broadcast to drive room if we know the driveId
     if (driveId) {
-      io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+      io.to(driveRoom(driveId)).emit('presence:page_viewers', {
         pageId,
         viewers: uniqueViewers,
       });
@@ -885,7 +1700,61 @@ io.on('connection', (socket: AuthSocket) => {
     pageIdExtractor: (payload: unknown) => (payload as { pageId?: string })?.pageId,
   }));
 
+  // Shell PTY handlers (shell:* family): a named PTY inside its
+  // agent session's ONE shared sandbox, addressed by `{shellId}` alone. Billing
+  // meters every connection's active-runtime cost against the session's payer
+  // (the session's own DRIVE owner, or the session owner for a
+  // global-assistant session or a vanished drive).
+  const shellHandlers = buildShellHandlers({
+    ...shellSessionDeps,
+    socket: socket as unknown as ShellSocketLike,
+  });
+
+  socket.on('shell:connect', (payload) => {
+    // Parsed ONCE, before dispatch, so BOTH outcomes can tag their emit.
+    const payloadConnectionId =
+      payload !== null && typeof payload === 'object' && typeof (payload as { connectionId?: unknown }).connectionId === 'string'
+        ? (payload as { connectionId: string }).connectionId
+        : undefined;
+    shellHandlers.onConnect(payload).then(() => {
+      // Same `connectionId ?? socket.id` fallback `onConnect` itself uses —
+      // several panes share this socket, each under its own connectionId, so a
+      // bare `socket.id` lookup would only ever find whichever pane sent none.
+      const session = agentTerminalSessionMap.getBySocket(composeSocketKey(socket.id, payloadConnectionId ?? socket.id));
+      if (session) {
+        loggers.realtime.info('Shell session opened', { userId: user?.id, sessionKey: session.sessionKey, sandboxId: session.sandboxId });
+      }
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : 'Internal error';
+      // MUST echo the connectionId: the client's `isMine` deliberately accepts
+      // untagged events, so an untagged `shell:error` is claimed by EVERY shell
+      // multiplexed on this socket — one pane's billing/database failure would
+      // mark them all dead and suppress their reconnects. Tagging scopes the
+      // kill to the pane that actually failed.
+      socket.emit('shell:error', {
+        message: msg,
+        ...(payloadConnectionId ? { connectionId: payloadConnectionId } : {}),
+      });
+    });
+  });
+  socket.on('shell:input', (payload) => shellHandlers.onInput(payload));
+  socket.on('shell:resize', (payload) => shellHandlers.onResize(payload));
+  socket.on('shell:disconnect', (payload) => shellHandlers.onDisconnect(payload));
+
+  // Published-app log streaming (app:logs:* family): read-only fan-out of a
+  // Fly app's NATS log firehose to every attached viewer — see app-logs/.
+  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike, undefined, orgRoomWatch);
+  onOrgRoomEvicted = (room) => appLogHandlers.onEvicted(room);
+  socket.on('app:logs:subscribe', (payload) => {
+    void appLogHandlers.onSubscribe(payload);
+  });
+  socket.on('app:logs:unsubscribe', (payload) => appLogHandlers.onUnsubscribe(payload));
+
   socket.on('disconnect', (reason) => {
+    orgRoomWatch.dispose();
+    orgRoomWatches.delete(socket.id);
+    shellHandlers.onDisconnect();
+    appLogHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {
@@ -897,7 +1766,7 @@ io.on('connection', (socket: AuthSocket) => {
       });
 
       if (driveId) {
-        io.to(`drive:${driveId}`).emit('presence:page_viewers', {
+        io.to(driveRoom(driveId)).emit('presence:page_viewers', {
           pageId,
           viewers: uniqueViewers,
         });

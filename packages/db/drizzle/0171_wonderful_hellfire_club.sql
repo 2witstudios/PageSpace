@@ -1,0 +1,2 @@
+ALTER TABLE "custom_domains" ADD COLUMN "is_primary" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS "custom_domains_primary_per_drive" ON "custom_domains" USING btree ("drive_id") WHERE "custom_domains"."is_primary";

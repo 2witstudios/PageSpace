@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth } from '@/lib/auth';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { checkDriveAccessForSearch, globSearchPages } from '@pagespace/lib/services/drive-search-service'
+import { hasAppDriveMembership, getAppDriveMembership, getAppAccessiblePagesInDrive } from '@pagespace/lib/permissions/app-permissions';
+import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
+import { drives } from '@pagespace/db/schema/core';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { parsePageTypesParam } from '@pagespace/lib/utils/enums';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
-
-const VALID_PAGE_TYPES = ['FOLDER', 'DOCUMENT', 'AI_CHAT', 'CHANNEL', 'CANVAS', 'SHEET', 'CODE'] as const;
-type PageType = (typeof VALID_PAGE_TYPES)[number];
 
 /**
  * GET /api/drives/[driveId]/search/glob
@@ -45,24 +48,41 @@ export async function GET(
       );
     }
 
-    // Parse includeTypes
-    const includeTypes = includeTypesParam
-      ? (includeTypesParam
-          .split(',')
-          .filter((t): t is PageType => VALID_PAGE_TYPES.includes(t as PageType)))
-      : undefined;
+    // Parse includeTypes. Derived from the canonical PageType enum — a
+    // hand-written list here had drifted and silently dropped FILE (#2150).
+    const includeTypes = parsePageTypesParam(includeTypesParam);
 
-    // Check drive access
-    const accessInfo = await checkDriveAccessForSearch(driveId, userId);
+    // Check drive access. A scoped MCP token is its own drive member — gate on
+    // the TOKEN's membership, not the owning user's.
+    let drive: { id: string; slug: string | null; name: string } | null;
+    if (isScopedMCPAuth(auth)) {
+      // Membership gate only — results below are filtered per page by the
+      // TOKEN's own access, so per-page custom-role grants still work.
+      if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
+        return NextResponse.json(
+          { error: "You don't have access to this drive" },
+          { status: 403 }
+        );
+      }
+      const [row] = await db
+        .select({ id: drives.id, slug: drives.slug, name: drives.name })
+        .from(drives)
+        .where(eq(drives.id, driveId));
+      drive = row ?? null;
+    } else {
+      const accessInfo = await checkDriveAccessForSearch(driveId, actorFromAuth(auth));
 
-    if (!accessInfo.hasAccess) {
-      return NextResponse.json(
-        { error: "You don't have access to this drive" },
-        { status: 403 }
-      );
+      if (!accessInfo.hasAccess) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
+          { error: "You don't have access to this drive" },
+          { status: 403 }
+        ));
+      }
+
+      drive = accessInfo.drive;
     }
 
-    if (!accessInfo.drive) {
+    if (!drive) {
       return NextResponse.json(
         { error: 'Drive not found' },
         { status: 404 }
@@ -70,14 +90,32 @@ export async function GET(
     }
 
     // Perform glob search
+    // Explicit-role tokens: filter results by the TOKEN's accessible page set.
+    // Inherited keys (role null) act as their owner, so the service's default
+    // user filter is already correct for them.
+    let tokenViewablePageIds: Set<string> | null = null;
+    if (isScopedMCPAuth(auth)) {
+      const explicitMembership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
+      if (explicitMembership && explicitMembership.role !== null) {
+        tokenViewablePageIds = new Set(
+          (await getAppAccessiblePagesInDrive(actorFromAuth(auth), auth.tokenId, driveId))
+            .filter((p) => p.permissions.canView)
+            .map((p) => p.id),
+        );
+      }
+    }
+
     const searchResults = await globSearchPages(
       driveId,
-      userId,
+      actorFromAuth(auth),
       pattern,
-      accessInfo.drive.slug,
+      drive.slug,
       {
         includeTypes: includeTypes?.length ? includeTypes : undefined,
         maxResults,
+        authorizeView: tokenViewablePageIds
+          ? async (pageId: string) => tokenViewablePageIds.has(pageId)
+          : undefined,
       }
     );
 

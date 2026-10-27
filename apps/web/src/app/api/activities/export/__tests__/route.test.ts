@@ -8,6 +8,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // vi.hoisted ensures mockFindMany is defined before vi.mock factories run
 const mockFindMany = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 
+// The sign-in row filter has its own integration test (activity-sign-in-filter); here it leaves nothing out.
+vi.mock('@/lib/activities/activity-sign-in-filter', () => ({ activitySignInCondition: vi.fn(async () => undefined) }));
 vi.mock('next/server', () => ({
   NextResponse: {
     json: vi.fn((data: unknown, init?: ResponseInit) => new Response(JSON.stringify(data), {
@@ -22,7 +24,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result && typeof result === 'object' && 'error' in result),
   checkMCPDriveScope: vi.fn().mockReturnValue(null),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && (auth.allowedDriveIds?.length ?? 0) > 0,
   getAllowedDriveIds: vi.fn().mockReturnValue([]),
+  isPrincipalDriveMember: vi.fn().mockResolvedValue(true),
+  canPrincipalViewPage: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -67,6 +73,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   isUserDriveMember: vi.fn().mockResolvedValue(true),
 }));

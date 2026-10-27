@@ -4,6 +4,7 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { verifyAppleIdToken } from '@pagespace/lib/auth/oauth-utils';
+import { captureAppleRefreshToken } from '@pagespace/lib/auth/apple/capture-apple-refresh-token';
 import {
   checkDistributedRateLimit,
   resetDistributedRateLimit,
@@ -17,16 +18,20 @@ import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { revokeSessionsForLogin, createWebDeviceToken } from '@/lib/auth';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { NextResponse } from 'next/server';
-import { provisionGettingStartedDriveIfNeeded } from '@/lib/onboarding/getting-started-drive';
+import { desktopDeepLink } from '@/lib/auth/desktop-shell';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { verifyOAuthState } from '@/lib/auth/oauth-state';
 import { appendSessionCookie, createDeviceTokenHandoffCookie } from '@/lib/auth/cookie-config';
 import { authRepository } from '@/lib/repositories/auth-repository';
+import { resolveOAuthAccount } from '@/lib/auth/oauth-account-resolver';
 import { buildHandoffBridgeResponse } from '@/app/api/auth/_shared/handoffBridgeResponse';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 // Apple sends name info as JSON in the 'user' field (only on first authorization)
 const appleUserSchema = z.object({
@@ -44,10 +49,12 @@ const appleUserSchema = z.object({
 export async function POST(req: Request) {
   try {
     // Parse form data (Apple uses application/x-www-form-urlencoded)
-    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token
-    // We use id_token directly for verification (no token exchange needed)
+    // Note: Apple sends both 'code' and 'id_token' with response_type=code id_token.
+    // The id_token alone authenticates the user; the code is exchanged afterwards,
+    // out of band, only to keep a revocable refresh token (TN3194).
     const formData = await req.formData();
     const idToken = formData.get('id_token') as string | null;
+    const authorizationCode = formData.get('code');
     const state = formData.get('state') as string | null;
     const userJson = formData.get('user') as string | null;
     const baseUrl = process.env.NEXTAUTH_URL || process.env.WEB_APP_URL || new URL(req.url).origin;
@@ -74,7 +81,9 @@ export async function POST(req: Request) {
       });
 
       if (verifiedState?.platform === 'desktop') {
-        return NextResponse.redirect(`pagespace://auth-error?error=${errorType}`);
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState?.shell, 'auth-error')}?error=${errorType}`,
+        );
       }
       return NextResponse.redirect(new URL(`/auth/signin?error=${encodeURIComponent(errorType)}`, baseUrl));
     }
@@ -139,8 +148,37 @@ export async function POST(req: Request) {
     const name = [givenName, familyName].filter(Boolean).join(' ') || undefined;
     const userName = name || email.split('@')[0] || 'User';
 
+    // Resolve the account match through the shared, security-critical decision.
+    // SECURITY (M5): match an EXISTING account by raw email only when Apple
+    // asserts the email is verified; the subject id (appleId) may always match.
+    const { decision: matchDecision, user: matchedUser, emailMatch } = await resolveOAuthAccount({
+      provider: 'apple',
+      providerId: appleId,
+      email,
+      emailVerified: emailVerified === true,
+    });
+
+    if (matchDecision === 'reject') {
+      loggers.auth.warn('Blocked OAuth account link: unverified email matches existing account', {
+        email: maskEmail(email),
+        provider: 'apple',
+      });
+      auditRequest(req, {
+        eventType: 'auth.login.failure',
+        riskScore: 0.8,
+        userId: emailMatch?.id,
+        details: { reason: 'apple_oauth_unverified_email_link_blocked' },
+      });
+      if (platform === 'desktop') {
+        return NextResponse.redirect(
+          `${desktopDeepLink(verifiedState.shell, 'auth-error')}?error=oauth_error`,
+        );
+      }
+      return NextResponse.redirect(new URL('/auth/signin?error=oauth_error', baseUrl));
+    }
+
     // Find or create user
-    let user = await authRepository.findUserByAppleIdOrEmail(appleId, email);
+    let user = matchedUser;
     const wasNewUser = !user;
 
     if (user) {
@@ -176,16 +214,21 @@ export async function POST(req: Request) {
       loggers.auth.info('New user created via Apple OAuth', { userId: user.id });
     }
 
-    // Provision getting started drive for new users
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
+    // Provision the Home drive (idempotent)
     let isNewlyProvisioned = false;
     try {
-      const provisionedDrive = await provisionGettingStartedDriveIfNeeded(user.id);
+      const provisionedDrive = await provisionHomeDriveIfNeeded(user.id);
       if (provisionedDrive.created) {
         isNewlyProvisioned = true;
-        returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        if (!returnUrl.startsWith('/s/')) {
+          returnUrl = `/dashboard/${provisionedDrive.driveId}`;
+        }
       }
     } catch (provisionError) {
-      loggers.auth.error('Failed to provision Getting Started drive', provisionError as Error, {
+      loggers.auth.error('Failed to provision Home drive', provisionError as Error, {
         userId: user.id,
         provider: 'apple',
       });
@@ -194,7 +237,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Apple OAuth');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'apple' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -211,6 +257,27 @@ export async function POST(req: Request) {
     }
 
     const csrfToken = generateCSRFToken(sessionClaims.sessionId);
+
+    // TN3194: keep a revocable refresh token so account deletion can revoke the
+    // Apple authorization. Called only once each platform's response is built,
+    // and never awaited — sign-in must not wait on, or fail because of, Apple.
+    const appleClientId = verificationResult.audience;
+    const signedInUserId = user.id;
+    const captureAppleTokenInBackground = () => {
+      if (typeof authorizationCode !== 'string' || authorizationCode.length === 0 || !appleClientId) return;
+      void captureAppleRefreshToken({
+        userId: signedInUserId,
+        code: authorizationCode,
+        clientId: appleClientId,
+        expectedSub: appleId,
+        redirectUri: process.env.APPLE_REDIRECT_URI,
+      }).catch((error: unknown) => {
+        loggers.auth.warn('Apple refresh token capture threw', {
+          userId: signedInUserId,
+          reason: error instanceof Error ? error.name : 'unknown_error',
+        });
+      });
+    };
 
     try {
       await resetDistributedRateLimit(`oauth:callback:ip:${clientIP}`);
@@ -264,6 +331,7 @@ export async function POST(req: Request) {
       }
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: deviceId,
@@ -283,7 +351,7 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
-      const deepLinkUrl = new URL('pagespace://auth-exchange');
+      const deepLinkUrl = new URL(desktopDeepLink(verifiedState.shell, 'auth-exchange'));
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
       if (isNewlyProvisioned) {
@@ -300,14 +368,45 @@ export async function POST(req: Request) {
         invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
+      const desktopResponse = buildHandoffBridgeResponse(deepLinkUrl.toString(), "You're signed in");
+      captureAppleTokenInBackground();
+      return desktopResponse;
     }
 
     // iOS PLATFORM: Same as desktop - use secure exchange code flow
+    // Deliberately iOS only, though the state schema now accepts 'android'.
+    //
+    // Android's web OAuth does NOT stay in the Capacitor WebView:
+    // `apps/android/capacitor.config.ts` allowlists only `pagespace.ai`, so a
+    // provider host is handed to `Bridge.launchIntent()` and opens externally —
+    // where a successful sign-in drops the session cookie in the wrong jar and
+    // the app stays logged out. This deep link is exactly the fix for that, and
+    // Phase C shipped the Android intent filter in anticipation of it.
+    //
+    // Two things must land before it may be emitted for Android, and the first is
+    // a security precondition, not a plumbing one:
+    //
+    //  1. The handoff must be bound to the app that started the flow. Custom
+    //     schemes are NOT exclusive on Android — any installed app may also
+    //     register `pagespace://` and be offered in the chooser or set as the
+    //     default handler — so an unbound one-time exchange code sent over this
+    //     scheme is a code another app can claim. `apps/android/README.md`
+    //     ("Deep links: what ships, and what is deliberately deferred") states
+    //     this as a precondition in as many words.
+    //  2. Something has to consume it. Nothing listens for the `@capacitor/app`
+    //     `appUrlOpen` event on EITHER platform, so a captured code is silently
+    //     dropped today (same file, "Prerequisite 2 — link routing in the web
+    //     app").
+    //
+    // Widening the state enum removes the blocker Phase C named. Emitting the
+    // link before (1) would trade a wrong-cookie-jar failure for a credential
+    // that can be intercepted — strictly worse — and before (2) it would not
+    // work at all.
     if (platform === 'ios') {
       const iosDeviceId = deviceId || createId();
 
       const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+        authentication,
         providedDeviceToken: undefined,
         userId: user.id,
         deviceId: iosDeviceId,
@@ -327,6 +426,8 @@ export async function POST(req: Request) {
         createdAt: Date.now(),
       });
 
+      // iOS is a separate Capacitor app that registers `pagespace://`
+      // itself; the desktop shell variant does not apply here.
       const deepLinkUrl = new URL('pagespace://auth-exchange');
       deepLinkUrl.searchParams.set('code', exchangeCode);
       deepLinkUrl.searchParams.set('provider', 'apple');
@@ -344,13 +445,16 @@ export async function POST(req: Request) {
         invitedDriveId: oauthInviteResult.invitedDriveId ?? null,
       });
 
-      return NextResponse.redirect(deepLinkUrl.toString());
+      const iosResponse = NextResponse.redirect(deepLinkUrl.toString());
+      captureAppleTokenInBackground();
+      return iosResponse;
     }
 
     let webDeviceTokenValue: string | undefined;
     if (deviceId) {
       try {
         webDeviceTokenValue = await createWebDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           deviceName: deviceName || req.headers.get('user-agent') || 'Web Browser',
           userAgent: req.headers.get('user-agent') || undefined,
@@ -363,7 +467,10 @@ export async function POST(req: Request) {
       }
     }
 
-    if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
+    if (oauthInviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      returnUrl = oauthInviteResult.orgLandingPath;
+    } else if (oauthInviteResult.kind === 'page' && oauthInviteResult.invitedDriveId && oauthInviteResult.invitedPageId) {
       returnUrl = `/dashboard/${oauthInviteResult.invitedDriveId}/pages/${oauthInviteResult.invitedPageId}?invited=1`;
     } else if (oauthInviteResult.kind === 'connection') {
       returnUrl = `/dashboard/connections?connection_requested=1`;
@@ -383,7 +490,9 @@ export async function POST(req: Request) {
       headers.append('Set-Cookie', createDeviceTokenHandoffCookie(webDeviceTokenValue));
     }
 
-    return NextResponse.redirect(redirectUrl, { headers });
+    const webResponse = NextResponse.redirect(redirectUrl, { headers });
+    captureAppleTokenInBackground();
+    return webResponse;
 
   } catch (error) {
     loggers.auth.error('Apple OAuth callback error', error as Error);

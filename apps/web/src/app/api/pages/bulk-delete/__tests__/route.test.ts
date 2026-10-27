@@ -22,6 +22,10 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result: unknown) => result !== null && typeof result === 'object' && 'error' in (result as Record<string, unknown>)),
   getAllowedDriveIds: vi.fn(() => []),
   isMCPAuthResult: vi.fn(() => false),
+  canPrincipalDeletePage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserDeletePage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserDeletePage(credentialActor(auth.userId, null), pageId);
+  }),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -42,6 +46,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserDeletePage: vi.fn().mockResolvedValue(true),
 }));
 
@@ -59,8 +64,14 @@ vi.mock('@pagespace/db/db', () => {
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
   const txUpdate = vi.fn().mockReturnValue({ set: txUpdateSet });
   const txQueryPagesFindMany = vi.fn().mockResolvedValue([]);
+  // Children-to-reparent lookup added by the task_items sync. Resolves to no children
+  // so the per-child syncTaskItemOnMove loop is a no-op in these tests.
+  const txSelectWhere = vi.fn().mockResolvedValue([]);
+  const txSelectFrom = vi.fn().mockReturnValue({ where: txSelectWhere });
+  const txSelect = vi.fn().mockReturnValue({ from: txSelectFrom });
   const tx = {
     update: txUpdate,
+    select: txSelect,
     query: { pages: { findMany: txQueryPagesFindMany } },
   };
   const transaction = vi.fn(async (fn: (t: unknown) => Promise<void>) => {
@@ -73,13 +84,25 @@ vi.mock('@pagespace/db/db', () => {
       },
       transaction,
     },
-    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction },
+    __test__: { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction },
   };
 });
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => [a, b]),
+  and: vi.fn((...conds: unknown[]) => conds),
   inArray: vi.fn((a: unknown, b: unknown) => [a, b]),
 }));
+
+// The memory-page guard queries personalization pointers. Left unmocked it
+// resolves through @pagespace/lib's BUILT dist, whose `@pagespace/db/db` import
+// the db mock above does not intercept — so this route test would quietly reach
+// a real database, passing in CI (where Postgres exists) and 500ing anywhere
+// else. Mock the guard so the route test stays a unit test. Real constants are
+// kept so a reworded refusal cannot pass silently.
+vi.mock('@pagespace/lib/memory/memory-pages', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/memory/memory-pages')>();
+  return { ...actual, findProtectedMemoryPages: vi.fn().mockResolvedValue(new Set<string>()) };
+});
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', parentId: 'parentId' },
 }));
@@ -94,12 +117,17 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 // @ts-expect-error - accessing test-only export
 import { db, __test__ as dbTest } from '@pagespace/db/db';
+import { findProtectedMemoryPages, MEMORY_PAGE_DELETE_ERROR } from '@pagespace/lib/memory/memory-pages';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
-const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, transaction: mockTransaction } = dbTest as {
+const { txUpdate, txUpdateSet, txUpdateWhere, txQueryPagesFindMany, txSelect, txSelectFrom, txSelectWhere, transaction: mockTransaction } = dbTest as {
   txUpdate: ReturnType<typeof vi.fn>;
   txUpdateSet: ReturnType<typeof vi.fn>;
   txUpdateWhere: ReturnType<typeof vi.fn>;
   txQueryPagesFindMany: ReturnType<typeof vi.fn>;
+  txSelect: ReturnType<typeof vi.fn>;
+  txSelectFrom: ReturnType<typeof vi.fn>;
+  txSelectWhere: ReturnType<typeof vi.fn>;
   transaction: ReturnType<typeof vi.fn>;
 };
 
@@ -160,9 +188,14 @@ function setupSuccessScenario() {
   txUpdateSet.mockReturnValue({ where: txUpdateWhere });
   txUpdate.mockReturnValue({ set: txUpdateSet });
   txQueryPagesFindMany.mockResolvedValue([]);
+  // Children-to-reparent lookup added by the task_items sync; no children by default.
+  txSelectWhere.mockResolvedValue([]);
+  txSelectFrom.mockReturnValue({ where: txSelectWhere });
+  txSelect.mockReturnValue({ from: txSelectFrom });
   mockTransaction.mockImplementation(async (fn: (t: unknown) => Promise<void>) => {
     await fn({
       update: txUpdate,
+      select: txSelect,
       query: { pages: { findMany: txQueryPagesFindMany } },
     });
   });
@@ -174,6 +207,32 @@ describe('DELETE /api/pages/bulk-delete', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupSuccessScenario();
+    // Default: nothing in the batch is a memory page.
+    vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set<string>());
+  });
+
+  // ── Memory page protection ──────────────────────────────────────────
+
+  describe('memory page protection', () => {
+    it('refuses the whole batch when one page is a memory page, trashing nothing', async () => {
+      // All-or-nothing on purpose: silently trashing the other four and keeping
+      // the profile is a worse outcome than refusing, because nothing tells the
+      // user which item was skipped or why.
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        mockPage({ id: 'page-1' }),
+        mockPage({ id: 'memory-bio', title: 'About You' }),
+      ] as never);
+      vi.mocked(findProtectedMemoryPages).mockResolvedValue(new Set(['memory-bio']));
+
+      const response = await DELETE(createRequest({ pageIds: ['page-1', 'memory-bio'], trashChildren: true }));
+      const body = await response.json();
+
+      expect(response.status).toBe(403);
+      expect(body.error).toBe(MEMORY_PAGE_DELETE_ERROR);
+      // The refusal must come BEFORE any write, not roll one back.
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(txUpdate).not.toHaveBeenCalled();
+    });
   });
 
   // ── Authentication ──────────────────────────────────────────────────

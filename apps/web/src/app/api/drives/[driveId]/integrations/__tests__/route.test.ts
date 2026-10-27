@@ -6,6 +6,7 @@ import type { SessionAuthResult, AuthError } from '@/lib/auth';
 // Contract Tests for /api/drives/[driveId]/integrations
 // ============================================================================
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     auditRequest: vi.fn(),
 }));
@@ -50,6 +51,8 @@ vi.mock('@/lib/auth', () => ({
 
 
 import { GET, POST } from '../route';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveAccess } from '@pagespace/lib/services/drive-service';
 import { listDriveConnections, createConnection, findDriveConnection } from '@pagespace/lib/integrations/repositories/connection-repository'
@@ -58,6 +61,7 @@ import { encryptCredentials } from '@pagespace/lib/integrations/credentials/encr
 import { buildOAuthAuthorizationUrl } from '@pagespace/lib/integrations/oauth/oauth-handler'
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { builtinProviders } from '@pagespace/lib/integrations/providers/builtin-providers';
 
 // ============================================================================
 // Test Helpers
@@ -109,7 +113,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('authorization', () => {
     it('should return 403 when user is not a member', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: false, role: null,
+        isOwner: false, isAdmin: false, isMember: false, role: null, customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations');
@@ -124,7 +128,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('response contract', () => {
     it('should return connections list with safe fields', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(listDriveConnections).mockResolvedValue([
         {
@@ -181,7 +185,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
 
     it('should handle connections with null provider', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(listDriveConnections).mockResolvedValue([
         // @ts-expect-error - partial mock data
@@ -215,7 +219,7 @@ describe('GET /api/drives/[driveId]/integrations', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('DB failed');
       vi.mocked(listDriveConnections).mockRejectedValueOnce(error);
@@ -245,6 +249,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth(MOCK_USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(getDrivePolicies).mockResolvedValue(null);
     // Reset env
     process.env = { ...originalEnv };
   });
@@ -271,7 +276,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('authorization', () => {
     it('should return 403 when user is not owner or admin', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER',
+        isOwner: false, isAdmin: false, isMember: true, role: 'MEMBER', customRoleId: null,
       });
 
       const request = new Request('https://example.com/api/drives/d/integrations', {
@@ -287,7 +292,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     it('should allow admin access', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN',
+        isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
@@ -318,7 +323,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('validation', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -349,7 +354,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('provider validation', () => {
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
     });
 
@@ -471,7 +476,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
     beforeEach(() => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       vi.mocked(getProviderById).mockResolvedValue(oauthProvider as never);
       vi.mocked(findDriveConnection).mockResolvedValue(null);
@@ -547,6 +552,45 @@ describe('POST /api/drives/[driveId]/integrations', () => {
       );
     });
 
+    it('should build the authorize URL from the canonical builtin config, not a stale persisted copy', async () => {
+      process.env.OAUTH_STATE_SECRET = 'test-secret';
+      process.env.INTEGRATION_GITHUB_CLIENT_ID = 'client-id-123';
+
+      // Persisted row is a builtin (providerType: 'builtin') but its authMethod
+      // config has drifted from what's shipped in code.
+      vi.mocked(getProviderById).mockResolvedValue({
+        id: 'prov-oauth',
+        slug: 'github',
+        providerType: 'builtin',
+        enabled: true,
+        driveId: null,
+        config: {
+          authMethod: {
+            type: 'oauth2',
+            config: { authorizationUrl: 'https://stale.example.com/authorize', scopes: [] },
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as never);
+
+      vi.mocked(createSignedState).mockReturnValue('signed-state-token');
+      vi.mocked(buildOAuthAuthorizationUrl).mockReturnValue('https://github.com/login/oauth/authorize?state=signed-state-token');
+
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-oauth', name: 'GitHub' }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+
+      expect(response.status).toBe(200);
+      // The canonical in-memory GitHub auth config is used, not the stale DB copy.
+      expect(buildOAuthAuthorizationUrl).toHaveBeenCalledWith(
+        builtinProviders.github.authMethod.type === 'oauth2' ? builtinProviders.github.authMethod.config : undefined,
+        expect.anything()
+      );
+    });
+
     it('should use returnUrl when provided', async () => {
       process.env.OAUTH_STATE_SECRET = 'test-secret';
       process.env.INTEGRATION_GITHUB_CLIENT_ID = 'client-id-123';
@@ -619,8 +663,9 @@ describe('POST /api/drives/[driveId]/integrations', () => {
 
   describe('non-OAuth flow', () => {
     beforeEach(() => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: DEFAULT_ORG_POLICIES });
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       // @ts-expect-error - partial mock data
       vi.mocked(getProviderById).mockResolvedValue({
@@ -633,6 +678,31 @@ describe('POST /api/drives/[driveId]/integrations', () => {
         createdAt: new Date(), updatedAt: new Date(),
       });
       vi.mocked(findDriveConnection).mockResolvedValue(null);
+    });
+
+    it('POL-11 refuses 403 org_policy for a service off the org allowlist - nothing is stored, no credential is taken', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['slack'] } });
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'lin_abc123' } }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'integrationsAllowlist' });
+      expect(encryptCredentials).not.toHaveBeenCalled();
+      expect(createConnection).not.toHaveBeenCalled();
+    });
+
+    it('POL-11 an allowed service still connects', async () => {
+      vi.mocked(getDrivePolicies).mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, integrationsAllowlist: ['linear'] } });
+      vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc_xyz' });
+      // @ts-expect-error - partial mock data
+      vi.mocked(createConnection).mockResolvedValue({ id: 'conn-new', providerId: 'prov-api', name: 'Linear', status: 'active', createdAt: new Date() });
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'k' } }),
+      });
+      expect((await POST(request, createContext(MOCK_DRIVE_ID))).status).toBe(201);
     });
 
     it('should return 400 when credentials are missing', async () => {
@@ -675,7 +745,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
           providerId: 'prov-api',
           name: 'Linear',
           credentials: { apiKey: 'lin_abc123' },
-          baseUrlOverride: 'https://custom.linear.app',
+          baseUrlOverride: 'https://93.184.216.34/linear',
         }),
       });
       const response = await POST(request, createContext(MOCK_DRIVE_ID));
@@ -695,9 +765,51 @@ describe('POST /api/drives/[driveId]/integrations', () => {
         name: 'Linear',
         status: 'active',
         credentials: { apiKey: 'enc_xyz' },
-        baseUrlOverride: 'https://custom.linear.app',
+        baseUrlOverride: 'https://93.184.216.34/linear',
         connectedBy: MOCK_USER_ID,
       }));
+    });
+
+    const blockedOverrides = [
+      'http://127.0.0.1:9000/hook',
+      'http://169.254.169.254/latest/meta-data/',
+      'http://10.0.0.5/hook',
+      'http://[::1]/hook',
+      'http://localhost:3000/hook',
+      'http://metadata.google.internal/computeMetadata/v1/',
+    ];
+
+    for (const baseUrlOverride of blockedOverrides) {
+      it(`given baseUrlOverride ${baseUrlOverride}, should reject with 400 and write no row`, async () => {
+        vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc' });
+
+        const request = new Request('https://example.com/api/drives/d/integrations', {
+          method: 'POST',
+          body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'k' }, baseUrlOverride }),
+        });
+        const response = await POST(request, createContext(MOCK_DRIVE_ID));
+        const body = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error).toBe('Validation failed');
+        expect(body.details.baseUrlOverride).toBeDefined();
+        expect(createConnection).not.toHaveBeenCalled();
+      });
+    }
+
+    it('given an http:// baseUrlOverride pointing at a PUBLIC host, should reject with 400 and write no row', async () => {
+      vi.mocked(encryptCredentials).mockResolvedValue({ apiKey: 'enc' });
+
+      const request = new Request('https://example.com/api/drives/d/integrations', {
+        method: 'POST',
+        body: JSON.stringify({ providerId: 'prov-api', name: 'Linear', credentials: { apiKey: 'k' }, baseUrlOverride: 'http://93.184.216.34/linear' }),
+      });
+      const response = await POST(request, createContext(MOCK_DRIVE_ID));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.details.baseUrlOverride[0]).toMatch(/HTTPS/i);
+      expect(createConnection).not.toHaveBeenCalled();
     });
 
     it('should pass null baseUrlOverride when not provided', async () => {
@@ -729,7 +841,7 @@ describe('POST /api/drives/[driveId]/integrations', () => {
   describe('error handling', () => {
     it('should return 500 and log when service throws', async () => {
       vi.mocked(getDriveAccess).mockResolvedValue({
-        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER',
+        isOwner: true, isAdmin: true, isMember: true, role: 'OWNER', customRoleId: null,
       });
       const error = new Error('Unexpected error');
       vi.mocked(getProviderById).mockRejectedValueOnce(error);

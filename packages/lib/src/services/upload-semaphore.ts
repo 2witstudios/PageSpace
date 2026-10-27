@@ -1,59 +1,68 @@
 import { STORAGE_TIERS } from './storage-limits';
-import { getMemoryStatus } from './memory-monitor';
+import { releasePendingUpload } from './pending-uploads';
 import { loggers } from '../logging/logger-config';
+import type { AttachmentTarget } from './attachment-upload-core';
+
+/**
+ * Server-trusted upload parameters captured at presign time. /complete reads
+ * these from the slot instead of trusting the client request body, so a client
+ * cannot presign for one drive/hash/size and complete with another.
+ *
+ * `driveId` is the drive a page-file (or channel-attachment) upload belongs to;
+ * conversation (DM) attachments have no drive and set it to '' while carrying the
+ * binding in `attachmentTarget`. `attachmentTarget` is set only by the
+ * channel/DM attachment flow — page-file uploads leave it undefined — and binds
+ * the slot to a specific page/conversation so /complete can't be replayed
+ * against a different target.
+ */
+export interface UploadSlotMetadata {
+  contentHash: string;
+  driveId: string;
+  fileSize: number;
+  mimeType: string;
+  attachmentTarget?: AttachmentTarget;
+  // H3 (page-file flow): server-trusted fact captured at presign so /complete can
+  // gate the dedup link without re-trusting the client. Optional — the attachment
+  // flow leaves it unset (it has its own verification path). The authoritative
+  // anti-claim check at /complete is the atomic `files`-row ownership claim, not
+  // this hint.
+  callerAlreadyReferences?: boolean;
+}
 
 interface UploadSlot {
   userId: string;
   acquiredAt: Date;
   fileSize: number;
+  metadata?: UploadSlotMetadata;
+  // L8: set once a completing/cancelling route has taken ownership of this slot
+  // (via getSlotMetadata). A claimed slot's DB activeUploads decrement is owned
+  // by that route, so the stale-slot sweep must NOT also decrement it (else the
+  // counter is double-decremented if the route's work outlives the timeout).
+  claimed?: boolean;
 }
 
-/**
- * Dynamic upload semaphore with memory-aware limits
- *
- * Features:
- * - Adjusts limits based on available system memory
- * - Configurable via environment variables
- * - Intelligent cleanup and monitoring
- * - Per-user tier limits with global coordination
- */
 class UploadSemaphore {
   private static instance: UploadSemaphore;
 
   private globalPermits: number;
   private userPermits: Map<string, number>;
   private activeSlots: Map<string, UploadSlot>;
-  private currentLimit: number;
-
-  // Dynamic configuration
-  private readonly baseGlobalPermits: number;
-  private readonly maxGlobalPermits: number;
+  private readonly globalLimit: number;
   private readonly slotTimeout = 10 * 60 * 1000; // 10 minutes max per upload
 
-  // Memory-aware scaling
-  private lastMemoryCheck = 0;
-  private readonly memoryCheckInterval = 30000; // Check memory every 30 seconds
-
   private constructor() {
-    // Load configuration from environment
-    this.baseGlobalPermits = parseInt(process.env.UPLOAD_BASE_PERMITS || '3');
-    this.maxGlobalPermits = parseInt(process.env.UPLOAD_MAX_PERMITS || '8');
-
-    this.globalPermits = this.baseGlobalPermits;
-    this.currentLimit = this.baseGlobalPermits;
+    // Per-process limit: with horizontal scaling each replica enforces this independently.
+    const parsedLimit = Number.parseInt(process.env.UPLOAD_MAX_PERMITS ?? '20', 10);
+    this.globalLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
+    this.globalPermits = this.globalLimit;
     this.userPermits = new Map();
     this.activeSlots = new Map();
 
-    // Cleanup stale slots every minute
     setInterval(() => this.cleanupStaleSlots(), 60000);
 
-    // Update permits based on memory every 30 seconds
-    setInterval(() => this.updateDynamicLimits(), this.memoryCheckInterval);
-
     loggers.api.info('Upload semaphore initialized', {
-      baseGlobalPermits: this.baseGlobalPermits,
-      maxGlobalPermits: this.maxGlobalPermits,
-      slotTimeoutMinutes: this.slotTimeout / 60000
+      globalLimit: this.globalLimit,
+      slotTimeoutMinutes: this.slotTimeout / 60000,
     });
   }
 
@@ -64,167 +73,43 @@ class UploadSemaphore {
     return UploadSemaphore.instance;
   }
 
-  /**
-   * Update dynamic limits based on system memory and load
-   */
-  private async updateDynamicLimits(): Promise<void> {
-    try {
-      const memStatus = await getMemoryStatus();
-      const now = Date.now();
-
-      // Skip if we checked memory recently
-      if (now - this.lastMemoryCheck < this.memoryCheckInterval) {
-        return;
-      }
-
-      this.lastMemoryCheck = now;
-
-      let newGlobalPermits = this.baseGlobalPermits;
-
-      // Adjust based on memory pressure
-      if (memStatus.warningLevel === 'critical') {
-        // Reduce permits significantly when memory is critical
-        newGlobalPermits = Math.max(1, Math.floor(this.baseGlobalPermits * 0.3));
-      } else if (memStatus.warningLevel === 'warning') {
-        // Reduce permits moderately when memory is under pressure
-        newGlobalPermits = Math.max(2, Math.floor(this.baseGlobalPermits * 0.6));
-      } else if (memStatus.percentUsed < 60 && memStatus.availableMB > 1000) {
-        // Increase permits when memory is plentiful
-        newGlobalPermits = Math.min(this.maxGlobalPermits, this.baseGlobalPermits + 2);
-      }
-
-      // Update permits if they changed
-      if (newGlobalPermits !== this.currentLimit) {
-        const oldLimit = this.currentLimit;
-        this.currentLimit = newGlobalPermits;
-        const recalculatedAvailable = Math.max(0, this.currentLimit - this.activeSlots.size);
-        this.globalPermits = recalculatedAvailable;
-
-        loggers.api.info('Dynamic upload limits adjusted', {
-          oldPermits: oldLimit,
-          newPermits: newGlobalPermits,
-          memoryPercent: memStatus.percentUsed,
-          availableMB: memStatus.availableMB,
-          warningLevel: memStatus.warningLevel,
-          activeUploads: this.activeSlots.size,
-          availableSlots: this.globalPermits
-        });
-      }
-
-    } catch (error) {
-      loggers.api.warn('Failed to update dynamic upload limits', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-  }
-
-  /**
-   * Try to acquire an upload slot with intelligent limits
-   * Returns a unique slot ID if successful, null if not
-   */
   async acquireUploadSlot(
     userId: string,
     tier: keyof typeof STORAGE_TIERS,
-    fileSize: number
+    fileSize: number,
+    metadata?: UploadSlotMetadata
   ): Promise<string | null> {
-    const startTime = Date.now();
-
-    // Update dynamic limits if needed (throttled)
-    await this.updateDynamicLimits();
-
-    // Check global limit (dynamically adjusted)
     if (this.globalPermits <= 0) {
-      loggers.api.debug('Upload rejected: Global limit reached', {
-        userId,
-        fileSize,
-        currentPermits: this.globalPermits,
-        activeUploads: this.activeSlots.size,
-        tier
+      loggers.api.debug('Upload rejected: global limit reached', {
+        userId, fileSize, activeUploads: this.activeSlots.size, tier,
       });
       return null;
     }
 
-    // Check user limit based on tier
     const userLimit = STORAGE_TIERS[tier].maxConcurrentUploads;
     const currentUserUploads = this.userPermits.get(userId) || 0;
 
     if (currentUserUploads >= userLimit) {
-      loggers.api.debug('Upload rejected: User tier limit reached', {
-        userId,
-        fileSize,
-        currentUserUploads,
-        userLimit,
-        tier
+      loggers.api.debug('Upload rejected: user tier limit reached', {
+        userId, fileSize, currentUserUploads, userLimit, tier,
       });
       return null;
     }
 
-    // Check system memory with cached status
-    try {
-      const memStatus = await getMemoryStatus();
-      if (!memStatus.canAcceptUpload) {
-        loggers.api.debug('Upload rejected: Insufficient memory', {
-          userId,
-          fileSize,
-          availableMB: memStatus.availableMB,
-          percentUsed: memStatus.percentUsed,
-          warningLevel: memStatus.warningLevel
-        });
-        return null;
-      }
-
-      // Additional check for very large files during memory pressure
-      if (memStatus.warningLevel === 'warning' && fileSize > 10 * 1024 * 1024) {
-        loggers.api.debug('Upload rejected: Large file during memory pressure', {
-          userId,
-          fileSize,
-          fileSizeMB: Math.round(fileSize / 1024 / 1024),
-          memoryPercent: memStatus.percentUsed,
-          warningLevel: memStatus.warningLevel
-        });
-        return null;
-      }
-
-    } catch (error) {
-      loggers.api.warn('Failed to check memory status, allowing upload with graceful degradation', {
-        userId,
-        fileSize,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
-
-    // Grant permit
     const slotId = `${userId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
     this.userPermits.set(userId, currentUserUploads + 1);
-    this.activeSlots.set(slotId, {
-      userId,
-      acquiredAt: new Date(),
-      fileSize
-    });
-
-    // Ensure availability reflects current limit after acquiring the slot
-    this.globalPermits = Math.max(0, this.currentLimit - this.activeSlots.size);
-
-    const processingTime = Date.now() - startTime;
+    this.activeSlots.set(slotId, { userId, acquiredAt: new Date(), fileSize, metadata });
+    this.globalPermits = Math.max(0, this.globalLimit - this.activeSlots.size);
 
     loggers.api.info('Upload slot granted', {
-      slotId,
-      userId,
-      fileSize,
+      slotId, userId, fileSize, tier,
       fileSizeMB: Math.round(fileSize / 1024 / 1024),
-      tier,
       globalPermitsRemaining: this.globalPermits,
-      userUploadsActive: currentUserUploads + 1,
-      processingTimeMs: processingTime
     });
 
     return slotId;
   }
 
-  /**
-   * Release an upload slot with improved tracking
-   */
   releaseUploadSlot(slotId: string): void {
     const slot = this.activeSlots.get(slotId);
     if (!slot) {
@@ -239,53 +124,27 @@ class UploadSemaphore {
 
     const currentUserUploads = this.userPermits.get(userId) || 0;
     this.userPermits.set(userId, Math.max(0, currentUserUploads - 1));
-
-    // Clean up user entry if no active uploads
     if ((this.userPermits.get(userId) || 0) === 0) {
       this.userPermits.delete(userId);
     }
 
-    // Recalculate availability using the current limit and remaining active slots
-    this.globalPermits = Math.max(0, this.currentLimit - this.activeSlots.size);
+    this.globalPermits = Math.max(0, this.globalLimit - this.activeSlots.size);
 
     loggers.api.info('Upload slot released', {
-      slotId,
-      userId,
-      fileSize,
+      slotId, userId, fileSize,
       fileSizeMB: Math.round(fileSize / 1024 / 1024),
       uploadDurationMs,
-      uploadDurationSeconds: Math.round(uploadDurationMs / 1000),
       globalPermitsNow: this.globalPermits,
-      activeUploads: this.activeSlots.size
     });
   }
 
-  /**
-   * Check if a user can acquire an upload slot without actually acquiring it
-   */
   async canAcquireSlot(userId: string, tier: keyof typeof STORAGE_TIERS): Promise<boolean> {
-    // Check global limit
     if (this.globalPermits <= 0) return false;
-
-    // Check user limit
     const userLimit = STORAGE_TIERS[tier].maxConcurrentUploads;
     const currentUserUploads = this.userPermits.get(userId) || 0;
-    if (currentUserUploads >= userLimit) return false;
-
-    // Check memory
-    try {
-      const memStatus = await getMemoryStatus();
-      if (!memStatus.canAcceptUpload) return false;
-    } catch {
-      // Allow if memory check fails
-    }
-
-    return true;
+    return currentUserUploads < userLimit;
   }
 
-  /**
-   * Get current semaphore status
-   */
   getStatus(): {
     globalSlotsAvailable: number;
     globalSlotsUsed: number;
@@ -298,20 +157,52 @@ class UploadSemaphore {
       globalSlotsUsed: this.activeSlots.size,
       userUploads: new Map(this.userPermits),
       activeSlots: this.activeSlots.size,
-      configuredLimit: this.currentLimit
+      configuredLimit: this.globalLimit,
     };
   }
 
   /**
-   * Clean up slots that have been held too long (likely from crashed uploads)
+   * L8: release a slot abandoned past its timeout. An abandoned upload's
+   * presign-time `pending_uploads` row is never released by a route, so this
+   * path deletes it too (#2154). Unlike the old counter decrement this is
+   * merely an optimization — the row's own TTL already returns the concurrency
+   * slot even if this process dies — and the delete is idempotent, so a
+   * `claimed` slot (owned by an in-flight completion/cancel route) skips it
+   * only to avoid redundant work, not to protect a counter.
+   *
+   * Keep the delete durable anyway: confirm the DB write succeeded BEFORE
+   * forgetting the in-memory slot, so a transient failure leaves the slot for
+   * the next 60s sweep to retry.
    */
+  private async releaseStaleSlot(slotId: string): Promise<void> {
+    const slot = this.activeSlots.get(slotId);
+    if (!slot) return;
+
+    if (slot.claimed) {
+      // An in-flight route owns the pending-upload release; just reclaim the
+      // in-memory permit.
+      this.releaseUploadSlot(slotId);
+      return;
+    }
+
+    try {
+      await releasePendingUpload(slotId);
+    } catch (err) {
+      // Keep the slot so the next sweep retries the release; do not forget it.
+      loggers.api.warn('Stale-slot pending-upload release failed; will retry next sweep', {
+        slotId, userId: slot.userId, err: err as Error,
+      });
+      return;
+    }
+    this.releaseUploadSlot(slotId);
+  }
+
   private cleanupStaleSlots(): void {
     const now = Date.now();
     const staleSlots: string[] = [];
 
     this.activeSlots.forEach((slot, slotId) => {
-      const age = now - slot.acquiredAt.getTime();
-      if (age > this.slotTimeout) {
+      if (now - slot.acquiredAt.getTime() > this.slotTimeout) {
         staleSlots.push(slotId);
       }
     });
@@ -320,23 +211,47 @@ class UploadSemaphore {
       loggers.api.warn('Cleaning up stale upload slots', {
         staleCount: staleSlots.length,
         timeoutMinutes: this.slotTimeout / 60000,
-        totalActiveSlots: this.activeSlots.size
       });
-
-      staleSlots.forEach(slotId => this.releaseUploadSlot(slotId));
+      // Fire each release; releaseStaleSlot is durable (keeps the slot on DB
+      // failure) and self-guards, so an unhandled rejection can't escape here.
+      staleSlots.forEach(slotId => { void this.releaseStaleSlot(slotId); });
     }
   }
 
+  verifySlotOwner(slotId: string, userId: string): boolean {
+    const slot = this.activeSlots.get(slotId);
+    if (!slot || slot.userId !== userId) return false;
+    // Reject (and reclaim) slots past the timeout rather than waiting for the
+    // once-a-minute sweep — a stale jobId must not still authorize a completion.
+    // Reclaim via releaseStaleSlot so the abandoned pending_uploads row is
+    // deleted promptly too (its TTL would release it anyway).
+    if (Date.now() - slot.acquiredAt.getTime() > this.slotTimeout) {
+      void this.releaseStaleSlot(slotId);
+      return false;
+    }
+    return true;
+  }
+
   /**
-   * Force release all slots for a user (e.g., on logout or error)
+   * Return the server-trusted metadata captured at presign time for a slot the
+   * user owns (and that hasn't expired). Returns null otherwise. Callers use
+   * this instead of trusting client-supplied upload parameters.
    */
+  getSlotMetadata(slotId: string, userId: string): UploadSlotMetadata | null {
+    if (!this.verifySlotOwner(slotId, userId)) return null;
+    const slot = this.activeSlots.get(slotId);
+    if (!slot) return null;
+    // The caller is taking ownership of this slot to complete the upload; mark it
+    // claimed so the stale-slot sweep won't also decrement the DB counter while
+    // this (possibly long) completion is in flight (see releaseStaleSlot).
+    slot.claimed = true;
+    return slot.metadata ?? null;
+  }
+
   releaseUserSlots(userId: string): void {
     const userSlots: string[] = [];
-
     this.activeSlots.forEach((slot, slotId) => {
-      if (slot.userId === userId) {
-        userSlots.push(slotId);
-      }
+      if (slot.userId === userId) userSlots.push(slotId);
     });
 
     if (userSlots.length > 0) {
@@ -345,19 +260,12 @@ class UploadSemaphore {
     }
   }
 
-  /**
-   * Reset semaphore (for testing or emergency recovery)
-   */
   reset(): void {
-    this.currentLimit = this.baseGlobalPermits;
-    this.globalPermits = this.currentLimit;
+    this.globalPermits = this.globalLimit;
     this.userPermits.clear();
     this.activeSlots.clear();
-    loggers.api.info('Upload semaphore reset to defaults', {
-      limit: this.currentLimit
-    });
+    loggers.api.info('Upload semaphore reset', { limit: this.globalLimit });
   }
 }
 
-// Export singleton instance
 export const uploadSemaphore = UploadSemaphore.getInstance();

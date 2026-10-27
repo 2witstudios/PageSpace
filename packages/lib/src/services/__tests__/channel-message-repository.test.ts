@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Boundary-level test double: see test-doubles/db.ts for the design rationale
 // (no thenable Drizzle chain mocks; assertions read observable state, not the
@@ -27,6 +27,10 @@ vi.mock('@pagespace/db/schema/storage', async () => {
 });
 
 import { channelMessageRepository } from '../channel-message-repository';
+import type { MessageAttachmentInput } from '../attachment-upload-core';
+// Real encryption helpers (NOT mocked) — prove ciphertext seeded at rest is
+// decrypted at the read edge. Legacy plaintext must still pass through.
+import { encryptField, looksEncrypted } from '../../encryption/field-crypto';
 
 interface AssertParams {
   given: string;
@@ -196,49 +200,64 @@ describe('channelMessageRepository.loadChannelMessageWithRelations', () => {
       expected: { userId: 'u-1', fileId: 'file-1', reactionUser: 'Bob' },
     });
   });
-});
 
-describe('channelMessageRepository.fileExists', () => {
-  it('returns true when the file row is present', async () => {
-    testDbState.seed('files', [{ id: 'file-1', mimeType: 'image/png' }]);
+  it('loads the attachment rows, each with its joined file', async () => {
+    // The shared `with` clause feeds both the POST response and the realtime
+    // broadcast, so if it stops loading this relation a multi-photo send goes
+    // out as an empty bubble and only a refresh repairs it.
+    testDbState.seed('users', [{ id: 'u-1', name: 'Alice' }]);
+    testDbState.seed('files', [
+      { id: 'file-1', mimeType: 'image/png', sizeBytes: 10 },
+      { id: 'file-2', mimeType: 'image/png', sizeBytes: 20 },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', userId: 'u-1', isActive: true, content: '' },
+    ]);
+    testDbState.seed('channelMessageAttachments', [
+      { id: 'att-1', messageId: 'msg-1', fileId: 'file-1', position: 0 },
+      { id: 'att-2', messageId: 'msg-1', fileId: 'file-2', position: 1 },
+    ]);
 
-    const result = await channelMessageRepository.fileExists('file-1');
+    const result = await channelMessageRepository.loadChannelMessageWithRelations('msg-1');
+    const attachments = result?.attachments as
+      | Array<{ fileId: string; position: number; file: { mimeType: string } | null }>
+      | undefined;
 
     assert({
-      given: 'an attachment id that resolves to a file row',
-      should: 'return true so the route accepts the upload',
-      actual: result,
-      expected: true,
-    });
-  });
-
-  it('returns false when the file row is missing', async () => {
-    const result = await channelMessageRepository.fileExists('missing-file');
-
-    assert({
-      given: 'an attachment id with no matching file row',
-      should: 'return false so the route returns a 400 instead of orphaning the message',
-      actual: result,
-      expected: false,
+      given: 'a message carrying two attachment rows',
+      should: 'load both, each with the joined file the renderer needs for its mime type',
+      actual: {
+        pairs: attachments
+          ?.map((a) => `${a.position}:${a.fileId}:${a.file?.mimeType}`)
+          .sort(),
+      },
+      expected: { pairs: ['0:file-1:image/png', '1:file-2:image/png'] },
     });
   });
 });
 
-describe('channelMessageRepository.insertChannelMessage', () => {
+describe('channelMessageRepository.insertChannelMessageWithAttachment', () => {
+  const baseInput = {
+    pageId: 'page-1',
+    userId: 'user-1',
+    content: 'hello',
+    attachments: [] as MessageAttachmentInput[],
+  };
+
   it('writes pageId, userId, content, fileId, and attachmentMeta verbatim', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
-      content: 'hello',
-      fileId: 'file-1',
-      attachmentMeta: { kind: 'image' } as never,
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { kind: 'image' } as never }],
     });
 
     const inserted = testDbState.rows('channelMessages')[0];
     assert({
-      given: 'an insert request with all fields populated',
+      given: 'an insert request with all fields populated and a valid fileId',
       should: 'persist each field unchanged — the repository does not normalize input',
       actual: {
+        kind: result.kind,
         pageId: inserted.pageId,
         userId: inserted.userId,
         content: inserted.content,
@@ -246,6 +265,7 @@ describe('channelMessageRepository.insertChannelMessage', () => {
         attachmentMeta: inserted.attachmentMeta,
       },
       expected: {
+        kind: 'ok',
         pageId: 'page-1',
         userId: 'user-1',
         content: 'hello',
@@ -255,31 +275,152 @@ describe('channelMessageRepository.insertChannelMessage', () => {
     });
   });
 
-  it('persists null fileId and null attachmentMeta when there is no attachment', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
-      content: 'plain text',
-      fileId: null,
-      attachmentMeta: null,
-    });
+  it('persists null fileId and null attachmentMeta, and never locks files, when there is no attachment', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment(baseInput);
 
     const inserted = testDbState.rows('channelMessages')[0];
     assert({
       given: 'a text-only message',
-      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns',
-      actual: { fileId: inserted.fileId, attachmentMeta: inserted.attachmentMeta },
-      expected: { fileId: null, attachmentMeta: null },
+      should: 'insert NULL into fileId and attachmentMeta rather than dropping the columns, and skip the file lock entirely',
+      actual: {
+        kind: result.kind,
+        fileId: inserted.fileId,
+        attachmentMeta: inserted.attachmentMeta,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+      },
+      expected: { kind: 'ok', fileId: null, attachmentMeta: null, fileLocks: 0 },
+    });
+  });
+
+  it('writes one attachment row per file, numbered by the order sent', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }, { id: 'file-3' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-3', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    const rows = testDbState.rows('channelMessageAttachments');
+    assert({
+      given: 'a three-photo send whose files are NOT in id order',
+      should: 'number them by the order the client sent — position is display order, not the order the file rows were locked in',
+      actual: {
+        kind: result.kind,
+        messageCount: testDbState.count('channelMessages'),
+        ordered: rows.map((r) => `${r.position}:${r.fileId}`),
+      },
+      expected: {
+        kind: 'ok',
+        messageCount: 1,
+        ordered: ['0:file-3', '1:file-1', '2:file-2'],
+      },
+    });
+  });
+
+  it('takes exactly one ordered file lock for a multi-file send', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    assert({
+      given: 'a send attaching two files',
+      should: 'lock them in ONE statement — a lock per file, unordered, lets two sends sharing files deadlock',
+      actual: {
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('mirrors the first attachment into the legacy columns', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }, { id: 'file-2' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'file-2', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    const inserted = testDbState.rows('channelMessages')[0];
+    assert({
+      given: 'a two-photo send',
+      should: 'still populate fileId/attachmentMeta from the first file, for readers not yet migrated off them',
+      actual: inserted.fileId,
+      expected: 'file-1',
+    });
+  });
+
+  it('rejects the whole send when any one file is missing, writing nothing', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [
+        { fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+        { fileId: 'missing', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } },
+      ],
+    });
+
+    assert({
+      given: 'a batch where one file id does not resolve',
+      should: 'reject the send atomically rather than posting a partial gallery',
+      actual: {
+        kind: result.kind,
+        messages: testDbState.count('channelMessages'),
+        attachments: testDbState.count('channelMessageAttachments'),
+      },
+      expected: { kind: 'not_found', messages: 0, attachments: 0 },
+    });
+  });
+
+  it('rejects more attachments than a message may carry, before opening a transaction', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: Array.from({ length: 11 }, (_, i) => ({
+        fileId: `file-${i}`,
+        attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) },
+      })),
+    });
+
+    assert({
+      given: 'eleven attachments, one past the cap',
+      should: 'reject without touching the database — the DB CHECK is the last line of defense, not the first',
+      actual: { kind: result.kind, transactionCalls: testDbState.transactionCalls() },
+      expected: { kind: 'too_many_attachments', transactionCalls: 0 },
+    });
+  });
+
+  it('writes no attachment rows for a text-only message', async () => {
+    await channelMessageRepository.insertChannelMessageWithAttachment(baseInput);
+
+    assert({
+      given: 'a text-only send',
+      should: 'insert the message and no attachment rows at all',
+      actual: {
+        messages: testDbState.count('channelMessages'),
+        attachments: testDbState.count('channelMessageAttachments'),
+      },
+      expected: { messages: 1, attachments: 0 },
     });
   });
 
   it('persists an explicit quotedMessageId on the row when provided', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
       content: 'inline quote reply',
-      fileId: null,
-      attachmentMeta: null,
       quotedMessageId: 'quoted-msg-1',
     });
 
@@ -293,12 +434,9 @@ describe('channelMessageRepository.insertChannelMessage', () => {
   });
 
   it('persists null quotedMessageId when the caller omits the field', async () => {
-    await channelMessageRepository.insertChannelMessage({
-      pageId: 'page-1',
-      userId: 'user-1',
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
       content: 'plain top-level message',
-      fileId: null,
-      attachmentMeta: null,
     });
 
     const inserted = testDbState.rows('channelMessages')[0];
@@ -307,6 +445,39 @@ describe('channelMessageRepository.insertChannelMessage', () => {
       should: 'still write the column as null rather than dropping it from the payload',
       actual: inserted.quotedMessageId,
       expected: null,
+    });
+  });
+
+  it('locks the file row for the duration of the tx (SELECT ... FOR UPDATE) so a concurrent delete cannot race the insert', async () => {
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a channel message insert with a valid fileId',
+      should: 'invoke .for("update") against files exactly once before inserting, all inside a single db.transaction',
+      actual: {
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('rejects with not_found and inserts nothing when the file does not exist', async () => {
+    const result = await channelMessageRepository.insertChannelMessageWithAttachment({
+      ...baseInput,
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a fileId with no matching file row',
+      should: 'return not_found without inserting a message',
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'not_found', rowCount: 0 },
     });
   });
 });
@@ -333,6 +504,41 @@ describe('channelMessageRepository.upsertChannelReadStatus', () => {
       should: 'collapse to one row, with lastReadAt updated to the later timestamp',
       actual: { rowCount: rows.length, lastReadAt: rows[0]?.lastReadAt },
       expected: { rowCount: 1, lastReadAt: later },
+    });
+  });
+});
+
+describe('channelMessageRepository.findChannelLastReadAt', () => {
+  it('returns the viewer\'s own read watermark for the channel, never another user\'s or another channel\'s', async () => {
+    const mine = new Date('2026-05-04T11:00:00Z');
+    testDbState.seed('channelReadStatus', [
+      { userId: 'user-other', channelId: 'page-1', lastReadAt: new Date('2026-05-04T12:00:00Z') },
+      { userId: 'user-1', channelId: 'page-other', lastReadAt: new Date('2026-05-04T13:00:00Z') },
+      { userId: 'user-1', channelId: 'page-1', lastReadAt: mine },
+    ]);
+
+    const result = await channelMessageRepository.findChannelLastReadAt({ userId: 'user-1', channelId: 'page-1' });
+
+    assert({
+      given: 'read rows for the viewer in this channel, another user here, and the viewer elsewhere',
+      should: 'return only the viewer\'s watermark in this channel',
+      actual: result,
+      expected: mine,
+    });
+  });
+
+  it('returns null when the viewer has never read the channel', async () => {
+    testDbState.seed('channelReadStatus', [
+      { userId: 'user-other', channelId: 'page-1', lastReadAt: new Date('2026-05-04T12:00:00Z') },
+    ]);
+
+    const result = await channelMessageRepository.findChannelLastReadAt({ userId: 'user-1', channelId: 'page-1' });
+
+    assert({
+      given: 'no read row for the viewer in the channel',
+      should: 'return null, so every post by someone else reads as unread',
+      actual: result,
+      expected: null,
     });
   });
 });
@@ -507,9 +713,9 @@ describe('channelMessageRepository.restoreChannelMessage', () => {
 
     assert({
       given: 'a restore of a thread reply whose parent must be re-validated under lock',
-      should: 'invoke .for("update") against channelMessages exactly once — the lock blocks a concurrent softDelete until the bump commits',
+      should: 'invoke .for("update") against channelMessages twice — once for the parent re-validation before the replyCount bump, once more inside recomputeThreadLastReply (#2153) before it re-derives lastReplyAt — both against the same parent row, so the second is a safe reentrant re-lock, not a new race window',
       actual: testDbState.selectsForUpdate('channelMessages').length,
-      expected: 1,
+      expected: 2,
     });
   });
 });
@@ -520,8 +726,7 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
     pageId: 'page-1',
     userId: 'user-replier',
     content: 'thread response',
-    fileId: null,
-    attachmentMeta: null,
+    attachments: [],
   };
 
   const seedActiveParent = (overrides: Partial<Record<string, unknown>> = {}) => {
@@ -667,6 +872,84 @@ describe('channelMessageRepository.insertChannelThreadReply', () => {
         mirrorMirroredFromId: reply?.id,
         resultMirrorId: mirror?.id,
       },
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Attachment locking (issue #1865 — mirrors insertChannelMessageWithAttachment's
+  // top-level lock coverage, which the thread-reply path lacked)
+  // -------------------------------------------------------------------------
+
+  it('locks the file row (FOR UPDATE) once when the reply carries a fileId, inside the same transaction as the parent lock', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a thread reply with a fileId that resolves to an existing file',
+      should: 'lock files exactly once, insert successfully, all inside one db.transaction',
+      actual: {
+        kind: result.kind,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+        transactionCalls: testDbState.transactionCalls(),
+      },
+      expected: { kind: 'ok', fileLocks: 1, transactionCalls: 1 },
+    });
+  });
+
+  it('takes only one file lock even when alsoSendToParent writes a second row referencing the same fileId', async () => {
+    seedActiveParent();
+    testDbState.seed('files', [{ id: 'file-1' }]);
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'file-1', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+      alsoSendToParent: true,
+    });
+
+    const messages = testDbState.rows('channelMessages');
+    assert({
+      given: 'an alsoSendToParent thread reply with a fileId, so the reply AND the mirror both reference file-1',
+      should: 'lock files exactly once — one lock covers both inserts in this transaction',
+      actual: {
+        kind: result.kind,
+        rowCount: messages.length,
+        fileLocks: testDbState.selectsForUpdate('files').length,
+      },
+      expected: { kind: 'ok', rowCount: 3, fileLocks: 1 },
+    });
+  });
+
+  it('inserts without touching files when the reply has no fileId', async () => {
+    seedActiveParent();
+
+    const result = await channelMessageRepository.insertChannelThreadReply(baseInput);
+
+    assert({
+      given: 'a text-only thread reply',
+      should: 'return kind ok and never lock files',
+      actual: { kind: result.kind, fileLocks: testDbState.selectsForUpdate('files').length },
+      expected: { kind: 'ok', fileLocks: 0 },
+    });
+  });
+
+  it('rejects with not_found and inserts no reply when the fileId does not exist', async () => {
+    seedActiveParent();
+
+    const result = await channelMessageRepository.insertChannelThreadReply({
+      ...baseInput,
+      attachments: [{ fileId: 'missing-file', attachmentMeta: { originalName: 'a.png', size: 1, mimeType: 'image/png', contentHash: 'A'.repeat(64) } }],
+    });
+
+    assert({
+      given: 'a thread reply whose fileId has no matching file row',
+      should: 'return not_found without inserting a reply — only the seeded parent remains',
+      actual: { kind: result.kind, rowCount: testDbState.count('channelMessages') },
+      expected: { kind: 'not_found', rowCount: 1 },
     });
   });
 
@@ -1027,9 +1310,9 @@ describe('channelMessageRepository surface', () => {
       expected: [
         'addChannelReaction',
         'addChannelThreadFollower',
-        'fileExists',
+        'findChannelLastReadAt',
         'findChannelMessageInPage',
-        'insertChannelMessage',
+        'insertChannelMessageWithAttachment',
         'insertChannelThreadReply',
         'listChannelMessages',
         'listChannelThreadFollowers',
@@ -1043,6 +1326,252 @@ describe('channelMessageRepository surface', () => {
         'updateChannelMessageContent',
         'upsertChannelReadStatus',
       ],
+    });
+  });
+});
+
+describe('channelMessageRepository — PII decryption at the read edge (GDPR #965)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  beforeEach(() => {
+    // A >=32-char key so the real AES-GCM encrypt/decrypt primitives are usable.
+    process.env.ENCRYPTION_KEY = 'channel-repo-pii-test-master-key-32chars!';
+  });
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('listChannelMessages decrypts the joined author and reactor names', async () => {
+    const aliceCipher = await encryptField('Alice');
+    const bobCipher = await encryptField('Bob');
+    // Guard: the seeded values are genuinely ciphertext, not plaintext.
+    expect(looksEncrypted(aliceCipher)).toBe(true);
+    expect(looksEncrypted(bobCipher)).toBe(true);
+
+    testDbState.seed('users', [
+      { id: 'u-1', name: aliceCipher, image: '/a.png' },
+      { id: 'u-2', name: bobCipher },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-1', pageId: 'page-1', userId: 'u-1', isActive: true, parentId: null, createdAt: new Date('2026-05-01T00:00:00Z') },
+    ]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-1', messageId: 'm-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+
+    assert({
+      given: 'author + reactor names stored as AES-GCM ciphertext at rest',
+      should: 'return plaintext names at the read edge for both the author and the reactor',
+      actual: {
+        author: (rows[0]?.user as { name: string } | null)?.name,
+        reactor: (rows[0]?.reactions as Array<{ user: { name: string } }> | undefined)?.[0]?.user?.name,
+      },
+      expected: { author: 'Alice', reactor: 'Bob' },
+    });
+  });
+
+  it('loadChannelMessageWithRelations decrypts the joined author name', async () => {
+    const cipher = await encryptField('Carol');
+    testDbState.seed('users', [{ id: 'u-9', name: cipher }]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-9', pageId: 'page-1', userId: 'u-9', isActive: true, parentId: null },
+    ]);
+
+    const row = await channelMessageRepository.loadChannelMessageWithRelations('m-9');
+
+    assert({
+      given: 'a single message whose author name is ciphertext at rest',
+      should: 'decrypt the author name on the loaded relation',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Carol',
+    });
+  });
+
+  it('loadChannelReactionWithUser decrypts the reactor name', async () => {
+    const cipher = await encryptField('Dave');
+    testDbState.seed('users', [{ id: 'u-7', name: cipher }]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-7', messageId: 'm-7', userId: 'u-7', emoji: '🎉' },
+    ]);
+
+    const row = await channelMessageRepository.loadChannelReactionWithUser('rx-7');
+
+    assert({
+      given: 'a reaction whose reactor name is ciphertext at rest',
+      should: 'decrypt the reactor name before the row is broadcast',
+      actual: (row?.user as { name: string } | null)?.name,
+      expected: 'Dave',
+    });
+  });
+
+  it('passes legacy plaintext names through unchanged (mixed-state safety)', async () => {
+    testDbState.seed('users', [{ id: 'u-legacy', name: 'Plain Pat' }]);
+    testDbState.seed('channelMessages', [
+      { id: 'm-legacy', pageId: 'page-1', userId: 'u-legacy', isActive: true, parentId: null },
+    ]);
+
+    const rows = await channelMessageRepository.listChannelMessages({ pageId: 'page-1', limit: 10 });
+
+    assert({
+      given: 'a legacy row whose name is still plaintext (mid-backfill)',
+      should: 'pass the plaintext name through unchanged',
+      actual: (rows[0]?.user as { name: string } | null)?.name,
+      expected: 'Plain Pat',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #2153 — derived-field maintenance on every mutation path.
+// parent.lastReplyAt is derived from the surviving active replies, and a
+// mirror row must never diverge from its source reply on edit.
+// ---------------------------------------------------------------------------
+
+describe('channel thread lastReplyAt recompute (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const T2 = new Date('2026-07-01T11:00:00Z');
+
+  it('soft-deleting the newest reply moves parent.lastReplyAt back to the surviving reply', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 2, lastReplyAt: T2, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', pageId: 'page-1', userId: 'u-1', content: 'second', isActive: true, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-2');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the newest reply in a channel thread',
+      should: 'recompute lastReplyAt from the surviving replies instead of leaving it pointing at the deleted one',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 1, lastReplyAt: T1 },
+    });
+  });
+
+  it('soft-deleting the only reply clears parent.lastReplyAt', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a soft-delete of the only reply in a channel thread',
+      should: 'clear lastReplyAt (no surviving replies) alongside the counter decrement',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 0, lastReplyAt: null },
+    });
+  });
+
+  it('restoring a reply recomputes parent.lastReplyAt from the now-surviving rows', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'first', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'reply-2', pageId: 'page-1', userId: 'u-1', content: 'second', isActive: false, parentId: 'parent-1', createdAt: T2 },
+    ]);
+
+    await channelMessageRepository.restoreChannelMessage('reply-2');
+
+    const parent = testDbState.rows('channelMessages').find((r) => r.id === 'parent-1');
+    assert({
+      given: 'a restore of the newest (previously soft-deleted) channel reply',
+      should: 'move lastReplyAt forward to the restored reply',
+      actual: { replyCount: parent?.replyCount, lastReplyAt: parent?.lastReplyAt },
+      expected: { replyCount: 2, lastReplyAt: T2 },
+    });
+  });
+
+  it('locks the parent row before recomputing lastReplyAt on soft-delete — a path with no pre-existing parent lock to piggyback on', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, replyCount: 1, lastReplyAt: T1, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'only', isActive: true, parentId: 'parent-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.softDeleteChannelMessage('reply-1');
+
+    assert({
+      given: 'a reply soft-delete — softDeleteChannelMessage never pre-locks the parent the way restoreChannelMessage does',
+      should: 'invoke .for("update") against the parent row exactly once via recomputeThreadLastReply (#2153), closing the same concurrent-delete race window restore already had covered',
+      actual: testDbState.selectsForUpdate('channelMessages').length,
+      expected: 1,
+    });
+  });
+});
+
+describe('channel mirror edit propagation (#2153)', () => {
+  const T1 = new Date('2026-07-01T10:00:00Z');
+  const editedAt = new Date('2026-07-01T12:00:00Z');
+
+  it('editing a thread reply propagates the new content to its top-level mirror', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'reply-1',
+      content: 'edited echo',
+      editedAt,
+    });
+
+    const mirror = testDbState.rows('channelMessages').find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit of a channel thread reply that has an alsoSendToParent mirror',
+      should: 'propagate the edit to the mirror row so the two copies cannot disagree',
+      actual: { content: mirror?.content, editedAt: mirror?.editedAt },
+      expected: { content: 'edited echo', editedAt },
+    });
+  });
+
+  it('editing the mirror propagates the new content back to the thread reply', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'parent-1', pageId: 'page-1', userId: 'u-1', content: 'root', isActive: true, parentId: null, createdAt: new Date('2026-07-01T09:00:00Z') },
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'mirror-1',
+      content: 'edited echo',
+      editedAt,
+    });
+
+    const reply = testDbState.rows('channelMessages').find((r) => r.id === 'reply-1');
+    assert({
+      given: 'an edit of the top-level mirror row',
+      should: 'propagate the edit back to the source thread reply',
+      actual: { content: reply?.content, editedAt: reply?.editedAt },
+      expected: { content: 'edited echo', editedAt },
+    });
+  });
+
+  it('does not propagate aiMeta to the mirror — only content and editedAt', async () => {
+    testDbState.seed('channelMessages', [
+      { id: 'reply-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: 'parent-1', createdAt: T1 },
+      { id: 'mirror-1', pageId: 'page-1', userId: 'u-2', content: 'echo', isActive: true, parentId: null, mirroredFromId: 'reply-1', aiMeta: null, createdAt: T1 },
+    ]);
+
+    await channelMessageRepository.updateChannelMessageContent({
+      messageId: 'reply-1',
+      content: 'edited echo',
+      editedAt,
+      aiMeta: { senderType: 'agent', senderName: 'Agent Smith' },
+    });
+
+    const rows = testDbState.rows('channelMessages');
+    const reply = rows.find((r) => r.id === 'reply-1');
+    const mirror = rows.find((r) => r.id === 'mirror-1');
+    assert({
+      given: 'an edit carrying an aiMeta replacement for the source reply',
+      should: 'apply aiMeta to the edited row only while still syncing the mirror content',
+      actual: { replyAiMeta: reply?.aiMeta, mirrorAiMeta: mirror?.aiMeta, mirrorContent: mirror?.content },
+      expected: { replyAiMeta: { senderType: 'agent', senderName: 'Agent Smith' }, mirrorAiMeta: null, mirrorContent: 'edited echo' },
     });
   });
 });

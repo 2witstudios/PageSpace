@@ -27,3 +27,12 @@ export function isCloud(): boolean {
 export function isBillingEnabled(): boolean {
   return isCloud();
 }
+
+import type { DeploymentMode } from '@pagespace/lib/consent';
+
+/** Client-side deployment mode as a discriminated value (defaults to cloud). */
+export function getDeploymentMode(): DeploymentMode {
+  if (isOnPrem()) return 'onprem';
+  if (isTenantMode()) return 'tenant';
+  return 'cloud';
+}

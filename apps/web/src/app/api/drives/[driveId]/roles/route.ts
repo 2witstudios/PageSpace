@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, listDriveRoles, createDriveRole, validateRolePermissions, validateDriveWidePermissions, OpenRoleFloorError } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
+import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
-const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
-const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
+const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
+const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
 // GET /api/drives/[driveId]/roles - List all roles for a drive
 export async function GET(
@@ -15,19 +20,21 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId } = await context.params;
 
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user has access to this drive
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     // Fetch all roles for the drive
@@ -52,19 +59,22 @@ export async function POST(
 
     const { driveId } = await context.params;
 
+    const scopeError = checkMCPDriveScope(auth, driveId);
+    if (scopeError) return scopeError;
+
     // Check if user is owner or admin
-    const access = await checkDriveAccessForRoles(driveId, userId);
+    const access = await checkDriveAccessForRoles(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only owners and admins can create roles' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only owners and admins can create roles' }, { status: 403 }));
     }
 
     const body = await request.json();
-    const { name, description, color, isDefault, permissions } = body;
+    const { name, description, color, isDefault, permissions, driveWidePermissions } = body;
 
     if (!name || !permissions) {
       return NextResponse.json({ error: 'Name and permissions are required' }, { status: 400 });
@@ -79,13 +89,26 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid permissions structure' }, { status: 400 });
     }
 
+    if (driveWidePermissions !== undefined && !validateDriveWidePermissions(driveWidePermissions)) {
+      return NextResponse.json({ error: 'Invalid driveWidePermissions structure' }, { status: 400 });
+    }
+
     const newRole = await createDriveRole(driveId, {
       name: trimmedName,
       description,
       color,
       isDefault,
       permissions,
+      driveWidePermissions: driveWidePermissions ?? null,
     });
+
+    // Broadcast role change so other admins see it live (best-effort — don't fail the request if it errors)
+    try {
+      const recipientUserIds = await getDriveRecipientUserIds(driveId);
+      await broadcastDriveEvent(createDriveEventPayload(driveId, 'updated', {}), recipientUserIds);
+    } catch (broadcastError) {
+      console.error('Failed to broadcast role create event for drive', driveId, broadcastError);
+    }
 
     // Log activity for audit trail
     const actorInfo = await getActorInfo(userId);
@@ -102,6 +125,7 @@ export async function POST(
       roleName: newRole.name,
       driveId,
       permissions: permissionsSummary,
+      driveWidePermissions: driveWidePermissions ?? null,
     }, actorInfo);
 
     auditRequest(request, { eventType: 'authz.role.assigned', userId, resourceType: 'drive', resourceId: driveId, details: { roleName: newRole.name, operation: 'create' } });
@@ -109,6 +133,11 @@ export async function POST(
     return NextResponse.json({ role: newRole }, { status: 201 });
   } catch (error) {
     console.error('Error creating role:', error);
+    // [D-OW-33] the write would give a role's holders more while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     // Check for unique constraint violation
     if (error instanceof Error && error.message.includes('unique')) {
       return NextResponse.json({ error: 'A role with this name already exists' }, { status: 409 });

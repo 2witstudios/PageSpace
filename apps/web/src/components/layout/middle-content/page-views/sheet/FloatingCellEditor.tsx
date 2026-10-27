@@ -4,12 +4,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { useSuggestion } from '@/hooks/useSuggestion';
 import { useSuggestionContext } from '@/components/providers/SuggestionProvider';
-import SuggestionPopup from '@/components/mentions/SuggestionPopup';
+import { MentionPickerPortal } from '@/components/mentions/MentionPickerPortal';
 import { useMobileKeyboard } from '@/hooks/useMobileKeyboard';
+import { computeEditorPosition, isMobileWidth, type EditorCellRect } from './core/layout';
+import { sheetTriggerPattern } from './core/constants';
 
 interface FloatingCellEditorProps {
   value: string;
-  cellRect: DOMRect | null;
+  /**
+   * Structural rather than a `DOMRect`: the grid computes this from its axes,
+   * so an off-screen cell still has a rectangle. A `DOMRect` remains assignable.
+   */
+  cellRect: EditorCellRect | null;
   isVisible: boolean;
   onCommit: (value: string) => void;
   onCancel: () => void;
@@ -39,9 +45,23 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
   // Track IME composition state to prevent accidental commits during predictive text
   const [isComposing, setIsComposing] = useState(false);
 
-  // Sheet-specific trigger pattern: allows @ after formula operators and whitespace
-  // Allows: ( = + - * / , < > ! and whitespace characters, or at start of string
-  const sheetTriggerPattern = /^$|^[\s(=+\-*/,<>!]$/;
+  // Measure the viewport into state so positioning never reads `window` during render.
+  const [viewport, setViewport] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const measure = () =>
+      setViewport({
+        width: window.innerWidth,
+        height: window.visualViewport?.height ?? window.innerHeight,
+      });
+    measure();
+    window.addEventListener('resize', measure);
+    window.visualViewport?.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.visualViewport?.removeEventListener('resize', measure);
+    };
+  }, []);
 
   // Add mention support
   const suggestion = useSuggestion({
@@ -154,33 +174,17 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
     return null;
   }
 
-  // Responsive sizing for mobile — use container width when available, fall back to viewport
-  const isMobile = containerWidth != null ? containerWidth < 640 : (typeof window !== 'undefined' && window.innerWidth < 640);
-  const minWidth = isMobile ? 100 : 120;
-  const minHeight = isMobile ? 36 : cellRect.height;
-
-  // Calculate position, accounting for keyboard on iOS
-  const viewportHeight = typeof window !== 'undefined'
-    ? (window.visualViewport?.height ?? window.innerHeight)
-    : 0;
-  const availableHeight = viewportHeight - keyboardHeight;
-  const cellBottom = cellRect.top + Math.max(cellRect.height, minHeight);
-
-  // If cell would be hidden behind keyboard, move it up
-  let adjustedTop = cellRect.top;
-  if (keyboardHeight > 0 && cellBottom > availableHeight - 20) {
-    // Move editor to be visible above keyboard with some padding
-    adjustedTop = availableHeight - Math.max(cellRect.height, minHeight) - 20;
-    // Don't go above the viewport
-    adjustedTop = Math.max(20, adjustedTop);
-  }
+  // Responsive sizing for mobile — use container width when available, fall back
+  // to the measured viewport width (both injected into the pure layout core).
+  const isMobile = isMobileWidth(containerWidth, viewport.width);
+  const position = computeEditorPosition(cellRect, keyboardHeight, viewport, isMobile);
 
   const style: React.CSSProperties = {
     position: 'fixed',
-    left: cellRect.left,
-    top: adjustedTop,
-    width: Math.max(cellRect.width, minWidth),
-    height: Math.max(cellRect.height, minHeight),
+    left: position.left,
+    top: position.top,
+    width: position.width,
+    height: position.height,
     zIndex: 1000,
     pointerEvents: 'auto',
   };
@@ -225,18 +229,14 @@ export const FloatingCellEditor: React.FC<FloatingCellEditorProps> = ({
         Press Enter to confirm, Escape to cancel, or Tab to move to next cell
       </div>
 
-      {/* Mention Suggestions Popup */}
-      <SuggestionPopup
+      <MentionPickerPortal
         isOpen={suggestionContext.isOpen}
-        items={suggestionContext.items}
-        selectedIndex={suggestionContext.selectedIndex}
         position={suggestionContext.position}
-        loading={suggestionContext.loading}
-        error={suggestionContext.error}
+        driveId={driveId}
+        allowedTypes={['page']}
+        initialQuery={suggestion.query}
         onSelect={suggestion.actions.selectSuggestion}
-        onSelectionChange={suggestion.actions.selectItem}
-        variant="inline"
-        popupPlacement="bottom"
+        onClose={suggestion.actions.close}
       />
     </div>
   );

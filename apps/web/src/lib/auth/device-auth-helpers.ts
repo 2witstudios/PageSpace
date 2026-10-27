@@ -1,4 +1,5 @@
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -17,9 +18,10 @@ export async function revokeSessionsForLogin(
     if (count > 0) loggers.auth.info(`Revoked device sessions on ${provider} login`, { userId, deviceId, count });
     return count;
   }
-  // Fallback: revoke all sessions for backward compatibility with older clients
-  const count = await sessionService.revokeAllUserSessions(userId, reason);
-  if (count > 0) loggers.auth.info(`Revoked all sessions on ${provider} login (no deviceId)`, { userId, count });
+  // Fallback: revoke all WEB sessions for backward compatibility with older clients.
+  // Excludes admin-console sessions so a web login never logs the user out of admin.
+  const count = await sessionService.revokeWebUserSessions(userId, reason);
+  if (count > 0) loggers.auth.info(`Revoked web sessions on ${provider} login (no deviceId)`, { userId, count });
   return count;
 }
 
@@ -28,6 +30,8 @@ export async function revokeSessionsForLogin(
  * Works for all platforms — web, desktop, ios, android.
  */
 export async function createDeviceToken(params: {
+  /** Required (D-OW-45): the evidence of the sign-in ceremony (or session) this device token stands for. */
+  authentication: VerifiedAuthentication | null;
   userId: string;
   deviceId: string;
   tokenVersion: number;
@@ -40,6 +44,7 @@ export async function createDeviceToken(params: {
   const platform = params.platform ?? 'web';
   const result = await validateOrCreateDeviceToken({
     providedDeviceToken: params.providedDeviceToken ?? null,
+    authentication: params.authentication,
     userId: params.userId,
     deviceId: params.deviceId,
     platform,

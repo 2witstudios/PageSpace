@@ -72,12 +72,14 @@ vi.mock('@pagespace/lib/auth/session-service', () => ({
       scopes: ['*'],
       expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000),
     }),
+    revokeSessionByHash: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 vi.mock('@/lib/auth', () => ({
   getClientIP: vi.fn().mockReturnValue('192.168.1.1'),
   appendSessionCookie: vi.fn(),
+  getSessionFromCookies: vi.fn(() => null),
 }));
 
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
@@ -182,6 +184,30 @@ describe('/api/auth/device/refresh', () => {
       const [webHeaders, webToken] = vi.mocked(appendSessionCookie).mock.calls[0];
       expect(webHeaders).toBeInstanceOf(Headers);
       expect(webToken).toBe('ps_sess_mock-session-token');
+    });
+
+    // A device row is only stamped 'android' by the NATIVE sign-in routes, which
+    // append a session cookie themselves. Without this branch the WebView would
+    // keep the cookie of the session this refresh just replaced, so page
+    // navigation (which Next.js middleware gates on the cookie) would start
+    // failing on the first rotation while Bearer API calls kept working.
+    it('returns a session cookie AND a bearer token for the android platform', async () => {
+      const androidDeviceRecord = { ...mockDeviceRecord, platform: 'android' };
+      vi.mocked(validateDeviceToken).mockResolvedValue(androidDeviceRecord as never);
+
+      const request = new Request('http://localhost/api/auth/device/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(validPayload),
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.sessionToken).toBe('ps_sess_mock-session-token');
+      expect(appendSessionCookie).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(appendSessionCookie).mock.calls[0][1]).toBe('ps_sess_mock-session-token');
     });
 
     it('creates new session for mobile/desktop', async () => {
@@ -357,8 +383,10 @@ describe('/api/auth/device/refresh', () => {
       expect(body.error).toBe('Device token does not match this device.');
     });
 
-    it('allows deviceId correction for legacy OAuth devices with "unknown" deviceId', async () => {
-      // Arrange - legacy device from OAuth migration
+    it('rejects legacy "unknown" deviceId tokens with 401 instead of rebinding (L4)', async () => {
+      // Arrange - legacy device from OAuth migration with an unbound deviceId.
+      // SECURITY (L4): this must be a HARD failure (force full re-auth), NOT an
+      // auto-rebind to the attacker-supplied deviceId.
       const legacyDeviceRecord = { ...mockDeviceRecord, deviceId: 'unknown' };
       vi.mocked(validateDeviceToken).mockResolvedValue(legacyDeviceRecord as never);
 
@@ -373,17 +401,19 @@ describe('/api/auth/device/refresh', () => {
 
       // Act
       const response = await POST(request);
+      const body = await response.json();
 
-      // Assert
-      expect(response.status).toBe(200);
+      // Assert - forced re-auth, no session minted, no rebind
+      expect(response.status).toBe(401);
+      expect(body.error).toBe('Device must be re-registered. Please sign in again.');
+      expect(sessionService.createSession).not.toHaveBeenCalled();
       expect(loggers.auth.warn).toHaveBeenCalledWith(
-        'Correcting device token deviceId from OAuth migration',
-        {
-          deviceTokenId: 'device-token-record-id',
-          oldDeviceId: 'unknown',
-          newDeviceId: 'new-device-id',
+        'Device token has no bound deviceId - forcing re-auth',
+        expect.objectContaining({
+          storedDeviceId: 'unknown',
+          providedDeviceId: 'new-device-id',
           userId: 'test-user-id',
-        }
+        })
       );
     });
 

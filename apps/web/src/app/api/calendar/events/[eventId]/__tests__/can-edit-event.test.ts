@@ -64,14 +64,17 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
   },
 }));
 
-vi.mock('../../../../../../lib/ai/core/timestamp-utils', () => ({
-  isNaiveISODatetime: vi.fn(() => false),
-  parseNaiveDatetimeInTimezone: vi.fn((dt: string) => new Date(dt)),
-}));
+// timestamp-utils is pure; the real parser is used rather than a partial stub.
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/services/calendar-event-drive-service', () => ({
+  isUserMemberOfAnyEventDrive: vi.fn().mockResolvedValue(false),
+  getAllDriveIdsForEvent: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -97,6 +100,18 @@ vi.mock('../../../../../../lib/auth', () => ({
     return typeof result === 'object' && result !== null && 'error' in result;
   }),
   checkMCPDriveScope: vi.fn(() => null), // Default: MCP scope check passes
+  isScopedMCPAuth: (auth: { tokenType?: string; allowedDriveIds?: string[] }) =>
+    auth?.tokenType === 'mcp' && ((auth.allowedDriveIds?.length ?? 0) > 0),
+  // Principal dispatch: session auth falls through to the user-level checks,
+  // so delegate to the mocked permissions fns to keep call-arg assertions.
+  isPrincipalDriveMember: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isUserDriveMember } = await import('@pagespace/lib/permissions/permissions');
+    return isUserDriveMember(credentialActor(auth.userId, null), driveId);
+  }),
+  isPrincipalDriveOwnerOrAdmin: vi.fn(async (auth: { userId: string }, driveId: string) => {
+    const { isDriveOwnerOrAdmin } = await import('@pagespace/lib/permissions/permissions');
+    return isDriveOwnerOrAdmin(credentialActor(auth.userId, null), driveId);
+  }),
 }));
 
 vi.mock('../../../../../../lib/websocket/calendar-events', () => ({
@@ -112,6 +127,7 @@ import { PATCH } from '../route';
 import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { authenticateRequestWithOptions } from '../../../../../../lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Test Helpers
@@ -132,6 +148,15 @@ const mockWebAuth = (userId: string): SessionAuthResult => ({
   sessionId: 'test-session-id',
   role: 'user',
   adminRoleVersion: 0,
+});
+
+// A drive-scoped MCP token (allowedDriveIds non-empty) — matches the
+// isScopedMCPAuth mock above (tokenType === 'mcp' && allowedDriveIds.length > 0).
+const mockScopedMcpAuth = (userId: string) => ({
+  userId,
+  tokenType: 'mcp' as const,
+  tokenId: 'mcp-token-1',
+  allowedDriveIds: [DRIVE_ID],
 });
 
 const createMockEvent = (overrides: Record<string, unknown> = {}) => ({
@@ -240,7 +265,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(ADMIN_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: ADMIN_ID }), DRIVE_ID);
   });
 
   it('returns 200 when a drive owner edits a drive event', async () => {
@@ -252,7 +277,7 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
     const response = await PATCH(createPatchRequest(), createContext());
     expect(response.status).toBe(200);
 
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(OWNER_ID, DRIVE_ID);
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER_ID }), DRIVE_ID);
   });
 
   it('returns 403 when a regular drive member tries to edit', async () => {
@@ -306,5 +331,32 @@ describe('PATCH /api/calendar/events/[eventId] — canEditEvent auth policy', ()
 
     // isDriveOwnerOrAdmin should NOT be called; creator short-circuits
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  // #1846 Codex P2 (2nd round): a scoped MCP token can now create a personal
+  // (driveless) event (calendar/events/route.ts fix) — it must also be able
+  // to read/edit/delete that SAME event it created, or the create is a
+  // permanent dead end. It must still have no power over a driveless event
+  // created by a DIFFERENT user.
+  it('returns 200 when a scoped MCP token edits a personal event it created itself', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(CREATOR_ID));
+    setupDbMocksForPatch(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(200);
+    expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+
+  it('returns 403 when a scoped MCP token tries to edit a personal event created by someone else', async () => {
+    const personalEvent = createMockEvent({ driveId: null, createdById: CREATOR_ID });
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(OUTSIDER_ID));
+    (db.query.calendarEvents.findFirst as Mock).mockResolvedValue(personalEvent);
+
+    const response = await PATCH(createPatchRequest(), createContext());
+    expect(response.status).toBe(403);
+
+    const body = await response.json();
+    expect(body.error).toBe('You do not have permission to edit this event');
   });
 });

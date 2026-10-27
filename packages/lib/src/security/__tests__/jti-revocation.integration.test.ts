@@ -17,6 +17,7 @@ import {
   revokeJTI,
   sweepExpiredRevokedJTIs,
 } from '../jti-revocation';
+import { requireDb } from '@pagespace/db/test/require-db';
 
 const originalNodeEnv = process.env.NODE_ENV;
 let dbAvailable = false;
@@ -30,7 +31,8 @@ describe('JTI revocation (Postgres)', () => {
     try {
       await db.select().from(revokedServiceTokens).limit(1);
       dbAvailable = true;
-    } catch {
+    } catch (error) {
+      requireDb('jti-revocation.integration.test.ts', error);
       dbAvailable = false;
     }
   });

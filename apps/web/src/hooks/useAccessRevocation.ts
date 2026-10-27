@@ -12,16 +12,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { toast } from 'sonner';
 import { useSocketStore } from '@/stores/useSocketStore';
-
-interface AccessRevokedPayload {
-  room: string;
-  reason: 'member_removed' | 'role_changed' | 'permission_revoked' | 'session_revoked';
-  metadata?: {
-    driveId?: string;
-    pageId?: string;
-    driveName?: string;
-  };
-}
+import type { AccessRevokedPayload } from '@/lib/websocket/socket-utils';
 
 /**
  * Determines if the user is currently viewing the revoked resource
@@ -74,6 +65,9 @@ function getRevocationMessage(payload: AccessRevokedPayload): string {
 
     case 'permission_revoked':
       return 'Your access to this page has been revoked';
+
+    case 'page_private':
+      return 'This page has been made private';
 
     case 'session_revoked':
       return 'Your session has been revoked. Please log in again.';

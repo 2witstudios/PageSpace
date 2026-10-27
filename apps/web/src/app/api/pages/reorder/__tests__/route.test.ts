@@ -27,6 +27,11 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn((result) => 'error' in result),
   isMCPAuthResult: vi.fn().mockReturnValue(false),
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  isScopedMCPAuth: () => false,
+}));
+
+vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
+  getAppDriveMembership: vi.fn(),
 }));
 
 vi.mock('@/lib/websocket', () => ({
@@ -254,7 +259,7 @@ describe('PATCH /api/pages/reorder', () => {
         pageId: mockPageId,
         newParentId: 'parent_456',
         newPosition: 5,
-        userId: mockUserId,
+        actor: expect.objectContaining({ userId: mockUserId }),
       });
     });
   });

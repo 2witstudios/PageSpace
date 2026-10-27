@@ -5,6 +5,8 @@
  * Tracks which messages are included in each API call to determine real context window usage.
  */
 
+import { MODEL_CONTEXT_WINDOWS } from '../ai/model-context-windows';
+
 /**
  * Minimal UIMessage type for token estimation
  * (Compatible with Vercel AI SDK UIMessage)
@@ -119,6 +121,29 @@ export function estimateMessageTokens(message: UIMessage): number {
             : JSON.stringify(part.result);
           tokens += estimateTokens(resultStr);
         }
+      } else if (
+        part.type !== 'text' &&
+        part.type !== 'file' &&
+        part.type !== 'step-start' &&
+        part.type.startsWith('tool-')
+      ) {
+        // AI SDK v5 UIMessage format: type is 'tool-{name}' with `input`/`output`.
+        // This branch is intentionally kept — the context calculator sees raw
+        // SDK-dialect histories from multiple callers (not just the compaction
+        // pipeline where normalize-parts.ts is applied). Without it, large tool
+        // results count as message overhead only and thresholds never fire.
+        tokens += 10; // Tool call ID overhead
+        tokens += estimateTokens(part.type.replace(/^tool-/, ''));
+        const sdkPart = part as { input?: unknown; output?: unknown };
+        if (sdkPart.input !== undefined && sdkPart.input !== null) {
+          tokens += estimateTokens(JSON.stringify(sdkPart.input));
+        }
+        if (sdkPart.output !== undefined && sdkPart.output !== null) {
+          const outStr = typeof sdkPart.output === 'string'
+            ? sdkPart.output
+            : JSON.stringify(sdkPart.output);
+          tokens += estimateTokens(outStr);
+        }
       }
     }
   }
@@ -136,6 +161,30 @@ export function estimateMessageTokens(message: UIMessage): number {
 export function getContextWindowSize(model: string, provider?: string): number {
   const providerLower = provider?.toLowerCase() || '';
   const modelLower = model.toLowerCase();
+
+  // Authoritative first: every cloud model is now vendor-prefixed ('vendor/model')
+  // and declared in the shared catalog (MODEL_CONTEXT_WINDOWS in ai-monitoring).
+  // Prefer an exact catalog match for those ids so truncation enforces the model's
+  // real limit instead of a drifting substring guess. Scoped to prefixed ids only:
+  // bare/legacy names and locally-discovered models keep the substring heuristic
+  // below (the catalog also holds bare aliases whose rounded values would otherwise
+  // shift long-standing heuristic results).
+  if (model.includes('/') && model in MODEL_CONTEXT_WINDOWS) {
+    return MODEL_CONTEXT_WINDOWS[model as keyof typeof MODEL_CONTEXT_WINDOWS];
+  }
+
+  // Z.ai direct (the admin-only `glm` provider, api.z.ai/api/coding/paas/v4) sends
+  // BARE `glm-*` ids with no vendor prefix, so the prefixed-id lookup above never
+  // fires for them and no heuristic block below matches — they fell through to the
+  // 200k conservative default. That silently compacted 1M-window models at 150k and
+  // hard-truncated them at 190k (buildModelContext's 0.75/0.95 ratios). The catalog
+  // carries an exact entry for every id this provider offers, so consult it directly.
+  // Unknown/unlisted bare glm ids keep the 200k default via the fallthrough below.
+  if (providerLower === 'glm' || modelLower.startsWith('glm-')) {
+    if (modelLower in MODEL_CONTEXT_WINDOWS) {
+      return MODEL_CONTEXT_WINDOWS[modelLower as keyof typeof MODEL_CONTEXT_WINDOWS];
+    }
+  }
 
   // OpenAI models
   if (providerLower === 'openai' || modelLower.includes('gpt')) {
@@ -209,15 +258,6 @@ export function getContextWindowSize(model: string, provider?: string): number {
     if (modelLower.includes('grok-4-fast')) return 2_000_000;
     if (modelLower.includes('grok')) return 128_000;
     return 128_000;
-  }
-
-  // PageSpace (GLM models)
-  if (providerLower === 'pagespace' || modelLower.includes('glm')) {
-    if (modelLower.includes('glm-5')) return 200_000;
-    if (modelLower.includes('glm-4.7')) return 200_000;
-    if (modelLower.includes('glm-4.6')) return 200_000;
-    if (modelLower.includes('glm-4.5')) return 128_000;
-    return 200_000; // Updated default for GLM
   }
 
   // MiniMax models

@@ -12,6 +12,8 @@ import {
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FocusTrigger } from "@/components/shared/FocusTrigger";
+import { driveFocus, focusSectionHref } from "@/lib/dashboard/focus";
 import {
   Table,
   TableBody,
@@ -21,11 +23,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useDriveStore, type Drive } from "@/hooks/useDrive";
-import { useFavorites } from "@/hooks/useFavorites";
+import { useFavorites, useFavoritesSync } from "@/hooks/useFavorites";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { DriveContextMenu } from "./DriveContextMenu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LockedOrgDrives } from "./LockedOrgDrives";
 
 type ViewMode = "grid" | "list";
 type SortKey = "name" | "role" | "lastAccessedAt" | "createdAt";
@@ -72,20 +75,13 @@ export default function DrivesBrowser() {
 
   const {
     isFavorite,
-    fetchFavorites,
-    isSynced,
     driveIds: favoriteDriveIds,
   } = useFavorites();
+  useFavoritesSync();
 
   useEffect(() => {
     fetchDrives(false, true);
   }, [fetchDrives]);
-
-  useEffect(() => {
-    if (!isSynced) {
-      fetchFavorites();
-    }
-  }, [isSynced, fetchFavorites]);
 
   const handleSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -153,7 +149,9 @@ export default function DrivesBrowser() {
     fetchWithAuth(`/api/drives/${drive.id}/access`, { method: "POST" }).catch(
       (err) => console.warn("Failed to record drive access:", err)
     );
-    router.push(`/dashboard/${drive.id}`);
+    // This browser is the Files surface, so opening a drive lands in its
+    // file browser rather than on the drive home.
+    router.push(focusSectionHref(driveFocus(drive.id), "files"));
   };
 
   if (isLoading && drives.length === 0) {
@@ -295,9 +293,17 @@ export default function DrivesBrowser() {
     <div className="h-full overflow-y-auto overflow-x-hidden">
       <div className="container mx-auto px-4 py-10 sm:px-6 lg:px-10 max-w-full">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold">Drives</h1>
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          {/*
+            This browser is what Files shows in the All drives focus: a
+            drive card sets the focus and the same section shows its files.
+            So it is titled as the section, with the focus line under it.
+          */}
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl font-bold">Files</h1>
+            <FocusTrigger section="files" />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             <Button
               variant={viewMode === "list" ? "secondary" : "ghost"}
               size="icon"
@@ -320,6 +326,8 @@ export default function DrivesBrowser() {
             </Button>
           </div>
         </div>
+
+        <LockedOrgDrives />
 
         {noActiveDrives ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">

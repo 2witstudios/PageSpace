@@ -40,6 +40,16 @@ vi.mock('../siem-delivery-worker', () => ({
   processSiemDelivery: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Mock audit chainer worker (dynamically imported by queue-manager)
+vi.mock('../audit-chainer-worker', () => ({
+  processAuditChainer: vi.fn().mockResolvedValue({ outcome: 'idle', drained: 0 }),
+}));
+
+// Mock email broadcast worker (dynamically imported by queue-manager)
+vi.mock('../email-broadcast-worker', () => ({
+  runEmailBroadcastJob: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock workers
 vi.mock('../text-extractor', () => ({
   needsTextExtraction: vi.fn().mockReturnValue(false),
@@ -52,6 +62,15 @@ vi.mock('../image-processor', () => ({
 
 vi.mock('../ocr-processor', () => ({
   processOCR: vi.fn().mockResolvedValue({ success: true, cached: false, text: 'ocr text', provider: 'tesseract' }),
+}));
+
+vi.mock('../video-processor', () => ({
+  processVideo: vi.fn().mockResolvedValue({ success: true, duration: 10, width: 1920, height: 1080, thumbnailKey: 'cache/hash/thumbnail.webp' }),
+  isVideo: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('../../api/s3-pull-adapter', () => ({
+  runPullPipeline: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { QueueManager, mapJobState } from '../queue-manager';
@@ -93,25 +112,63 @@ describe('QueueManager', () => {
   });
 
   describe('initialize', () => {
+    // The FIRST initialize() in this file pays a one-time cost: startWorkers()
+    // fires 7 dynamic `await import(...)` of worker modules, and vitest resolves
+    // + transforms that module graph on first import (mocks don't skip resolution).
+    // On a loaded CI runner that cold-start can exceed the 5s default timeout,
+    // while every later initialize() hits the module cache and is instant — hence
+    // a generous timeout only here. Not a product-code issue.
     it('starts pg-boss and sets up workers', async () => {
       const qm = new QueueManager();
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(5);
+      expect(mockBossWork).toHaveBeenCalledTimes(14);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
       expect(mockBossWork.mock.calls[3][0]).toBe('ocr-process');
-      expect(mockBossWork.mock.calls[4][0]).toBe('siem-delivery');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(5);
+      expect(mockBossWork.mock.calls[4][0]).toBe('video-process');
+      expect(mockBossWork.mock.calls[5][0]).toBe('siem-delivery');
+      expect(mockBossWork.mock.calls[6][0]).toBe('pull-verify');
+      expect(mockBossWork.mock.calls[7][0]).toBe('account-erasure');
+      expect(mockBossWork.mock.calls[8][0]).toBe('audit-chainer');
+      expect(mockBossWork.mock.calls[9][0]).toBe('email-broadcast');
+      expect(mockBossWork.mock.calls[10][0]).toBe('stuck-page-reconciler');
+      expect(mockBossWork.mock.calls[11][0]).toBe('app-build');
+      expect(mockBossWork.mock.calls[12][0]).toBe('app-build-reconciler');
+      expect(mockBossWork.mock.calls[13][0]).toBe('app-build-source-retention');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(14);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('text-extract');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ocr-process');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('video-process');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('siem-delivery');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('account-erasure');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('audit-chainer');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('email-broadcast');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('stuck-page-reconciler');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build-reconciler');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build-source-retention');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
-    });
+      // Same cadence + no-stack pattern as siem-delivery: retryLimit 0 so
+      // overlapping scheduled runs never pile up; the advisory lock inside
+      // the worker serializes any overlap that still happens.
+      expect(mockBossSchedule).toHaveBeenCalledWith('audit-chainer', '*/30 * * * * *', {}, { retryLimit: 0 });
+      // Same no-stack pattern for the stuck-page reconciler (#2159); its own
+      // advisory lock serializes any overlap that still happens.
+      expect(mockBossSchedule).toHaveBeenCalledWith('stuck-page-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
+      // The published-app build reconciler (epic Phase 2): same no-stack
+      // pattern, with the claim's durable lease — not the schedule — doing the
+      // real work of stopping two processors recovering the same app.
+      expect(mockBossSchedule).toHaveBeenCalledWith('app-build-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
+      // The build-source disk sweep: daily, since this is hygiene rather than
+      // anything time-sensitive.
+      expect(mockBossSchedule).toHaveBeenCalledWith('app-build-source-retention', '0 3 * * *', {}, { retryLimit: 0 });
+    }, 30000);
 
     it('handles queue creation errors gracefully', async () => {
       mockBossCreateQueue.mockRejectedValue(new Error('Queue already exists'));
@@ -186,6 +243,43 @@ describe('QueueManager', () => {
         mimeType: 'application/pdf',
         originalName: 'test.pdf',
       })).rejects.toThrow('Failed to queue job on ingest-file');
+    });
+
+    it('gives email-broadcast a retry policy that outlasts the one-hour email rate limiter', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' });
+
+      // sendEmail's per-recipient limiter blocks for roughly an hour; the default
+      // 3×5s policy would exhaust every retry in seconds and strand rate-limited
+      // recipients as `failed` forever. Exponential backoff from 60s crosses the
+      // window. expireInSeconds must dwarf the longest legitimate attempt: the
+      // pg-boss default of 15 minutes would fail a long-running send mid-flight
+      // and start a concurrent duplicate run.
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({
+          retryLimit: 10,
+          retryDelay: 60,
+          retryBackoff: true,
+          expireInSeconds: 6 * 60 * 60,
+        })
+      );
+    });
+
+    it('lets caller options (e.g. singletonKey) pass through and win over queue defaults', async () => {
+      const qm = new QueueManager();
+      await qm.initialize();
+
+      await qm.addJob('email-broadcast', { broadcastId: 'bcast-1' }, { singletonKey: 'bcast-1' });
+
+      expect(mockBossSend).toHaveBeenCalledWith(
+        'email-broadcast',
+        { broadcastId: 'bcast-1' },
+        expect.objectContaining({ singletonKey: 'bcast-1', retryLimit: 10 })
+      );
     });
 
     it('sets higher priority for image-optimize queue', async () => {
@@ -320,6 +414,8 @@ describe('QueueManager', () => {
       expect(status['text-extract']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['ocr-process']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
       expect(status['siem-delivery']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
+      expect(status['audit-chainer']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
+      expect(status['email-broadcast']).toEqual({ active: 0, pending: 0, completed: 0, failed: 0 });
     });
 
     it('maps queue states correctly', async () => {

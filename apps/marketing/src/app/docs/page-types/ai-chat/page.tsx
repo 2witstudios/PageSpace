@@ -18,7 +18,7 @@ An AI Chat is a dedicated conversation page with an AI agent. It sits in the pag
 - Create an AI Chat page anywhere in the tree from the **+** button in the sidebar or the slash menu inside another page.
 - Chat directly on the page; replies and tool calls stream in as they arrive.
 - Configure the agent from the page's settings panel: its **system prompt**, the **enabled tools** allow-list, the **provider** and **model**, a **read-only** toggle, and a **web search** toggle — all per page.
-- Share an AI Chat page with teammates — everyone on the page sees the same live conversation and the same tool calls.
+- Keep your conversation private by default, or flip on multiplayer so teammates with access share one live conversation and see the same tool calls.
 - Undo what the agent did on any turn — preview the edits that assistant message caused, then revert them as a group.
 - @mention this AI Chat page from anywhere else in your workspace to pull it into that thread.
 
@@ -28,7 +28,7 @@ An AI Chat page is just a page. It has a title, a parent, a URL, permissions, ve
 
 The configuration panel is where you shape the agent. The **system prompt** is a free-form text field that tells the agent what it is and how to behave. The **enabled tools** list is an explicit allow-list — any tool not in the list cannot be called from this page. The **provider** and **model** decide which backend runs the conversation. **Read-only mode** strips every write-capable tool on top of the allow-list, so the agent can still search and read but cannot create, edit, or delete. **Web search** is a single toggle that enables or disables one specific web-lookup tool.
 
-Multi-user chat is built in: any teammate with access to the AI Chat page can post into the same conversation. User messages are attributed to their sender; the agent sees the whole thread and replies to everyone in real time.
+By default each person gets their own private conversation with the agent on the page — sharing the page shares its setup, not your chat history. Turn on multiplayer and everyone with access posts into one shared conversation instead, with each message attributed to its sender and the agent replying to the whole room in real time.
 
 ## Good to know
 

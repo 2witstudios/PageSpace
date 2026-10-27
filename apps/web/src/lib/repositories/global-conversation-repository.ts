@@ -1,13 +1,42 @@
 /**
  * Repository seam for global conversation routes.
  * Isolates database operations from route handlers for testability.
+ *
+ * SCOPE, since the message-table merge (epic "Agent-Session Single Source of
+ * Truth", Phase 4 / D6, PR 12): this module owns `conversations` ROWS only.
+ * Every operation it used to have on the `messages` TABLE — read a message,
+ * edit one, soft/hard-delete one, purge, recompute `lastMessageAt` — moved to
+ * `message-repository.ts`, which is now the one writer AND the one reader for
+ * durable messages of every kind. `chat-message-repository.ts` was absorbed
+ * there wholesale and deleted.
+ *
+ * The plan's phrasing was "merge both repositories into message-repository";
+ * what actually merged is both repositories' MESSAGE surfaces, because that is
+ * what the two message tables becoming one makes redundant. A conversation's
+ * title, its history listing and its usage log are not messages, and burying
+ * them inside a message repository would trade one misnamed seam for another.
+ * They belong beside `conversation-repository.ts` — a consolidation for the
+ * naming phase (D7), not for the riskiest PR of the message cutover.
  */
 
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, sql, lt } from '@pagespace/db/operators'
+import { eq, and, desc, sql, lt, exists, isNull } from '@pagespace/db/operators'
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring'
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createId } from '@paralleldrive/cuid2';
+import { invalidate as invalidateCompaction } from '@/lib/ai/core/compaction/compaction-repository';
+import { emitConversationLifecycle } from '@/lib/repositories/conversation-rev';
+// Recency, the sort key and the cursor codecs are declared ONCE, in the module
+// the Agents-surface listing imports too — see that file's header for the
+// drift between the two that this listing was on the wrong side of.
+import {
+  recencyExpr,
+  sortKeyExpr,
+  newestFirst,
+  encodeCursor,
+  decodeCursor,
+  olderThanCursor,
+} from '@/lib/conversations/conversation-recency';
 
 // Types
 export interface ConversationSummary {
@@ -29,14 +58,6 @@ export interface CreateConversationInput {
   title?: string | null;
   type?: string;
   contextId?: string | null;
-}
-
-export interface Message {
-  id: string;
-  conversationId: string;
-  content: string;
-  role: string;
-  isActive: boolean;
 }
 
 export interface UsageLog {
@@ -137,8 +158,18 @@ export function calculateUsageSummary(
 
 export interface ListConversationsPaginatedInput {
   limit?: number;
+  /**
+   * Always "older than this conversation". There is no `direction` toggle:
+   * returning the page truly adjacent on the other side needs the ORDER BY
+   * inverted (ascending toward the cursor, then reversed back for display),
+   * and the branch that used to claim `after` did not do that — it reused the
+   * `before` comparator under an unchanged `DESC` order, which returns the
+   * globally newest matches rather than the adjacent page. No caller ever sent
+   * it (`SidebarHistoryTab` hardcodes `direction=before`, and nothing else
+   * calls this), so it is gone rather than kept unverified and wrong — the
+   * same call `listAllConversationsPaginated` documents for the same reason.
+   */
   cursor?: string;
-  direction?: 'before' | 'after';
 }
 
 export interface PaginatedConversationsResult {
@@ -146,14 +177,58 @@ export interface PaginatedConversationsResult {
   pagination: {
     hasMore: boolean;
     nextCursor: string | null;
-    prevCursor: string | null;
     limit: number;
   };
 }
 
+/**
+ * SQL condition: conversation has at least one active message.
+ * Used to filter history — empty (never-messaged) conversations are hidden.
+ * Handles both new rows (lastMessageAt=null) and existing stale rows from before
+ * lazy creation was introduced.
+ *
+ * NOT a type filter, though it used to act as one. Before the message-table
+ * merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6) `messages`
+ * held global-assistant rows ONLY — page and client threads wrote to
+ * `chat_messages` — so this predicate incidentally excluded every other kind,
+ * and the listings below never needed to say so. The merge's backfill moved all
+ * of it into one table and the accident stopped holding. Scope is now stated
+ * explicitly by `isGlobalAssistantThread`; this asks only what it says.
+ */
+const hasMessages = exists(
+  db
+    .select({ one: sql`1` })
+    .from(messages)
+    .where(and(
+      eq(messages.conversationId, conversations.id),
+      eq(messages.isActive, true),
+    ))
+);
+
+/**
+ * The scope of this repository's history listings: the Global Assistant's own
+ * threads, and nothing else.
+ *
+ * `SidebarHistoryTab` shows the history of the SELECTED agent. With a page
+ * agent selected it calls that agent's own endpoint
+ * (`/api/ai/page-agents/{id}/conversations`); with the Global Assistant
+ * selected it calls the route these functions back. The page-agent branch was
+ * always scoped — this one was not, and once page rows entered `messages` it
+ * returned every conversation of every type, burying the assistant's own
+ * history under hundreds of page-agent threads (measured on one account:
+ * 107 page rows in the first 180). Clicking one of those also mis-routed, since
+ * the global branch loads a row through `loadGlobalConversation`.
+ *
+ * A `type: 'client'` thread (minted by `POST /api/v1/conversations` for
+ * pagespace-cli and other OpenAI-compatible clients) is excluded by the same
+ * rule: it belongs to an API caller, not to this sidebar.
+ */
+const isGlobalAssistantThread = eq(conversations.type, 'global');
+
 export const globalConversationRepository = {
   /**
-   * List all active conversations for a user, ordered by lastMessageAt
+   * List all active Global Assistant conversations for a user, newest activity
+   * first.
    * @deprecated Use listConversationsPaginated for better performance
    */
   async listConversations(userId: string): Promise<ConversationSummary[]> {
@@ -163,15 +238,18 @@ export const globalConversationRepository = {
         title: conversations.title,
         type: conversations.type,
         contextId: conversations.contextId,
-        lastMessageAt: conversations.lastMessageAt,
+        // The REAL last activity, not the stored column — see `recencyExpr`.
+        lastMessageAt: recencyExpr,
         createdAt: conversations.createdAt,
       })
       .from(conversations)
       .where(and(
         eq(conversations.userId, userId),
-        eq(conversations.isActive, true)
+        eq(conversations.isActive, true),
+        isGlobalAssistantThread,
+        hasMessages,
       ))
-      .orderBy(desc(conversations.lastMessageAt));
+      .orderBy(...newestFirst());
   },
 
   /**
@@ -181,46 +259,37 @@ export const globalConversationRepository = {
     userId: string,
     options: ListConversationsPaginatedInput = {}
   ): Promise<PaginatedConversationsResult> {
-    const { limit = 20, cursor, direction = 'before' } = options;
-    const maxLimit = Math.min(limit, 100);
+    const { limit = 20, cursor } = options;
+    // Clamped at BOTH ends, matching `listAllConversationsPaginated`. An
+    // upper bound alone leaves two broken states for a non-positive `limit`:
+    // `0` queries `.limit(1)`, which makes `hasMore` true with an empty page
+    // and therefore a null `nextCursor` — a caller told there is more, with no
+    // way to advance — and a negative reaches Postgres as a negative LIMIT and
+    // raises. The route guards its own input, so no shipped path reaches this,
+    // but the method is exported and called directly (this module's own
+    // integration suite does), so the guard is not structural (review finding).
+    const maxLimit = Math.min(Math.max(limit, 1), 100);
 
     // Build query conditions
     const conditions = [
       eq(conversations.userId, userId),
-      eq(conversations.isActive, true)
+      eq(conversations.isActive, true),
+      isGlobalAssistantThread,
+      hasMessages,
     ];
 
-    // Add cursor condition if provided - use compound cursor (lastMessageAt + id) for stable ordering
+    // An OPAQUE cursor carrying the sort key the caller last saw, evaluated in
+    // the same total order this query sorts by — see `olderThanCursor`. What it
+    // replaces re-read the cursor ROW live and branched on
+    // `if (cursorConv?.lastMessageAt)`, which is falsy for every conversation
+    // that never had the column written, and fell through to comparing `id`
+    // alone. Ordering by one key while paginating by another does not merely
+    // reorder a page: rows between the two boundaries are returned by NO page.
+    // Proven against real Postgres in this module's integration suite — six
+    // conversations, pages of two, four rows reachable.
     if (cursor) {
-      // Get the cursor conversation's lastMessageAt and id
-      const [cursorConv] = await db
-        .select({ lastMessageAt: conversations.lastMessageAt, id: conversations.id })
-        .from(conversations)
-        .where(eq(conversations.id, cursor))
-        .limit(1);
-
-      if (cursorConv?.lastMessageAt) {
-        if (direction === 'before') {
-          // Get conversations older than cursor (earlier lastMessageAt)
-          // Use compound condition: either earlier timestamp, or same timestamp but smaller id
-          conditions.push(
-            sql`(${conversations.lastMessageAt} < ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} < ${cursorConv.id}))`
-          );
-        } else {
-          // Get conversations newer than cursor (later lastMessageAt)
-          // Use compound condition: either later timestamp, or same timestamp but larger id
-          conditions.push(
-            sql`(${conversations.lastMessageAt} > ${cursorConv.lastMessageAt} OR (${conversations.lastMessageAt} = ${cursorConv.lastMessageAt} AND ${conversations.id} > ${cursorConv.id}))`
-          );
-        }
-      } else if (cursorConv) {
-        // Cursor conversation exists but has null lastMessageAt - use id-only comparison
-        if (direction === 'before') {
-          conditions.push(sql`${conversations.id} < ${cursorConv.id}`);
-        } else {
-          conditions.push(sql`${conversations.id} > ${cursorConv.id}`);
-        }
-      }
+      const decoded = decodeCursor(cursor);
+      if (decoded) conditions.push(olderThanCursor(decoded));
     }
 
     // Query with limit + 1 to check for more
@@ -230,24 +299,24 @@ export const globalConversationRepository = {
         title: conversations.title,
         type: conversations.type,
         contextId: conversations.contextId,
-        lastMessageAt: conversations.lastMessageAt,
+        lastMessageAt: recencyExpr,
+        sortKeyValue: sortKeyExpr,
         createdAt: conversations.createdAt,
       })
       .from(conversations)
       .where(and(...conditions))
-      .orderBy(desc(conversations.lastMessageAt), desc(conversations.id))
+      .orderBy(...newestFirst())
       .limit(maxLimit + 1);
 
     const hasMore = results.length > maxLimit;
-    const conversationsToReturn = hasMore ? results.slice(0, maxLimit) : results;
+    const rows = hasMore ? results.slice(0, maxLimit) : results;
+    // `sortKeyValue` is this query's own ordering key, not part of the wire
+    // shape — it exists to be frozen into the next cursor and is dropped here.
+    const conversationsToReturn = rows.map(({ sortKeyValue: _sortKey, ...row }) => row);
 
-    // Determine cursors
-    const nextCursor = hasMore && conversationsToReturn.length > 0
-      ? conversationsToReturn[conversationsToReturn.length - 1].id
-      : null;
-
-    const prevCursor = conversationsToReturn.length > 0 && cursor
-      ? conversationsToReturn[0].id
+    const lastRow = rows.length > 0 ? rows[rows.length - 1] : null;
+    const nextCursor = hasMore && lastRow
+      ? encodeCursor(lastRow.sortKeyValue, lastRow.id)
       : null;
 
     return {
@@ -255,7 +324,6 @@ export const globalConversationRepository = {
       pagination: {
         hasMore,
         nextCursor,
-        prevCursor,
         limit: maxLimit,
       },
     };
@@ -276,13 +344,17 @@ export const globalConversationRepository = {
         title: input.title || null,
         type: input.type || 'global',
         contextId: input.contextId || null,
-        lastMessageAt: now,
+        // lastMessageAt stays null until the first message is saved.
+        // This prevents the conversation from appearing in history before any messages exist.
         createdAt: now,
         updatedAt: now,
         isActive: true,
       })
       .returning();
 
+    if (newConversation) {
+      emitConversationLifecycle('created', { ...newConversation, rev: Number(newConversation.rev) });
+    }
     return newConversation;
   },
 
@@ -303,9 +375,20 @@ export const globalConversationRepository = {
       .where(and(
         eq(conversations.userId, userId),
         eq(conversations.type, 'global'),
-        eq(conversations.isActive, true)
+        eq(conversations.isActive, true),
+        hasMessages,
       ))
-      .orderBy(desc(conversations.createdAt))
+      // The SAME ordering the history listing uses, because this answers the
+      // same question — which thread was used most recently — and two answers
+      // to it is the drift this module was on the wrong side of. The two
+      // diverge exactly where the raw column is absent but activity is not: a
+      // thread with messages and no `lastMessageAt` (one production account
+      // holds 30) sorted LAST under `NULLS LAST` while ranking FIRST by real
+      // activity, so the sidebar would show it at the top of history while this
+      // resumed a different one. `sortKeyExpr` is total, so it needs no null
+      // handling of its own, and its final fallback is `createdAt` — the same
+      // tiebreak this used to spell out.
+      .orderBy(...newestFirst())
       .limit(1);
 
     return results[0] || null;
@@ -336,6 +419,7 @@ export const globalConversationRepository = {
       .set({
         title,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -343,7 +427,31 @@ export const globalConversationRepository = {
       ))
       .returning();
 
+    if (updatedConversation) {
+      emitConversationLifecycle(
+        'updated',
+        { ...updatedConversation, rev: Number(updatedConversation.rev) },
+        undefined,
+        { title },
+      );
+    }
     return updatedConversation || null;
+  },
+
+  /**
+   * Auto-title from the first user message, never overwriting an existing
+   * title (IS NULL guard lives in the SQL, so it's race-safe to call on
+   * every message). Rev-bumped + emitted like every lifecycle mutation.
+   */
+  async autoTitleConversation(conversationId: string, title: string): Promise<void> {
+    const [updated] = await db
+      .update(conversations)
+      .set({ title, updatedAt: new Date(), rev: sql`${conversations.rev} + 1` })
+      .where(and(eq(conversations.id, conversationId), isNull(conversations.title)))
+      .returning();
+    if (updated) {
+      emitConversationLifecycle('updated', { ...updated, rev: Number(updated.rev) }, undefined, { title });
+    }
   },
 
   /**
@@ -355,6 +463,7 @@ export const globalConversationRepository = {
       .set({
         isActive: false,
         updatedAt: new Date(),
+        rev: sql`${conversations.rev} + 1`,
       })
       .where(and(
         eq(conversations.id, conversationId),
@@ -362,47 +471,18 @@ export const globalConversationRepository = {
       ))
       .returning();
 
+    if (deletedConversation) {
+      emitConversationLifecycle('deleted', { ...deletedConversation, rev: Number(deletedConversation.rev) });
+    }
+
+    // Invalidate only when the user-scoped delete actually matched a row —
+    // a caller holding someone else's conversation ID must not be able to
+    // disturb that conversation's compaction state.
+    if (deletedConversation) {
+      await invalidateCompaction(conversationId, { source: 'global' });
+    }
+
     return deletedConversation || null;
-  },
-
-  /**
-   * Get an active message by ID within a conversation
-   * Only returns messages that haven't been soft-deleted
-   */
-  async getMessageById(conversationId: string, messageId: string): Promise<Message | null> {
-    const [message] = await db
-      .select()
-      .from(messages)
-      .where(and(
-        eq(messages.id, messageId),
-        eq(messages.conversationId, conversationId),
-        eq(messages.isActive, true)
-      ));
-
-    return message || null;
-  },
-
-  /**
-   * Update message content
-   */
-  async updateMessageContent(messageId: string, content: string): Promise<void> {
-    await db
-      .update(messages)
-      .set({
-        content,
-        editedAt: new Date()
-      })
-      .where(eq(messages.id, messageId));
-  },
-
-  /**
-   * Soft delete a message
-   */
-  async softDeleteMessage(messageId: string): Promise<void> {
-    await db
-      .update(messages)
-      .set({ isActive: false })
-      .where(eq(messages.id, messageId));
   },
 
   /**
@@ -433,33 +513,6 @@ export const globalConversationRepository = {
       .from(aiUsageLogs)
       .where(eq(aiUsageLogs.conversationId, conversationId))
       .orderBy(desc(aiUsageLogs.timestamp));
-  },
-
-  /**
-   * Permanently delete a message from the database
-   */
-  async hardDeleteMessage(messageId: string): Promise<void> {
-    await db
-      .delete(messages)
-      .where(eq(messages.id, messageId));
-  },
-
-  /**
-   * Purge soft-deleted messages older than the cutoff date.
-   * Returns the number of rows removed.
-   */
-  async purgeInactiveMessages(olderThan: Date): Promise<number> {
-    const result = await db
-      .delete(messages)
-      .where(
-        and(
-          eq(messages.isActive, false),
-          lt(messages.createdAt, olderThan)
-        )
-      )
-      .returning({ id: messages.id });
-
-    return result.length;
   },
 
   /**

@@ -126,13 +126,14 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
 
   const invalidateTree = useCallback(() => {
     if (swrKey) {
-      // Guard: defer revalidation during any active state (document editing, AI streaming,
-      // or pending send) to prevent editor remounting and stream abort. The deferred flag
-      // is flushed by the store subscriber below once all sessions end.
-      const isActive = useEditingStore.getState().isAnyActive();
-      if (isActive) {
+      // Guard: defer revalidation only during document or form editing to prevent
+      // the editor from receiving stale tree data mid-keystroke. AI streaming
+      // sessions do NOT block — users need to see pages created by AI tool calls
+      // appear in the sidebar in real time.
+      const isEditing = useEditingStore.getState().isAnyEditing();
+      if (isEditing) {
         pendingInvalidateRef.current = true;
-        console.log('⏸️ Skipping tree revalidation - document editing, AI streaming, or pending send in progress');
+        console.log('⏸️ Skipping tree revalidation - document or form editing in progress');
         return;
       }
 
@@ -141,11 +142,11 @@ export function usePageTree(driveId?: string, trashView?: boolean) {
     }
   }, [swrKey, mutate]);
 
-  // Flush any deferred invalidation once all active sessions end.
+  // Flush any deferred invalidation once document/form editing ends.
   useEffect(() => {
     const unsubscribe = useEditingStore.subscribe((state) => {
       if (!swrKey || !pendingInvalidateRef.current) return;
-      if (state.isAnyActive()) return;
+      if (state.isAnyEditing()) return;
       pendingInvalidateRef.current = false;
       mutate();
     });

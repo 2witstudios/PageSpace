@@ -4,11 +4,14 @@ import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { calendarEvents, eventAttendees } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { getDriveMemberUserIds } from '@pagespace/lib/services/drive-member-service';
+import { getAllMemberUserIdsForEvent, isUserMemberOfAnyEventDrive, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
-import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, getAllowedDriveIds } from '@/lib/auth';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -59,10 +62,25 @@ export async function GET(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow access if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
+    }
+
+    // SEC-2/3 (D-OW-45): an event in a drive is that drive's content: the drive's org sign-in policy is asked of the
+    // credential before the creator/attendee shortcuts below, and a refusal names the sign-in code.
+    if (event.driveId) {
+      const actor = actorFromAuth(auth);
+      if (!(await checkActorDriveAuthentication(actor, event.driveId)).allowed) {
+        return deniedResponse(actor, event.driveId, NextResponse.json({ error: 'Access denied - you do not have access to this event' }, { status: 403 }));
+      }
     }
 
     const isCreator = event.createdById === userId;
@@ -94,10 +112,9 @@ export async function GET(
         }
       }
     }
-    // DRIVE events: creator, attendees, or drive members can access
+    // DRIVE events: creator, attendees, or any-drive members can access
     else if (event.visibility === 'DRIVE') {
       if (!isCreator) {
-        // Check if user is an attendee first (fast path)
         const isAttendee = await db.query.eventAttendees.findFirst({
           where: and(
             eq(eventAttendees.eventId, eventId),
@@ -106,18 +123,10 @@ export async function GET(
         });
 
         if (!isAttendee) {
-          // Must be a drive member
-          if (!event.driveId) {
+          const isMember = await isUserMemberOfAnyEventDrive(actorFromAuth(auth), event);
+          if (!isMember) {
             return NextResponse.json(
-              { error: 'Access denied - invalid event configuration' },
-              { status: 403 }
-            );
-          }
-
-          const isDriveMember = await isUserDriveMember(userId, event.driveId);
-          if (!isDriveMember) {
-            return NextResponse.json(
-              { error: 'Access denied - you do not have access to this drive' },
+              { error: 'Access denied - you do not have access to this event' },
               { status: 403 }
             );
           }
@@ -126,6 +135,7 @@ export async function GET(
     }
 
     // Get attendees with user info
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const attendees = await db.query.eventAttendees.findMany({
       where: eq(eventAttendees.eventId, eventId),
       with: {
@@ -179,10 +189,16 @@ export async function POST(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: write operations require access to any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Only creator can add attendees
@@ -216,11 +232,11 @@ export async function POST(
     // Deduplicate userIds to prevent unique constraint errors
     const userIds = [...new Set(rawUserIds)];
 
-    // For drive events, verify all proposed attendees are drive members
+    // For drive events, verify all proposed attendees are members of the
+    // home drive OR any drive the event is shared with.
     if (event.driveId) {
-      const driveMemberIds = await getDriveMemberUserIds(event.driveId);
-      const driveMemberSet = new Set(driveMemberIds);
-      const nonMembers = userIds.filter(id => !driveMemberSet.has(id));
+      const memberIds = await getAllMemberUserIdsForEvent(eventId, event.driveId);
+      const nonMembers = userIds.filter(id => !memberIds.has(id));
 
       if (nonMembers.length > 0) {
         return NextResponse.json(
@@ -246,18 +262,25 @@ export async function POST(
       );
     }
 
-    // Add new attendees
-    await db.insert(eventAttendees).values(
-      newUserIds.map(attendeeId => ({
-        eventId,
-        userId: attendeeId,
-        status: 'PENDING' as const,
-        isOrganizer: false,
-        isOptional,
-      }))
-    );
+    // Add new attendees. [D-OW-33] ruling: adding attendees to an org-drive event widens who reads org content,
+    // refused while the drive's org is lapsed (read in the insert's transaction). Removing attendees still works.
+    const lapsed = await db.transaction(async (tx) => {
+      if (event.driveId && (await checkDriveMayLoosen(tx, event.driveId, true))) return true;
+      await tx.insert(eventAttendees).values(
+        newUserIds.map(attendeeId => ({
+          eventId,
+          userId: attendeeId,
+          status: 'PENDING' as const,
+          isOrganizer: false,
+          isOptional,
+        }))
+      );
+      return false;
+    });
+    if (lapsed) return orgLapsedResponse();
 
     // Fetch updated attendees
+    // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
     const attendees = await db.query.eventAttendees.findMany({
       where: eq(eventAttendees.eventId, eventId),
       with: {
@@ -318,10 +341,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow RSVP if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Verify user is an attendee
@@ -392,9 +421,10 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/calendar/events/[eventId]/attendees
+ * DELETE /api/calendar/events/[eventId]/attendees?userId=<targetUserId>
  *
- * Remove an attendee from the event (only creator can remove others, anyone can remove themselves)
+ * Remove an attendee from the event (only creator can remove others, anyone can remove themselves).
+ * The `userId` query parameter is required — there is no fallback to the caller.
  */
 export async function DELETE(
   request: Request,
@@ -408,7 +438,14 @@ export async function DELETE(
 
   const userId = auth.userId;
   const { searchParams } = new URL(request.url);
-  const targetUserId = searchParams.get('userId') || userId;
+  const targetUserId = searchParams.get('userId');
+
+  if (!targetUserId) {
+    return NextResponse.json(
+      { error: 'userId query parameter is required' },
+      { status: 400 }
+    );
+  }
 
   try {
     // Verify event exists
@@ -423,10 +460,16 @@ export async function DELETE(
       return NextResponse.json({ error: 'Event not found' }, { status: 404 });
     }
 
-    // Check MCP drive scope if event is drive-associated
+    // For scoped MCP tokens: allow removal if token covers any of the event's drives
     if (event.driveId) {
-      const scopeError = checkMCPDriveScope(auth, event.driveId);
-      if (scopeError) return scopeError;
+      const allowedDriveIds = getAllowedDriveIds(auth);
+      if (allowedDriveIds.length > 0) {
+        const allEventDriveIds = await getAllDriveIdsForEvent(eventId);
+        const hasScope = allEventDriveIds.some((id) => allowedDriveIds.includes(id));
+        if (!hasScope) {
+          return NextResponse.json({ error: 'This token does not have access to this event' }, { status: 403 });
+        }
+      }
     }
 
     // Check permissions

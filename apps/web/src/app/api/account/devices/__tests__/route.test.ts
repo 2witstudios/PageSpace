@@ -414,9 +414,26 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[2]).toBe('desktop');
       expect(createArgs[3]).toBe(4); // tokenVersion 3 + 1
       expect(createArgs[4]).toEqual({
+        authentication: null,
         deviceName: 'My MacBook',
         userAgent: undefined,
-        ipAddress: undefined,
+        ipAddress: 'unknown',
+      });
+    });
+
+    it('SEC-2 (partial) the rotated device token carries the replaced token\'s sign-in evidence, never fresh (D-OW-45)', async () => {
+      const authenticatedAt = new Date(Date.now() - 60_000);
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.query.deviceTokens.findFirst).mockResolvedValue({
+        deviceId: 'dev-abc', platform: 'desktop', deviceName: 'My MacBook',
+        authenticatedAt, authenticationAssurance: 'user_verified_passkey',
+      });
+
+      await DELETE(createDeleteRequest({ 'x-device-token': 'ps_dev_current_token' }));
+
+      expect(vi.mocked(createDeviceTokenRecord).mock.calls[0][4].authentication).toEqual({
+        authenticatedAtMs: authenticatedAt.getTime(),
+        assurance: 'user_verified_passkey',
       });
     });
 
@@ -447,6 +464,7 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[2]).toBe('desktop');
       expect(createArgs[3]).toBe(4);
       expect(createArgs[4]).toEqual({
+        authentication: null,
         deviceName: 'My MacBook',
         userAgent: 'TestAgent/1.0',
         ipAddress: '10.0.0.1',
@@ -467,6 +485,7 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[2]).toBe('desktop');
       expect(createArgs[3]).toBe(4);
       expect(createArgs[4]).toEqual({
+        authentication: null,
         deviceName: 'My MacBook',
         userAgent: undefined,
         ipAddress: '172.16.0.1',
@@ -568,9 +587,10 @@ describe('DELETE /api/account/devices', () => {
       expect(createArgs[2]).toBe('desktop');
       expect(createArgs[3]).toBe(4);
       expect(createArgs[4]).toEqual({
+        authentication: null,
         deviceName: undefined,
         userAgent: undefined,
-        ipAddress: undefined,
+        ipAddress: 'unknown',
       });
     });
   });

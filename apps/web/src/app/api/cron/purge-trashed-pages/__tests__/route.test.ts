@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockPageRepo, mockAudit } = vi.hoisted(() => ({
+const { mockPageRepo, mockAudit, mockReapOrphanedFiles } = vi.hoisted(() => ({
   mockPageRepo: { purgeExpiredTrashedPages: vi.fn() },
   mockAudit: vi.fn(),
+  mockReapOrphanedFiles: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -15,6 +16,14 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 
 vi.mock('@pagespace/lib/repositories/page-repository', () => ({
   pageRepository: mockPageRepo,
+}));
+
+vi.mock('@pagespace/db/db', () => ({
+  db: {},
+}));
+
+vi.mock('@/lib/storage/reap-orphaned-files', () => ({
+  reapOrphanedFiles: mockReapOrphanedFiles,
 }));
 
 vi.mock('next/server', () => ({
@@ -39,6 +48,12 @@ describe('/api/cron/purge-trashed-pages', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(0);
+    mockReapOrphanedFiles.mockResolvedValue({
+      orphansFound: 0,
+      physicalFilesDeleted: 0,
+      dbRecordsDeleted: 0,
+      failedPhysicalDeletes: [],
+    });
   });
 
   it('given valid HMAC, should purge trashed pages older than 30 days', async () => {
@@ -111,9 +126,43 @@ describe('/api/cron/purge-trashed-pages', () => {
         eventType: 'data.delete',
         resourceType: 'cron_job',
         resourceId: 'purge_trashed_pages',
-        details: { pagesPurged: 3 },
+        details: { pagesPurged: 3, filesReaped: 0 },
       })
     );
+  });
+
+  it('reaps orphaned files inline after purge and surfaces the count', async () => {
+    mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(4);
+    mockReapOrphanedFiles.mockResolvedValue({
+      orphansFound: 2,
+      physicalFilesDeleted: 2,
+      dbRecordsDeleted: 2,
+      failedPhysicalDeletes: [],
+    });
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(mockReapOrphanedFiles).toHaveBeenCalledTimes(1);
+    expect(body.filesReaped).toBe(2);
+    expect(mockAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: { pagesPurged: 4, filesReaped: 2 },
+      })
+    );
+  });
+
+  it('still purges successfully when inline reap fails', async () => {
+    mockPageRepo.purgeExpiredTrashedPages.mockResolvedValue(5);
+    mockReapOrphanedFiles.mockRejectedValue(new Error('processor down'));
+
+    const response = await GET(makeRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(body.pagesPurged).toBe(5);
+    expect(body.filesReaped).toBe(0);
   });
 
   it('given invalid HMAC, should not log audit event', async () => {

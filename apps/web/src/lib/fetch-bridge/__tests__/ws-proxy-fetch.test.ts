@@ -135,7 +135,7 @@ describe('createWsProxyFetch', () => {
 
       await proxyFetch('http://localhost:11434/api/chat', {
         method: 'POST',
-        body: buffer,
+        body: buffer as ArrayBuffer,
       });
 
       const call = vi.mocked(mockBridge.proxyFetch).mock.calls[0];

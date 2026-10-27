@@ -21,7 +21,7 @@ vi.mock('@pagespace/db/db', () => {
 });
 
 vi.mock('@pagespace/db/schema/notifications', () => ({
-  notifications: { id: 'id', userId: 'userId', type: 'type', isRead: 'isRead', metadata: 'metadata', createdAt: 'createdAt' },
+  notifications: { id: 'id', userId: 'userId', type: 'type', isRead: 'isRead', metadata: 'metadata', createdAt: 'createdAt', pageId: 'pageId' },
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', name: 'name', email: 'email', image: 'image' },
@@ -66,6 +66,8 @@ import {
   getUnreadCount,
   markNotificationAsRead,
   markAllNotificationsAsRead,
+  markPageNotificationsRead,
+  markDmConversationNotificationsRead,
   deleteNotification,
   createPermissionNotification,
   createDriveNotification,
@@ -76,6 +78,7 @@ import {
   markConnectionRequestActioned,
 } from '../notifications';
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import { sendPushNotification } from '../push-notifications';
 
 // ---------------------------------------------------------------------------
@@ -341,6 +344,64 @@ describe('markAllNotificationsAsRead', () => {
   });
 });
 
+describe('markPageNotificationsRead', () => {
+  it('marks unread MENTION notifications for the page as read, scoped to the calling user, and returns the count', async () => {
+    const { setFn } = setupUpdateChain([{ id: 'n1' }, { id: 'n2' }]);
+
+    const count = await markPageNotificationsRead('user-1', 'page-1');
+
+    expect(db.update).toHaveBeenCalled();
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isRead: true }));
+    // AC6: scoped to the calling user, not just the page — a shared page's
+    // notifications for OTHER users must never be touched by this call.
+    expect(eq).toHaveBeenCalledWith('userId', 'user-1');
+    expect(eq).toHaveBeenCalledWith('pageId', 'page-1');
+    expect(eq).toHaveBeenCalledWith('isRead', false);
+    // Regression guard: a page can carry PERMISSION_UPDATED/PAGE_SHARED/
+    // TASK_ASSIGNED notifications with the same pageId as a MENTION — this
+    // call must only ever touch MENTION rows, or reading a channel would
+    // silently dismiss an unrelated notification the user never saw.
+    expect(eq).toHaveBeenCalledWith('type', 'MENTION');
+    expect(count).toBe(2);
+  });
+
+  it('returns 0 when nothing was unread', async () => {
+    setupUpdateChain([]);
+
+    const count = await markPageNotificationsRead('user-1', 'page-1');
+
+    expect(count).toBe(0);
+  });
+});
+
+describe('markDmConversationNotificationsRead', () => {
+  it('marks unread NEW_DIRECT_MESSAGE notifications for the conversation as read, scoped to the calling user, and returns the count', async () => {
+    const { setFn } = setupUpdateChain([{ id: 'n1' }]);
+
+    const count = await markDmConversationNotificationsRead('user-1', 'conv-1');
+
+    expect(db.update).toHaveBeenCalled();
+    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ isRead: true }));
+    // AC6: scoped to the calling user — the other DM participant's own
+    // NEW_DIRECT_MESSAGE notification for this conversation must not be touched.
+    expect(eq).toHaveBeenCalledWith('userId', 'user-1');
+    expect(eq).toHaveBeenCalledWith('isRead', false);
+    // Regression guard: only NEW_DIRECT_MESSAGE rows carry a conversationId
+    // in metadata today, but the type filter is explicit so a future
+    // notification type reusing that metadata shape is never swept up here.
+    expect(eq).toHaveBeenCalledWith('type', 'NEW_DIRECT_MESSAGE');
+    expect(count).toBe(1);
+  });
+
+  it('returns 0 when nothing was unread', async () => {
+    setupUpdateChain([]);
+
+    const count = await markDmConversationNotificationsRead('user-1', 'conv-1');
+
+    expect(count).toBe(0);
+  });
+});
+
 describe('deleteNotification', () => {
   it('calls delete on DB', async () => {
     setupDeleteChain();
@@ -548,6 +609,31 @@ describe('createMentionNotification', () => {
 
     await createMentionNotification('user-1', 'page-1', 'user-2');
     expect(db.insert).toHaveBeenCalled();
+  });
+
+  it('uses mentionerNameOverride in message and metadata when provided', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
+
+    await createMentionNotification('user-1', 'page-1', 'user-2', { mentionerNameOverride: 'ResearchBot' });
+
+    const insertArg = valuesFn.mock.calls[0][0];
+    expect(insertArg.message).toContain('ResearchBot');
+    expect(insertArg.metadata?.mentionerName).toBe('ResearchBot');
+  });
+
+  it('falls back to DB user name when no override', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
+
+    await createMentionNotification('user-1', 'page-1', 'user-2');
+
+    const insertArg = valuesFn.mock.calls[0][0];
+    expect(insertArg.message).toContain('Alice');
+    expect(insertArg.metadata?.mentionerName).toBe('Alice');
+  });
+
+  it('self-mention still returns null even with override', async () => {
+    const result = await createMentionNotification('user-1', 'page-1', 'user-1', { mentionerNameOverride: 'Bot' });
+    expect(result).toBeNull();
   });
 });
 

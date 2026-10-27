@@ -1,26 +1,24 @@
 import { NextResponse } from 'next/server';
 import { generateText } from 'ai';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import {
-  createAIProvider,
-  isProviderError,
-  buildTimestampSystemPrompt,
-  getUserTimeOfDay,
-  getStartOfTodayInTimezone,
-  isValidTimezone,
-  normalizeTimezone,
-  formatDateInTimezone,
-} from '@/lib/ai/core';
+import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { buildTimestampSystemPrompt, getUserTimeOfDay, getStartOfTodayInTimezone, isValidTimezone, normalizeTimezone, formatDateInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { BACKGROUND_LIGHT_PROVIDER, BACKGROUND_LIGHT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull } from '@pagespace/db/operators'
+import { eq, and, or, lt, gte, ne, desc, inArray, isNotNull, isNull, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
-import { pages, drives, userMentions, chatMessages } from '@pagespace/db/schema/core'
+import { decryptField, decryptFieldValuesOnce } from '@pagespace/lib/encryption/field-crypto'
+import { pages, drives, userMentions } from '@pagespace/db/schema/core'
+import { conversations, messages } from '@pagespace/db/schema/conversations'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { driveMembers, pagePermissions } from '@pagespace/db/schema/members'
 import { taskItems } from '@pagespace/db/schema/tasks'
 import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
-import { fetchCalendarContext } from '../calendar-context';
+import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
+import { resolvePulseEnabled } from '@pagespace/lib/billing/automation-preferences';
+import { readReusablePulseSummaries } from '../source-admission';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -34,10 +32,20 @@ import {
   type DiffRequest,
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
+import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
+import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -46,6 +54,12 @@ export async function POST(req: Request) {
   if (isAuthError(auth)) return auth.error;
   const userId = auth.userId;
 
+  // Credit-gate reservation, released when usage is billed below. Hoisted so the
+  // finally can free it on any pre-generation early return/throw after the gate.
+  let holdId: string | undefined;
+  // The wallet the hold was placed on, settled against with it (WAL-5).
+  let walletId: string | undefined;
+  let holdHandedOff = false;
   try {
     // Parse request body for timezone
     let clientTimezone: string | undefined;
@@ -61,7 +75,45 @@ export async function POST(req: Request) {
 
     // Get user info for personalization
     const [user] = await db.select().from(users).where(eq(users.id, userId));
-    const userName = user?.name || user?.email?.split('@')[0] || 'there';
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+    // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
+    const userNamePlain = await decryptField(user.name);
+    const userEmailPlain = await decryptField(user.email);
+    const userName = userNamePlain || userEmailPlain?.split('@')[0] || 'there';
+
+    // Honor the user's Pulse on/off toggle (opt-out: no row ⇒ enabled). This is the
+    // authoritative enforcement point: the cron filters disabled users and GET /api/pulse
+    // suppresses shouldRefresh, but a disabled user must NEVER be able to spend credits on
+    // Pulse via a direct/stale POST here. No-op (no model call, no charge) when off.
+    const [pulsePref] = await db
+      .select({ pulseEnabled: userAutomationPreferences.pulseEnabled })
+      .from(userAutomationPreferences)
+      .where(eq(userAutomationPreferences.userId, userId));
+    if (!resolvePulseEnabled(pulsePref)) {
+      return NextResponse.json({ skipped: true, reason: 'pulse_disabled' });
+    }
+
+    // Prepaid credit gate: block out-of-credits users before any model invocation.
+    // Safe in billing-disabled deployments (returns unlimited) and lazy-inits balances.
+    // This is the on-demand (user-triggered) Pulse path; the cron path is intentionally
+    // NOT gated so a failed bill can't 500 the batch.
+    // Model isn't resolved until the generation step below, so we let the hold use the
+    // default flat estimate (estCostCents omitted) and just apply the chat concurrency cap.
+    const creditGate = await canConsumeAI(userId, toPersonalSubscriptionTier(user.subscriptionTier), {
+      // Pulse summarizes the person's own workspace and is not a drive session, so it
+      // spends their personal credits (SPEND-8).
+      spend: PERSONAL_SPEND,
+      maxInFlight: MAX_CHAT_INFLIGHT,
+    });
+    if (!creditGate.allowed) {
+      loggers.api.warn('Pulse generate: AI credit gate denied', { userId, reason: creditGate.reason });
+      return creditGateErrorResponse(creditGate.reason, creditGate.refusal);
+    }
+    // The gate's reservation for this call, released when usage is billed below.
+    holdId = creditGate.holdId;
+    walletId = creditGate.walletId;
 
     // Determine timezone: use client-provided, then stored preference, then UTC
     const userTimezone = clientTimezone || normalizeTimezone(user?.timezone);
@@ -77,15 +129,26 @@ export async function POST(req: Request) {
     const fortyEightHoursAgo = new Date(now.getTime() - 48 * 60 * 60 * 1000);
     const startOfToday = getStartOfTodayInTimezone(userTimezone);
 
-    // Get user's drives
-    const userDrives = await db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      ));
-    const driveIds = userDrives.map(d => d.driveId);
+    // Get user's drives, and the pages the user is actually permitted to view
+    // (owner | drive-admin | explicit page permission | default member read).
+    // Drive membership alone does NOT grant access to every page in a drive, so
+    // Pulse must scope all page content, diffs, and per-page activity to this
+    // set or it leaks restricted pages. Task scoping below reuses the same set
+    // rather than a driveId-based filter: it already covers owner access (no
+    // accepted drive_members row required — that row is only lazily backfilled
+    // on first drive access) and explicit page-level grants with no drive
+    // membership at all, and excludes trashed pages and pages in trashed drives.
+    const [userDrives, allAccessiblePages] = await Promise.all([
+      // Owned or joined (org-aware; page-level access does not count)
+      getMemberDriveIds(actorFromAuth(auth), { includeTrashed: true }),
+      accessiblePageIds(actorFromAuth(auth)),
+    ]);
+    // POL-8: the digest's model reads only drives (and pages in drives) whose org allows it.
+    const { driveIds, pageIds: accessiblePagesList } = await scopeReadableByModel(
+      { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+      { driveIds: userDrives, pageIds: allAccessiblePages },
+    );
+    const accessiblePages = new Set(accessiblePagesList);
 
     // ========================================
     // 1. WORKSPACE CONTEXT
@@ -103,7 +166,7 @@ export async function POST(req: Request) {
       )) : [];
 
     // Get team members
-    const teamMembers = driveIds.length > 0 ? await db
+    const teamMembersRaw = driveIds.length > 0 ? await db
       .select({
         driveId: driveMembers.driveId,
         userName: users.name,
@@ -114,8 +177,20 @@ export async function POST(req: Request) {
       .where(and(
         inArray(driveMembers.driveId, driveIds),
         ne(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
+        isNotNull(driveMembers.acceptedAt),
+        ne(driveMembers.role, 'GUEST')
       )) : [];
+    // Decrypt PII at the edge so the team roster in the prompt is plaintext —
+    // batched once per unique stored value (the same user repeats across
+    // drives with the same ciphertext), not once per row.
+    const lookupTeamPii = await decryptFieldValuesOnce(
+      teamMembersRaw.flatMap((m) => [m.userName, m.userEmail])
+    );
+    const teamMembers = teamMembersRaw.map((m) => ({
+      ...m,
+      userName: lookupTeamPii(m.userName),
+      userEmail: lookupTeamPii(m.userEmail),
+    }));
 
     const teamByDrive = teamMembers.reduce((acc, m) => {
       if (!acc[m.driveId]) acc[m.driveId] = [];
@@ -163,6 +238,7 @@ export async function POST(req: Request) {
     // Filter to page content changes that we can diff
     const pageActivities = rawActivity.filter(
       a => a.pageId &&
+           accessiblePages.has(a.pageId) &&
            a.driveId &&
            a.resourceType === 'page' &&
            (a.operation === 'update' || a.operation === 'create') &&
@@ -279,12 +355,18 @@ export async function POST(req: Request) {
 
     rawActivity.forEach(a => {
       if (a.resourceType !== 'page' || !a.resourceId) return;
-      const key = `${a.actorId}-${a.resourceId}`;
+      // For page resources, resourceId is the pageId — enforce view permission.
+      if (!accessiblePages.has(a.resourceId)) return;
+      // Key on the denormalized actorEmail (NOT NULL, snapshotted per row).
+      // userId is nullable (FK ON DELETE SET NULL / system actors); keying on
+      // it collapses every null-user row on a page into one bucket and
+      // mislabels them as whichever actor was seen first.
+      const key = `${a.actorEmail}-${a.resourceId}`;
       const driveName = driveDetails.find(d => d.id === a.driveId)?.name || 'Unknown';
 
       if (!activityByPersonPage[key]) {
         activityByPersonPage[key] = {
-          person: a.actorName || 'Someone',
+          person: a.actorName ?? a.actorEmail,
           pageId: a.resourceId,
           pageTitle: a.resourceTitle || 'Untitled',
           driveName,
@@ -343,8 +425,15 @@ export async function POST(req: Request) {
         .orderBy(desc(directMessages.createdAt))
         .limit(10);
 
-      unreadDMs = unreadMessagesList.map(m => ({
-        from: m.senderName || m.senderEmail?.split('@')[0] || 'Someone',
+      // Decrypt PII at the edge so DM sender names in the prompt are plaintext
+      // — batched once per unique stored value. Emails only enter the batch
+      // for rows with no sender name, mirroring the old `||` short-circuit
+      // (no stored value decrypts to '', so raw-falsy ⇔ decrypted-falsy).
+      const lookupDmPii = await decryptFieldValuesOnce(
+        unreadMessagesList.flatMap((m) => [m.senderName, m.senderName ? null : m.senderEmail])
+      );
+      unreadDMs = unreadMessagesList.map((m) => ({
+        from: lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone',
         content: m.content || '',
         sentAt: m.createdAt,
       }));
@@ -353,31 +442,51 @@ export async function POST(req: Request) {
     // ========================================
     // 6. PAGE CHAT DISCUSSIONS
     // ========================================
-    const recentPageChats = driveIds.length > 0 ? await db
+    // Unified `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). The page is
+    // reached through `conversations.contextId` (the end-state authority,
+    // indexed) rather than the transitional `messages.pageId`.
+    const recentPageChatsRaw = driveIds.length > 0 ? await db
       .select({
-        pageId: chatMessages.pageId,
+        // Non-null by construction: `type = 'page'` conversations always carry
+      // a contextId (`conversations_page_context_present_chk`, migration 0250).
+      pageId: sql<string>`${conversations.contextId}`,
         pageTitle: pages.title,
         senderName: users.name,
         senderEmail: users.email,
-        content: chatMessages.content,
-        createdAt: chatMessages.createdAt,
+        content: messages.content,
+        createdAt: messages.createdAt,
       })
-      .from(chatMessages)
-      .leftJoin(pages, eq(pages.id, chatMessages.pageId))
-      .leftJoin(users, eq(users.id, chatMessages.userId))
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .leftJoin(pages, eq(pages.id, conversations.contextId))
+      .leftJoin(users, eq(users.id, messages.userId))
       .where(
         and(
+          eq(conversations.type, 'page'),
           inArray(pages.driveId, driveIds),
-          eq(chatMessages.role, 'user'),
-          eq(chatMessages.isActive, true),
-          gte(chatMessages.createdAt, twentyFourHoursAgo),
-          ne(chatMessages.userId, userId)
+          eq(messages.role, 'user'),
+          eq(messages.isActive, true),
+          gte(messages.createdAt, twentyFourHoursAgo),
+          ne(messages.userId, userId)
         )
       )
-      .orderBy(desc(chatMessages.createdAt))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(15) : [];
+    // Decrypt PII at the edge so page-chat sender names in the prompt are
+    // plaintext — batched once per unique stored value, not once per row.
+    const lookupChatPii = await decryptFieldValuesOnce(
+      recentPageChatsRaw.flatMap((c) => [c.senderName, c.senderEmail])
+    );
+    const recentPageChats = recentPageChatsRaw.map((c) => ({
+      ...c,
+      senderName: lookupChatPii(c.senderName),
+      senderEmail: lookupChatPii(c.senderEmail),
+    }));
 
-    const chatsByPage = recentPageChats.reduce((acc, chat) => {
+    const chatsByPage = recentPageChats
+      .filter(chat => chat.pageId && accessiblePages.has(chat.pageId))
+      .reduce((acc, chat) => {
       const key = chat.pageId;
       if (!acc[key]) {
         acc[key] = {
@@ -396,7 +505,7 @@ export async function POST(req: Request) {
     // ========================================
     // 7. MENTIONS & SHARES
     // ========================================
-    const recentMentions = await db
+    const recentMentionsRaw = await db
       .select({
         mentionedByName: users.name,
         pageTitle: pages.title,
@@ -413,8 +522,17 @@ export async function POST(req: Request) {
       )
       .orderBy(desc(userMentions.createdAt))
       .limit(5);
+    // Decrypt PII at the edge so mention author names in the prompt are
+    // plaintext — batched once per unique stored value, not once per row.
+    const lookupMentionPii = await decryptFieldValuesOnce(
+      recentMentionsRaw.map((m) => m.mentionedByName)
+    );
+    const recentMentions = recentMentionsRaw.map((m) => ({
+      ...m,
+      mentionedByName: lookupMentionPii(m.mentionedByName),
+    }));
 
-    const recentShares = await db
+    const recentSharesRaw = await db
       .select({
         pageTitle: pages.title,
         sharedByName: users.name,
@@ -431,19 +549,20 @@ export async function POST(req: Request) {
       )
       .orderBy(desc(pagePermissions.grantedAt))
       .limit(5);
+    // Decrypt PII at the edge so share author names in the prompt are
+    // plaintext — batched once per unique stored value, not once per row.
+    const lookupSharePii = await decryptFieldValuesOnce(
+      recentSharesRaw.map((s) => s.sharedByName)
+    );
+    const recentShares = recentSharesRaw.map((s) => ({
+      ...s,
+      sharedByName: lookupSharePii(s.sharedByName),
+    }));
 
     // ========================================
     // 8. PREVIOUS PULSES (for deduplication)
     // ========================================
-    const recentPulses = await db
-      .select({
-        summary: pulseSummaries.summary,
-        generatedAt: pulseSummaries.generatedAt,
-      })
-      .from(pulseSummaries)
-      .where(eq(pulseSummaries.userId, userId))
-      .orderBy(desc(pulseSummaries.generatedAt))
-      .limit(5);
+    const recentPulses = await readReusablePulseSummaries(actorFromAuth(auth), { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL });
 
     // ========================================
     // 9. TASKS
@@ -458,7 +577,8 @@ export async function POST(req: Request) {
         and(
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
-          lt(taskItems.dueDate, startOfToday)
+          lt(taskItems.dueDate, startOfToday),
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
       .orderBy(desc(taskItems.priority))
@@ -473,7 +593,8 @@ export async function POST(req: Request) {
           or(eq(taskItems.assigneeId, userId), eq(taskItems.userId, userId)),
           ne(taskItems.status, 'completed'),
           gte(taskItems.dueDate, startOfToday),
-          lt(taskItems.dueDate, endOfToday)
+          lt(taskItems.dueDate, endOfToday),
+          inArray(taskItems.pageId, accessiblePagesList)
         )
       )
       .limit(5);
@@ -484,12 +605,18 @@ export async function POST(req: Request) {
     const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
 
     const calendarContext = await fetchCalendarContext({
-      userId, driveIds, now, endOfToday, endOfTomorrow,
+      actor: actorFromAuth(auth), model: { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+      driveIds, now, endOfToday, endOfTomorrow,
     });
     const { happeningNow, upcomingToday } = calendarContext;
     const tomorrowEvents = calendarContext.tomorrow;
     const pendingRsvps = calendarContext.pendingInvites;
     const allCalendarEvents = calendarContext.allEvents;
+    // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+    const contributingOrgIds = [...new Set([
+      ...await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext }),
+      ...recentPulses.flatMap((pulse) => pulse.orgIds),
+    ])].sort();
 
     // ========================================
     // BUILD THE RICH CONTEXT WITH DIFFS
@@ -509,6 +636,7 @@ export async function POST(req: Request) {
       contentChanges: contentDiffs.map((diff: StackedDiff & { driveId: string }) => ({
         page: diff.pageTitle || 'Untitled',
         actors: diff.actors,
+        primaryActor: diff.primaryActor,
         editCount: diff.collapsedCount,
         timeRange: diff.timeRange,
         isAiGenerated: diff.isAiGenerated,
@@ -606,9 +734,9 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     // Get AI provider
     const providerResult = await createAIProvider(userId, {
-      selectedProvider: 'pagespace',
-      selectedModel: 'standard',
-    });
+      selectedProvider: BACKGROUND_LIGHT_PROVIDER,
+      selectedModel: BACKGROUND_LIGHT_MODEL,
+    }, { driveId: null, contentDriveIds: [...driveIds, ...calendarContext.sourceDriveIds], contentOrgIds: contributingOrgIds });
 
     if (isProviderError(providerResult)) {
       loggers.api.error('Failed to create AI provider for pulse', { error: providerResult.error });
@@ -628,15 +756,24 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
 
     // Track AI usage
     const usage = result.usage;
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
+      source: 'pulse',
       inputTokens: usage?.inputTokens,
       outputTokens: usage?.outputTokens,
       totalTokens: usage ? ((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)) : undefined,
+      cachedInputTokens: usage?.cachedInputTokens,
+      reasoningTokens: usage?.reasoningTokens,
+      providerCostDollars: extractOpenRouterCostDollars(result.steps),
+      openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
       success: true,
-    });
+      holdId,
+      walletId,
+    }));
+    // trackUsage owns the hold release from here.
+    holdHandedOff = true;
 
     // Extract greeting
     let greeting: string | null = null;
@@ -654,6 +791,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
       summary,
       greeting,
       type: 'on_demand',
+      orgIds: contributingOrgIds,
       contextData: {
         workspace: contextData.workspace,
         workingOn: contextData.activitySummary.slice(0, 5).map(a => ({
@@ -679,9 +817,9 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
         mentions: contextData.mentions.map(m => ({ by: m.by, inPage: m.inPage })),
         notifications: [],
         sharedWithYou: contextData.sharedWithYou.map(s => ({ page: s.page, by: s.by })),
-        contentChanges: contextData.contentChanges.slice(0, 5).map((c: { page: string; actors: string[] }) => ({
+        contentChanges: contextData.contentChanges.slice(0, 5).map((c: { page: string; primaryActor: string }) => ({
           page: c.page,
-          by: c.actors[0] || 'Someone',
+          by: c.primaryActor || 'Someone',
         })),
         pages: {
           updatedToday: contextData.activitySummary.filter(a => new Date(a.lastActive) >= startOfToday).length,
@@ -731,5 +869,8 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   } catch (error) {
     loggers.api.error('Error generating pulse summary:', error as Error);
     return NextResponse.json({ error: 'Failed to generate pulse summary' }, { status: 500 });
+  } finally {
+    // Generation never reached trackUsage (pre-generation error/exit) — free the hold.
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

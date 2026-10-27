@@ -56,6 +56,15 @@ vi.mock('@pagespace/db/db', () => ({
     }),
   },
 }));
+// Phase 2 (leaf 5): default readers resolve the adminDb binding; dedicated
+// mode returns getAdminDb(), pointed at the same default-db mock above.
+vi.mock('@pagespace/db/admin-db', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    getAdminDbMode: vi.fn(() => ({ mode: 'dedicated', reason: 'ADMIN_DATABASE_URL is set' })),
+    getAdminDb: vi.fn(() => db),
+  };
+});
 vi.mock('@pagespace/db/schema/security-audit', () => ({
   securityAuditLog: {},
 }));
@@ -73,10 +82,13 @@ vi.mock('@pagespace/db/operators', () => ({
 
 // Import after mocking
 import {
-  SecurityAuditService,
+  createSecurityAuditService,
+  CHAIN_LOCK_KEY,
   computeSecurityEventHash,
   type AuditEvent,
+  type SecurityAuditService,
 } from '../security-audit';
+import { createSecurityAuditRepository } from '../security-audit-repository';
 import { db } from '@pagespace/db/db';
 import { securityAuditLog } from '@pagespace/db/schema/security-audit';
 
@@ -93,7 +105,7 @@ describe('Security Audit Service', () => {
     });
     testState.capturedInserts.length = 0;
     testState.executedSql.length = 0;
-    service = new SecurityAuditService();
+    service = createSecurityAuditService({ repository: createSecurityAuditRepository({ db }) });
   });
 
   afterEach(() => {
@@ -293,7 +305,7 @@ describe('Security Audit Service', () => {
     });
 
     it('uses fixed lock key for all events (#542)', async () => {
-      expect(SecurityAuditService.CHAIN_LOCK_KEY).toBe(8370291546);
+      expect(CHAIN_LOCK_KEY).toBe(8370291546);
     });
 
     it('reads latest hash after acquiring lock, not with FOR UPDATE (#542)', async () => {

@@ -35,4 +35,20 @@ describe('SettingsRow contrast affordances', () => {
     expect(row.className).not.toContain('hover:bg-accent');
     expect(row.className).not.toContain('hover:text-accent-foreground');
   });
+
+  it('UI-1 (partial) a row can carry a badge and drop the chevron (an action, not a page), and keeps the hover flip', () => {
+    const { container } = render(<SettingsRow item={baseItem} index={0} badge={<span>3 to review</span>} chevron={false} />);
+    expect(screen.getByText('3 to review')).toBeTruthy();
+    expect(container.querySelector('svg.lucide-chevron-right')).toBeNull();
+    expect((container.firstElementChild as HTMLElement).className).toContain('hover:text-accent-foreground');
+  });
+
+  it('a destructive row stays destructive on hover: no accent-foreground flip over red text', () => {
+    const { container } = render(<SettingsRow item={baseItem} index={0} destructive />);
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.className).toContain('text-destructive');
+    expect(row.className).not.toContain('hover:text-accent-foreground');
+    expect(screen.getByText('Account').className).not.toContain('text-foreground');
+  });
 });
+

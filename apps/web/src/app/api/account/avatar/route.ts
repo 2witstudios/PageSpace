@@ -7,6 +7,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -20,12 +22,12 @@ const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
 async function createAvatarServiceToken(
-  userId: string,
+  actor: AccessActor,
   expirationTime: string
 ): Promise<{ token: string }> {
   // createUserServiceToken validates that the user is accessing their own resources
   const { token } = await createUserServiceToken(
-    userId,
+    actor,
     REQUIRED_AVATAR_SCOPES,
     expirationTime
   );
@@ -72,13 +74,16 @@ export async function POST(request: NextRequest) {
       if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
         // Send delete request to processor
         try {
-          const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
+          const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '2m');
 
           await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
             method: 'DELETE',
             headers: {
               'Authorization': `Bearer ${serviceToken}`
-            }
+            },
+            // Best-effort cleanup; bounded so a stalled processor can't pin
+            // the request slot before the upload fetch below is reached.
+            signal: AbortSignal.timeout(10_000),
           });
         } catch (error) {
           console.log('Could not delete old avatar:', error);
@@ -92,7 +97,7 @@ export async function POST(request: NextRequest) {
     processorFormData.append('userId', userId);
 
     // Create opaque service token for processor authentication
-    const { token: serviceToken } = await createAvatarServiceToken(userId, '5m');
+    const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '5m');
 
     const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;
     console.log('Uploading avatar to processor', {
@@ -100,13 +105,28 @@ export async function POST(request: NextRequest) {
       userId: userId,
     });
 
-    const processorResponse = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${serviceToken}`
-      },
-      body: processorFormData,
-    });
+    // Bounded so a stalled processor can't pin this request slot open —
+    // the web instance has a hard cap on concurrent requests.
+    let processorResponse: Response;
+    try {
+      processorResponse = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${serviceToken}`
+        },
+        body: processorFormData,
+        signal: AbortSignal.timeout(60_000),
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'TimeoutError') {
+        console.error('Processor avatar upload timed out', { userId });
+        return NextResponse.json(
+          { error: 'Avatar upload timed out, please try again' },
+          { status: 504 }
+        );
+      }
+      throw err;
+    }
 
     if (!processorResponse.ok) {
       const errorData = await processorResponse.json().catch(() => ({}));
@@ -163,7 +183,7 @@ export async function DELETE(request: NextRequest) {
     if (!currentUser[0].image.startsWith('http://') && !currentUser[0].image.startsWith('https://')) {
       // Send delete request to processor
       try {
-        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
+        const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '2m');
 
         await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
           method: 'DELETE',

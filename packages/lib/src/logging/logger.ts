@@ -7,7 +7,9 @@ import { hostname } from 'os';
 import { createId } from '@paralleldrive/cuid2';
 import type { LogInput } from './logger-types';
 import { scrubPII } from '../compliance/pii-scrubber';
+import { errorCauseChain, formatCauseChain, loggableMessage, loggableStack, type ErrorCauseLink } from './error-cause';
 import { fireSiemErrorHook, type SiemErrorPayload } from './siem-error-hook';
+import { createShutdownHandler } from './graceful-shutdown';
 
 export enum LogLevel {
   TRACE = 0,
@@ -42,6 +44,8 @@ export interface LogEntry {
     name: string;
     message: string;
     stack?: string;
+    /** The error's `.cause` chain (e.g. the pg error Drizzle wraps), outermost first. */
+    cause?: ErrorCauseLink[];
   };
   performance?: {
     duration: number;
@@ -78,9 +82,12 @@ class Logger {
   private startTime: number = Date.now();
 
   private constructor(config: Partial<LoggerConfig> = {}) {
-    const configuredDestination = (process.env.LOG_DESTINATION || '').trim();
-    const destination = (configuredDestination as 'console' | 'database' | 'both') ||
-      (process.env.MONITORING_INGEST_KEY ? 'both' : 'console');
+    const rawDestination = (process.env.LOG_DESTINATION || '').trim().toLowerCase();
+    // 'stdout' is an alias for 'console' (Fly/Docker convention)
+    const normalizedDestination = rawDestination === 'stdout' || rawDestination === 'stderr' ? 'console' : rawDestination;
+    const destination = (['console', 'database', 'both'].includes(normalizedDestination)
+      ? normalizedDestination
+      : (process.env.MONITORING_INGEST_KEY ? 'both' : 'console')) as 'console' | 'database' | 'both';
 
     this.config = {
       level: this.parseLogLevel(process.env.LOG_LEVEL || 'info'),
@@ -228,10 +235,20 @@ class Logger {
     }
 
     if (error) {
+      // The cause chain rides on the entry AND on the stack: the stack is the field every sink
+      // (the database writer's errorStack included) already persists.
+      const cause = errorCauseChain(error).map((link) => ({ ...link, message: scrubPII(link.message) ?? '[scrub_failed]' }));
+      // Bound query params never reach a sink (review P3-4): a DrizzleQueryError's message — and the
+      // stack, which repeats it — carry them verbatim.
+      // A SQLSTATE class 22 error quotes the offending value, so its message is withheld (review
+      // 5407898542 P3-1) — on the error itself and on every cause.
+      const ownStack = loggableStack(error);
+      const stack = cause.length > 0 ? `${ownStack ?? `${error.name}: ${loggableMessage(error)}`}\n${formatCauseChain(cause)}` : ownStack;
       entry.error = {
         name: error.name,
-        message: scrubPII(error.message) ?? '[scrub_failed]',
-        stack: scrubPII(error.stack),
+        message: scrubPII(loggableMessage(error)) ?? '[scrub_failed]',
+        stack: scrubPII(stack),
+        ...(cause.length > 0 ? { cause } : {}),
       };
     }
 
@@ -358,15 +375,26 @@ class Logger {
       });
     }, this.config.flushInterval);
 
-    // Ensure flush on process exit
+    // Ensure flush on process exit. flush() feeds rows into the ClickHouse
+    // insert buffers (writeLogsToDatabase → analytics-inserts), so shutdown
+    // must sequence flush → drain → exit; exiting synchronously here loses
+    // up to 500 buffered CH rows per table on every deploy (#890 Phase 3).
     process.on('beforeExit', () => this.flush());
+    const shutdown = createShutdownHandler({
+      flushLogs: () => this.flush(),
+      drainAnalytics: async () => {
+        // Dynamic import to keep @clickhouse/client out of this module's
+        // static graph (same reason writeToDatabase imports lazily).
+        const { drainAnalyticsInserts } = await import('../observability/analytics-inserts');
+        await drainAnalyticsInserts();
+      },
+      exit: (code) => process.exit(code),
+    });
     process.on('SIGINT', () => {
-      this.flush();
-      process.exit(0);
+      void shutdown();
     });
     process.on('SIGTERM', () => {
-      this.flush();
-      process.exit(0);
+      void shutdown();
     });
   }
 
