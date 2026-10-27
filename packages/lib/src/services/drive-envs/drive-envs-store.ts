@@ -124,6 +124,8 @@ export interface DriveEnvLocalRecord {
   revokedAt: Date | null;
   /** Stop (GA wave 3): set while the OWNER has paused the env's grants; NULL = running. */
   pausedAt: Date | null;
+  /** The Stop the machine has not yet acknowledged (its `pausedAt` stamp); survives Resume. NULL = nothing owed. */
+  pauseOwedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -329,6 +331,12 @@ export interface DriveEnvStore {
    * the row is in the requested state. False = not written.
    */
   setPaused(input: { envId: string; ownerId: string; paused: boolean; now: Date }): Promise<boolean>;
+  /**
+   * The machine signed `pause_result` for the Stop stamped `pausedAt`: clear
+   * the owed marker — only if it is STILL that Stop, so the ack of an older
+   * one never clears a newer one. Resume never clears it; only this does.
+   */
+  clearPauseOwed(input: { envId: string; pausedAt: Date }): Promise<boolean>;
   /**
    * Set `drive_envs.visibleToGlobalAssistant` IFF the caller OWNS the local
    * machine behind this env and it is not revoked — ONE guarded `UPDATE`,
@@ -716,6 +724,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     enrolledAt: driveEnvLocal.enrolledAt,
     revokedAt: driveEnvLocal.revokedAt,
     pausedAt: driveEnvLocal.pausedAt,
+    pauseOwedAt: driveEnvLocal.pauseOwedAt,
     createdAt: driveEnvLocal.createdAt,
     updatedAt: driveEnvLocal.updatedAt,
   };
@@ -893,7 +902,8 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         // Stamp only a RUNNING row; an already-paused one keeps its first stamp.
         const updated = await db
           .update(driveEnvLocal)
-          .set({ pausedAt: at, updatedAt: at })
+          // The owed marker is stamped WITH the pause, so the Stop is delivered even if Resume clears `pausedAt` first.
+          .set({ pausedAt: at, pauseOwedAt: at, updatedAt: at })
           .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt), isNull(driveEnvLocal.pausedAt)))
           .returning({ envId: driveEnvLocal.envId });
         if (updated.length === 1) return true;
@@ -901,10 +911,20 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         const [row] = await db.select({ pausedAt: driveEnvLocal.pausedAt }).from(driveEnvLocal).where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt))).limit(1);
         return row !== undefined && row.pausedAt !== null;
       }
+      // Resume clears the signing gate's stamp ONLY; `pauseOwedAt` stays until the machine acks the Stop.
       const updated = await db
         .update(driveEnvLocal)
         .set({ pausedAt: null, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.ownerId, ownerId), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async clearPauseOwed({ envId, pausedAt }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ pauseOwedAt: null })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.pauseOwedAt, pausedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },

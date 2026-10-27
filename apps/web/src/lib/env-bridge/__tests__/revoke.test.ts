@@ -14,6 +14,8 @@ vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({ loadServerSigning
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 // The signing gate refuses everything while the deployment flag is off; this suite is about a LIVE env's revoke.
 vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => true) }));
+// A page of THREE, so the replay's paging is exercised without minting a hundred rows.
+vi.mock('@pagespace/lib/services/drive-envs/approval-mirror-store', () => ({ APPROVAL_MIRROR_LIST_LIMIT: 3 }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ getDriveEnvStore: vi.fn(), getGrantAuditStore: vi.fn(), listUnacknowledgedEnvApprovalRevokes: vi.fn(async () => []), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
 
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -290,6 +292,7 @@ describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror sti
     vi.mocked(loadServerSigningKeyring).mockReturnValue(ring);
     vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockResolvedValue([{ id: 'ch_owed' }, { id: 'ch_owed2' }] as never);
     vi.mocked(markEnvApprovalAcknowledged).mockClear();
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockClear();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -320,8 +323,8 @@ describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror sti
     expect(ws.sent).toHaveLength(2);
     getEnvBridgeClient().handleMachineResult(ws, ackFor('ch_owed2', 1));
     expect(await pending).toEqual({ owed: 2, acknowledged: 2 });
-    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(1, { id: 'ch_owed', removed: 2 });
-    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(2, { id: 'ch_owed2', removed: 1 });
+    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(1, { id: 'ch_owed', envId: ENV, removed: 2 });
+    expect(markEnvApprovalAcknowledged).toHaveBeenNthCalledWith(2, { id: 'ch_owed2', envId: ENV, removed: 1 });
   });
 
   it('given no ack in time, the row stays owed (NOT stamped) and the replay reports it; the next hello will try again', async () => {
@@ -332,6 +335,38 @@ describe('GA wave 3 · leaf 5 — the reconnect REPLAY of revokes the mirror sti
     await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
     expect(await pending).toEqual({ owed: 1, acknowledged: 0 });
     expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
+  });
+
+  /** The ledger as successive pages: each read takes the next one, and an exhausted queue is an empty ledger. */
+  const ledgerPages = (...pages: Array<Array<{ id: string }>>) => {
+    vi.mocked(listUnacknowledgedEnvApprovalRevokes).mockImplementation(async () => (pages.shift() ?? []) as never);
+  };
+
+  it('given a FULL page that the machine acknowledges, should read the NEXT page and replay it too before reporting — one page of debt never releases the hold (Codex P1 on #2590)', async () => {
+    const ws = owedSocket();
+    ledgerPages([{ id: 'p1a' }, { id: 'p1b' }, { id: 'p1c' }], [{ id: 'p2a' }]);
+    const pending = replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws });
+    for (const id of ['p1a', 'p1b', 'p1c', 'p2a']) {
+      await settle();
+      getEnvBridgeClient().handleMachineResult(ws, ackFor(id, 1));
+    }
+    expect(await pending).toEqual({ owed: 4, acknowledged: 4 });
+    expect(listUnacknowledgedEnvApprovalRevokes).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a FULL page with a row the machine did NOT acknowledge, should report more owed than acknowledged (the rest is unknown debt) and not page past it', async () => {
+    const ws = owedSocket();
+    ledgerPages([{ id: 'p1a' }, { id: 'p1b' }, { id: 'p1c' }], [{ id: 'p2a' }]);
+    const pending = replayUnacknowledgedApprovalRevokes({ envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, ws });
+    await settle();
+    getEnvBridgeClient().handleMachineResult(ws, ackFor('p1a', 1));
+    await settle();
+    getEnvBridgeClient().handleMachineResult(ws, ackFor('p1b', 1));
+    await settle();
+    await vi.advanceTimersByTimeAsync(APPROVAL_REVOKE_ACK_TIMEOUT_MS + 1);
+    const result = await pending;
+    expect(result.owed).toBeGreaterThan(result.acknowledged);
+    expect(listUnacknowledgedEnvApprovalRevokes).toHaveBeenCalledTimes(1);
   });
 
   it('given nothing owed, sends nothing', async () => {

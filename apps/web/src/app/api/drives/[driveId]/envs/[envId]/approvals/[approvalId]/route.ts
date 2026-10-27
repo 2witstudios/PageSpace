@@ -24,7 +24,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { getDriveEnvStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked } from '@/lib/drive-envs/drive-envs-runtime';
+import { getApprovalMirrorStore, getDriveEnvStore, markEnvApprovalAcknowledged, markEnvApprovalRevoked } from '@/lib/drive-envs/drive-envs-runtime';
 import { revokeLocalEnvApproval } from '@/lib/env-bridge/revoke';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -57,6 +57,14 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
       return NextResponse.json({ error: "Only this machine's owner or a drive admin can revoke an approval on it", reason: 'not_owner' }, { status: 403 });
     }
 
+    // An id the mirror holds for ANOTHER env is not this env's to revoke: the
+    // caller was authorized against `envId`, so naming a foreign approval is
+    // answered exactly like an id that does not exist (Codex P1 on #2590). An
+    // id the mirror has never seen is still sent — the machine file is the
+    // authority on what it holds — and the mirror writes below are env-scoped.
+    const mirrored = await (await getApprovalMirrorStore()).findById(approvalId);
+    if (mirrored && mirrored.envId !== envId) return NextResponse.json({ error: 'No approval with this id on this environment' }, { status: 404 });
+
     const result = await revokeLocalEnvApproval({ envId, approvalId, reason: `revoked_by_${auth.userId}` });
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
@@ -67,8 +75,8 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     // machine said — a revoke the socket could not deliver is a revoke OWED,
     // replayed on the daemon's next hello before any grant is signed. The ack
     // stamp lands only on the machine's SIGNED acknowledgement.
-    await markEnvApprovalRevoked({ id: approvalId, by: auth.userId });
-    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, removed: machine.removed });
+    await markEnvApprovalRevoked({ id: approvalId, envId, by: auth.userId });
+    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, envId, removed: machine.removed });
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: envId, details: { route: 'drive-env-approvals', operation: 'revoke', approvalId, machine: machine.kind, ...(machine.kind === 'acknowledged' && { removed: machine.removed }) } });
     // 200 ONLY on the machine's signed ack (Codex P2 on #2583): the server never claims a revoke it cannot prove.
     if (machine.kind === 'acknowledged') return NextResponse.json({ revoked: true, machine: 'acknowledged', approvalId, removed: machine.removed });

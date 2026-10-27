@@ -73,7 +73,8 @@ describe('EnvApprovalsList', () => {
 
   it('a 202 (unacknowledged) or a no-socket 409 is reported as recorded-and-replayed, not as revoked; any other failure is an error', async () => {
     const user = userEvent.setup();
-    mockDel.mockRejectedValueOnce(new ApiRequestError('sent', 202, { revoked: false, reason: 'unacknowledged' }));
+    // A 202 is a 2xx: `del` RESOLVES with the body, so the body — not a throw — has to say it is unproven (Codex P2 on #2590).
+    mockDel.mockResolvedValueOnce({ revoked: false, reason: 'unacknowledged' });
     render(<EnvApprovalsList approvals={[row()]} isLoading={false} isError={false} refetch={refetch} />);
     await user.click(screen.getByRole('button', { name: 'Revoke' }));
     await user.click(screen.getAllByRole('button', { name: 'Revoke' }).at(-1)!);

@@ -452,6 +452,13 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       // never add one: no frame writes to the approvals store, and this
       // branch never touches the key or the enrollment.
       const removed = deps.approvals === undefined ? 0 : await deps.approvals.revoke(frame.approvalId);
+      if (removed === null) {
+        // The file still holds it and could not be rewritten: the approval is
+        // still in force here, so NO ack is signed. The server keeps it owed
+        // and replays it on the next hello (Codex P1 on #2590).
+        await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: `dropped:approval_revoke_write_failed:${frame.approvalId}`, argsHash: null, exitCode: null });
+        return { kind: 'dropped', reason: 'approval_revoke_write_failed' };
+      }
       await deps.audit.record({ grantId: null, principal: null, op: 'revoke', verdict: `approval_revoked:${frame.approvalId}:${removed}`, argsHash: null, exitCode: null });
       // The ACK (Codex P2 on #2583): machine-signed over {approvalId, removed}, so the server can only ever claim what this machine did.
       return { kind: 'approval_revoked', approvalId: frame.approvalId, removed, frame: signResultFrame({ type: 'approval_revoke_result', approvalId: frame.approvalId, removed }, signer) };

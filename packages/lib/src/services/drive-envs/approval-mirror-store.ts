@@ -58,9 +58,9 @@ export interface ApprovalMirrorStore {
   /** The click ran: mirror what the machine remembered. Idempotent on `id`. */
   remember(input: RememberApprovalInput): Promise<DriveEnvApprovalRecord>;
   /** The owner's (or an admin's) decision, whatever the machine said. Idempotent: the first stamp stays. @returns the row, or null when unknown. */
-  markRevoked(input: { id: string; by: string; now: Date }): Promise<DriveEnvApprovalRecord | null>;
+  markRevoked(input: { id: string; envId: string; by: string; now: Date }): Promise<DriveEnvApprovalRecord | null>;
   /** The machine's SIGNED ack landed. Only a revoked row takes it. @returns the row, or null when unknown / not revoked. */
-  markAcknowledged(input: { id: string; removed: number; now: Date }): Promise<DriveEnvApprovalRecord | null>;
+  markAcknowledged(input: { id: string; envId: string; removed: number; now: Date }): Promise<DriveEnvApprovalRecord | null>;
   /** Revokes owed to the machine: `revokedAt` set, `revokeAcknowledgedAt` not — what the hello replays. */
   listUnacknowledgedRevokes(envId: string): Promise<DriveEnvApprovalRecord[]>;
   /** In force as the machine sees it (not acknowledged-revoked, not expired; revoked-but-unacked rows included and flagged), newest first, bounded. */
@@ -150,23 +150,27 @@ export async function createDbApprovalMirrorStore(): Promise<ApprovalMirrorStore
       return asRecord(existing!);
     },
 
-    async markRevoked({ id, by, now }) {
+    // Both writes are scoped to the env the caller authorized against, never
+    // to the id alone: an id from ANOTHER env must not be stamped revoked (and
+    // queued for replay) or acknowledged (and hidden) by this env's revoke
+    // (Codex P1 on #2590).
+    async markRevoked({ id, envId, by, now }) {
       const [row] = await db
         .update(driveEnvApprovals)
         .set({ revokedAt: now, revokedBy: by })
-        .where(and(eq(driveEnvApprovals.id, id), isNull(driveEnvApprovals.revokedAt)))
+        .where(and(eq(driveEnvApprovals.id, id), eq(driveEnvApprovals.envId, envId), isNull(driveEnvApprovals.revokedAt)))
         .returning();
       if (row) return asRecord(row);
-      const [existing] = await db.select().from(driveEnvApprovals).where(eq(driveEnvApprovals.id, id)).limit(1);
+      const [existing] = await db.select().from(driveEnvApprovals).where(and(eq(driveEnvApprovals.id, id), eq(driveEnvApprovals.envId, envId))).limit(1);
       return existing ? asRecord(existing) : null;
     },
 
-    async markAcknowledged({ id, removed, now }) {
+    async markAcknowledged({ id, envId, removed, now }) {
       const [row] = await db
         .update(driveEnvApprovals)
         .set({ revokeAcknowledgedAt: now, revokeRemoved: removed })
         // Only a revoked, not-yet-acknowledged row takes the ack (the CHECK forbids the other order anyway).
-        .where(and(eq(driveEnvApprovals.id, id), isNotNull(driveEnvApprovals.revokedAt), isNull(driveEnvApprovals.revokeAcknowledgedAt)))
+        .where(and(eq(driveEnvApprovals.id, id), eq(driveEnvApprovals.envId, envId), isNotNull(driveEnvApprovals.revokedAt), isNull(driveEnvApprovals.revokeAcknowledgedAt)))
         .returning();
       return row ? asRecord(row) : null;
     },

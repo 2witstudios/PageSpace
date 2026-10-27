@@ -77,6 +77,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     enrolledAt: null,
     revokedAt: null,
     pausedAt: null,
+    pauseOwedAt: null,
     createdAt: NOW,
     updatedAt: NOW,
     ...over,
@@ -244,7 +245,15 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       // The real store's CAS predicate, verbatim: owner AND not revoked; Stop keeps the first stamp.
       if (!sibling || sibling.ownerId !== ownerId || sibling.revokedAt !== null) return false;
       if (paused && sibling.pausedAt !== null) return true;
-      local.set(envId, { ...sibling, pausedAt: paused ? at : null, updatedAt: at });
+      // Resume clears `pausedAt` only; the owed marker waits for the machine's ack.
+      local.set(envId, paused ? { ...sibling, pausedAt: at, pauseOwedAt: at, updatedAt: at } : { ...sibling, pausedAt: null, updatedAt: at });
+      return true;
+    },
+
+    async clearPauseOwed({ envId, pausedAt }) {
+      const sibling = local.get(envId);
+      if (!sibling || sibling.pauseOwedAt?.getTime() !== pausedAt.getTime()) return false;
+      local.set(envId, { ...sibling, pauseOwedAt: null });
       return true;
     },
 

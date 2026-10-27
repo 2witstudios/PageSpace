@@ -76,8 +76,13 @@ export interface ApprovalsStore {
   reload(): ApprovalsLoad;
   /** Remember an owner's decision per its scope. Never throws. */
   remember(input: RememberApprovalInput): Promise<void>;
-  /** Delete every row of exactly this approval, file and memory. @returns rows removed. */
-  revoke(approvalId: string): Promise<number>;
+  /**
+   * Delete every row of exactly this approval, file and memory.
+   * @returns rows removed, or `null` when the file HOLDS the approval but could
+   *   not be rewritten — the approval is still in force on disk, so the caller
+   *   must not acknowledge the revoke (Codex P1 on #2590).
+   */
+  revoke(approvalId: string): Promise<number | null>;
   /** Drop expired rows from the file. @returns rows removed. */
   prune(now: number): Promise<number>;
 }
@@ -172,8 +177,10 @@ export function createApprovalsStore(deps: ApprovalsStoreDeps): ApprovalsStore {
       const loaded = load();
       const kept = loaded.approvals.filter((a) => a.approvalId !== approvalId);
       const fromFile = loaded.approvals.length - kept.length;
-      if (fromFile > 0 && (await writeDurable(kept, loaded))) removed += fromFile;
-      return removed;
+      if (fromFile === 0) return removed;
+      // The next `entries()` re-reads the file, so an unwritten removal is no removal at all.
+      if (!(await writeDurable(kept, loaded))) return null;
+      return removed + fromFile;
     },
     async prune(now) {
       const loaded = load();

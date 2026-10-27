@@ -1042,6 +1042,15 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
       expect(h.approvals.entries()).toHaveLength(3);
     });
 
+    it('given a signed approval revoke whose file rewrite FAILS, should sign NO ack (dropped approval_revoke_write_failed) so the server keeps it owed, and the approval keeps running (Codex P1 on #2590)', async () => {
+      const content = JSON.stringify({ version: 1, approvals: [{ approvalId: 'ch_1', envId: ENV_ID, userId: 'u1', op: 'exec', subject: 'exec:/usr/bin/tool', scope: 'until_revoked', createdAt: 1, expiresAt: null }] });
+      const approvals = createApprovalsStore({ path: '/p', uid: 501, open: () => ({ uid: 501, mode: 0o100600, content }), write: async () => { throw new Error('ENOSPC'); }, now: () => NOW });
+      const h = harness({ policy: () => ASK_POLICY, ask: null, approvals, resolveArgv0: (name) => ({ tool: '/usr/bin/tool' })[name] ?? null });
+      expect(await h.dispatcher.handle(approvalRevoke('ch_1'))).toEqual({ kind: 'dropped', reason: 'approval_revoke_write_failed' });
+      expect(h.audits[0]?.verdict).toBe('dropped:approval_revoke_write_failed:ch_1');
+      expect(approvals.entries().map((a) => a.approvalId)).toEqual(['ch_1']);
+    });
+
     it('given an approval revoke NOT signed by the pinned key, or signed for another id, should drop it and delete nothing', async () => {
       const h = revokeHarness();
       const forged = { ...approvalRevoke('ch_1'), approvalId: 'ch_2' } as Frame;

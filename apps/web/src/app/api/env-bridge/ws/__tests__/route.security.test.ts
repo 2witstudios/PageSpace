@@ -75,10 +75,10 @@ function claimsFor(over: Record<string, unknown> = {}) {
   return { sessionId: 'sess-1', userId: USER, userRole: 'user', tokenVersion: 1, adminRoleVersion: 0, type: 'mcp', scopes: ['env:bridge'], expiresAt: new Date(NOW.getTime() + 3600_000), resourceType: 'drive_env', resourceId: ENV, ...over };
 }
 
-type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; pausedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
+type LocalRow = { envId: string; ownerId: string; enrollmentId: string; machinePublicKey: string | null; serverKeyId: string | null; enrolledAt: Date | null; revokedAt: Date | null; pausedAt: Date | null; pauseOwedAt: Date | null; serverPolicy: { ops: string[]; checkpoint: boolean } };
 function rowFor(over: Partial<LocalRow> = {}): LocalRow {
   // `serverPolicy` is what `sendGrant` consults (decideSign) before a frame goes out: allow every implemented op unless a row says otherwise.
-  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, pausedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
+  return { envId: ENV, ownerId: USER, enrollmentId: 'enr_a', machinePublicKey: spkiB64(machine), serverKeyId: ring.current.keyId, enrolledAt: NOW, revokedAt: null, pausedAt: null, pauseOwedAt: null, serverPolicy: { ops: ['exec', 'fs_read', 'fs_write'], checkpoint: false }, ...over };
 }
 
 type FakeSocket = WebSocket & { readyState: number; sent: string[]; handlers: Record<string, (...args: unknown[]) => void>; emit: (event: string, ...args: unknown[]) => void };
@@ -140,7 +140,7 @@ const flush = async () => {
 
 describe('env-bridge ws route', () => {
   let rows: Map<string, LocalRow>;
-  let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; recordHello: ReturnType<typeof vi.fn>; recordHeartbeat: ReturnType<typeof vi.fn> };
+  let store: { findLocalByEnvId: ReturnType<typeof vi.fn>; recordHello: ReturnType<typeof vi.fn>; recordHeartbeat: ReturnType<typeof vi.fn>; clearPauseOwed: ReturnType<typeof vi.fn> };
   const server = {} as unknown as WebSocketServer;
 
   beforeEach(() => {
@@ -158,6 +158,12 @@ describe('env-bridge ws route', () => {
       recordHeartbeat: vi.fn(async ({ envId }: { envId: string }) => {
         const row = rows.get(envId);
         return !!row && row.enrolledAt !== null && row.revokedAt === null;
+      }),
+      clearPauseOwed: vi.fn(async ({ envId, pausedAt }: { envId: string; pausedAt: Date }) => {
+        const row = rows.get(envId);
+        if (!row || row.pauseOwedAt?.getTime() !== pausedAt.getTime()) return false;
+        rows.set(envId, { ...row, pauseOwedAt: null });
+        return true;
       }),
     };
     vi.mocked(getDriveEnvStore).mockResolvedValue(store as never);
@@ -544,7 +550,7 @@ describe('env-bridge ws route', () => {
       await settleGate();
       const after = framesOf(ws).map((f) => f.type);
       expect(after.indexOf('revoke')).toBeLessThan(after.indexOf('grant_exec'));
-      expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_owed', removed: 1 });
+      expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_owed', envId: expect.any(String), removed: 1 });
       expect(events()).toContain('env_bridge_approval_revokes_replayed');
     });
 
@@ -673,6 +679,22 @@ describe('env-bridge ws route', () => {
       await settleGate();
       expect(ws.sent.slice(after).map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok && (d as { frame: Frame }).frame.type === 'pause')).toHaveLength(0);
       expect(ws.close).not.toHaveBeenCalled();
+    });
+
+    it('Codex P1 on #2590 — given a Stop the owner RESUMED before this replica delivered it (pausedAt cleared, pauseOwedAt kept), the next pong still delivers that Stop, and the machine\'s ack clears what was owed', async () => {
+      const ws = await connectAuthorized();
+      const stoppedAt = new Date(NOW.getTime() + 1000);
+      rows.set(ENV, rowFor({ pausedAt: null, pauseOwedAt: stoppedAt }));
+      ws.emit('message', Buffer.from(encodeFrame({ type: 'pong', ts: Date.now() })));
+      await flush();
+      await settleGate();
+      const pause = ws.sent.map((raw) => decodeFrame(raw, { maxFrameBytes: 1 << 20 })).filter((d) => d.ok).map((d) => (d as { frame: Frame }).frame).find((f) => f.type === 'pause');
+      expect(pause).toMatchObject({ type: 'pause', pausedAt: stoppedAt.getTime() });
+      ws.emit('message', Buffer.from(signedResult({ type: 'pause_result', envId: ENV, pausedAt: stoppedAt.getTime(), killed: 1 })));
+      await flush();
+      await settleGate();
+      expect(store.clearPauseOwed).toHaveBeenCalledWith({ envId: ENV, pausedAt: stoppedAt });
+      expect(rows.get(ENV)?.pauseOwedAt).toBeNull();
     });
 
     it('Codex P1 (review round 1) — an UNACKNOWLEDGED pause is resent on the next pong; once the machine\'s signed ack lands, a later pong sends nothing', async () => {

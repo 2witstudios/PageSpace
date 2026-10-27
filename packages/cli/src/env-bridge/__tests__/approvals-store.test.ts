@@ -174,6 +174,14 @@ describe('revoking exactly one approval', () => {
     expect(await h.store.revoke('nope')).toBe(0);
   });
 
+  it('given the file HOLDS the approval but cannot be rewritten, should answer null — never a count the caller could acknowledge — and the approval stays in force (Codex P1 on #2590)', async () => {
+    const h = harness({ content: file([row(), row({ approvalId: 'ch_2', subject: 'exec:/bin/rm' })]), stat: { uid: UID, mode: 0o100600 } }, { write: async () => { throw new Error('ENOSPC'); } });
+    expect(await h.store.revoke('ch_1')).toBeNull();
+    expect(h.store.entries().map((a) => a.approvalId)).toContain('ch_1');
+    // An id the file does not hold needs no write, so it is still an honest 0.
+    expect(await h.store.revoke('nope')).toBe(0);
+  });
+
   it('prune(now) should drop expired rows from the file', async () => {
     const h = harness({ content: file([row({ expiresAt: NOW - 1 }), row({ approvalId: 'live' })]), stat: { uid: UID, mode: 0o100600 } });
     expect(await h.store.prune(NOW)).toBe(1);

@@ -341,8 +341,8 @@ export async function DELETE(request: Request, context: Params) {
       return NextResponse.json({ error: 'This environment has been revoked', reason: 'revoked' }, { status: 409 });
     }
     const machine = result.machine;
-    await markEnvApprovalRevoked({ id: approvalId, by: auth.userId });
-    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, removed: machine.removed });
+    await markEnvApprovalRevoked({ id: approvalId, envId: mirrored.envId, by: auth.userId });
+    if (machine.kind === 'acknowledged') await markEnvApprovalAcknowledged({ id: approvalId, envId: mirrored.envId, removed: machine.removed });
     auditRequest(request, { eventType: 'data.write', userId: auth.userId, resourceType: 'drive_env', resourceId: mirrored.envId, details: { route: 'env-bridge/approvals', operation: 'revoke', approvalId, machine: machine.kind, ...(machine.kind === 'acknowledged' && { removed: machine.removed }) } });
     if (machine.kind === 'acknowledged') return NextResponse.json({ revoked: true, machine: 'acknowledged', approvalId, removed: machine.removed });
     if (machine.kind === 'unacknowledged') {

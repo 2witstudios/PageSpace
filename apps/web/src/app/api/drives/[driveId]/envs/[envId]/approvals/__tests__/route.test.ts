@@ -13,7 +13,8 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn(async () => true),
   isPrincipalDriveOwnerOrAdmin: vi.fn(async () => false),
 }));
-vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ resolveEnvInDrive: vi.fn(), getDriveEnvStore: vi.fn(), listEnvApprovals: vi.fn(), markEnvApprovalRevoked: vi.fn(async () => null), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
+const { mockFindMirrored } = vi.hoisted(() => ({ mockFindMirrored: vi.fn<(id: string) => Promise<{ id: string; envId: string } | null>>(async () => null) }));
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ resolveEnvInDrive: vi.fn(), getDriveEnvStore: vi.fn(), getApprovalMirrorStore: vi.fn(async () => ({ findById: mockFindMirrored })), listEnvApprovals: vi.fn(), markEnvApprovalRevoked: vi.fn(async () => null), markEnvApprovalAcknowledged: vi.fn(async () => null) }));
 vi.mock('@/lib/env-bridge/revoke', () => ({ revokeLocalEnvApproval: vi.fn() }));
 
 import { DELETE } from '../[approvalId]/route';
@@ -138,18 +139,27 @@ describe('GA wave 3 · leaf 6 — GET …/approvals is OWNER-ONLY (everything th
     expect(listEnvApprovals).not.toHaveBeenCalled();
   });
 
+  it('DELETE given an approval id the mirror holds for ANOTHER env, should answer 404 and neither revoke on the machine nor touch the mirror (Codex P1 on #2590)', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: OWNER } as never);
+    mockFindMirrored.mockResolvedValueOnce({ id: 'ch_other', envId: 'env_other' });
+    expect((await call('ch_other')).status).toBe(404);
+    expect(revokeLocalEnvApproval).not.toHaveBeenCalled();
+    expect(markEnvApprovalRevoked).not.toHaveBeenCalled();
+    expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
+  });
+
   it('DELETE records the owner\'s decision whatever the machine said, and stamps the ack ONLY on the machine\'s signed acknowledgement', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: OWNER } as never);
     vi.mocked(revokeLocalEnvApproval).mockResolvedValueOnce({ ok: true, machine: { kind: 'no_live_socket' } } as never);
     expect((await call()).status).toBe(409);
-    expect(markEnvApprovalRevoked).toHaveBeenCalledWith({ id: 'ch_1', by: OWNER });
+    expect(markEnvApprovalRevoked).toHaveBeenCalledWith({ id: 'ch_1', envId: ENV, by: OWNER });
     expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
     vi.mocked(revokeLocalEnvApproval).mockResolvedValueOnce({ ok: true, machine: { kind: 'unacknowledged', reason: 'timeout' } } as never);
     expect((await call()).status).toBe(202);
     expect(markEnvApprovalAcknowledged).not.toHaveBeenCalled();
     vi.mocked(revokeLocalEnvApproval).mockResolvedValueOnce({ ok: true, machine: { kind: 'acknowledged', removed: 2 } } as never);
     expect((await call()).status).toBe(200);
-    expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_1', removed: 2 });
+    expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_1', envId: ENV, removed: 2 });
     expect(markEnvApprovalRevoked).toHaveBeenCalledTimes(3);
   });
 });

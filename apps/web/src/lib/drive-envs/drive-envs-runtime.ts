@@ -140,12 +140,12 @@ export async function rememberEnvApproval(input: RememberApprovalInput): Promise
   }
 }
 
-export async function markEnvApprovalRevoked(input: { id: string; by: string }): Promise<DriveEnvApprovalRecord | null> {
-  return (await getApprovalMirrorStore()).markRevoked({ id: input.id, by: input.by, now: new Date() });
+export async function markEnvApprovalRevoked(input: { id: string; envId: string; by: string }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markRevoked({ id: input.id, envId: input.envId, by: input.by, now: new Date() });
 }
 
-export async function markEnvApprovalAcknowledged(input: { id: string; removed: number }): Promise<DriveEnvApprovalRecord | null> {
-  return (await getApprovalMirrorStore()).markAcknowledged({ id: input.id, removed: input.removed, now: new Date() });
+export async function markEnvApprovalAcknowledged(input: { id: string; envId: string; removed: number }): Promise<DriveEnvApprovalRecord | null> {
+  return (await getApprovalMirrorStore()).markAcknowledged({ id: input.id, envId: input.envId, removed: input.removed, now: new Date() });
 }
 
 /** A hello from daemon process `epoch` (Codex P2 #7): expire this env's session-scoped mirror rows held by any other process. */

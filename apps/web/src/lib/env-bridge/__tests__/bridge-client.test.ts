@@ -412,6 +412,21 @@ describe('EnvBridgeClient', () => {
       expect(auditWrites).toEqual([expect.objectContaining({ kind: 'refusal', input: expect.objectContaining({ reason: 'paused' }) })]);
     });
 
+    it('given a grant that waited out a replay hold during which the owner paused the env, should re-read the sibling and refuse paused — never sign from the verdict read before the wait (Codex P1 on #2590)', async () => {
+      const ws = connect('env-1');
+      let releaseHold!: (ok: boolean) => void;
+      const held = client.withHold('env-1', () => new Promise<boolean>((resolve) => { releaseHold = resolve; }));
+      const sent = client.sendGrant({ envId: 'env-1', frame: exec, principal });
+      await flushPromises();
+      // The pause lands while the grant is parked behind the hold.
+      siblings.set('env-1', { ownerId: 'owner-1', pausedAt: new Date(1_760_000_000_000), revokedAt: null, serverPolicy: { ops: ['exec', 'fs_read'], checkpoint: false } });
+      releaseHold(true);
+      await held;
+      await expect(sent).rejects.toMatchObject({ kind: 'server_denied', detail: { reason: 'paused' } });
+      expect(keyGet).not.toHaveBeenCalled();
+      expect(ws.sent).toHaveLength(0);
+    });
+
     it("GA wave 3 (Stop) — pauseEnv fails the env's IN-FLIGHT requests with typed paused (never left to time out), records failed:paused, and leaves other envs alone", async () => {
       const ws1 = connect('env-1');
       const ws2 = connect('env-2');

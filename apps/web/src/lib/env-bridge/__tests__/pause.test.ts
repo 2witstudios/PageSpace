@@ -49,14 +49,18 @@ function socket(): FakeSocket {
   return { readyState: 1, sent, send: (data: string) => sent.push(data), close: vi.fn(), on: vi.fn() } as unknown as FakeSocket;
 }
 
-let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; pausedAt: Date | null } | null;
+/** The owed-Stop marker's clear — the only write delivery makes, on the machine's signed ack. */
+const mockClearPauseOwed = vi.fn(async () => true);
+
+let row: { envId: string; enrollmentId: string; serverKeyId: string | null; revokedAt: Date | null; pausedAt: Date | null; pauseOwedAt: Date | null } | null;
 
 beforeEach(() => {
+  mockClearPauseOwed.mockClear();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
   clearAllEnvConnectionsForTesting();
-  row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, pausedAt: PAUSED_AT };
-  vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async () => row) } as never);
+  row = { envId: ENV, enrollmentId: 'enr_a', serverKeyId: currentId, revokedAt: null, pausedAt: PAUSED_AT, pauseOwedAt: PAUSED_AT };
+  vi.mocked(getDriveEnvStore).mockResolvedValue({ findLocalByEnvId: vi.fn(async () => row), clearPauseOwed: mockClearPauseOwed } as never);
   vi.mocked(getGrantAuditStore).mockResolvedValue(createGrantAuditFake());
   vi.mocked(loadServerSigningKeyring).mockReturnValue(ring);
 });
@@ -93,6 +97,18 @@ describe('pauseLocalEnvMachine — the signed pause over the live socket, acked 
     expect(await pending).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 3 } });
     expect(ws.close).not.toHaveBeenCalled();
     expect(getEnvConnection(ENV)).toBe(ws);
+    // The machine's signed ack is what settles the owed Stop.
+    expect(mockClearPauseOwed).toHaveBeenCalledWith({ envId: ENV, pausedAt: PAUSED_AT });
+  });
+
+  it('Codex P1 on #2590 — given the owner RESUMED before delivery (pausedAt cleared) but the Stop is still owed, should still deliver THAT Stop', async () => {
+    row = { ...row!, pausedAt: null, pauseOwedAt: PAUSED_AT };
+    const ws = liveSocket();
+    const pending = pauseLocalEnvMachine({ envId: ENV });
+    await settle();
+    expect(sentPause(ws).pausedAt).toBe(PAUSED_AT.getTime());
+    getEnvBridgeClient().handleMachineResult(ws, ack(1));
+    expect(await pending).toEqual({ ok: true, machine: { kind: 'acknowledged', killed: 1 } });
   });
 
   it('the frame verifies under the PAUSE domain for this enrollment and pausedAt, and never as an enrollment or approval revoke', async () => {
@@ -188,7 +204,7 @@ describe('pauseLocalEnvMachine — the signed pause over the live socket, acked 
 
   it('given a row that is not paused, revoked, or missing, delivers nothing and says which', async () => {
     liveSocket();
-    row = { ...row!, pausedAt: null };
+    row = { ...row!, pausedAt: null, pauseOwedAt: null };
     expect(await pauseLocalEnvMachine({ envId: ENV })).toEqual({ ok: false, reason: 'not_paused' });
     row = { ...row!, pausedAt: PAUSED_AT, revokedAt: NOW };
     expect(await pauseLocalEnvMachine({ envId: ENV })).toEqual({ ok: false, reason: 'revoked' });

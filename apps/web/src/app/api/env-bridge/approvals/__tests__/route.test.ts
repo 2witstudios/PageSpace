@@ -295,8 +295,8 @@ describe('Codex P1 #5 (review round 1) — DELETE /api/env-bridge/approvals/[app
     expect(r.status).toBe(200);
     expect(await json(r)).toMatchObject({ revoked: true, machine: 'acknowledged', approvalId: 'ch_1', removed: 2 });
     expect(revokeLocalEnvApproval).toHaveBeenCalledWith({ envId: ENV, approvalId: 'ch_1', reason: `revoked_by_${OWNER}` });
-    expect(markEnvApprovalRevoked).toHaveBeenCalledWith({ id: 'ch_1', by: OWNER });
-    expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_1', removed: 2 });
+    expect(markEnvApprovalRevoked).toHaveBeenCalledWith({ id: 'ch_1', envId: ENV, by: OWNER });
+    expect(markEnvApprovalAcknowledged).toHaveBeenCalledWith({ id: 'ch_1', envId: ENV, removed: 2 });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: OWNER, resourceId: ENV, details: expect.objectContaining({ route: 'env-bridge/approvals', operation: 'revoke', approvalId: 'ch_1' }) }));
   });
 

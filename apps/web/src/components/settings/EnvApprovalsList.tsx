@@ -69,9 +69,13 @@ export function EnvApprovalsList({ approvals, isLoading, isError, refetch, drive
         : `/api/env-bridge/approvals/${encodeURIComponent(approval.id)}`;
       setRevokingId(approval.id);
       try {
-        const body = await del<{ removed?: number }>(url);
-        const answer = describeRevokeAnswer(200, body ?? null);
-        toast.success(answer.title, { description: answer.description });
+        // 202 (sent, not acknowledged) is a 2xx, so `del` RESOLVES for it: only the
+        // body's `revoked: true` — set on the machine's signed ack alone — earns
+        // "revoked" (Codex P2 on #2590).
+        const body = await del<{ revoked?: boolean; reason?: string; removed?: number }>(url);
+        const answer = describeRevokeAnswer(body?.revoked === true ? 200 : 202, body ?? null);
+        if (answer.gone) toast.success(answer.title, { description: answer.description });
+        else toast.message(answer.title, { description: answer.description });
       } catch (error) {
         // 202 (unacknowledged) and 409 (no live socket) are honest answers, not failures: the decision is recorded and replayed on reconnect.
         const status = error instanceof ApiRequestError ? error.status : 0;

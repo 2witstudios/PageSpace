@@ -210,31 +210,43 @@ export class EnvBridgeClient {
     const op = request.op;
     const argsHash = envBridgeHash(canonicalizeArgs(request.args));
     const summary = summarizeGrantRequest(request);
-    const sibling = await this.deps.findLocalByEnvId(input.envId);
-    const verdict = decideSign({
-      op,
-      // A missing sibling is a dead local env (the owner was erased): treated
-      // as revoked, exactly as the bind gate treats it. A stored policy the
-      // strict parser refuses is `null` and denies.
-      envRevoked: sibling === null || sibling.revokedAt !== null,
-      // Stop (GA wave 3): the owner's pause, read fresh per grant like the policy.
-      paused: sibling !== null && sibling.pausedAt !== null,
-      serverPolicy: sibling === null ? null : parseServerPolicy(sibling.serverPolicy),
-      flagEnabled: this.deps.flagEnabled(),
-    });
-    if (!verdict.ok) {
-      log().warn('Refused to sign a grant for a local environment', { envId: input.envId, op, reason: verdict.reason, userId: input.principal.userId, sessionId: input.principal.sessionId, action: 'sign_refused' });
-      this.deps.onSignRefused?.({ envId: input.envId, op, reason: verdict.reason, principal: input.principal });
-      // The refusal is audited as a row too (GA wave 3): no grant id, the typed
-      // reason. A failed write here cannot change the answer — the grant is
-      // refused either way — so it is logged, never thrown.
-      await this.recordRefusal({ envId: input.envId, principal: input.principal, op, argsHash, summary, reason: verdict.reason, ownerId: sibling?.ownerId ?? null });
-      throw new EnvBridgeError('server_denied', `PageSpace refused to sign a ${op} grant for ${input.envId}: ${verdict.reason}`, { envId: input.envId, op, reason: verdict.reason });
-    }
+    // The server's say, read fresh: once on entry, and AGAIN after a replay
+    // hold — a pause or a policy change that landed while the grant waited
+    // must refuse it, never be signed from the verdict read before the wait
+    // (Codex P1 on #2590: a stale verdict signed after a pause would even read
+    // to the daemon as proof of resume).
+    const decide = async () => {
+      const sibling = await this.deps.findLocalByEnvId(input.envId);
+      const verdict = decideSign({
+        op,
+        // A missing sibling is a dead local env (the owner was erased): treated
+        // as revoked, exactly as the bind gate treats it. A stored policy the
+        // strict parser refuses is `null` and denies.
+        envRevoked: sibling === null || sibling.revokedAt !== null,
+        // Stop (GA wave 3): the owner's pause, read fresh per grant like the policy.
+        paused: sibling !== null && sibling.pausedAt !== null,
+        serverPolicy: sibling === null ? null : parseServerPolicy(sibling.serverPolicy),
+        flagEnabled: this.deps.flagEnabled(),
+      });
+      if (!verdict.ok) {
+        log().warn('Refused to sign a grant for a local environment', { envId: input.envId, op, reason: verdict.reason, userId: input.principal.userId, sessionId: input.principal.sessionId, action: 'sign_refused' });
+        this.deps.onSignRefused?.({ envId: input.envId, op, reason: verdict.reason, principal: input.principal });
+        // The refusal is audited as a row too (GA wave 3): no grant id, the typed
+        // reason. A failed write here cannot change the answer — the grant is
+        // refused either way — so it is logged, never thrown.
+        await this.recordRefusal({ envId: input.envId, principal: input.principal, op, argsHash, summary, reason: verdict.reason, ownerId: sibling?.ownerId ?? null });
+        throw new EnvBridgeError('server_denied', `PageSpace refused to sign a ${op} grant for ${input.envId}: ${verdict.reason}`, { envId: input.envId, op, reason: verdict.reason });
+      }
+      return sibling;
+    };
+    let sibling = await decide();
 
     // A revoke owed to the machine is replayed on its hello (leaf 5); nothing is signed for the env until that has run.
     const hold = this.holds.get(input.envId);
-    if (hold !== undefined) await hold;
+    if (hold !== undefined) {
+      await hold;
+      sibling = await decide();
+    }
     // …and nothing is signed while the last replay left a revoke unacknowledged (Codex P1, review round 1): the machine may still hold what the owner revoked.
     if (this.blocked.has(input.envId)) {
       log().warn('Refused to sign: the environment owes the machine an unacknowledged approval revoke', { envId: input.envId, op, userId: input.principal.userId, action: 'sign_refused' });

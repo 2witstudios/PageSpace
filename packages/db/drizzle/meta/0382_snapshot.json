@@ -1,5 +1,5 @@
 {
-  "id": "36a3fa8e-8904-4309-9b0f-a673d46129e5",
+  "id": "290619e8-465d-4af7-9c1f-051f6795e80d",
   "prevId": "8cb04e7e-5a8d-4d15-b300-d6ee475a520a",
   "version": "7",
   "dialect": "postgresql",
@@ -25718,6 +25718,12 @@
         },
         "pausedAt": {
           "name": "pausedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pauseOwedAt": {
+          "name": "pauseOwedAt",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false

@@ -30,6 +30,7 @@ import { logger } from '@pagespace/lib/logging/logger-config';
 import { getEnvConnection, isEnvAuthorized, unregisterEnvConnection } from '@/lib/websocket/ws-env-connections';
 import { EnvBridgeError, getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { getDriveEnvStore, listUnacknowledgedEnvApprovalRevokes, markEnvApprovalAcknowledged } from '@/lib/drive-envs/drive-envs-runtime';
+import { APPROVAL_MIRROR_LIST_LIMIT } from '@pagespace/lib/services/drive-envs/approval-mirror-store';
 
 export const ENV_REVOKED_CLOSE_CODE = 1008;
 export const ENV_REVOKED_CLOSE_REASON = 'Environment revoked';
@@ -243,43 +244,59 @@ export async function revokeLocalEnvApproval(input: { envId: string; approvalId:
  * the daemon reconnects and this runs again — Codex P1, review round 1).
  */
 export async function replayUnacknowledgedApprovalRevokes(input: { envId: string; enrollmentId: string; serverKeyId: string | null; ws: WebSocket; now?: number }): Promise<{ owed: number; acknowledged: number }> {
-  let rows: Awaited<ReturnType<typeof listUnacknowledgedEnvApprovalRevokes>>;
-  try {
-    rows = await listUnacknowledgedEnvApprovalRevokes(input.envId);
-  } catch (error) {
-    // Fail closed: an unreadable ledger is an unknown debt. Reported as one owed and none acknowledged, so the env stays blocked (Codex P1, review round 1).
-    log().error('Could not read owed approval revokes for replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_read_failed' });
-    return { owed: 1, acknowledged: 0 };
-  }
+  // The reader returns at most one PAGE. A full page may hide more debt behind
+  // it, so the replay drains page by page until a short page proves nothing is
+  // left (Codex P1 on #2590: releasing the hold after one page of 100 left
+  // later revokes authoritative on the machine).
+  let owed = 0;
   let acknowledged = 0;
-  for (const row of rows) {
-    const outcome = await notifyMachineOfApprovalRevoke(
-      { envId: input.envId, enrollmentId: input.enrollmentId, serverKeyId: input.serverKeyId, issuedAt: input.now ?? Date.now(), reason: 'replayed_after_reconnect', approvalId: row.id },
-      {
-        // THIS socket, not the registry: the hello is being processed and the replay must go where the hello came from.
-        getConnection: () => input.ws,
-        isAuthorized: isEnvAuthorized,
-        awaitAck: (ack) => getEnvBridgeClient().awaitApprovalRevokeAck(ack),
-        keyring: () => {
-          try {
-            return loadKeyring();
-          } catch (error) {
-            log().error('Signing key ring unavailable during approval replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_keyring_error' });
-            return { get: () => null };
-          }
-        },
-      },
-    );
-    if (outcome.kind === 'acknowledged') {
-      acknowledged += 1;
-      try {
-        await markEnvApprovalAcknowledged({ id: row.id, removed: outcome.removed });
-      } catch (error) {
-        log().error('Approval replay acknowledged but the mirror stamp failed; it will replay again', { envId: input.envId, approvalId: row.id, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_stamp_failed' });
-      }
-    } else {
-      log().warn('Approval revoke replay not acknowledged; still owed', { envId: input.envId, approvalId: row.id, outcome: outcome.kind, action: 'approval_replay_unacknowledged' });
+  for (;;) {
+    let rows: Awaited<ReturnType<typeof listUnacknowledgedEnvApprovalRevokes>>;
+    try {
+      rows = await listUnacknowledgedEnvApprovalRevokes(input.envId);
+    } catch (error) {
+      // Fail closed: an unreadable ledger is an unknown debt. Reported as one more owed than acknowledged, so the env stays blocked (Codex P1, review round 1).
+      log().error('Could not read owed approval revokes for replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_read_failed' });
+      return { owed: owed + 1, acknowledged };
     }
+    let pageSettled = true;
+    for (const row of rows) {
+      const outcome = await notifyMachineOfApprovalRevoke(
+        { envId: input.envId, enrollmentId: input.enrollmentId, serverKeyId: input.serverKeyId, issuedAt: input.now ?? Date.now(), reason: 'replayed_after_reconnect', approvalId: row.id },
+        {
+          // THIS socket, not the registry: the hello is being processed and the replay must go where the hello came from.
+          getConnection: () => input.ws,
+          isAuthorized: isEnvAuthorized,
+          awaitAck: (ack) => getEnvBridgeClient().awaitApprovalRevokeAck(ack),
+          keyring: () => {
+            try {
+              return loadKeyring();
+            } catch (error) {
+              log().error('Signing key ring unavailable during approval replay', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_keyring_error' });
+              return { get: () => null };
+            }
+          },
+        },
+      );
+      if (outcome.kind === 'acknowledged') {
+        acknowledged += 1;
+        try {
+          await markEnvApprovalAcknowledged({ id: row.id, envId: input.envId, removed: outcome.removed });
+        } catch (error) {
+          // The machine dropped it, so it counts as acknowledged; but the row is still listed, so the next page cannot be trusted to be new.
+          pageSettled = false;
+          log().error('Approval replay acknowledged but the mirror stamp failed; it will replay again', { envId: input.envId, approvalId: row.id, error: error instanceof Error ? error.message : String(error), action: 'approval_replay_stamp_failed' });
+        }
+      } else {
+        pageSettled = false;
+        log().warn('Approval revoke replay not acknowledged; still owed', { envId: input.envId, approvalId: row.id, outcome: outcome.kind, action: 'approval_replay_unacknowledged' });
+      }
+    }
+    owed += rows.length;
+    // A short page is the end of the debt.
+    if (rows.length < APPROVAL_MIRROR_LIST_LIMIT) return { owed, acknowledged };
+    // A full page that did not settle cannot be paged past (its rows are still
+    // listed first); whatever lies behind it is unknown debt, so the env stays blocked.
+    if (!pageSettled) return { owed: owed + 1, acknowledged };
   }
-  return { owed: rows.length, acknowledged };
 }

@@ -145,6 +145,16 @@ export function productionPauseDeps(): PauseNotifyDeps {
 export type PauseLocalEnvMachineResult = { ok: true; machine: PauseNotifyOutcome } | { ok: false; reason: 'not_found' | 'not_paused' | 'revoked' };
 
 /**
+ * The Stop a delivery should carry: the one the machine still OWES an ack for,
+ * else the current pause. The owed stamp outlives Resume, so a Stop the owner
+ * undid before its frame reached the socket's replica is still delivered and
+ * its processes still killed (Codex P1 on #2590); `null` = nothing to deliver.
+ */
+export function pauseToDeliver(row: { pausedAt: Date | null; pauseOwedAt: Date | null }): Date | null {
+  return row.pauseOwedAt ?? row.pausedAt;
+}
+
+/**
  * Deliver the env's CURRENT pause to its machine through the production
  * seams — from the owner's PATCH (this replica) and from the heartbeat path
  * (whichever replica holds the socket). Reads `pausedAt` from the row so both
@@ -154,10 +164,18 @@ export async function pauseLocalEnvMachine(input: { envId: string }): Promise<Pa
   const row = await (await getDriveEnvStore()).findLocalByEnvId(input.envId);
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
-  if (row.pausedAt === null) return { ok: false, reason: 'not_paused' };
+  const stop = pauseToDeliver(row);
+  if (stop === null) return { ok: false, reason: 'not_paused' };
+  const store = await getDriveEnvStore();
   const machine = await notifyMachineOfPause(
-    { envId: input.envId, enrollmentId: row.enrollmentId, serverKeyId: row.serverKeyId, issuedAt: Date.now(), pausedAt: row.pausedAt.getTime() },
+    { envId: input.envId, enrollmentId: row.enrollmentId, serverKeyId: row.serverKeyId, issuedAt: Date.now(), pausedAt: stop.getTime() },
     productionPauseDeps(),
   );
+  // Only the machine's SIGNED ack (now, or earlier on this socket) settles what was owed.
+  if (machine.kind === 'acknowledged' || machine.kind === 'already_acknowledged') {
+    await store.clearPauseOwed({ envId: input.envId, pausedAt: stop }).catch((error: unknown) => {
+      log().error('Pause acknowledged but the owed marker could not be cleared; it will be re-delivered', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'pause_owed_clear_failed' });
+    });
+  }
   return { ok: true, machine };
 }

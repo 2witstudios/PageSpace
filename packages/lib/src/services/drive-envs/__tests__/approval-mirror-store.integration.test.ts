@@ -80,16 +80,25 @@ describe('remember — the click ran, the mirror records it', () => {
 describe('the revoke owed to the machine', () => {
   it('markRevoked stamps once (the first decision stays); markAcknowledged lands ONLY on a revoked, unacknowledged row and records the machine\'s count', async () => {
     await remember('ch_1');
-    expect(await store.markAcknowledged({ id: 'ch_1', removed: 2, now: LATER })).toBeNull();
-    const revoked = await store.markRevoked({ id: 'ch_1', by: ownerId, now: LATER });
+    expect(await store.markAcknowledged({ id: 'ch_1', envId, removed: 2, now: LATER })).toBeNull();
+    const revoked = await store.markRevoked({ id: 'ch_1', envId, by: ownerId, now: LATER });
     expect(revoked).toMatchObject({ revokedAt: LATER, revokedBy: ownerId, revokeAcknowledgedAt: null });
-    const again = await store.markRevoked({ id: 'ch_1', by: 'someone-else', now: new Date(LATER.getTime() + 1000) });
+    const again = await store.markRevoked({ id: 'ch_1', envId, by: 'someone-else', now: new Date(LATER.getTime() + 1000) });
     expect(again).toMatchObject({ revokedAt: LATER, revokedBy: ownerId });
-    const acked = await store.markAcknowledged({ id: 'ch_1', removed: 2, now: new Date(LATER.getTime() + 2000) });
+    const acked = await store.markAcknowledged({ id: 'ch_1', envId, removed: 2, now: new Date(LATER.getTime() + 2000) });
     expect(acked).toMatchObject({ revokeRemoved: 2 });
     expect(acked!.revokeAcknowledgedAt!.getTime()).toBe(LATER.getTime() + 2000);
-    expect(await store.markAcknowledged({ id: 'ch_1', removed: 9, now: LATER })).toBeNull();
-    expect(await store.markRevoked({ id: 'ch_nope', by: ownerId, now: LATER })).toBeNull();
+    expect(await store.markAcknowledged({ id: 'ch_1', envId, removed: 9, now: LATER })).toBeNull();
+    expect(await store.markRevoked({ id: 'ch_nope', envId, by: ownerId, now: LATER })).toBeNull();
+  });
+
+  it('markRevoked and markAcknowledged are scoped to the env: an id from ANOTHER env is neither stamped revoked nor acknowledged (Codex P1 on #2590)', async () => {
+    await remember('ch_theirs', { envId: otherEnvId, userId: otherOwnerId });
+    expect(await store.markRevoked({ id: 'ch_theirs', envId, by: ownerId, now: LATER })).toBeNull();
+    expect((await store.findById('ch_theirs'))?.revokedAt).toBeNull();
+    await store.markRevoked({ id: 'ch_theirs', envId: otherEnvId, by: otherOwnerId, now: LATER });
+    expect(await store.markAcknowledged({ id: 'ch_theirs', envId, removed: 1, now: LATER })).toBeNull();
+    expect((await store.findById('ch_theirs'))?.revokeAcknowledgedAt).toBeNull();
   });
 
   it('the CHECK refuses an ack without a revoke decision', async () => {
@@ -101,11 +110,11 @@ describe('the revoke owed to the machine', () => {
     await remember('ch_b');
     await remember('ch_c');
     await remember('ch_theirs', { envId: otherEnvId, userId: otherOwnerId });
-    await store.markRevoked({ id: 'ch_b', by: ownerId, now: LATER });
-    await store.markRevoked({ id: 'ch_a', by: ownerId, now: new Date(LATER.getTime() + 1000) });
-    await store.markRevoked({ id: 'ch_theirs', by: otherOwnerId, now: LATER });
-    await store.markRevoked({ id: 'ch_c', by: ownerId, now: new Date(LATER.getTime() + 2000) });
-    await store.markAcknowledged({ id: 'ch_c', removed: 1, now: new Date(LATER.getTime() + 3000) });
+    await store.markRevoked({ id: 'ch_b', envId, by: ownerId, now: LATER });
+    await store.markRevoked({ id: 'ch_a', envId, by: ownerId, now: new Date(LATER.getTime() + 1000) });
+    await store.markRevoked({ id: 'ch_theirs', envId: otherEnvId, by: otherOwnerId, now: LATER });
+    await store.markRevoked({ id: 'ch_c', envId, by: ownerId, now: new Date(LATER.getTime() + 2000) });
+    await store.markAcknowledged({ id: 'ch_c', envId, removed: 1, now: new Date(LATER.getTime() + 3000) });
     expect((await store.listUnacknowledgedRevokes(envId)).map((row) => row.id)).toEqual(['ch_b', 'ch_a']);
   });
 });
@@ -138,9 +147,9 @@ describe('the two listings', () => {
     await remember('ch_expired', { expiresAt: new Date(NOW.getTime() - 1) });
     await remember('ch_revoked_unacked', { createdAt: new Date(NOW.getTime() + 2000) });
     await remember('ch_revoked_acked', { createdAt: new Date(NOW.getTime() + 3000) });
-    await store.markRevoked({ id: 'ch_revoked_unacked', by: ownerId, now: LATER });
-    await store.markRevoked({ id: 'ch_revoked_acked', by: ownerId, now: LATER });
-    await store.markAcknowledged({ id: 'ch_revoked_acked', removed: 1, now: LATER });
+    await store.markRevoked({ id: 'ch_revoked_unacked', envId, by: ownerId, now: LATER });
+    await store.markRevoked({ id: 'ch_revoked_acked', envId, by: ownerId, now: LATER });
+    await store.markAcknowledged({ id: 'ch_revoked_acked', envId, removed: 1, now: LATER });
     const rows = await store.listActiveForEnv({ envId, now: NOW, limit: 50 });
     expect(rows.map((row) => [row.id, row.revokePending])).toEqual([['ch_revoked_unacked', true], ['ch_forever', false], ['ch_live', false]]);
     expect((await store.listActiveForOwner({ ownerId, now: NOW, limit: 50 })).map((row) => [row.id, row.revokePending])).toEqual([['ch_revoked_unacked', true], ['ch_forever', false], ['ch_live', false]]);

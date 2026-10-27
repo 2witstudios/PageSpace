@@ -74,6 +74,20 @@ describe('setPaused — the CAS on (envId, ownerId, revokedAt IS NULL)', () => {
     expect(row.pausedAt).toBeNull();
   });
 
+  it('given a Stop then a Resume BEFORE the machine acked, the owed marker SURVIVES the Resume (so the socket replica still delivers it) and clears only on the ack of THAT Stop (Codex P1 on #2590)', async () => {
+    expect(await store.setPaused({ envId, ownerId, paused: true, now: LATER })).toBe(true);
+    expect((await readRow(envId)).pauseOwedAt?.getTime()).toBe(LATER.getTime());
+    expect(await store.setPaused({ envId, ownerId, paused: false, now: new Date(LATER.getTime() + 1000) })).toBe(true);
+    let row = await readRow(envId);
+    expect(row.pausedAt).toBeNull();
+    expect(row.pauseOwedAt?.getTime()).toBe(LATER.getTime());
+    // An ack for some OTHER stamp clears nothing.
+    expect(await store.clearPauseOwed({ envId, pausedAt: NOW })).toBe(false);
+    expect(await store.clearPauseOwed({ envId, pausedAt: LATER })).toBe(true);
+    row = await readRow(envId);
+    expect(row.pauseOwedAt).toBeNull();
+  });
+
   it('given a NON-owner (the drive admin who owns the drive), the CAS loses on Stop AND on Resume and the row is byte-identical', async () => {
     let before = await readRow(envId);
     expect(await store.setPaused({ envId, ownerId: adminId, paused: true, now: LATER })).toBe(false);

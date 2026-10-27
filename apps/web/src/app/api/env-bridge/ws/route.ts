@@ -453,11 +453,16 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
     // Stop made anywhere reaches the process within ENV_BRIDGE_PING_INTERVAL_MS.
     // The socket stays: Stop pauses grants and kills processes, not the machine.
     const sibling = await store.findLocalByEnvId(envId);
-    if (sibling?.pausedAt != null) {
-      const ended = getEnvBridgeClient().pauseEnv(envId);
-      if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+    // A Stop the machine has not acked is delivered even after a Resume
+    // cleared `pausedAt` (Codex P1 on #2590): `pauseOwedAt` outlives it.
+    const stop = sibling ? (sibling.pauseOwedAt ?? sibling.pausedAt) : null;
+    if (sibling && stop !== null) {
+      if (sibling.pausedAt !== null) {
+        const ended = getEnvBridgeClient().pauseEnv(envId);
+        if (ended > 0) dropFrame('env_bridge_paused_in_flight', { ended }, 0.1);
+      }
       // Keyed on the ACK (Codex P1, review round 1): an unacknowledged delivery is retried on every pong until the machine signs for it.
-      if (metadata?.pauseAckedForMs !== sibling.pausedAt.getTime()) {
+      if (metadata?.pauseAckedForMs !== stop.getTime() || sibling.pauseOwedAt != null) {
         const { pauseLocalEnvMachine } = await import('@/lib/env-bridge/pause');
         const delivered = await pauseLocalEnvMachine({ envId });
         auditRequest(request, {
@@ -466,7 +471,7 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
           resourceType: RESOURCE_TYPE,
           resourceId: envId,
           riskScore: 0,
-          details: { originalEvent: 'env_bridge_pause_delivered', pausedAt: sibling.pausedAt.toISOString(), machine: delivered.ok ? delivered.machine.kind : delivered.reason, ...(delivered.ok && delivered.machine.kind === 'acknowledged' && { killed: delivered.machine.killed }) },
+          details: { originalEvent: 'env_bridge_pause_delivered', pausedAt: stop.toISOString(), machine: delivered.ok ? delivered.machine.kind : delivered.reason, ...(delivered.ok && delivered.machine.kind === 'acknowledged' && { killed: delivered.machine.killed }) },
         });
       }
     }

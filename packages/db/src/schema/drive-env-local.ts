@@ -215,6 +215,15 @@ export const driveEnvLocal = pgTable('drive_env_local', {
    * `revokedAt`, which is terminal.
    */
   pausedAt: timestamp('pausedAt', { mode: 'date' }),
+  /**
+   * The Stop the MACHINE still owes an acknowledgement for: the `pausedAt`
+   * stamp of the last Stop, kept until the machine signs `pause_result` for
+   * it. Separate from `pausedAt` because Resume clears that one — and a Stop
+   * whose frame had not yet reached the socket's replica must still be
+   * delivered (and its processes killed) even after a quick Resume (Codex P1
+   * on #2590). NULL = nothing owed.
+   */
+  pauseOwedAt: timestamp('pauseOwedAt', { mode: 'date' }),
 
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
