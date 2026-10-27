@@ -1,5 +1,5 @@
 import { describe, it, vi } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // The barrel binds defaultRollbackDeps() at module load, which references the db
 // connection and effect modules. Stub the connection so importing the surface

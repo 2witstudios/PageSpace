@@ -1,5 +1,5 @@
 import { describe, test, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { useCalendarFilterStore } from '../useCalendarFilterStore';
 
 // Reset store between tests to avoid shared mutable state

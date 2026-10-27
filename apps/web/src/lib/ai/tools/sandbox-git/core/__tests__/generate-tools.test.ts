@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { z } from 'zod';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { defineRow, type GitToolRow } from '../../tools/types';
 import { generateSandboxGitTools, deriveToolNames, type GeneratorSeams } from '../../generate-tools';
 import { SANDBOX_GIT_TOOL_ROWS } from '../../tools/registry';

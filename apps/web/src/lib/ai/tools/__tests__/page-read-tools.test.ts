@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 // Mock database and dependencies
 // Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.

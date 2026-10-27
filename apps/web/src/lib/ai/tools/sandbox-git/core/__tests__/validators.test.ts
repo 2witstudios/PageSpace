@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import {
   startsLikeFlag,
   validateFlagSafe,

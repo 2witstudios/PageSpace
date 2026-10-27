@@ -2,7 +2,7 @@ import { describe, test, beforeEach, vi } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig, useSWRConfig } from 'swr';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { CalendarEvent, CalendarEventAttendee } from '../calendar-types';
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { PAGE_TYPE_VALUES } from '@pagespace/lib/utils/enums';
 
 const {

@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { cookies } from 'next/headers';
 import { connection } from 'next/server';
 import { notFound } from 'next/navigation';
@@ -31,6 +31,15 @@ const mono = Geist_Mono({
 export const metadata: Metadata = {
   title: { default: 'Imago', template: '%s · Imago' },
   robots: { index: false, follow: false },
+};
+
+// viewport-fit=cover draws under the notch and home indicator so env(safe-area-inset-*) reports
+// them (the phone shell pads itself by them). No maximum-scale: users must be able to zoom any
+// page. iOS focus zoom is avoided instead by 16px text fields on touch screens (globals.css).
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default async function RootLayout({

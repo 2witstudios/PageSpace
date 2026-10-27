@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 
 const { mockToastWarning } = vi.hoisted(() => ({ mockToastWarning: vi.fn() }));
 

@@ -6,16 +6,22 @@ import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { renderIcon } from '../../components/icon/icon.render';
 import { dispatch, transactions } from '../../store/transactions';
 import type { HideableSection } from '../stage/stage';
+import { usePhone } from '../viewport/use-viewport-tier';
 import { askPillClass, headControlClass, headDividerClass } from './controls-class';
 
 /**
  * The three kinds of column control (SPEC v3.2), never mixed: the left pane collapses
  * (left-panel icon), every middle area closes (×), and Imago docked collapses to the right
  * (right-panel icon), leaving the Ask pill.
+ *
+ * A phone has no columns to collapse: one screen fills it and the bottom bar moves between
+ * them, so the sidebar and Imago controls render nothing there. Close page stays until each
+ * phone screen has its own Back.
  */
 
 /** At the end of a left pane's head. */
 export function CloseSidebar({ section }: { readonly section: HideableSection }): ReactNode {
+  if (usePhone()) return null;
   return (
     <button type="button" className={headControlClass} aria-label="Close sidebar" title="Close sidebar" onClick={() => dispatch(transactions.collapseSection, section)}>
       {renderIcon({ name: 'panelLeftClose', size: 16 })}
@@ -25,6 +31,7 @@ export function CloseSidebar({ section }: { readonly section: HideableSection })
 
 /** At the start of the first visible head while the pane is closed. */
 export function ShowSidebar({ section }: { readonly section: HideableSection }): ReactNode {
+  if (usePhone()) return null;
   return (
     <button type="button" className={`${headControlClass} -ml-2`} aria-label="Show sidebar" title="Show sidebar" onClick={() => dispatch(transactions.expandSection, section)}>
       {renderIcon({ name: 'panelLeftOpen', size: 16 })}
@@ -34,6 +41,7 @@ export function ShowSidebar({ section }: { readonly section: HideableSection }):
 
 /** At the end of Imago's head while it is docked beside a page. */
 export function CollapseImago(): ReactNode {
+  if (usePhone()) return null;
   return (
     <button type="button" className={headControlClass} aria-label="Collapse Imago" title="Collapse Imago" onClick={() => dispatch(transactions.collapseImago, undefined)}>
       {renderIcon({ name: 'panelRightClose', size: 16 })}
@@ -43,6 +51,7 @@ export function CollapseImago(): ReactNode {
 
 /** At the end of Imago's head while it fills the middle. */
 export function CloseImago(): ReactNode {
+  if (usePhone()) return null;
   return (
     <button type="button" className={headControlClass} aria-label="Close Imago" title="Close Imago" onClick={() => dispatch(transactions.closeImago, undefined)}>
       {renderIcon({ name: 'close', size: 12 })}
@@ -52,6 +61,7 @@ export function CloseImago(): ReactNode {
 
 /** In the page head while Imago is collapsed: brings it back docked. */
 export function AskPill({ label = 'Ask' }: { readonly label?: string }): ReactNode {
+  if (usePhone()) return null;
   return (
     <button type="button" className={askPillClass} onClick={() => dispatch(transactions.expandImago, undefined)}>
       <ImagoOrb size="glyph" live />

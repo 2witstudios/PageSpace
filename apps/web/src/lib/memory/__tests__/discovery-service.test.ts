@@ -1,5 +1,5 @@
 import { describe, it, vi, beforeEach, expect } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { HELD_DRIVES, automationActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**

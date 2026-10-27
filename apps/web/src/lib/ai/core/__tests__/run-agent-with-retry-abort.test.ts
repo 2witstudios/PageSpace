@@ -15,7 +15,7 @@ import { describe, it } from 'vitest';
 import { z } from 'zod';
 import { streamText, stepCountIs, type ModelMessage, type Tool, type UIMessageChunk, type UIMessageStreamWriter } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { runAgentWithRetry, type AgentStreamResult } from '../run-agent-with-retry';
 
 type DoStream = MockLanguageModelV3['doStream'];
